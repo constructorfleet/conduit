@@ -26,6 +26,12 @@ enum Reply {
     Chunks(Vec<String>),
     /// An error status and message.
     Status(u16, String),
+    /// An error status, message, and `Retry-After` header value.
+    StatusRetryAfter(u16, String, String),
+    /// The request is accepted and never answered: no status, no body.
+    Stall,
+    /// The given packets are sent and then the body never ends.
+    StallAfter(Vec<String>),
 }
 
 /// What the server received.
@@ -63,6 +69,28 @@ impl MockServer {
     /// Rejects requests with `status`.
     pub async fn start_status(status: u16, message: &str) -> Self {
         Self::spawn(Reply::Status(status, message.to_owned())).await
+    }
+
+    /// Rejects requests with `status` and a `Retry-After` header.
+    pub async fn start_retry_after(status: u16, message: &str, retry_after: &str) -> Self {
+        Self::spawn(Reply::StatusRetryAfter(status, message.to_owned(), retry_after.to_owned()))
+            .await
+    }
+
+    /// Accepts the request and never answers it.
+    ///
+    /// The TCP handshake completes, so `connect_timeout` cannot save a caller
+    /// here — only a request timeout can.
+    pub async fn start_stalled() -> Self {
+        Self::spawn(Reply::Stall).await
+    }
+
+    /// Answers with `chunks` and then never ends the body.
+    ///
+    /// This is the shape of a provider that starts streaming a reply and then
+    /// goes quiet mid-sentence.
+    pub async fn start_stalled_after(chunks: Vec<String>) -> Self {
+        Self::spawn(Reply::StallAfter(chunks)).await
     }
 
     async fn spawn(reply: Reply) -> Self {
@@ -136,6 +164,13 @@ async fn chat(
         Reply::Status(status, message) => {
             Err((StatusCode::from_u16(status).expect("valid status"), message))
         }
+        Reply::StatusRetryAfter(status, message, retry_after) => Ok(Response::builder()
+            .status(StatusCode::from_u16(status).expect("valid status"))
+            .header("retry-after", retry_after)
+            .body(Body::from(message))
+            .expect("response")),
+        Reply::Stall => Ok(never().await),
+        Reply::StallAfter(chunks) => Ok(sse_response(unending(chunks))),
     }
 }
 
@@ -177,12 +212,51 @@ async fn transcriptions(
         Reply::Status(status, message) => {
             Err((StatusCode::from_u16(status).expect("valid status"), message))
         }
+        Reply::StatusRetryAfter(status, message, retry_after) => Ok(Response::builder()
+            .status(StatusCode::from_u16(status).expect("valid status"))
+            .header("retry-after", retry_after)
+            .body(Body::from(message))
+            .expect("response")),
+        Reply::Stall => Ok(never().await),
+        Reply::StallAfter(chunks) => Ok(Response::builder()
+            .header("content-type", "application/octet-stream")
+            .body(unending(chunks))
+            .expect("response")),
     }
 }
 
+/// Never returns, so the caller's request is accepted and left unanswered.
+///
+/// The handler is dropped when the test's server is dropped, so this leaks
+/// nothing beyond the test.
+async fn never() -> Response {
+    std::future::pending().await
+}
+
+/// A body that delivers `chunks` and then stays open forever.
+fn unending(chunks: Vec<String>) -> Body {
+    use futures_util::StreamExt;
+
+    let sent = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+    Body::from_stream(sent.chain(futures_util::stream::once(std::future::pending())))
+}
+
 /// Minimal model listing, enough for a health check.
-async fn models() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "data": [{ "id": "gpt-test" }] }))
+///
+/// A server that is refusing requests or has gone quiet does so here too — a
+/// health check that answers while every real request stalls would report a
+/// broken server as healthy.
+async fn models(State(state): State<AppState>) -> Result<Json<serde_json::Value>, Response> {
+    match state.reply {
+        Reply::Stall => Err(never().await),
+        Reply::Status(status, message) | Reply::StatusRetryAfter(status, message, _) => {
+            Err(Response::builder()
+                .status(StatusCode::from_u16(status).expect("valid status"))
+                .body(Body::from(message))
+                .expect("response"))
+        }
+        _ => Ok(Json(serde_json::json!({ "data": [{ "id": "gpt-test" }] }))),
+    }
 }
 
 fn sse_response(body: Body) -> Response {

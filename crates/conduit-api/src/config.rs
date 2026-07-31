@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use conduit_core::{Error, Result};
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
@@ -25,6 +26,8 @@ const NAME: &str = "CONDUIT_OPENAI_NAME";
 const STT_MODEL: &str = "CONDUIT_OPENAI_STT_MODEL";
 /// Speech model, e.g. `tts-1`. Enables the synthesizer.
 const TTS_MODEL: &str = "CONDUIT_OPENAI_TTS_MODEL";
+/// How long the server may go silent mid-response, in seconds. `0` disables it.
+const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
 
 /// Directory to keep pipeline definitions in. Unset means memory only.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
@@ -91,6 +94,39 @@ impl Registered {
     }
 }
 
+/// How long a provider may go silent mid-response, as configured.
+///
+/// Unset means the provider's own default. `0` means no bound, which is a
+/// deliberate choice a deployment can make rather than an accident — a stalled
+/// provider then hangs the turn until the client disconnects.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the value is not a whole number of seconds. A
+/// misspelled duration silently falling back to the default is how a
+/// deployment ends up with a timeout it did not ask for.
+fn read_timeout(vars: &HashMap<String, String>) -> Result<Option<Duration>> {
+    let Some(value) = vars.get(READ_TIMEOUT).map(|value| value.trim()) else {
+        return Ok(OpenAiConfig::default().read_timeout);
+    };
+    if value.is_empty() {
+        return Ok(OpenAiConfig::default().read_timeout);
+    }
+
+    let seconds: u64 = value.parse().map_err(|_| {
+        Error::Config(format!(
+            "{READ_TIMEOUT} must be a whole number of seconds, got `{value}`"
+        ))
+    })?;
+    if seconds == 0 {
+        tracing::warn!(
+            "{READ_TIMEOUT} is 0, so a provider that stops responding will not be given up on"
+        );
+        return Ok(None);
+    }
+    Ok(Some(Duration::from_secs(seconds)))
+}
+
 /// Reads provider configuration from the process environment.
 ///
 /// # Errors
@@ -131,6 +167,7 @@ pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registere
         base_url: base_url.cloned().unwrap_or_else(|| OpenAiConfig::default().base_url),
         api_key: api_key.cloned(),
         name: vars.get(NAME).cloned().unwrap_or_else(|| OpenAiConfig::default().name),
+        read_timeout: read_timeout(vars)?,
         ..OpenAiConfig::default()
     };
 
@@ -202,6 +239,37 @@ mod tests {
     fn a_key_alone_is_enough_for_the_hosted_api() {
         let (providers, _) = from_vars(&vars(&[(API_KEY, "sk-test")])).expect("builds");
         assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["openai"]);
+    }
+
+    #[test]
+    fn the_read_timeout_defaults_to_the_providers_own() {
+        assert_eq!(
+            read_timeout(&vars(&[])).expect("builds"),
+            OpenAiConfig::default().read_timeout
+        );
+        assert!(
+            read_timeout(&vars(&[])).expect("builds").is_some(),
+            "a deployment that configures nothing must still bound a stalled provider"
+        );
+    }
+
+    #[test]
+    fn the_read_timeout_can_be_set_in_seconds() {
+        let timeout = read_timeout(&vars(&[(READ_TIMEOUT, "5")])).expect("builds");
+        assert_eq!(timeout, Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_zero_read_timeout_removes_the_bound() {
+        assert_eq!(read_timeout(&vars(&[(READ_TIMEOUT, "0")])).expect("builds"), None);
+    }
+
+    #[test]
+    fn an_unreadable_read_timeout_is_refused_rather_than_ignored() {
+        // Falling back to the default would give a deployment a timeout it did
+        // not ask for and no indication of why.
+        let error = read_timeout(&vars(&[(READ_TIMEOUT, "30s")])).expect_err("not a number");
+        assert!(error.to_string().contains(READ_TIMEOUT), "{error}");
     }
 
     #[test]

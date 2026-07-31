@@ -13,6 +13,7 @@ use conduit_provider::llm::{Completion, Usage};
 use conduit_provider::ChunkStream;
 use futures_util::{Stream, StreamExt};
 
+use crate::failure::Failure;
 use crate::sse::Decoder;
 use crate::wire;
 
@@ -73,7 +74,11 @@ pub fn completions(response: reqwest::Response, provider: String) -> ChunkStream
                 Some(Err(error)) => {
                     state.ended = true;
                     let provider = state.provider.clone();
-                    state.ready.push_back(Err(Error::provider(provider, error)));
+                    // A reply that stops arriving mid-sentence is a stall, and
+                    // the classification is what lets a caller retry it.
+                    state
+                        .ready
+                        .push_back(Err(Error::provider(provider, Failure::transport(&error))));
                 }
                 None => {
                     state.ended = true;
@@ -95,7 +100,7 @@ fn decode(state: &mut State, payload: &str) {
             let provider = state.provider.clone();
             state.ready.push_back(Err(Error::provider(
                 provider,
-                std::io::Error::other(format!("unreadable completion chunk: {error}")),
+                Failure::malformed(format!("unreadable completion chunk: {error}")),
             )));
             state.ended = true;
             return;
