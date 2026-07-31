@@ -80,9 +80,12 @@ instead of going silent. Turns are capped at `max_tool_rounds` model calls
 cargo run -p conduit-api
 ```
 
-The published container image is `ghcr.io/<owner>/<repo>:latest`. Builds merged
-to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`, an OCI
-package containing the Linux `conduit-api` binary and the ESPHome firmware YAMLs.
+The published container image is `ghcr.io/<owner>/<repo>:latest`, and each
+`main` build also tags it with the Cargo package version, for example
+`ghcr.io/<owner>/<repo>:0.1.0` and `ghcr.io/<owner>/<repo>:v0.1.0`. Builds
+merged to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`
+with matching version tags; that OCI package contains the Linux `conduit-api`
+binary and the ESPHome firmware YAMLs.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
