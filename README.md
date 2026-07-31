@@ -566,10 +566,13 @@ speaker identification, and memory the provider traits exist, and what is
 missing is any implementation of them and the runtime wiring to run one. For
 `router` there is no trait yet either.
 
-**Several event variants have no emitter yet.** `WakeWordDetected`,
-`WakeWordRejected`, `AudioStarted`, `AudioChunkReceived`, `AudioFinished`,
-`SpeakerIdentified`, and `TurnStarted` are part of the vocabulary but nothing
-publishes them, so `/v1/events?stages=capture` is a valid subscription to a
-permanently silent stream. The stages that do carry traffic today are
-`transcription`, `conversation`, `reasoning`, `tools`, `synthesis`, and
-`diagnostics`.
+**Three event variants have no emitter yet.** `WakeWordDetected`,
+`WakeWordRejected`, and `SpeakerIdentified` are part of the vocabulary but
+nothing publishes them, because no provider detects a wake word or matches a
+voice print. Their stages — `wake_word` and `identity` — are therefore refused
+at subscribe time: `/v1/events?stages=wake_word` is a `422` naming the stages
+that do carry traffic, rather than a `200` followed by silence for as long as
+the client is willing to wait. One silent stage refuses the whole subscription,
+since quietly narrowing it would deliver something other than what was asked
+for. The stages that carry traffic today are `capture`, `transcription`,
+`conversation`, `reasoning`, `tools`, `synthesis`, and `diagnostics`.
