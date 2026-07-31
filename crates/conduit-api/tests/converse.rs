@@ -102,9 +102,14 @@ fn control(frames: &[Message]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Stores a pipeline, failing the test if the store refuses.
+async fn store(state: &AppState, name: &str, graph: PipelineGraph) {
+    state.put_pipeline(name, graph).await.expect("stores");
+}
+
 async fn server_with_echo_pipeline() -> Server {
     let state = AppState::new(EventBus::default()).with_providers(providers());
-    state.put_pipeline("echo", echo_graph());
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
     Server::start(state).await
 }
 
@@ -182,7 +187,8 @@ async fn a_pipeline_the_runtime_cannot_execute_is_refused() {
     // Stored pipelines are only checked as graphs; whether the runtime can
     // execute one is a separate question, answered here rather than mid-turn.
     let state = AppState::new(EventBus::default()).with_providers(providers());
-    state.put_pipeline(
+    store(
+        &state,
         "unrunnable",
         PipelineGraph::new("unrunnable")
             .with_node(Node::new("stt", NodeKind::Stt, "nonexistent"))
@@ -193,7 +199,8 @@ async fn a_pipeline_the_runtime_cannot_execute_is_refused() {
             .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
             .with_edge(Edge::new("stt", "llm"))
             .with_edge(Edge::new("llm", "tts")),
-    );
+    )
+    .await;
     let server = Server::start(state).await;
 
     let result =
@@ -207,7 +214,7 @@ async fn a_server_with_no_providers_still_serves_the_rest_of_the_api() {
     // Providers are optional; a deployment that has not configured any should
     // still be able to store and read pipelines.
     let state = AppState::new(EventBus::default());
-    state.put_pipeline("echo", echo_graph());
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
     let server = Server::start(state).await;
 
     let response = reqwest::get(server.http_url("/v1/pipelines")).await.expect("request");
@@ -223,7 +230,7 @@ async fn a_conversation_shows_up_in_the_metrics() {
     // The collector is a bus subscriber, so this also proves the server wires
     // one up: without it a scrape would stay empty however much happened.
     let state = AppState::new(EventBus::default()).with_providers(providers());
-    state.put_pipeline("echo", echo_graph());
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
     conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
     let server = Server::start(state).await;
 

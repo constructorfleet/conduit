@@ -7,9 +7,13 @@
 
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 use conduit_core::{Error, Result};
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
+use conduit_provider::storage::PipelineStore;
 use conduit_runtime::Providers;
+use conduit_store::{FileStore, MemoryStore};
 
 /// Base URL of an OpenAI-compatible server.
 const BASE_URL: &str = "CONDUIT_OPENAI_BASE_URL";
@@ -21,6 +25,33 @@ const NAME: &str = "CONDUIT_OPENAI_NAME";
 const STT_MODEL: &str = "CONDUIT_OPENAI_STT_MODEL";
 /// Speech model, e.g. `tts-1`. Enables the synthesizer.
 const TTS_MODEL: &str = "CONDUIT_OPENAI_TTS_MODEL";
+
+/// Directory to keep pipeline definitions in. Unset means memory only.
+const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
+
+/// Opens the pipeline store the environment asks for.
+///
+/// Defaults to memory, and says so: a server that silently forgot every
+/// pipeline on restart would be a nasty surprise in production.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
+    match std::env::var(PIPELINE_DIR) {
+        Ok(directory) if !directory.is_empty() => {
+            tracing::info!(%directory, "storing pipelines on disk");
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+        _ => {
+            tracing::warn!(
+                "pipelines are kept in memory and will be lost on restart; set \
+                 {PIPELINE_DIR} to keep them"
+            );
+            Ok(Arc::new(MemoryStore::new()))
+        }
+    }
+}
 
 /// What a configuration registered, for logging and for deciding whether any
 /// providers exist at all.

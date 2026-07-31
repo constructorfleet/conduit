@@ -24,6 +24,7 @@ echoes described under [Running](#running).
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
+| [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
 
 ## Design
@@ -83,6 +84,7 @@ cargo run -p conduit-api
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
+| `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
 | `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
 | `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
@@ -151,6 +153,22 @@ socket names the conversation before sending a single sample.
 
 A missing or unrunnable pipeline is refused with an HTTP status *before* the
 upgrade, so a client never has to diagnose a socket that opens and then dies.
+
+## Storage
+
+Pipelines are kept as one JSON file each in `CONDUIT_PIPELINE_DIR` — readable,
+diffable, and editable with the tools anyone already has. Without that variable
+the server keeps them in memory and warns that a restart will lose them.
+
+Both backends implement the same [`PipelineStore`](crates/conduit-provider/src/storage.rs)
+trait and are held to the same test, so which one a deployment uses is
+configuration rather than behaviour. Writes go to a temporary file and are
+renamed, so a crash mid-write leaves the previous definition intact rather than
+a truncated one.
+
+Pipeline names are validated before they reach a backend: a name arrives from a
+URL path and becomes a file name, so `../../etc/passwd` is refused with a 422
+rather than being allowed to escape the directory.
 
 ## Observability
 
@@ -223,7 +241,7 @@ FLAC.
 ## Next
 
 - gRPC and MQTT device transports alongside the WebSocket one
-- Persistent storage behind the pipeline store
+- A SQL storage backend, for deployments with more than one API replica
 - Wake word, speaker identification, and memory in the runtime
 
 ## Known gaps
@@ -233,8 +251,9 @@ Tracked here rather than as TODOs in the source.
 - **No distributed tracing.** Metrics and structured logs are in place, and
   every event already carries a trace id, but nothing exports spans to an
   OpenTelemetry collector yet.
-- **The pipeline store is in-memory.** Restarting the API loses every stored
-  pipeline.
+- **Only a file and memory store exist.** Pipelines persist to a directory,
+  which suits a single node; a shared SQL backend is what several API replicas
+  would need.
 - **Only linear graphs execute.** The runtime rejects router fan-out rather
   than pretending to run it; the graph model already describes it.
 - **`Permission::Confirm` is refused, not asked.** Asking the speaker to

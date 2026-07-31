@@ -190,6 +190,7 @@ dependencies = [
  "conduit-openai",
  "conduit-provider",
  "conduit-runtime",
+ "conduit-store",
  "futures-util",
  "http-body-util",
  "reqwest",
@@ -274,6 +275,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tracing",
+]
+
+[[package]]
+name = "conduit-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "conduit-core",
+ "conduit-provider",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

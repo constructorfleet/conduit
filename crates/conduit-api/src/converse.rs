@@ -69,6 +69,8 @@ pub async fn converse(
 ) -> Result<Response, ApiError> {
     let graph = state
         .pipeline(&name)
+        .await
+        .map_err(|error| ApiError::unavailable(error.to_string()))?
         .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
 
     let providers = state.providers().ok_or_else(|| {

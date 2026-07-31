@@ -23,6 +23,16 @@ impl ApiError {
         Self { status: StatusCode::NOT_FOUND, kind: "not_found", detail: detail.into() }
     }
 
+    /// The store could not answer.
+    #[must_use]
+    pub fn unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            kind: "unavailable",
+            detail: detail.into(),
+        }
+    }
+
     /// The request was well-formed JSON but semantically invalid.
     #[must_use]
     pub fn unprocessable(detail: impl Into<String>) -> Self {

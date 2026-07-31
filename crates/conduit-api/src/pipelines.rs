@@ -18,21 +18,39 @@ pub struct PipelineView {
 }
 
 /// `GET /v1/pipelines` — names of every stored pipeline.
-pub async fn list(State(state): State<AppState>) -> Json<Vec<String>> {
-    Json(state.pipeline_names())
+///
+/// # Errors
+///
+/// Returns 503 if the store cannot be read.
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<String>>, ApiError> {
+    state.pipeline_names().await.map(Json).map_err(store_failure)
+}
+
+/// Turns a store failure into a response.
+///
+/// A name the store refuses is the client's mistake; anything else is the
+/// server's, and the status has to say which.
+fn store_failure(error: conduit_core::Error) -> ApiError {
+    match error {
+        conduit_core::Error::Config(detail) => ApiError::unprocessable(detail),
+        other => ApiError::unavailable(other.to_string()),
+    }
 }
 
 /// `GET /v1/pipelines/{name}` — one pipeline with its execution order.
 ///
 /// # Errors
 ///
-/// Returns 404 if no pipeline is stored under `name`.
+/// Returns 404 if no pipeline is stored under `name`, or 503 if the store
+/// cannot be read.
 pub async fn get(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<PipelineView>, ApiError> {
     let graph = state
         .pipeline(&name)
+        .await
+        .map_err(store_failure)?
         .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
     Ok(Json(view(graph)?))
 }
@@ -51,7 +69,7 @@ pub async fn put(
     Json(graph): Json<PipelineGraph>,
 ) -> Result<(StatusCode, Json<PipelineView>), ApiError> {
     let view = view(graph.clone())?;
-    let replaced = state.put_pipeline(name, graph);
+    let replaced = state.put_pipeline(&name, graph).await.map_err(store_failure)?;
     let status = if replaced { StatusCode::OK } else { StatusCode::CREATED };
     Ok((status, Json(view)))
 }
@@ -65,7 +83,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if state.remove_pipeline(&name) {
+    if state.remove_pipeline(&name).await.map_err(store_failure)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("no pipeline named `{name}`")))

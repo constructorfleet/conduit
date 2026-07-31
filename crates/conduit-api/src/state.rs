@@ -1,19 +1,21 @@
 //! Shared application state.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
+use conduit_core::Result;
 use conduit_metrics::Metrics;
+use conduit_provider::storage::PipelineStore;
 use conduit_runtime::Providers;
+use conduit_store::MemoryStore;
 
 /// State shared by every request handler. Cheap to clone.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct AppState {
     /// The process-wide event bus.
     pub bus: EventBus,
-    pipelines: Arc<RwLock<BTreeMap<String, PipelineGraph>>>,
+    pipelines: Arc<dyn PipelineStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Option<Arc<Providers>>,
@@ -22,18 +24,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creates state backed by `bus` and an empty pipeline store.
-    ///
-    /// The store is in-memory; persistence arrives with the storage backends
-    /// and will replace this type's internals, not its API.
+    /// Creates state backed by `bus` and an in-memory pipeline store.
     #[must_use]
     pub fn new(bus: EventBus) -> Self {
-        Self {
-            bus,
-            pipelines: Arc::new(RwLock::new(BTreeMap::new())),
-            providers: None,
-            metrics: Arc::new(Metrics::new()),
-        }
+        Self::with_store(bus, Arc::new(MemoryStore::new()))
+    }
+
+    /// Creates state backed by `bus` and `pipelines`.
+    #[must_use]
+    pub fn with_store(bus: EventBus, pipelines: Arc<dyn PipelineStore>) -> Self {
+        Self { bus, pipelines, providers: None, metrics: Arc::new(Metrics::new()) }
     }
 
     /// The metrics this server exposes.
@@ -56,38 +56,45 @@ impl AppState {
     }
 
     /// Names of every stored pipeline, in order.
-    #[must_use]
-    pub fn pipeline_names(&self) -> Vec<String> {
-        self.read().keys().cloned().collect()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn pipeline_names(&self) -> Result<Vec<String>> {
+        self.pipelines.list().await
     }
 
     /// Fetches a pipeline by name.
-    #[must_use]
-    pub fn pipeline(&self, name: &str) -> Option<PipelineGraph> {
-        self.read().get(name).cloned()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable or the definition cannot
+    /// be read.
+    pub async fn pipeline(&self, name: &str) -> Result<Option<PipelineGraph>> {
+        self.pipelines.get(name).await
     }
 
     /// Stores a pipeline, returning `true` if it replaced an existing one.
-    pub fn put_pipeline(&self, name: impl Into<String>, graph: PipelineGraph) -> bool {
-        self.write().insert(name.into(), graph).is_some()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the name is unusable or the write fails.
+    pub async fn put_pipeline(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
+        self.pipelines.put(name, graph).await
     }
 
     /// Removes a pipeline, returning `true` if it existed.
-    pub fn remove_pipeline(&self, name: &str) -> bool {
-        self.write().remove(name).is_some()
-    }
-
-    /// Reads the store, recovering from a poisoned lock.
     ///
-    /// A panic while holding the lock leaves the map structurally sound —
-    /// every mutation is a single insert or remove — so refusing to serve
-    /// afterwards would be worse than continuing.
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<String, PipelineGraph>> {
-        self.pipelines.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn remove_pipeline(&self, name: &str) -> Result<bool> {
+        self.pipelines.remove(name).await
     }
+}
 
-    /// Writes to the store, recovering from a poisoned lock.
-    fn write(&self) -> std::sync::RwLockWriteGuard<'_, BTreeMap<String, PipelineGraph>> {
-        self.pipelines.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState").field("providers", &self.providers).finish_non_exhaustive()
     }
 }

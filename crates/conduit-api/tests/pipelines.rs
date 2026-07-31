@@ -131,3 +131,56 @@ async fn unknown_stage_filters_are_rejected() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body["detail"].as_str().expect("detail").contains("telepathy"));
 }
+
+/// A directory that cleans itself up.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new() -> Self {
+        Self(std::env::temp_dir().join(format!(
+            "conduit-api-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        )))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn a_stored_pipeline_survives_a_restart() {
+    // The whole reason for a store: a fresh server on the same directory.
+    let directory = TempDir::new();
+    let store =
+        std::sync::Arc::new(conduit_store::FileStore::open(&directory.0).await.expect("opens"));
+
+    let before = AppState::with_store(EventBus::default(), store.clone());
+    let (status, _) = call(&before, put(&valid_graph())).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let after = AppState::with_store(EventBus::default(), store);
+    let (status, body) = call(&after, get("/v1/pipelines/kitchen")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["graph"]["name"], "kitchen");
+}
+
+#[tokio::test]
+async fn a_name_the_store_cannot_use_is_rejected() {
+    let state = AppState::new(EventBus::default());
+    let request = Request::builder()
+        .method("PUT")
+        .uri("/v1/pipelines/kitchen%20light")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&valid_graph()).expect("serialize")))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+}

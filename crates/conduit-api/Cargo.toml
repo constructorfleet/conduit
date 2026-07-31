@@ -12,6 +12,7 @@ conduit-core.workspace = true
 conduit-metrics.workspace = true
 conduit-openai.workspace = true
 conduit-provider.workspace = true
+conduit-store.workspace = true
 conduit-runtime.workspace = true
 
 axum.workspace = true
@@ -32,6 +33,7 @@ dev-providers = ["conduit-provider/testing"]
 
 [dev-dependencies]
 conduit-metrics.workspace = true
+conduit-store.workspace = true
 conduit-provider = { workspace = true, features = ["testing"] }
 futures-util.workspace = true
 http-body-util = "0.1"

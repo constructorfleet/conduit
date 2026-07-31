@@ -23,7 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(provider = %description, "registered provider");
     }
 
-    let mut state = AppState::new(EventBus::default());
+    let store = conduit_api::config::store_from_env().await?;
+    let mut state = AppState::with_store(EventBus::default(), store);
     if !registered.is_empty() {
         state = state.with_providers(providers);
     }

@@ -14,6 +14,7 @@ pub mod llm;
 pub mod memory;
 pub mod registry;
 pub mod speaker;
+pub mod storage;
 pub mod stt;
 #[cfg(feature = "testing")]
 pub mod testing;
