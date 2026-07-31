@@ -10,6 +10,8 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{validate_name, PipelineStore};
 
+use crate::is_listable;
+
 /// The extension every stored definition carries.
 const EXTENSION: &str = "json";
 
@@ -70,10 +72,12 @@ impl PipelineStore for FileStore {
             .map_err(|error| Self::failure(&self.directory, &error))?
         {
             let path = entry.path();
-            // A directory may hold anything; only our own files are pipelines.
+            // A directory may hold anything — notes, subdirectories, a
+            // `.json.tmp` left by a crash mid-write. Only our own finished
+            // files are pipelines.
             if path.extension().is_some_and(|extension| extension == EXTENSION) {
                 if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) {
-                    if validate_name(name).is_ok() {
+                    if is_listable(name) {
                         names.push(name.to_owned());
                     }
                 }

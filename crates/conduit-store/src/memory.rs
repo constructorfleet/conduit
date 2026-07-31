@@ -10,6 +10,8 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_provider::storage::{validate_name, PipelineStore};
 
+use crate::is_listable;
+
 /// An in-memory pipeline store.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
@@ -33,24 +35,30 @@ impl MemoryStore {
     }
 }
 
+// A `BTreeMap` would happily hold `../../etc/passwd`, so nothing here needs
+// validation to work. It is validated anyway, on every method: a name this
+// backend accepts and another refuses is a bug that only shows up after a
+// deployment switches its storage, which is the worst time to find it.
 #[async_trait::async_trait]
 impl PipelineStore for MemoryStore {
     async fn list(&self) -> Result<Vec<String>> {
-        Ok(self.lock().keys().cloned().collect())
+        // `put` is the only way in, so every key here is already usable; the
+        // filter states that rather than trusting it.
+        Ok(self.lock().keys().filter(|name| is_listable(name)).cloned().collect())
     }
 
     async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
+        validate_name(name)?;
         Ok(self.lock().get(name).cloned())
     }
 
     async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
-        // Validated here too, so a name this backend would accept cannot be
-        // one another backend refuses.
         validate_name(name)?;
         Ok(self.lock().insert(name.to_owned(), graph).is_some())
     }
 
     async fn remove(&self, name: &str) -> Result<bool> {
+        validate_name(name)?;
         Ok(self.lock().remove(name).is_some())
     }
 }

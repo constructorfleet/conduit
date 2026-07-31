@@ -40,9 +40,44 @@ pub fn validate_name(name: &str) -> Result<()> {
 }
 
 /// Somewhere pipeline definitions are kept.
+///
+/// # Contract
+///
+/// Which backend a deployment uses is configuration, so it must not be
+/// observable behaviour. Every implementation owes its callers all of this:
+///
+/// - **Names are validated on every method.** `list`, `get`, `put` and
+///   `remove` all reject a name [`validate_name`] refuses. In particular
+///   `get` and `remove` return [`Error::Config`] rather than `Ok(None)` /
+///   `Ok(false)`: an unusable name is a malformed request, not a missing
+///   pipeline, and reporting absence would tell the caller to go create one
+///   under a name that can never be created. It must not depend on whether a
+///   given backend happens to need the name to be safe — an in-memory map is
+///   in no danger from `../../etc/passwd`, but it refuses it all the same, so
+///   that a request accepted before a storage migration is accepted after it.
+/// - **`list` only returns names `get` will answer for.** Storage outlives the
+///   rule that governs it — a directory is editable by hand, a table is
+///   writable by anything holding the credentials — so a name that predates
+///   this contract may be sitting in it. Such entries are omitted rather than
+///   returned as names that would then be rejected.
+/// - **Absence is not failure.** `get` on a name that is merely not there is
+///   `Ok(None)`, and `remove` on it is `Ok(false)`.
+/// - **Unreadable is not absent.** A stored definition that will not decode is
+///   an error, never `Ok(None)`: "it is not there" invites an editor to
+///   overwrite something that is merely broken.
+/// - **Round-tripping is lossless.** `get` after `put` returns an equal graph.
+/// - **`put` reports replacement.** `true` when it overwrote an existing
+///   pipeline, `false` when it created one.
+///
+/// The shared conformance suite in `conduit-store`
+/// (`crates/conduit-store/tests/conformance/mod.rs`) is the executable form of
+/// this list, and every backend is run through it.
+///
+/// [`Error::Config`]: conduit_core::Error::Config
 #[async_trait::async_trait]
 pub trait PipelineStore: Send + Sync + 'static {
-    /// Names of every stored pipeline, in a stable order.
+    /// Names of every stored pipeline, sorted, excluding any that
+    /// [`validate_name`] would refuse.
     ///
     /// # Errors
     ///
@@ -53,22 +88,25 @@ pub trait PipelineStore: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns an error if the backend is unavailable or the stored
-    /// definition cannot be read.
+    /// Returns [`Error::Config`] if [`validate_name`] refuses `name`, or an
+    /// error if the backend is unavailable or the stored definition cannot be
+    /// read.
     async fn get(&self, name: &str) -> Result<Option<PipelineGraph>>;
 
     /// Stores a pipeline, returning `true` if it replaced an existing one.
     ///
     /// # Errors
     ///
-    /// Returns an error if the name is unusable or the write fails.
+    /// Returns [`Error::Config`] if [`validate_name`] refuses `name`, or an
+    /// error if the write fails.
     async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool>;
 
     /// Removes a pipeline, returning `true` if it existed.
     ///
     /// # Errors
     ///
-    /// Returns an error if the backend is unavailable.
+    /// Returns [`Error::Config`] if [`validate_name`] refuses `name`, or an
+    /// error if the backend is unavailable.
     async fn remove(&self, name: &str) -> Result<bool>;
 }
 

@@ -12,6 +12,8 @@ use conduit_provider::storage::{validate_name, PipelineStore};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
+use crate::is_listable;
+
 /// Migrations embedded at compile time, so a deployment needs no side-car.
 static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -86,7 +88,14 @@ impl PipelineStore for PostgresStore {
             .fetch_all(&self.pool)
             .await
             .map_err(Self::failure)?;
-        Ok(rows.iter().map(|row| row.get::<String, _>("name")).collect())
+        // The table is shared and writable by anything with the credentials,
+        // so a row may carry a name `put` would refuse — and a caller turns
+        // every listed name straight back into a `get`.
+        Ok(rows
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .filter(|name| is_listable(name))
+            .collect())
     }
 
     async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
