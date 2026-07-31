@@ -22,7 +22,7 @@ echoes described under [Running](#running).
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
-| [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible language models — OpenAI, Ollama, vLLM, LM Studio, OpenRouter |
+| [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
 
 ## Design
@@ -151,9 +151,17 @@ cargo audit
 
 ## Providers
 
-`conduit-openai` implements the chat completions API, which is the closest
-thing to a lingua franca among model servers. One implementation covers OpenAI,
-Ollama, vLLM, LM Studio, and OpenRouter — only the base URL changes:
+`conduit-openai` implements the three APIs that come closest to a lingua franca
+among model and speech servers, so one implementation of each reaches a great
+many of them:
+
+| Capability | Endpoint | Also served by |
+| --- | --- | --- |
+| `OpenAi` | `/chat/completions` | Ollama, vLLM, LM Studio, OpenRouter |
+| `OpenAiStt` | `/audio/transcriptions` | Speaches, `whisper.cpp`, `faster-whisper` |
+| `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper |
+
+Only the base URL changes:
 
 ```rust
 // A local Ollama server, no key needed.
@@ -164,13 +172,20 @@ OpenAi::new(OpenAiConfig {
 })?;
 ```
 
-Because the registry keys on the provider name, differently configured servers
-coexist in one pipeline: a local model for most turns and a hosted one for the
-hard questions.
+A configuration describes one *server*, not one capability, so a host serving
+all three is described once and used three times. Because the registry keys on
+the provider name, differently configured servers also coexist in one pipeline:
+a local model for most turns and a hosted one for the hard questions.
+
+Two honest limits. Transcription takes a complete recording rather than a
+stream, so `OpenAiStt` buffers the utterance and reports no partial
+transcripts — it genuinely has none, and inventing them would make the pipeline
+look more responsive than it is. And raw Opus frames cannot be uploaded,
+because Opus needs a container this code does not build; capture as PCM or
+FLAC.
 
 ## Next
 
-- Reference providers: Whisper for speech, Piper for synthesis
 - gRPC and MQTT device transports alongside the WebSocket one
 - Persistent storage behind the pipeline store
 - Wake word, speaker identification, and memory in the runtime

@@ -3,6 +3,9 @@
 //! Real enough to be worth testing against: it records what it received and
 //! can reply in packets that do not line up with message boundaries.
 
+// Shared by several test binaries, not all of which inspect every field.
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -29,6 +32,8 @@ enum Reply {
 #[derive(Default)]
 struct Received {
     body: Option<serde_json::Value>,
+    raw: Option<Vec<u8>>,
+    content_type: Option<String>,
     authorization: Option<String>,
 }
 
@@ -66,6 +71,8 @@ impl MockServer {
 
         let app = Router::new()
             .route("/chat/completions", post(chat))
+            .route("/audio/transcriptions", post(transcriptions))
+            .route("/audio/speech", post(chat))
             .route("/models", get(models))
             .with_state(state);
 
@@ -86,6 +93,16 @@ impl MockServer {
     /// The body of the most recent request.
     pub async fn last_body(&self) -> Option<serde_json::Value> {
         self.received.lock().await.body.clone()
+    }
+
+    /// The raw body of the most recent upload.
+    pub async fn last_raw(&self) -> Option<Vec<u8>> {
+        self.received.lock().await.raw.clone()
+    }
+
+    /// The `Content-Type` of the most recent upload.
+    pub async fn last_content_type(&self) -> Option<String> {
+        self.received.lock().await.content_type.clone()
     }
 
     /// The `Authorization` header of the most recent request.
@@ -115,6 +132,47 @@ async fn chat(
             let stream =
                 futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
             Ok(sse_response(Body::from_stream(stream)))
+        }
+        Reply::Status(status, message) => {
+            Err((StatusCode::from_u16(status).expect("valid status"), message))
+        }
+    }
+}
+
+/// Records the uploaded body verbatim and replies as configured.
+///
+/// The body is multipart, so it is kept as raw text for tests to inspect
+/// rather than parsed into JSON.
+async fn transcriptions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, (StatusCode, String)> {
+    {
+        let mut received = state.received.lock().await;
+        received.raw = Some(body.to_vec());
+        received.content_type = headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        received.authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+    }
+
+    match state.reply {
+        Reply::Body(body) => Ok(Response::builder()
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("response")),
+        Reply::Chunks(chunks) => {
+            let stream =
+                futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+            Ok(Response::builder()
+                .header("content-type", "application/octet-stream")
+                .body(Body::from_stream(stream))
+                .expect("response"))
         }
         Reply::Status(status, message) => {
             Err((StatusCode::from_u16(status).expect("valid status"), message))
