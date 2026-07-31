@@ -188,6 +188,15 @@ is on `/v1/events`, tagged with the conversation id the socket announces. That
 keeps the audio path free of anything that is not audio, and it is why the
 socket names the conversation before sending a single sample.
 
+The capture/playback format defaults to 16 kHz mono signed 16-bit little-endian
+PCM. A device may negotiate a different format with query parameters:
+
+```text
+/v1/pipelines/kitchen/converse?encoding=pcm_f32_le&sample_rate=48000&channels=2
+```
+
+Unsupported provider encodings are refused before the socket upgrades.
+
 A missing or unrunnable pipeline is refused with an HTTP status *before* the
 upgrade, so a client never has to diagnose a socket that opens and then dies.
 

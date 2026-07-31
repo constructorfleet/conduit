@@ -8,6 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use conduit_core::audio::Encoding;
 use conduit_core::event::FinishReason;
 use conduit_core::id::ToolCallId;
 use conduit_core::{Error, Result};
@@ -43,11 +44,17 @@ fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
 #[derive(Clone)]
 pub struct FakeStt {
     transcripts: Vec<Transcript>,
+    encodings: Vec<Encoding>,
 }
 
 impl FakeStt {
     pub fn new(transcripts: Vec<Transcript>) -> Self {
-        Self { transcripts }
+        Self { transcripts, encodings: Vec::new() }
+    }
+
+    pub fn accepting_encodings(mut self, encodings: &[Encoding]) -> Self {
+        self.encodings = encodings.to_vec();
+        self
     }
 }
 
@@ -68,6 +75,10 @@ impl SpeechToText for FakeStt {
         let received = audio.count().await;
         assert!(received > 0, "the recognizer was given no audio");
         Ok(stream_of(self.transcripts.clone()))
+    }
+
+    fn supports_encoding(&self, encoding: Encoding) -> bool {
+        self.encodings.is_empty() || self.encodings.contains(&encoding)
     }
 }
 
@@ -127,6 +138,7 @@ pub struct FakeLlm {
     /// Whether the final round replays forever once the script runs out, so a
     /// test can drive a model that never stops asking for tools.
     repeat_last: bool,
+    models: Vec<String>,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 
@@ -144,6 +156,7 @@ impl FakeLlm {
         Self {
             rounds: Arc::new(Mutex::new(rounds)),
             repeat_last: false,
+            models: Vec::new(),
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -151,6 +164,12 @@ impl FakeLlm {
     /// Replays the final round forever once the script is exhausted.
     pub fn repeating(mut self) -> Self {
         self.repeat_last = true;
+        self
+    }
+
+    /// Advertises a finite model catalogue.
+    pub fn serving(mut self, models: &[&str]) -> Self {
+        self.models = models.iter().map(|model| (*model).to_owned()).collect();
         self
     }
 
@@ -186,6 +205,10 @@ impl LanguageModel for FakeLlm {
     fn supports_tools(&self) -> bool {
         true
     }
+
+    fn models(&self) -> &[String] {
+        &self.models
+    }
 }
 
 /// A synthesizer that emits the requested text as bytes and records it.
@@ -193,11 +216,21 @@ impl LanguageModel for FakeLlm {
 pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
     spoke: Arc<Notify>,
+    encodings: Vec<Encoding>,
 }
 
 impl FakeTts {
     pub fn new() -> Self {
-        Self { spoken: Arc::new(Mutex::new(Vec::new())), spoke: Arc::new(Notify::new()) }
+        Self {
+            spoken: Arc::new(Mutex::new(Vec::new())),
+            spoke: Arc::new(Notify::new()),
+            encodings: Vec::new(),
+        }
+    }
+
+    pub fn producing_encodings(mut self, encodings: &[Encoding]) -> Self {
+        self.encodings = encodings.to_vec();
+        self
     }
 
     /// The text of every synthesis request, in order.
@@ -238,6 +271,10 @@ impl TextToSpeech for FakeTts {
             name: "Fake".to_owned(),
             language: "en-US".to_owned(),
         }])
+    }
+
+    fn supports_encoding(&self, encoding: Encoding) -> bool {
+        self.encodings.is_empty() || self.encodings.contains(&encoding)
     }
 }
 

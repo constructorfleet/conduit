@@ -1,7 +1,7 @@
 //! Text-to-speech provider interface.
 
 use bytes::Bytes;
-use conduit_core::audio::AudioFormat;
+use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::Result;
 use serde::{Deserialize, Serialize};
 
@@ -84,4 +84,11 @@ pub trait TextToSpeech: Provider {
     ///
     /// Returns an error if the catalogue cannot be retrieved.
     async fn voices(&self) -> Result<Vec<Voice>>;
+
+    /// Whether this provider can produce audio in `encoding`.
+    ///
+    /// The default is permissive for adapters whose backend decides at runtime.
+    fn supports_encoding(&self, _encoding: Encoding) -> bool {
+        true
+    }
 }

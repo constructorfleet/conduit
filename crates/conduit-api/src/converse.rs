@@ -11,13 +11,15 @@
 //! is talking.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::Response;
+use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::device::{Command, Notice};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
 use futures_util::StreamExt;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -39,11 +41,13 @@ const CAPTURE_BUFFER: usize = 32;
 ///
 /// Returns 404 if no such pipeline is stored, and 422 if it cannot be executed
 /// with the providers this server has.
-pub async fn converse(
+pub(crate) async fn converse(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(format): Query<AudioFormatQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
+    let format = format.into_format()?;
     let graph = state
         .pipeline(&name)
         .await
@@ -56,9 +60,38 @@ pub async fn converse(
 
     let runner = Runner::prepare(&graph, &providers, state.bus.clone())
         .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+    let runner = runner
+        .with_format(format)
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?;
 
     tracing::info!(pipeline = %name, "conversation socket opened");
     Ok(upgrade.on_upgrade(move |socket| run(socket, runner)))
+}
+
+/// Device-negotiated audio format for one conversation.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AudioFormatQuery {
+    encoding: Option<Encoding>,
+    sample_rate: Option<u32>,
+    channels: Option<u16>,
+}
+
+impl AudioFormatQuery {
+    fn into_format(self) -> Result<AudioFormat, ApiError> {
+        let default = AudioFormat::DEFAULT;
+        let format = AudioFormat {
+            encoding: self.encoding.unwrap_or(default.encoding),
+            sample_rate: self.sample_rate.unwrap_or(default.sample_rate),
+            channels: self.channels.unwrap_or(default.channels),
+        };
+        if format.sample_rate == 0 {
+            return Err(ApiError::unprocessable("audio sample_rate must be greater than zero"));
+        }
+        if format.channels == 0 {
+            return Err(ApiError::unprocessable("audio channels must be greater than zero"));
+        }
+        Ok(format)
+    }
 }
 
 /// Drives one turn over `socket`.

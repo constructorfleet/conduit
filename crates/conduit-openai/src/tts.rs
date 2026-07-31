@@ -140,6 +140,10 @@ impl TextToSpeech for OpenAiTts {
     async fn voices(&self) -> Result<Vec<Voice>> {
         Ok(self.voices.clone())
     }
+
+    fn supports_encoding(&self, encoding: Encoding) -> bool {
+        matches!(encoding, Encoding::PcmS16Le | Encoding::Flac | Encoding::Opus)
+    }
 }
 
 #[cfg(test)]

@@ -3,11 +3,14 @@
 //! These drive a real server over a real socket, because the point of the
 //! endpoint is what happens on the wire.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use conduit_api::{router, AppState};
+use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
 use conduit_provider::{ChunkStream, Provider};
@@ -27,6 +30,83 @@ struct SlowTts;
 impl Provider for SlowTts {
     fn name(&self) -> &str {
         "echo-tts"
+    }
+}
+
+/// Records the format the API said the device was streaming.
+#[derive(Debug, Clone, Default)]
+struct RecordingStt {
+    formats: Arc<Mutex<Vec<AudioFormat>>>,
+}
+
+impl RecordingStt {
+    fn formats(&self) -> Vec<AudioFormat> {
+        self.formats.lock().expect("lock").clone()
+    }
+}
+
+impl Provider for RecordingStt {
+    fn name(&self) -> &str {
+        "recording-stt"
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeechToText for RecordingStt {
+    async fn transcribe(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        options: TranscribeOptions,
+    ) -> conduit_core::Result<ChunkStream<Transcript>> {
+        self.formats.lock().expect("lock").push(options.format);
+        let heard = audio
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|chunk| chunk.expect("chunk").data)
+            .fold(Vec::new(), |mut bytes, chunk| {
+                bytes.extend_from_slice(&chunk);
+                bytes
+            });
+        let text = String::from_utf8_lossy(&heard).into_owned();
+        Ok(Box::pin(futures_util::stream::iter(vec![Ok(Transcript::final_text(text))])))
+    }
+}
+
+/// Records the format requested from synthesis.
+#[derive(Debug, Clone, Default)]
+struct RecordingTts {
+    formats: Arc<Mutex<Vec<AudioFormat>>>,
+}
+
+impl RecordingTts {
+    fn formats(&self) -> Vec<AudioFormat> {
+        self.formats.lock().expect("lock").clone()
+    }
+}
+
+impl Provider for RecordingTts {
+    fn name(&self) -> &str {
+        "recording-tts"
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for RecordingTts {
+    async fn synthesize(
+        &self,
+        request: SynthesisRequest,
+    ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
+        self.formats.lock().expect("lock").push(request.format);
+        Ok(Box::pin(futures_util::stream::iter(vec![Ok(SpeechChunk {
+            sequence: 0,
+            format: request.format,
+            data: bytes::Bytes::from(request.text.into_bytes()),
+        })])))
+    }
+
+    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
+        Ok(Vec::new())
     }
 }
 
@@ -82,6 +162,18 @@ fn providers() -> Providers {
 /// The same pipeline, but slow enough to interrupt.
 fn slow_providers() -> Providers {
     Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(SlowTts)
+}
+
+fn recording_graph() -> PipelineGraph {
+    PipelineGraph::new("recording")
+        .with_node(Node::new("stt", NodeKind::Stt, "recording-stt"))
+        .with_node(
+            Node::new("llm", NodeKind::Llm, "echo-llm")
+                .with_config(serde_json::json!({ "model": "echo" })),
+        )
+        .with_node(Node::new("tts", NodeKind::Tts, "recording-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
 }
 
 /// A server listening on an ephemeral port. Stops when the test ends.
@@ -207,6 +299,30 @@ async fn the_reply_is_streamed_not_delivered_whole() {
     let audio_frames =
         frames.iter().filter(|frame| matches!(frame, Message::Binary(_))).count();
     assert!(audio_frames >= 2, "expected streamed audio, got {audio_frames} frame(s)");
+}
+
+#[tokio::test]
+async fn the_negotiated_audio_format_reaches_the_runtime() {
+    let stt = RecordingStt::default();
+    let tts = RecordingTts::default();
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new().with_stt(stt.clone()).with_llm(EchoLlm).with_tts(tts.clone()),
+    );
+    state.put_pipeline("recording", recording_graph()).await.expect("stores");
+    let server = Server::start(state).await;
+
+    let frames = converse(
+        &server,
+        "/v1/pipelines/recording/converse?encoding=pcm_f32_le&sample_rate=48000&channels=2",
+        "hello",
+    )
+    .await;
+
+    let negotiated =
+        AudioFormat { encoding: Encoding::PcmF32Le, sample_rate: 48_000, channels: 2 };
+    assert_eq!(spoken(&frames), "You said: hello.");
+    assert_eq!(stt.formats(), [negotiated]);
+    assert_eq!(tts.formats(), [negotiated]);
 }
 
 #[tokio::test]
