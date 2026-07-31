@@ -4,6 +4,7 @@ substitutions:
   conduit_server: 192.168.1.10:8080
   conduit_pipeline: kitchen
   conduit_scheme: ws
+  conduit_max_utterance_ms: "8000"
   wake_debug_assistant_id: ${conduit_pipeline}
   wake_debug_udp_host: ""
   wake_debug_udp_port: "6056"
@@ -193,6 +194,7 @@ conduit_voice:
   pipeline: ${conduit_pipeline}
   # From secrets.yaml, not a substitution: substitutions are committed.
   token: !secret conduit_token
+  max_utterance_ms: ${conduit_max_utterance_ms}
   debug_assistant_id: ${wake_debug_assistant_id}
   debug_udp_host: ${wake_debug_udp_host}
   debug_udp_port: ${wake_debug_udp_port}
