@@ -25,3 +25,19 @@ The canonical Rust definitions live in
 `crates/conduit-core/src/device.rs`. The files under `sat1/` and `voicepe/`
 are board integration targets for this protocol, not wrappers around any other
 assistant protocol.
+
+## Shared Helpers
+
+`common/conduit_converse.h` provides:
+
+- the required audio format constants,
+- `CONDUIT_CONVERSE_END_JSON`,
+- pipeline-name validation matching the API storage rules,
+- `/v1/pipelines/{pipeline}/converse` path construction,
+- parsing for `started`, `done`, and `failed` notices.
+
+Run the firmware helper tests with:
+
+```sh
+./firmware/test.sh
+```

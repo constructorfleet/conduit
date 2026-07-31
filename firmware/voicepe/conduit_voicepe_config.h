@@ -3,7 +3,15 @@
 
 #include "../common/conduit_converse.h"
 
-#define CONDUIT_BOARD_ID "voicepe"
-#define CONDUIT_BOARD_NAME "VoicePE"
+#define CONDUIT_VOICEPE_BOARD_ID "voicepe"
+#define CONDUIT_VOICEPE_BOARD_NAME "VoicePE"
+
+#ifndef CONDUIT_BOARD_ID
+#define CONDUIT_BOARD_ID CONDUIT_VOICEPE_BOARD_ID
+#endif
+
+#ifndef CONDUIT_BOARD_NAME
+#define CONDUIT_BOARD_NAME CONDUIT_VOICEPE_BOARD_NAME
+#endif
 
 #endif

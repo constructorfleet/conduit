@@ -29,6 +29,63 @@ typedef struct conduit_notice {
   size_t error_len;
 } conduit_notice_t;
 
+static inline int conduit_pipeline_name_is_valid(const char *pipeline) {
+  size_t len = 0;
+  if (pipeline == NULL || pipeline[0] == '\0') {
+    return 0;
+  }
+  while (pipeline[len] != '\0') {
+    const char c = pipeline[len];
+    const int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!ok) {
+      return 0;
+    }
+    len++;
+  }
+  return len <= 128;
+}
+
+static inline size_t conduit_strlen(const char *value) {
+  size_t len = 0;
+  if (value == NULL) {
+    return 0;
+  }
+  while (value[len] != '\0') {
+    len++;
+  }
+  return len;
+}
+
+static inline size_t conduit_copy(char *out, size_t capacity, size_t offset, const char *value) {
+  size_t index = 0;
+  while (value[index] != '\0') {
+    if (out != NULL && offset + index + 1 < capacity) {
+      out[offset + index] = value[index];
+    }
+    index++;
+  }
+  return offset + index;
+}
+
+static inline size_t conduit_converse_path(char *out, size_t capacity, const char *pipeline) {
+  if (!conduit_pipeline_name_is_valid(pipeline)) {
+    if (out != NULL && capacity > 0) {
+      out[0] = '\0';
+    }
+    return 0;
+  }
+
+  size_t len = 0;
+  len = conduit_copy(out, capacity, len, CONDUIT_CONVERSE_PATH_PREFIX);
+  len = conduit_copy(out, capacity, len, pipeline);
+  len = conduit_copy(out, capacity, len, CONDUIT_CONVERSE_PATH_SUFFIX);
+  if (out != NULL && capacity > 0) {
+    out[len < capacity ? len : capacity - 1] = '\0';
+  }
+  return len;
+}
+
 static inline int conduit_streq_literal(const char *value, size_t len, const char *literal) {
   size_t i = 0;
   while (literal[i] != '\0') {

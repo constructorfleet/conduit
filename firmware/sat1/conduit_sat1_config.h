@@ -3,7 +3,15 @@
 
 #include "../common/conduit_converse.h"
 
-#define CONDUIT_BOARD_ID "sat1"
-#define CONDUIT_BOARD_NAME "Satellite1"
+#define CONDUIT_SAT1_BOARD_ID "sat1"
+#define CONDUIT_SAT1_BOARD_NAME "Satellite1"
+
+#ifndef CONDUIT_BOARD_ID
+#define CONDUIT_BOARD_ID CONDUIT_SAT1_BOARD_ID
+#endif
+
+#ifndef CONDUIT_BOARD_NAME
+#define CONDUIT_BOARD_NAME CONDUIT_SAT1_BOARD_NAME
+#endif
 
 #endif
