@@ -1,0 +1,219 @@
+//! A device holding a conversation over a WebSocket.
+//!
+//! These drive a real server over a real socket, because the point of the
+//! endpoint is what happens on the wire.
+
+use std::time::Duration;
+
+use conduit_api::{router, AppState};
+use conduit_core::bus::EventBus;
+use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
+use conduit_runtime::Providers;
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::Message;
+
+/// A pipeline built on the in-memory providers: text in, text out.
+fn echo_graph() -> PipelineGraph {
+    PipelineGraph::new("echo")
+        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
+        .with_node(
+            Node::new("llm", NodeKind::Llm, "echo-llm")
+                .with_config(serde_json::json!({ "model": "echo" })),
+        )
+        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+}
+
+fn providers() -> Providers {
+    Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(EchoTts)
+}
+
+/// A server listening on an ephemeral port. Stops when the test ends.
+struct Server {
+    address: std::net::SocketAddr,
+    state: AppState,
+}
+
+impl Server {
+    async fn start(state: AppState) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let app = router(state.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self { address, state }
+    }
+
+    fn ws_url(&self, path: &str) -> String {
+        format!("ws://{}{path}", self.address)
+    }
+
+    fn http_url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.address)
+    }
+}
+
+/// Connects, says `utterance`, and returns the frames the server sent back.
+async fn converse(server: &Server, path: &str, utterance: &str) -> Vec<Message> {
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(server.ws_url(path)).await.expect("connects");
+
+    socket.send(Message::Binary(utterance.as_bytes().to_vec().into())).await.expect("sends");
+    socket
+        .send(Message::Text(r#"{"type":"end"}"#.into()))
+        .await
+        .expect("sends end of utterance");
+
+    let collect = async {
+        let mut frames = Vec::new();
+        while let Some(frame) = socket.next().await {
+            match frame.expect("frame") {
+                Message::Close(_) => break,
+                message => frames.push(message),
+            }
+        }
+        frames
+    };
+    tokio::time::timeout(Duration::from_secs(10), collect).await.expect("server replies")
+}
+
+/// The audio the server sent, as text — the echo providers speak UTF-8.
+fn spoken(frames: &[Message]) -> String {
+    frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Message::Binary(data) => Some(String::from_utf8_lossy(data).into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The JSON control frames the server sent.
+fn control(frames: &[Message]) -> Vec<serde_json::Value> {
+    frames
+        .iter()
+        .filter_map(|frame| match frame {
+            Message::Text(text) => serde_json::from_str(text).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn server_with_echo_pipeline() -> Server {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline("echo", echo_graph());
+    Server::start(state).await
+}
+
+#[tokio::test]
+async fn a_device_speaks_and_is_answered() {
+    let server = server_with_echo_pipeline().await;
+    let frames = converse(&server, "/v1/pipelines/echo/converse", "hello there").await;
+
+    assert_eq!(spoken(&frames), "You said: hello there.");
+}
+
+#[tokio::test]
+async fn the_conversation_is_announced_before_the_audio() {
+    // A client needs the id to follow its own turn on /v1/events.
+    let server = server_with_echo_pipeline().await;
+    let frames = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
+
+    let first = control(&frames).first().cloned().expect("a control frame");
+    assert_eq!(first["type"], "started");
+    assert!(
+        first["conversation"].as_str().is_some_and(|id| !id.is_empty()),
+        "expected a conversation id: {first}"
+    );
+}
+
+#[tokio::test]
+async fn the_turn_ends_with_a_done_frame() {
+    let server = server_with_echo_pipeline().await;
+    let frames = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
+
+    let last = control(&frames).last().cloned().expect("a control frame");
+    assert_eq!(last["type"], "done");
+}
+
+#[tokio::test]
+async fn the_reply_is_streamed_not_delivered_whole() {
+    // Sentence by sentence: two sentences must not arrive as one frame.
+    let server = server_with_echo_pipeline().await;
+    let frames = converse(&server, "/v1/pipelines/echo/converse", "one. two").await;
+
+    let audio_frames =
+        frames.iter().filter(|frame| matches!(frame, Message::Binary(_))).count();
+    assert!(audio_frames >= 2, "expected streamed audio, got {audio_frames} frame(s)");
+}
+
+#[tokio::test]
+async fn events_from_the_turn_reach_the_event_stream() {
+    let server = server_with_echo_pipeline().await;
+    let mut subscription = server.state.bus.subscribe();
+
+    let frames = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
+    let id = control(&frames)[0]["conversation"].as_str().expect("id").to_owned();
+
+    let envelope = tokio::time::timeout(Duration::from_secs(5), subscription.recv())
+        .await
+        .expect("an event")
+        .expect("bus open");
+    assert_eq!(
+        envelope.conversation.map(|conversation| conversation.to_string()),
+        Some(id),
+        "the announced id must match the events"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_pipeline_is_refused_before_upgrading() {
+    let server = server_with_echo_pipeline().await;
+    let result =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/ghost/converse")).await;
+    assert!(result.is_err(), "connecting to a missing pipeline must fail");
+}
+
+#[tokio::test]
+async fn a_pipeline_the_runtime_cannot_execute_is_refused() {
+    // Stored pipelines are only checked as graphs; whether the runtime can
+    // execute one is a separate question, answered here rather than mid-turn.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline(
+        "unrunnable",
+        PipelineGraph::new("unrunnable")
+            .with_node(Node::new("stt", NodeKind::Stt, "nonexistent"))
+            .with_node(
+                Node::new("llm", NodeKind::Llm, "echo-llm")
+                    .with_config(serde_json::json!({ "model": "echo" })),
+            )
+            .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
+            .with_edge(Edge::new("stt", "llm"))
+            .with_edge(Edge::new("llm", "tts")),
+    );
+    let server = Server::start(state).await;
+
+    let result =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/unrunnable/converse"))
+            .await;
+    assert!(result.is_err(), "an unrunnable pipeline must be refused");
+}
+
+#[tokio::test]
+async fn a_server_with_no_providers_still_serves_the_rest_of_the_api() {
+    // Providers are optional; a deployment that has not configured any should
+    // still be able to store and read pipelines.
+    let state = AppState::new(EventBus::default());
+    state.put_pipeline("echo", echo_graph());
+    let server = Server::start(state).await;
+
+    let response = reqwest::get(server.http_url("/v1/pipelines")).await.expect("request");
+    assert!(response.status().is_success());
+
+    let result =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/echo/converse")).await;
+    assert!(result.is_err(), "conversing without providers must be refused");
+}

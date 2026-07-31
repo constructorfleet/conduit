@@ -12,7 +12,10 @@ local pipeline — the pipeline stays the same, only the providers change.
 
 ## Status
 
-Early. The contracts are in place; the runtime that executes them is not.
+Early, but end to end: a device can open a socket, speak, and be answered.
+What is missing is real speech — there is no Whisper or Piper provider yet, so
+the only complete pipelines today run on a language model plus the in-memory
+echoes described under [Running](#running).
 
 | Crate | What it holds |
 | --- | --- |
@@ -20,7 +23,7 @@ Early. The contracts are in place; the runtime that executes them is not.
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible language models — OpenAI, Ollama, vLLM, LM Studio, OpenRouter |
-| [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD and a live event stream |
+| [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
 
 ## Design
 
@@ -80,6 +83,14 @@ cargo run -p conduit-api
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
 
+To hold a conversation without any speech engine or model server, build with
+the `dev-providers` feature. It registers in-memory providers that treat audio
+as UTF-8 text, so you can talk to a pipeline with a text WebSocket client:
+
+```sh
+cargo run -p conduit-api --features dev-providers
+```
+
 ```sh
 # Store a pipeline (rejected with 422 if it does not validate)
 curl -X PUT localhost:8080/v1/pipelines/kitchen \
@@ -102,6 +113,28 @@ curl -X PUT localhost:8080/v1/pipelines/kitchen \
 curl -N localhost:8080/v1/events?stages=reasoning,tools
 ```
 
+## Talking to a pipeline
+
+`GET /v1/pipelines/{name}/converse` upgrades to a WebSocket. The protocol is
+deliberately small — binary frames are audio in both directions, text frames
+are JSON control messages:
+
+```
+→  <binary>                  captured audio
+→  {"type":"end"}            the utterance is over
+←  {"type":"started", "conversation":"…"}
+←  <binary>                  the reply, as each sentence is synthesized
+←  {"type":"done"}
+```
+
+Everything else about the turn — partial transcripts, tool calls, timings —
+is on `/v1/events`, tagged with the conversation id the socket announces. That
+keeps the audio path free of anything that is not audio, and it is why the
+socket names the conversation before sending a single sample.
+
+A missing or unrunnable pipeline is refused with an HTTP status *before* the
+upgrade, so a client never has to diagnose a socket that opens and then dies.
+
 ## Developing
 
 Read [AGENTS.md](AGENTS.md) first — it is the canonical engineering standard for
@@ -111,8 +144,8 @@ These four gates are what CI runs, and what "done" requires:
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 cargo audit
 ```
 
@@ -138,7 +171,7 @@ hard questions.
 ## Next
 
 - Reference providers: Whisper for speech, Piper for synthesis
-- Device transport (WebSocket, then gRPC)
+- gRPC and MQTT device transports alongside the WebSocket one
 - Persistent storage behind the pipeline store
 - Wake word, speaker identification, and memory in the runtime
 

@@ -4,6 +4,7 @@
 //! a live view of the event bus. Anything that processes audio belongs in the
 //! runtime, not in the API.
 
+pub mod converse;
 pub mod error;
 pub mod events;
 pub mod pipelines;
@@ -26,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/events", get(events::stream))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
+        .route("/v1/pipelines/{name}/converse", get(converse::converse))
         .route(
             "/v1/pipelines/{name}",
             get(pipelines::get).put(pipelines::put).delete(pipelines::delete),

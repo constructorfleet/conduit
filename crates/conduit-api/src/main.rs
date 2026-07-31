@@ -18,12 +18,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr =
         std::env::var("CONDUIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned()).parse()?;
 
-    let state = AppState::new(EventBus::default());
+    let state = with_providers(AppState::new(EventBus::default()));
+    tracing::debug!(providers = ?state.providers(), "provider registry");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "conduit api listening");
 
     axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await?;
     Ok(())
+}
+
+/// Registers the providers this build was compiled with.
+///
+/// A server with none still serves the whole API except conversations, which
+/// is the honest default: nothing here should pretend to hear speech unless
+/// someone asked it to.
+#[cfg(feature = "dev-providers")]
+fn with_providers(state: AppState) -> AppState {
+    use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
+    use conduit_runtime::Providers;
+
+    tracing::warn!(
+        "the echo providers are enabled; this build transcribes audio as text \
+         and cannot hear speech"
+    );
+    state.with_providers(Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(EchoTts))
+}
+
+/// Registers no providers; conversations are refused until some are configured.
+#[cfg(not(feature = "dev-providers"))]
+fn with_providers(state: AppState) -> AppState {
+    state
 }
 
 /// Resolves on SIGINT or SIGTERM so in-flight requests can drain.

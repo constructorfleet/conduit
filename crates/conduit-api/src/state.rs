@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
+use conduit_runtime::Providers;
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Debug, Clone, Default)]
@@ -12,6 +13,9 @@ pub struct AppState {
     /// The process-wide event bus.
     pub bus: EventBus,
     pipelines: Arc<RwLock<BTreeMap<String, PipelineGraph>>>,
+    /// Providers available to pipelines, if any have been configured. A
+    /// server without them still serves everything except conversations.
+    providers: Option<Arc<Providers>>,
 }
 
 impl AppState {
@@ -21,7 +25,20 @@ impl AppState {
     /// and will replace this type's internals, not its API.
     #[must_use]
     pub fn new(bus: EventBus) -> Self {
-        Self { bus, pipelines: Arc::new(RwLock::new(BTreeMap::new())) }
+        Self { bus, pipelines: Arc::new(RwLock::new(BTreeMap::new())), providers: None }
+    }
+
+    /// Makes `providers` available to conversations.
+    #[must_use]
+    pub fn with_providers(mut self, providers: Providers) -> Self {
+        self.providers = Some(Arc::new(providers));
+        self
+    }
+
+    /// The configured providers, if any.
+    #[must_use]
+    pub fn providers(&self) -> Option<Arc<Providers>> {
+        self.providers.clone()
     }
 
     /// Names of every stored pipeline, in order.

@@ -15,6 +15,8 @@ pub mod memory;
 pub mod registry;
 pub mod speaker;
 pub mod stt;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod tool;
 pub mod tts;
 pub mod wake;

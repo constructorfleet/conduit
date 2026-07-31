@@ -131,6 +131,19 @@ impl Providers {
     }
 }
 
+/// Written by hand because the registries hold trait objects, which are not
+/// `Debug`. Lists what is registered, which is what anyone printing this wants.
+impl std::fmt::Debug for Providers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Providers")
+            .field("stt", &self.stt.names().collect::<Vec<_>>())
+            .field("llm", &self.llm.names().collect::<Vec<_>>())
+            .field("tts", &self.tts.names().collect::<Vec<_>>())
+            .field("tools", &self.tools.names().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 /// One running turn: the reply being spoken, and the id it is filed under.
 pub struct Conversation {
     /// The conversation every event from this turn carries.
