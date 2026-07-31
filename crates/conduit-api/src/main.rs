@@ -18,8 +18,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr =
         std::env::var("CONDUIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned()).parse()?;
 
-    let state = with_providers(AppState::new(EventBus::default()));
-    tracing::debug!(providers = ?state.providers(), "provider registry");
+    let (providers, registered) = conduit_api::config::from_env()?;
+    for description in &registered.descriptions {
+        tracing::info!(provider = %description, "registered provider");
+    }
+
+    let mut state = AppState::new(EventBus::default());
+    if !registered.is_empty() {
+        state = state.with_providers(providers);
+    }
+    let state = with_dev_providers(state);
+    if state.providers().is_none() {
+        tracing::warn!(
+            "no providers are configured; conversations will be refused until \
+             CONDUIT_OPENAI_BASE_URL or CONDUIT_OPENAI_API_KEY is set"
+        );
+    }
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "conduit api listening");
 
@@ -33,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// is the honest default: nothing here should pretend to hear speech unless
 /// someone asked it to.
 #[cfg(feature = "dev-providers")]
-fn with_providers(state: AppState) -> AppState {
+fn with_dev_providers(state: AppState) -> AppState {
     use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
     use conduit_runtime::Providers;
 
@@ -46,7 +60,7 @@ fn with_providers(state: AppState) -> AppState {
 
 /// Registers no providers; conversations are refused until some are configured.
 #[cfg(not(feature = "dev-providers"))]
-fn with_providers(state: AppState) -> AppState {
+fn with_dev_providers(state: AppState) -> AppState {
     state
 }
 

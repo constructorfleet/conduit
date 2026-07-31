@@ -4,6 +4,7 @@
 //! a live view of the event bus. Anything that processes audio belongs in the
 //! runtime, not in the API.
 
+pub mod config;
 pub mod converse;
 pub mod error;
 pub mod events;

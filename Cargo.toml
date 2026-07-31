@@ -12,6 +12,7 @@ repository = "https://github.com/Teagan42/conduit"
 [workspace.dependencies]
 conduit-core = { path = "crates/conduit-core", version = "0.1.0" }
 conduit-provider = { path = "crates/conduit-provider", version = "0.1.0" }
+conduit-openai = { path = "crates/conduit-openai", version = "0.1.0" }
 conduit-runtime = { path = "crates/conduit-runtime", version = "0.1.0" }
 
 async-trait = "0.1"

@@ -186,6 +186,7 @@ dependencies = [
  "axum",
  "bytes",
  "conduit-core",
+ "conduit-openai",
  "conduit-provider",
  "conduit-runtime",
  "futures-util",

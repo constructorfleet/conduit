@@ -82,6 +82,22 @@ cargo run -p conduit-api
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
+| `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
+| `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
+| `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
+| `CONDUIT_OPENAI_STT_MODEL` | — | Enables speech recognition, e.g. `whisper-1` |
+| `CONDUIT_OPENAI_TTS_MODEL` | — | Enables synthesis, e.g. `tts-1` |
+
+Nothing is registered unless it is asked for, and a model named without a
+server to run it on stops the server at startup rather than failing halfway
+through someone's first sentence. A whole local pipeline:
+
+```sh
+CONDUIT_OPENAI_BASE_URL=http://localhost:8000/v1 \
+CONDUIT_OPENAI_STT_MODEL=Systran/faster-whisper-small \
+CONDUIT_OPENAI_TTS_MODEL=piper \
+cargo run -p conduit-api
+```
 
 To hold a conversation without any speech engine or model server, build with
 the `dev-providers` feature. It registers in-memory providers that treat audio
