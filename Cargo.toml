@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-core", "crates/conduit-provider"]
+members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
