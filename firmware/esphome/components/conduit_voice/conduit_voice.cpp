@@ -2,9 +2,8 @@
 
 #ifdef USE_ESP32
 
-#include "conduit_converse_embedded.h"
-
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
 
 #include "esp_http_client.h"
 #include "lwip/netdb.h"
@@ -51,17 +50,19 @@ void ConduitVoice::setup() {
 }
 
 void ConduitVoice::loop() {
-  if (this->pending_start_) {
-    this->pending_start_ = false;
-    this->start();
+  if (this->state_.load() == State::STREAMING &&
+      conduit_voice_utterance_timeout_elapsed(
+          millis(), this->utterance_started_at_ms_, this->max_utterance_ms_)) {
+    ESP_LOGD(TAG, "Ending Conduit utterance after %u ms",
+             static_cast<unsigned>(this->max_utterance_ms_));
+    this->finish_utterance_();
   }
-  if (this->pending_stop_) {
-    this->pending_stop_ = false;
+  if (this->pending_stop_.exchange(false)) {
     this->cleanup_client_();
     if (this->speaker_ != nullptr && this->speaker_->is_running()) {
       this->speaker_->finish();
     }
-    this->state_ = State::IDLE;
+    this->state_.store(State::IDLE);
   }
 }
 
@@ -80,7 +81,7 @@ void ConduitVoice::start() {
     ESP_LOGE(TAG, "Cannot start failed Conduit voice component");
     return;
   }
-  if (this->state_ != State::IDLE) {
+  if (this->state_.load() != State::IDLE) {
     ESP_LOGW(TAG, "Conduit voice session is already running");
     return;
   }
@@ -92,15 +93,15 @@ void ConduitVoice::start() {
   // outlive this call.
   config.headers = this->build_headers_();
   config.network_timeout_ms = 10000;
-  config.reconnect_timeout_ms = 0;
+  config.reconnect_timeout_ms = 1000;
   config.buffer_size = 4096;
   config.user_context = this;
 
   this->client_ = esp_websocket_client_init(&config);
   if (this->client_ == nullptr) {
     ESP_LOGE(TAG, "Failed to create WebSocket client for %s", url.c_str());
-    this->state_ = State::FAILED;
-    this->pending_stop_ = true;
+    this->state_.store(State::FAILED);
+    this->pending_stop_.store(true);
     return;
   }
 
@@ -111,35 +112,36 @@ void ConduitVoice::start() {
       this);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to register WebSocket events: %s", esp_err_to_name(err));
-    this->pending_stop_ = true;
+    this->pending_stop_.store(true);
     return;
   }
 
-  this->state_ = State::CONNECTING;
+  this->state_.store(State::CONNECTING);
   err = esp_websocket_client_start(this->client_);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to connect to Conduit at %s: %s", url.c_str(), esp_err_to_name(err));
-    this->pending_stop_ = true;
+    this->pending_stop_.store(true);
   }
 }
 
 void ConduitVoice::stop() {
-  if (this->state_ == State::IDLE) {
+  if (this->state_.load() == State::IDLE) {
     return;
   }
   this->finish_utterance_();
 }
 
 void ConduitVoice::interrupt() {
-  if (this->state_ == State::IDLE) {
+  const State state = this->state_.load();
+  if (state == State::IDLE) {
     return;
   }
   // Nothing has been sent yet, so there is no turn to interrupt — but the
   // socket is opening, and dropping it would look like a device that vanished.
   // Say `end` on connect and let the turn finish; a caller who wants silence
   // now should use `stop`.
-  if (this->state_ == State::CONNECTING) {
-    this->send_end_on_connect_ = true;
+  if (state == State::CONNECTING) {
+    this->send_end_on_connect_.store(true);
     return;
   }
 
@@ -155,7 +157,7 @@ void ConduitVoice::interrupt() {
   if (!this->send_command_(CONDUIT_VOICE_CONVERSE_STOP_JSON, "stop")) {
     return;
   }
-  this->state_ = State::STOPPING;
+  this->state_.store(State::STOPPING);
 }
 
 void ConduitVoice::wake_debug_event() {
@@ -201,18 +203,18 @@ void ConduitVoice::handle_websocket_event_(int32_t event_id, esp_websocket_event
   switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
       ESP_LOGD(TAG, "Connected to Conduit");
-      this->state_ = State::STREAMING;
+      this->state_.store(State::STREAMING);
+      this->utterance_started_at_ms_ = millis();
       if (this->microphone_source_ != nullptr) {
         this->microphone_source_->start();
       }
-      if (this->send_end_on_connect_) {
-        this->send_end_on_connect_ = false;
+      if (this->send_end_on_connect_.exchange(false)) {
         this->finish_utterance_();
       }
       break;
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGD(TAG, "Disconnected from Conduit");
-      this->pending_stop_ = true;
+      this->pending_stop_.store(true);
       break;
     case WEBSOCKET_EVENT_DATA:
       if (event == nullptr || event->data_ptr == nullptr || event->data_len <= 0) {
@@ -227,8 +229,8 @@ void ConduitVoice::handle_websocket_event_(int32_t event_id, esp_websocket_event
       break;
     case WEBSOCKET_EVENT_ERROR:
       ESP_LOGE(TAG, "Conduit WebSocket error");
-      this->state_ = State::FAILED;
-      this->pending_stop_ = true;
+      this->state_.store(State::FAILED);
+      this->pending_stop_.store(true);
       break;
     default:
       break;
@@ -244,15 +246,15 @@ void ConduitVoice::handle_text_frame_(const char *data, size_t length) {
       break;
     case ConduitNoticeType::DONE:
       ESP_LOGD(TAG, "Conduit conversation done");
-      this->pending_stop_ = true;
+      this->pending_stop_.store(true);
       break;
     case ConduitNoticeType::FAILED:
       // The server's reason is the only diagnosis available on-device, so log
       // it rather than making someone read the server to learn what broke.
       ESP_LOGE(TAG, "Conduit conversation failed: error=%s%s", notice.error,
                notice.truncated ? " (truncated)" : "");
-      this->state_ = State::FAILED;
-      this->pending_stop_ = true;
+      this->state_.store(State::FAILED);
+      this->pending_stop_.store(true);
       break;
     case ConduitNoticeType::UNKNOWN:
       ESP_LOGW(TAG, "Unknown Conduit notice: %s", text.c_str());
@@ -267,7 +269,7 @@ void ConduitVoice::handle_binary_frame_(const uint8_t *data, size_t length) {
   if (!this->speaker_->is_running()) {
     this->speaker_->start();
   }
-  this->state_ = State::REPLYING;
+  this->state_.store(State::REPLYING);
   size_t written = this->speaker_->play(data, length, pdMS_TO_TICKS(100));
   if (written < length) {
     ESP_LOGW(TAG, "Speaker accepted %u of %u reply bytes", static_cast<unsigned>(written),
@@ -276,7 +278,7 @@ void ConduitVoice::handle_binary_frame_(const uint8_t *data, size_t length) {
 }
 
 void ConduitVoice::handle_microphone_data_(const std::vector<uint8_t> &data) {
-  if (this->state_ != State::STREAMING || this->client_ == nullptr || data.empty()) {
+  if (this->state_.load() != State::STREAMING || this->client_ == nullptr || data.empty()) {
     return;
   }
   if (!esp_websocket_client_is_connected(this->client_)) {
@@ -290,8 +292,8 @@ void ConduitVoice::handle_microphone_data_(const std::vector<uint8_t> &data) {
       pdMS_TO_TICKS(100));
   if (written < 0) {
     ESP_LOGE(TAG, "Failed to send microphone audio to Conduit");
-    this->state_ = State::FAILED;
-    this->pending_stop_ = true;
+    this->state_.store(State::FAILED);
+    this->pending_stop_.store(true);
   }
 }
 
@@ -350,7 +352,8 @@ void ConduitVoice::cleanup_client_() {
     esp_websocket_client_destroy(this->client_);
     this->client_ = nullptr;
   }
-  this->send_end_on_connect_ = false;
+  this->send_end_on_connect_.store(false);
+  this->utterance_started_at_ms_ = 0;
 }
 
 std::string ConduitVoice::build_url_() const {
@@ -372,26 +375,27 @@ const char *ConduitVoice::build_headers_() {
 }
 
 void ConduitVoice::finish_utterance_() {
-  if (this->state_ == State::CONNECTING) {
-    this->send_end_on_connect_ = true;
+  if (this->state_.load() == State::CONNECTING) {
+    this->send_end_on_connect_.store(true);
     return;
   }
 
   if (this->microphone_source_ != nullptr && this->microphone_source_->is_running()) {
     this->microphone_source_->stop();
   }
+  this->utterance_started_at_ms_ = 0;
 
   if (!this->send_command_(CONDUIT_VOICE_CONVERSE_END_JSON, "end-of-utterance")) {
     return;
   }
-  this->state_ = State::STOPPING;
+  this->state_.store(State::STOPPING);
 }
 
 // Sends one control frame. Returns false if there was nothing to send it on or
 // the write failed, having already arranged for the session to end.
 bool ConduitVoice::send_command_(const char *json, const char *what) {
   if (this->client_ == nullptr || !esp_websocket_client_is_connected(this->client_)) {
-    this->pending_stop_ = true;
+    this->pending_stop_.store(true);
     return false;
   }
 
@@ -402,7 +406,7 @@ bool ConduitVoice::send_command_(const char *json, const char *what) {
       pdMS_TO_TICKS(100));
   if (written < 0) {
     ESP_LOGE(TAG, "Failed to send %s to Conduit", what);
-    this->pending_stop_ = true;
+    this->pending_stop_.store(true);
     return false;
   }
   return true;

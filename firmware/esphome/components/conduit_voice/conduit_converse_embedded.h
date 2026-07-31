@@ -13,6 +13,7 @@ static constexpr uint8_t CONDUIT_VOICE_WWD2_AUDIO_ENCODING_PCM_SIGNED_LE = 1;
 static constexpr size_t CONDUIT_VOICE_WWD2_HEADER_BYTES = 18;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_ASSISTANT_ID_BYTES = 64;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_PAYLOAD_BYTES = 0xFFFF;
+static constexpr uint32_t CONDUIT_VOICE_DEFAULT_MAX_UTTERANCE_MS = 8000;
 static constexpr const char *CONDUIT_VOICE_CONVERSE_END_JSON = "{\"type\":\"end\"}";
 // Ends the whole turn, including a reply already being spoken. The server reads
 // control frames past `end` for exactly this, and reports the cancellation as
@@ -445,6 +446,13 @@ inline size_t conduit_voice_wwd2_packet(
   std::memcpy(out + CONDUIT_VOICE_WWD2_HEADER_BYTES, assistant_id, assistant_id_len);
   std::memcpy(out + CONDUIT_VOICE_WWD2_HEADER_BYTES + assistant_id_len, pcm, pcm_len);
   return packet_len;
+}
+
+inline bool conduit_voice_utterance_timeout_elapsed(
+    uint32_t now,
+    uint32_t started_at,
+    uint32_t timeout_ms) {
+  return timeout_ms > 0 && static_cast<uint32_t>(now - started_at) >= timeout_ms;
 }
 
 }  // namespace esphome::conduit_voice

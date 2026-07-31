@@ -9,9 +9,12 @@
 #include "esphome/core/component.h"
 #include "esphome/core/defines.h"
 
+#include "conduit_converse_embedded.h"
+
 #include "esp_event.h"
 #include "esp_websocket_client.h"
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -29,6 +32,9 @@ class ConduitVoice : public Component {
   void set_scheme(const std::string &scheme) { this->scheme_ = scheme; }
   void set_pipeline(const std::string &pipeline) { this->pipeline_ = pipeline; }
   void set_token(const std::string &token) { this->token_ = token; }
+  void set_max_utterance_ms(uint32_t max_utterance_ms) {
+    this->max_utterance_ms_ = max_utterance_ms;
+  }
   void set_microphone_source(microphone::MicrophoneSource *microphone_source) {
     this->microphone_source_ = microphone_source;
   }
@@ -47,7 +53,7 @@ class ConduitVoice : public Component {
   void stop();
   void interrupt();
   void wake_debug_event();
-  bool is_running() const { return this->state_ != State::IDLE; }
+  bool is_running() const { return this->state_.load() != State::IDLE; }
 
  protected:
   enum class State : uint8_t {
@@ -92,12 +98,13 @@ class ConduitVoice : public Component {
   microphone::MicrophoneSource *debug_microphone_source_{nullptr};
   speaker::Speaker *speaker_{nullptr};
   esp_websocket_client_handle_t client_{nullptr};
-  State state_{State::IDLE};
+  std::atomic<State> state_{State::IDLE};
   uint16_t debug_udp_port_{6056};
   uint32_t debug_udp_sequence_{0};
-  bool pending_start_{false};
-  bool pending_stop_{false};
-  bool send_end_on_connect_{false};
+  uint32_t max_utterance_ms_{CONDUIT_VOICE_DEFAULT_MAX_UTTERANCE_MS};
+  uint32_t utterance_started_at_ms_{0};
+  std::atomic<bool> pending_stop_{false};
+  std::atomic<bool> send_end_on_connect_{false};
 };
 
 template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<ConduitVoice> {

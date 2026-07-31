@@ -3,6 +3,7 @@
 #include <cstring>
 
 using esphome::conduit_voice::ConduitNoticeType;
+using esphome::conduit_voice::conduit_voice_utterance_timeout_elapsed;
 using esphome::conduit_voice::conduit_voice_wwd2_packet;
 using esphome::conduit_voice::conduit_voice_converse_path;
 using esphome::conduit_voice::conduit_voice_notice_parse;
@@ -56,6 +57,21 @@ int main() {
     return 1;
   }
   if (expect(std::memcmp(packet + 18 + std::strlen("kitchen"), pcm, sizeof(pcm)) == 0) != 0) {
+    return 1;
+  }
+  if (expect(!conduit_voice_utterance_timeout_elapsed(1000, 1000, 8000)) != 0) {
+    return 1;
+  }
+  if (expect(!conduit_voice_utterance_timeout_elapsed(8999, 1000, 8000)) != 0) {
+    return 1;
+  }
+  if (expect(conduit_voice_utterance_timeout_elapsed(9000, 1000, 8000)) != 0) {
+    return 1;
+  }
+  if (expect(!conduit_voice_utterance_timeout_elapsed(9000, 1000, 0)) != 0) {
+    return 1;
+  }
+  if (expect(conduit_voice_utterance_timeout_elapsed(16, 0xFFFFFFF0u, 32)) != 0) {
     return 1;
   }
 

@@ -107,6 +107,11 @@ Set the substitutions before flashing:
 - `conduit_server`: host and port for Conduit, for example `192.168.1.10:8080`.
 - `conduit_pipeline`: the Conduit pipeline name.
 - `conduit_scheme`: `ws` or `wss`.
+- `conduit_authorization`: optional value for the WebSocket `Authorization`
+  header, for example `Bearer ...`. Empty disables the header.
+- `conduit_max_utterance_ms`: maximum microphone streaming window after a
+  socket connects. Defaults to `8000`; set `0` only if some other automation
+  calls `conduit_voice.stop`.
 - `wake_debug_assistant_id`: assistant id used for debug packets and wake
   events. Defaults to `conduit_pipeline`.
 - `wake_debug_udp_host`: host running
@@ -142,12 +147,13 @@ The option is optional, for a server started with `CONDUIT_ALLOW_ANONYMOUS`.
 Against any other server, omitting it means the upgrade is refused with 401.
 
 The local component streams microphone audio as binary WebSocket frames, sends
-`{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
-reply frames to the board speaker. It exposes three actions and one condition:
+`{"type":"end"}` when stopped or when `conduit_max_utterance_ms` elapses,
+parses Conduit text notices, and writes binary reply frames to the board
+speaker. It exposes three actions and one condition:
 
 | Action | What it does |
 | --- | --- |
-| `conduit_voice.start` | Opens the socket and starts streaming the microphone |
+| `conduit_voice.start` | Opens the socket and starts streaming a bounded microphone utterance |
 | `conduit_voice.stop` | Ends the utterance and lets the reply play out |
 | `conduit_voice.interrupt` | Sends `{"type":"stop"}`, silences the speaker, and ends the turn |
 | `conduit_voice.is_running` (condition) | Whether a turn is in progress |
@@ -169,7 +175,8 @@ signature so the firmware actually compiles with current ESPHome.
 - Speaker playback via the `i2s_audio` speaker behind a mixer and a resampler
   (`announcement_resampling_speaker`), through the `satellite1` DAC proxy.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
-  `conduit_voice.start`.
+  `conduit_voice.start`; the component sends `end` automatically after
+  `conduit_max_utterance_ms`.
 - Button trigger: the `btn_action` GPIO `on_multi_click` calls
   `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
   running — a press during a reply cuts it off. Starting is gated on
@@ -188,7 +195,8 @@ target, so the LED ring is dark.
 - Speaker playback via the `i2s_audio` speaker behind a resampler
   (`announcement_resampling_speaker`), through the `aic3204` DAC.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
-  `conduit_voice.start`.
+  `conduit_voice.start`; the component sends `end` automatically after
+  `conduit_max_utterance_ms`.
 - Button trigger: the `center_button` GPIO `on_multi_click` calls
   `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
   running — a press during a reply cuts it off. Starting is gated on

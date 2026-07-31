@@ -17,6 +17,7 @@ CONF_DEBUG_MICROPHONE_SOURCE_ID = "debug_microphone_source_id"
 CONF_DEBUG_UDP_HOST = "debug_udp_host"
 CONF_DEBUG_UDP_PORT = "debug_udp_port"
 CONF_DEBUG_WAKE_EVENT_URL = "debug_wake_event_url"
+CONF_MAX_UTTERANCE_MS = "max_utterance_ms"
 CONF_SCHEME = "scheme"
 CONF_SERVER = "server"
 CONF_TOKEN = "token"
@@ -81,6 +82,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_DEBUG_UDP_HOST, default=""): cv.string_strict,
             cv.Optional(CONF_DEBUG_UDP_PORT, default=6056): cv.port,
             cv.Optional(CONF_DEBUG_WAKE_EVENT_URL, default=""): cv.string_strict,
+            cv.Optional(CONF_MAX_UTTERANCE_MS, default=8000): cv.int_range(min=0),
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
@@ -133,6 +135,7 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_scheme(config[CONF_SCHEME]))
     cg.add(var.set_pipeline(config[CONF_PIPELINE]))
     cg.add(var.set_token(config[CONF_TOKEN]))
+    cg.add(var.set_max_utterance_ms(config[CONF_MAX_UTTERANCE_MS]))
     cg.add(var.set_debug_assistant_id(config.get(CONF_DEBUG_ASSISTANT_ID, config[CONF_PIPELINE])))
     cg.add(var.set_debug_udp_host(config[CONF_DEBUG_UDP_HOST]))
     cg.add(var.set_debug_udp_port(config[CONF_DEBUG_UDP_PORT]))
