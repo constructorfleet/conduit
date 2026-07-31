@@ -40,9 +40,18 @@ shows up on a dashboard rather than only in the logs.
 **A pipeline is data.** [`PipelineGraph`](crates/conduit-core/src/graph.rs) is a
 serializable list of nodes and edges. The API validates and stores it, the UI
 edits it, and the runtime resolves it into providers. None of that requires
-knowing what a `whisper` node is — though the runtime's reading of a graph is
-still shallower than the graph model implies, which
-[Known gaps](#known-gaps) spells out.
+knowing what a `whisper` node is.
+
+Edges are load-bearing, not decoration. A graph must be one connected pipeline
+— a graph with no edges at all describes nothing and is refused — and the
+runtime checks that its edges actually describe the order it will execute:
+recognition feeding the model, the model feeding synthesis and any tools. A
+pipeline wired `tts -> llm -> stt` is refused rather than quietly run forwards.
+The check is reachability rather than adjacency, so a node may sit between two
+stages without breaking the chain. The graph model stays the wider of the two
+layers — it can express shapes the runtime cannot yet run, such as a `router`
+choosing between two models — and those are refused at prepare time, with the
+node named.
 
 **Providers are interfaces, not special cases.** Adding ElevenLabs means
 implementing [`TextToSpeech`](crates/conduit-provider/src/tts.rs) and registering
@@ -342,18 +351,12 @@ constraint, not a preference: bind Conduit to a trusted network, or put it
 behind a proxy that authenticates, until the API has a notion of identity of its
 own.
 
-**The runtime does not honour edges.** It resolves a graph by looking at each
-node's `kind` and nothing else, then runs speech recognition, then the model,
-then synthesis, in that fixed order. A graph wired `tts -> llm -> stt` behaves
-exactly like a correctly wired one, and a graph with no edges at all is
-accepted — validation checks that the *topology* is sound, not that it describes
-the order the runtime will use. Treat edges as documentation of intent for now.
-
-**One node of each kind, and `router` nodes do nothing.** A second `llm` or
-`tts` node is rejected as a duplicate, so the two-model arrangement described
-under [Providers](#providers) cannot yet be expressed as a graph. A `router`
-node is accepted and then ignored, which is worse than refusing it; it will be
-refused or implemented rather than left silent.
+**One node of each kind.** A second `llm` or `tts` node is rejected as a
+duplicate, so the two-model arrangement described under
+[Providers](#providers) cannot yet be expressed as a runnable graph. The graph
+model can describe it, and a `router` node choosing between the two validates
+as a graph; the runtime refuses both, so the shape is expressible before it is
+executable rather than silently mis-run.
 
 **Nothing times out.** A speech or model provider that accepts a request and
 never answers stalls the turn for as long as the client stays connected. The
@@ -386,10 +389,11 @@ every voice as unidentified. Nothing substitutes the device or the conversation
 for a speaker, and nothing should: those name which satellite is connected, and
 a policy satisfied by the wrong identity is worse than one satisfied by none.
 
-**Wake word, speaker identification, and memory are graph-only.** The graph
-model describes those nodes, but the runtime refuses them: for wake word,
+**Wake word, speaker identification, memory, and routing are graph-only.** The
+graph model describes those nodes, but the runtime refuses them. For wake word,
 speaker identification, and memory the provider traits exist, and what is
-missing is any implementation of them and the runtime wiring to run one.
+missing is any implementation of them and the runtime wiring to run one. For
+`router` there is no trait yet either.
 
 **Several event variants have no emitter yet.** `WakeWordDetected`,
 `WakeWordRejected`, `AudioStarted`, `AudioChunkReceived`, `AudioFinished`,

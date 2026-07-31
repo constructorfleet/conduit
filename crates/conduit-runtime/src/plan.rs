@@ -91,12 +91,13 @@ impl Plan {
         let mut llm = None;
         let mut tts = None;
         let mut tools = BTreeMap::new();
+        let mut tool_nodes = Vec::new();
 
         for node in graph.topological_order()? {
             match node.kind {
                 // Endpoints describe where audio enters and leaves; the
                 // caller supplies both, so there is nothing to resolve.
-                NodeKind::Source | NodeKind::Router | NodeKind::Sink => {}
+                NodeKind::Source | NodeKind::Sink => {}
                 NodeKind::Stt => {
                     reject_duplicate(&stt, node)?;
                     stt = Some((providers.stt().require(&node.provider)?, node.id.clone()));
@@ -128,6 +129,7 @@ impl Plan {
                             node.id
                         )));
                     }
+                    tool_nodes.push(node.id.clone());
                 }
                 NodeKind::Tts => {
                     reject_duplicate(&tts, node)?;
@@ -137,6 +139,17 @@ impl Plan {
                         node.id.clone(),
                         config.voice,
                     ));
+                }
+                // Explicitly refused rather than skipped. A router that is
+                // accepted and then ignored turns "send hard questions to the
+                // cloud model" into "send everything to whichever model
+                // resolved", which is worse than refusing to run the graph.
+                NodeKind::Router => {
+                    return Err(Error::Config(format!(
+                        "`router` nodes are not executable yet, and running this graph \
+                         would ignore the routing it describes (node `{}`)",
+                        node.id
+                    )))
                 }
                 kind => {
                     return Err(Error::Config(format!(
@@ -152,6 +165,17 @@ impl Plan {
         let (llm, llm_node, model, system, max_tool_rounds) =
             llm.ok_or_else(|| missing("llm"))?;
         let (tts, tts_node, voice) = tts.ok_or_else(|| missing("tts"))?;
+
+        // This runtime executes recognition, then reasoning, then synthesis,
+        // in that order. A graph is only a description of *this* pipeline if
+        // its edges say the same thing — otherwise a graph wired
+        // `tts -> llm -> stt` would run identically to a correct one, and its
+        // author would have no way to find out.
+        require_downstream(graph, &stt_node, &llm_node)?;
+        require_downstream(graph, &llm_node, &tts_node)?;
+        for tool_node in &tool_nodes {
+            require_downstream(graph, &llm_node, tool_node)?;
+        }
 
         if !tools.is_empty() && !llm.supports_tools() {
             return Err(Error::Config(format!(
@@ -192,6 +216,22 @@ fn reject_duplicate<T>(existing: &Option<T>, node: &Node) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Requires that `downstream` is reachable from `upstream`.
+///
+/// The check is reachability rather than a direct edge, so a graph may put a
+/// wake word, speaker id, or router node between two stages once those are
+/// executable, and an existing graph does not have to be rewired to keep
+/// working.
+fn require_downstream(graph: &PipelineGraph, upstream: &str, downstream: &str) -> Result<()> {
+    if graph.reaches(upstream, downstream) {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "node `{downstream}` is not downstream of `{upstream}`, but this runtime would \
+         run it as though it were; add the edges the pipeline needs"
+    )))
 }
 
 /// Reads a node's configuration into `T`.

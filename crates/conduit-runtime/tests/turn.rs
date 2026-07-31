@@ -371,14 +371,15 @@ async fn nothing_the_runtime_does_reports_barge_in() {
 }
 
 #[tokio::test]
-async fn router_fan_out_to_tools_is_executable() {
+async fn tool_fan_out_is_executable() {
+    // Two tools hanging off the model, which is the fan-out the runtime does
+    // support: tools requested together run together. Routing them through a
+    // `router` node is what it does not — see `tests/plan.rs`.
     let graph = linear_graph()
-        .with_node(Node::new("route", NodeKind::Router, "builtin"))
         .with_node(Node::new("search", NodeKind::Tool, "search"))
         .with_node(Node::new("clock", NodeKind::Tool, "clock"))
-        .with_edge(Edge::new("llm", "route"))
-        .with_edge(Edge::from_port("route", "search", "search"))
-        .with_edge(Edge::from_port("route", "clock", "clock"))
+        .with_edge(Edge::new("llm", "search"))
+        .with_edge(Edge::new("llm", "clock"))
         .with_edge(Edge::new("search", "tts"))
         .with_edge(Edge::new("clock", "tts"));
 
@@ -390,7 +391,7 @@ async fn router_fan_out_to_tools_is_executable() {
         .with_tts(FakeTts::new());
 
     Runner::prepare(&graph, &providers, EventBus::default())
-        .expect("router fan-out to tools is executable");
+        .expect("tool fan-out is executable");
 }
 
 #[tokio::test]

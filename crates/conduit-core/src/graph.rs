@@ -152,9 +152,47 @@ impl PipelineGraph {
     /// # Errors
     ///
     /// Returns [`GraphError`] if node ids collide, an edge dangles, the graph
-    /// is cyclic, or it lacks an entry or exit point.
+    /// is cyclic, it lacks an entry or exit point, or it is not one connected
+    /// pipeline.
     pub fn validate(&self) -> Result<(), GraphError> {
         self.topological_order().map(|_| ())
+    }
+
+    /// Whether `to` is downstream of `from`, following edges.
+    ///
+    /// This is what makes an edge mean something: a runtime that needs the
+    /// recognizer to feed the model can ask whether it does, rather than
+    /// assuming it because both nodes exist.
+    ///
+    /// A node does not reach itself unless a path leads back to it.
+    #[must_use]
+    pub fn reaches(&self, from: &str, to: &str) -> bool {
+        let Ok(index) = self.index_nodes() else { return false };
+        let (Some(&start), Some(&target)) = (index.get(from), index.get(to)) else {
+            return false;
+        };
+
+        let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); self.nodes.len()];
+        for edge in &self.edges {
+            if let (Some(&a), Some(&b)) =
+                (index.get(edge.from.as_str()), index.get(edge.to.as_str()))
+            {
+                outgoing[a].push(b);
+            }
+        }
+
+        let mut seen = vec![false; self.nodes.len()];
+        let mut queue: VecDeque<usize> = outgoing[start].iter().copied().collect();
+        while let Some(current) = queue.pop_front() {
+            if current == target {
+                return true;
+            }
+            if std::mem::replace(&mut seen[current], true) {
+                continue;
+            }
+            queue.extend(outgoing[current].iter().copied());
+        }
+        false
     }
 
     /// Returns the nodes in execution order.
@@ -195,6 +233,15 @@ impl PipelineGraph {
             return Err(GraphError::NoSink);
         }
 
+        // A graph that is sound but not connected describes several pipelines,
+        // or — when it has no edges at all — none. Every node then has
+        // indegree 0 and no outgoing edge, so both checks above pass while
+        // nothing says what feeds what.
+        let islands = self.disconnected_nodes(&outgoing, &incoming);
+        if !islands.is_empty() {
+            return Err(GraphError::Disconnected(islands));
+        }
+
         let mut queue: VecDeque<usize> = sources.into_iter().collect();
         let mut ordered = Vec::with_capacity(self.nodes.len());
         let mut placed = vec![false; self.nodes.len()];
@@ -214,6 +261,41 @@ impl PipelineGraph {
         }
 
         Ok(ordered)
+    }
+
+    /// The nodes not connected to the pipeline the first node belongs to.
+    ///
+    /// Connectivity is judged ignoring edge direction: a node feeding the
+    /// pipeline and a node fed by it are both part of it, and a node joined to
+    /// neither is not. A single-node graph is trivially connected and is
+    /// rejected by the source and sink checks instead.
+    ///
+    /// The result is in declaration order, so an operator reads the ids in the
+    /// order they wrote them.
+    fn disconnected_nodes(
+        &self,
+        outgoing: &[Vec<usize>],
+        incoming: &[Vec<usize>],
+    ) -> Vec<NodeId> {
+        if self.nodes.len() < 2 {
+            return Vec::new();
+        }
+
+        let mut reached = vec![false; self.nodes.len()];
+        reached[0] = true;
+        let mut queue = VecDeque::from([0]);
+        while let Some(current) = queue.pop_front() {
+            for &next in outgoing[current].iter().chain(&incoming[current]) {
+                if !std::mem::replace(&mut reached[next], true) {
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        (0..self.nodes.len())
+            .filter(|&node| !reached[node])
+            .map(|node| self.nodes[node].id.clone())
+            .collect()
     }
 
     /// Narrows the nodes a topological sort could not place down to the ones
@@ -294,9 +376,16 @@ mod tests {
         assert_eq!(order, ["mic", "wake", "stt", "llm", "tts"]);
     }
 
-    #[test]
-    fn router_fan_out_joins_before_the_sink() {
-        let graph = PipelineGraph::new("router")
+    /// A router choosing between two models.
+    ///
+    /// This is a valid *graph* and not an executable *pipeline*: the runtime
+    /// refuses both the router node and the second `llm`. The graph model is
+    /// deliberately the wider of the two — a shape has to be expressible
+    /// before it can be implemented — but the two must not disagree silently,
+    /// so `crates/conduit-runtime/tests/plan.rs` asserts the refusal against
+    /// this exact shape.
+    fn router_fan_out() -> PipelineGraph {
+        PipelineGraph::new("router")
             .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
             .with_node(Node::new("router", NodeKind::Router, "builtin"))
             .with_node(Node::new("local", NodeKind::Llm, "ollama"))
@@ -306,11 +395,112 @@ mod tests {
             .with_edge(Edge::from_port("router", "local", "local"))
             .with_edge(Edge::from_port("router", "cloud", "cloud"))
             .with_edge(Edge::new("local", "tts"))
-            .with_edge(Edge::new("cloud", "tts"));
+            .with_edge(Edge::new("cloud", "tts"))
+    }
 
+    #[test]
+    fn router_fan_out_joins_before_the_sink() {
+        let graph = router_fan_out();
         let order: Vec<&str> =
             graph.topological_order().expect("valid").iter().map(|n| n.id.as_str()).collect();
         assert_eq!(order, ["stt", "router", "local", "cloud", "tts"]);
+    }
+
+    #[test]
+    fn a_graph_with_no_edges_describes_no_pipeline() {
+        // Every node has indegree 0, so `sources` is non-empty, and none has an
+        // outgoing edge, so the sink check passes too. Without a connectivity
+        // check this shape validated while saying nothing about order.
+        let graph = PipelineGraph::new("unwired")
+            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
+            .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
+            .with_node(Node::new("tts", NodeKind::Tts, "piper"));
+
+        let Err(GraphError::Disconnected(nodes)) = graph.validate() else {
+            panic!("an unwired graph must not validate");
+        };
+        assert_eq!(
+            nodes,
+            ["llm", "tts"],
+            "named relative to the pipeline the first node is in"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_node_is_rejected_rather_than_ignored() {
+        // A node nothing feeds and that feeds nothing would never run, and a
+        // graph that accepts it tells its author the opposite.
+        let graph = linear().with_node(Node::new("orphan", NodeKind::Tool, "builtin"));
+
+        assert_eq!(graph.validate(), Err(GraphError::Disconnected(vec!["orphan".to_owned()])));
+    }
+
+    #[test]
+    fn two_separate_pipelines_in_one_graph_are_rejected() {
+        let graph = PipelineGraph::new("two")
+            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
+            .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
+            .with_node(Node::new("other-stt", NodeKind::Stt, "vosk"))
+            .with_node(Node::new("other-llm", NodeKind::Llm, "vllm"))
+            .with_edge(Edge::new("stt", "llm"))
+            .with_edge(Edge::new("other-stt", "other-llm"));
+
+        let Err(GraphError::Disconnected(nodes)) = graph.validate() else {
+            panic!("two pipelines in one graph must not validate");
+        };
+        assert_eq!(nodes, ["other-stt", "other-llm"]);
+    }
+
+    #[test]
+    fn a_node_that_only_feeds_the_pipeline_is_connected() {
+        // Connectivity ignores direction: a tool hanging off the model is part
+        // of the pipeline whichever way the edge points.
+        linear()
+            .with_node(Node::new("clock", NodeKind::Tool, "builtin"))
+            .with_edge(Edge::new("clock", "llm"))
+            .validate()
+            .expect("an upstream branch is still one pipeline");
+    }
+
+    #[test]
+    fn reachability_follows_edges_rather_than_declaration_order() {
+        let graph = linear();
+        assert!(graph.reaches("stt", "tts"), "transitively downstream");
+        assert!(graph.reaches("mic", "stt"), "directly downstream");
+        assert!(!graph.reaches("tts", "stt"), "edges are directed");
+        assert!(!graph.reaches("stt", "stt"), "a node does not reach itself");
+    }
+
+    #[test]
+    fn reachability_over_a_branch_covers_both_sides() {
+        let graph = router_fan_out();
+        assert!(graph.reaches("stt", "local"));
+        assert!(graph.reaches("stt", "cloud"));
+        assert!(graph.reaches("router", "tts"));
+        assert!(!graph.reaches("local", "cloud"), "siblings do not reach each other");
+    }
+
+    #[test]
+    fn reachability_of_an_unknown_node_is_false_rather_than_a_panic() {
+        // The query is used on graphs a caller has not validated, so a bad id
+        // must be an answer rather than a crash.
+        let graph = linear();
+        assert!(!graph.reaches("stt", "nope"));
+        assert!(!graph.reaches("nope", "stt"));
+    }
+
+    #[test]
+    fn reachability_terminates_on_a_cyclic_graph() {
+        // Cyclic graphs do not validate, but `reaches` is callable on any
+        // graph and must not spin.
+        let graph = PipelineGraph::new("cyclic")
+            .with_node(Node::new("a", NodeKind::Llm, "ollama"))
+            .with_node(Node::new("b", NodeKind::Tool, "builtin"))
+            .with_edge(Edge::new("a", "b"))
+            .with_edge(Edge::new("b", "a"));
+
+        assert!(graph.reaches("a", "b"));
+        assert!(graph.reaches("a", "a"), "a cycle does lead back");
     }
 
     #[test]

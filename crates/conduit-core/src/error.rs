@@ -95,4 +95,13 @@ pub enum GraphError {
     /// The graph produced no output.
     #[error("graph has no sink node")]
     NoSink,
+
+    /// The graph is not one pipeline: the listed nodes are not connected to
+    /// the rest of it, so nothing would ever run them.
+    ///
+    /// A graph with no edges at all is the common case. Every node is then its
+    /// own island, which validates as a sound *topology* while describing no
+    /// pipeline whatsoever.
+    #[error("nodes are not connected to the rest of the pipeline: {}", .0.join(", "))]
+    Disconnected(Vec<String>),
 }
