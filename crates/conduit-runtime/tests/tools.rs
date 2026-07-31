@@ -450,7 +450,10 @@ async fn tools_requested_together_run_together() {
     let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
 
-    let graph = graph_with_tool().with_node(Node::new("clock", NodeKind::Tool, "clock"));
+    let graph = graph_with_tool()
+        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
+        .with_edge(Edge::new("llm", "clock"))
+        .with_edge(Edge::new("clock", "tts"));
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
         .with_llm(FakeLlm::scripted(vec![
