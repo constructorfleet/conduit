@@ -19,7 +19,8 @@
 //! # fn example(graph: &PipelineGraph, providers: &Providers) -> conduit_core::Result<()> {
 //! let runner = Runner::prepare(graph, providers, EventBus::default())?;
 //! # let audio = todo!();
-//! let speech = runner.run(audio);
+//! let conversation = runner.run(audio);
+//! // Events for this turn are tagged with `conversation.id`.
 //! # Ok(())
 //! # }
 //! ```
@@ -35,6 +36,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
+use conduit_core::id::ConversationId;
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
@@ -129,6 +131,20 @@ impl Providers {
     }
 }
 
+/// One running turn: the reply being spoken, and the id it is filed under.
+pub struct Conversation {
+    /// The conversation every event from this turn carries.
+    pub id: ConversationId,
+    /// Synthesized audio, as it is produced.
+    pub audio: ChunkStream<SpeechChunk>,
+}
+
+impl std::fmt::Debug for Conversation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Conversation").field("id", &self.id).finish_non_exhaustive()
+    }
+}
+
 /// Executes one pipeline, one turn at a time.
 ///
 /// Cheap to clone and safe to share: each [`Runner::run`] call is an
@@ -169,17 +185,22 @@ impl Runner {
 
     /// Runs one turn, returning the synthesized reply as it is produced.
     ///
-    /// The returned stream yields audio before the model has finished
-    /// generating. Dropping it stops the turn: synthesis halts and the
-    /// conversation is cancelled, which is how barge-in works.
+    /// The returned [`Conversation`] carries the audio and the id every event
+    /// from this turn is tagged with, so a caller can follow the turn on the
+    /// bus without guessing which conversation is theirs.
+    ///
+    /// The audio stream yields before the model has finished generating.
+    /// Dropping it stops the turn: synthesis halts and the conversation is
+    /// cancelled, which is how barge-in works.
     ///
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
-    pub fn run(&self, audio: ChunkStream<AudioChunk>) -> ChunkStream<SpeechChunk> {
+    pub fn run(&self, audio: ChunkStream<AudioChunk>) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
         let turn =
             turn::Turn::new(Arc::clone(&self.plan), self.bus.clone(), self.format, sender);
+        let id = turn.conversation();
         tokio::spawn(turn.run(audio));
-        Box::pin(ReceiverStream::new(receiver))
+        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)) }
     }
 }

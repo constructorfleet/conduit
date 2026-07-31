@@ -11,6 +11,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Event, FinishReason};
+use conduit_core::id::ConversationId;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
@@ -66,6 +67,11 @@ impl Turn {
             speaking: false,
             spoken_ms: 0,
         }
+    }
+
+    /// The conversation this turn's events are filed under.
+    pub fn conversation(&self) -> ConversationId {
+        self.emitter.conversation()
     }
 
     /// Runs the turn to completion.

@@ -78,7 +78,7 @@ fn names(events: &[Event]) -> Vec<String> {
 /// Runs one turn to completion, failing fast rather than hanging.
 async fn run_turn(runner: &Runner) {
     let turn = async {
-        let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+        let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
     };
     tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
 }

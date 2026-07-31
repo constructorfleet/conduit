@@ -75,7 +75,7 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let spoken: Vec<_> = runner.run(audio_of(&["a", "b"])).collect().await;
+    let spoken: Vec<_> = runner.run(audio_of(&["a", "b"])).audio.collect().await;
 
     let audio: Vec<u8> = spoken
         .into_iter()
@@ -118,7 +118,7 @@ async fn speech_starts_before_the_model_finishes() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     let events = names(&drain(&mut subscription).await);
     let started = events.iter().position(|name| name == "TtsStarted").expect("TtsStarted");
@@ -136,7 +136,7 @@ async fn passes_the_transcript_to_the_model() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     let requests = llm.requests();
     assert_eq!(requests.len(), 1);
@@ -155,7 +155,7 @@ async fn speaks_each_sentence_as_soon_as_it_is_complete() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     // Waiting for the model to finish before speaking would collapse this to
     // one call with the whole response.
@@ -173,7 +173,7 @@ async fn stage_failures_reach_the_bus_and_the_caller() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let spoken: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let spoken: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     assert!(spoken.iter().any(Result::is_err), "caller must see the failure");
 
@@ -252,10 +252,30 @@ async fn a_runner_can_serve_more_than_one_turn() {
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     assert_eq!(tts.spoken(), ["Hello.", "Hello."]);
+}
+
+#[tokio::test]
+async fn the_returned_conversation_id_is_the_one_events_carry() {
+    // Without this a caller cannot tell which events on the bus are theirs.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let id = conversation.id;
+    let _: Vec<_> = conversation.audio.collect().await;
+
+    let envelope = subscription.recv().await.expect("event");
+    assert_eq!(envelope.conversation, Some(id));
 }
 
 #[tokio::test]
@@ -269,10 +289,10 @@ async fn each_turn_gets_its_own_conversation() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus.clone()).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
     let first = subscription.recv().await.expect("event").conversation;
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
     let mut second = None;
     while let Ok(Some(envelope)) =
         tokio::time::timeout(Duration::from_secs(5), subscription.recv()).await
@@ -298,7 +318,7 @@ async fn every_event_in_a_turn_shares_one_trace() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
 
     let mut traces = Vec::new();
     while let Ok(Some(envelope)) =
