@@ -157,6 +157,10 @@ socket names the conversation before sending a single sample.
 A missing or unrunnable pipeline is refused with an HTTP status *before* the
 upgrade, so a client never has to diagnose a socket that opens and then dies.
 
+Sat1 and VoicePE firmware integration targets live in [`firmware`](firmware).
+They are Conduit WebSocket targets, not Home Assistant Assist, Tater native
+satellite, ESPHome voice-assistant, or wake-audio UDP firmware.
+
 ## Storage
 
 Three backends, chosen by configuration:

@@ -9,12 +9,11 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::response::Response;
-use conduit_core::id::ConversationId;
+use conduit_core::device::{Command, Notice};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -25,32 +24,6 @@ use crate::{ApiError, AppState};
 /// Small on purpose: audio that has been waiting is audio the recognizer
 /// should already have had.
 const CAPTURE_BUFFER: usize = 32;
-
-/// What a client can say that is not audio.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Command {
-    /// The utterance is over; answer it.
-    End,
-}
-
-/// What the server says that is not audio.
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Notice {
-    /// Sent before any audio, so the client can follow its own events.
-    Started {
-        /// The conversation this turn is filed under.
-        conversation: ConversationId,
-    },
-    /// The turn finished normally.
-    Done,
-    /// The turn failed. The detail is also on the event stream.
-    Failed {
-        /// What went wrong.
-        error: String,
-    },
-}
 
 /// `GET /v1/pipelines/{name}/converse` — hold a conversation over a socket.
 ///

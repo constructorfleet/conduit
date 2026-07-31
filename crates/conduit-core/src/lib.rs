@@ -33,6 +33,7 @@
 
 pub mod audio;
 pub mod bus;
+pub mod device;
 pub mod error;
 pub mod event;
 pub mod graph;
