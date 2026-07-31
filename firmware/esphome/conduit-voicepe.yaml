@@ -4,6 +4,10 @@ substitutions:
   conduit_server: 192.168.1.10:8080
   conduit_pipeline: kitchen
   conduit_scheme: ws
+  wake_debug_assistant_id: ${conduit_pipeline}
+  wake_debug_udp_host: ""
+  wake_debug_udp_port: "6056"
+  wake_debug_event_url: ""
   # Official board firmware source: https://github.com/esphome/home-assistant-voice-pe
   voicepe_ref: 0579e7b9d8504264719c593474c85447253c9dc1
 
@@ -167,6 +171,8 @@ micro_wake_word:
         condition:
           switch.is_off: master_mute_switch
         then:
+          - conduit_voice.wake_debug_event:
+              id: conduit
           - conduit_voice.start:
               id: conduit
 
@@ -175,5 +181,9 @@ conduit_voice:
   server: ${conduit_server}
   scheme: ${conduit_scheme}
   pipeline: ${conduit_pipeline}
+  debug_assistant_id: ${wake_debug_assistant_id}
+  debug_udp_host: ${wake_debug_udp_host}
+  debug_udp_port: ${wake_debug_udp_port}
+  debug_wake_event_url: ${wake_debug_event_url}
   microphone: i2s_mics
   speaker: announcement_resampling_speaker

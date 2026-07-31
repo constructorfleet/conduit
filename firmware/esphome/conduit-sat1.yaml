@@ -4,6 +4,10 @@ substitutions:
   conduit_server: 192.168.1.10:8080
   conduit_pipeline: kitchen
   conduit_scheme: ws
+  wake_debug_assistant_id: ${conduit_pipeline}
+  wake_debug_udp_host: ""
+  wake_debug_udp_port: "6056"
+  wake_debug_event_url: ""
   # Official board firmware source: https://github.com/futureproofhomes/satellite1-esphome
   satellite1_ref: 592a9687206709046f475b5464941702beacb093
 
@@ -24,6 +28,8 @@ external_components:
       path: components
     components:
       - conduit_voice
+      - pcm5122
+      - satellite1
 
 esphome:
   name: ${name}
@@ -236,6 +242,8 @@ micro_wake_word:
         condition:
           switch.is_off: master_mute_switch
         then:
+          - conduit_voice.wake_debug_event:
+              id: conduit
           - conduit_voice.start:
               id: conduit
 
@@ -244,5 +252,9 @@ conduit_voice:
   server: ${conduit_server}
   scheme: ${conduit_scheme}
   pipeline: ${conduit_pipeline}
+  debug_assistant_id: ${wake_debug_assistant_id}
+  debug_udp_host: ${wake_debug_udp_host}
+  debug_udp_port: ${wake_debug_udp_port}
+  debug_wake_event_url: ${wake_debug_event_url}
   microphone: sat1_mics
   speaker: announcement_resampling_speaker

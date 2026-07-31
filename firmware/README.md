@@ -68,7 +68,34 @@ Set the substitutions before flashing:
 - `conduit_server`: host and port for Conduit, for example `192.168.1.10:8080`.
 - `conduit_pipeline`: the Conduit pipeline name.
 - `conduit_scheme`: `ws` or `wss`.
+- `wake_debug_assistant_id`: assistant id used for debug packets and wake
+  events. Defaults to `conduit_pipeline`.
+- `wake_debug_udp_host`: host running
+  `~/src/wakeword/esphome-wakeword-debug/` ingest. Empty disables UDP debug
+  audio.
+- `wake_debug_udp_port`: UDP ingest port. Defaults to `6056`.
+- `wake_debug_event_url`: debug ingest HTTP wake endpoint, for example
+  `http://192.168.1.10:8000/wake_event`. Empty disables wake-event posting.
 
 The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
 reply frames to the board speaker.
+
+Satellite1 also loads local `pcm5122` and `satellite1` component overlays from
+`esphome/components/`. These are copied from the pinned FutureProofHomes ref
+and patched only for ESPHome 2026.7's `GPIOPin::dump_summary(char *, size_t)`
+signature so the firmware actually compiles with current ESPHome.
+
+When `wake_debug_udp_host` is set, the local component also streams the same
+16 kHz mono signed little-endian PCM that feeds wake-word detection to the
+debug receiver using WWD2 UDP packets:
+
+```text
+magic=WWD2 assistant_id channels=1 bits=16 encoding=pcm_s16le sample_rate=16000
+```
+
+On wake-word detection, the YAML calls `conduit_voice.wake_debug_event` before
+starting the Conduit conversation. That action posts to `wake_debug_event_url`
+with `assistant_id={wake_debug_assistant_id}` so
+`esphome-wakeword-debug` can align the wake event with the continuous WWD2
+audio stream.

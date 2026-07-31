@@ -12,6 +12,11 @@ DEPENDENCIES = ["microphone", "network"]
 CODEOWNERS = ["@tglenn"]
 
 CONF_PIPELINE = "pipeline"
+CONF_DEBUG_ASSISTANT_ID = "debug_assistant_id"
+CONF_DEBUG_MICROPHONE_SOURCE_ID = "debug_microphone_source_id"
+CONF_DEBUG_UDP_HOST = "debug_udp_host"
+CONF_DEBUG_UDP_PORT = "debug_udp_port"
+CONF_DEBUG_WAKE_EVENT_URL = "debug_wake_event_url"
 CONF_SCHEME = "scheme"
 CONF_SERVER = "server"
 
@@ -26,6 +31,9 @@ StopAction = conduit_voice_ns.class_(
 )
 IsRunningCondition = conduit_voice_ns.class_(
     "IsRunningCondition", automation.Condition, cg.Parented.template(ConduitVoice)
+)
+WakeDebugEventAction = conduit_voice_ns.class_(
+    "WakeDebugEventAction", automation.Action, cg.Parented.template(ConduitVoice)
 )
 
 
@@ -44,9 +52,16 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ConduitVoice),
+            cv.GenerateID(CONF_DEBUG_MICROPHONE_SOURCE_ID): cv.declare_id(
+                microphone.MicrophoneSource
+            ),
             cv.Required(CONF_SERVER): cv.string_strict,
             cv.Optional(CONF_SCHEME, default="ws"): cv.one_of("ws", "wss", lower=True),
             cv.Required(CONF_PIPELINE): _validate_pipeline,
+            cv.Optional(CONF_DEBUG_ASSISTANT_ID): _validate_pipeline,
+            cv.Optional(CONF_DEBUG_UDP_HOST, default=""): cv.string_strict,
+            cv.Optional(CONF_DEBUG_UDP_PORT, default=6056): cv.port,
+            cv.Optional(CONF_DEBUG_WAKE_EVENT_URL, default=""): cv.string_strict,
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
@@ -57,7 +72,7 @@ CONFIG_SCHEMA = cv.All(
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
-    socket.consume_sockets(1, "conduit_voice_websocket"),
+    socket.consume_sockets(2, "conduit_voice"),
 )
 
 FINAL_VALIDATE_SCHEMA = cv.All(
@@ -87,12 +102,21 @@ async def to_code(config: ConfigType) -> None:
     mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE])
     cg.add(var.set_microphone_source(mic_source))
 
+    debug_mic_config = dict(config[CONF_MICROPHONE])
+    debug_mic_config[CONF_ID] = config[CONF_DEBUG_MICROPHONE_SOURCE_ID]
+    debug_mic_source = await microphone.microphone_source_to_code(debug_mic_config, passive=True)
+    cg.add(var.set_debug_microphone_source(debug_mic_source))
+
     spkr = await cg.get_variable(config[CONF_SPEAKER])
     cg.add(var.set_speaker(spkr))
 
     cg.add(var.set_server(config[CONF_SERVER]))
     cg.add(var.set_scheme(config[CONF_SCHEME]))
     cg.add(var.set_pipeline(config[CONF_PIPELINE]))
+    cg.add(var.set_debug_assistant_id(config.get(CONF_DEBUG_ASSISTANT_ID, config[CONF_PIPELINE])))
+    cg.add(var.set_debug_udp_host(config[CONF_DEBUG_UDP_HOST]))
+    cg.add(var.set_debug_udp_port(config[CONF_DEBUG_UDP_PORT]))
+    cg.add(var.set_debug_wake_event_url(config[CONF_DEBUG_WAKE_EVENT_URL]))
 
     network.require_high_performance_networking()
     wifi.enable_runtime_power_save_control()
@@ -148,5 +172,22 @@ async def is_running_condition_to_code(
     args: TemplateArgsType,
 ):
     var = cg.new_Pvariable(condition_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+@automation.register_action(
+    "conduit_voice.wake_debug_event",
+    WakeDebugEventAction,
+    CONDUIT_VOICE_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def wake_debug_event_action_to_code(
+    config: ConfigType,
+    action_id: ID,
+    template_arg: cg.TemplateArguments,
+    args: TemplateArgsType,
+):
+    var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var

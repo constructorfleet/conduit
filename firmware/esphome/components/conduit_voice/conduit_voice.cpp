@@ -6,7 +6,12 @@
 
 #include "esphome/core/log.h"
 
+#include "esp_http_client.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
+
 #include <cstring>
+#include <unistd.h>
 
 namespace esphome::conduit_voice {
 
@@ -32,6 +37,11 @@ void ConduitVoice::setup() {
   this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
     this->handle_microphone_data_(data);
   });
+  if (this->debug_microphone_source_ != nullptr) {
+    this->debug_microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
+      this->handle_debug_microphone_data_(data);
+    });
+  }
 
   audio::AudioStreamInfo stream_info(
       CONDUIT_VOICE_AUDIO_BITS_PER_SAMPLE,
@@ -112,6 +122,32 @@ void ConduitVoice::stop() {
     return;
   }
   this->finish_utterance_();
+}
+
+void ConduitVoice::wake_debug_event() {
+  if (this->debug_wake_event_url_.empty()) {
+    return;
+  }
+
+  std::string url = this->debug_wake_event_url_;
+  url += (url.find('?') == std::string::npos) ? "?" : "&";
+  url += "assistant_id=" + this->debug_assistant_id_;
+
+  esp_http_client_config_t config = {};
+  config.url = url.c_str();
+  config.method = HTTP_METHOD_POST;
+  config.timeout_ms = 3000;
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  if (client == nullptr) {
+    ESP_LOGW(TAG, "Failed to create wake debug HTTP client");
+    return;
+  }
+  esp_err_t err = esp_http_client_perform(client);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to post wake debug event: %s", esp_err_to_name(err));
+  }
+  esp_http_client_cleanup(client);
 }
 
 void ConduitVoice::websocket_event_handler_(
@@ -219,6 +255,50 @@ void ConduitVoice::handle_microphone_data_(const std::vector<uint8_t> &data) {
     ESP_LOGE(TAG, "Failed to send microphone audio to Conduit");
     this->state_ = State::FAILED;
     this->pending_stop_ = true;
+  }
+}
+
+void ConduitVoice::handle_debug_microphone_data_(const std::vector<uint8_t> &data) {
+  if (this->debug_udp_host_.empty() || this->debug_assistant_id_.empty() || data.empty()) {
+    return;
+  }
+  this->send_debug_udp_(data.data(), data.size());
+}
+
+void ConduitVoice::send_debug_udp_(const uint8_t *data, size_t length) {
+  const size_t assistant_id_len = this->debug_assistant_id_.size();
+  std::vector<uint8_t> packet(CONDUIT_VOICE_WWD2_HEADER_BYTES + assistant_id_len + length);
+  const size_t packet_len = conduit_voice_wwd2_packet(
+      packet.data(),
+      packet.size(),
+      this->debug_assistant_id_.c_str(),
+      data,
+      length,
+      this->debug_udp_sequence_);
+  if (packet_len == 0) {
+    return;
+  }
+
+  struct addrinfo hints = {};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  struct addrinfo *result = nullptr;
+  const std::string port = std::to_string(this->debug_udp_port_);
+  if (getaddrinfo(this->debug_udp_host_.c_str(), port.c_str(), &hints, &result) != 0 || result == nullptr) {
+    ESP_LOGW(TAG, "Failed to resolve wake debug UDP host %s", this->debug_udp_host_.c_str());
+    return;
+  }
+
+  int fd = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+  if (fd < 0) {
+    freeaddrinfo(result);
+    return;
+  }
+  ssize_t sent = sendto(fd, packet.data(), packet_len, 0, result->ai_addr, result->ai_addrlen);
+  close(fd);
+  freeaddrinfo(result);
+  if (sent == static_cast<ssize_t>(packet_len)) {
+    this->debug_udp_sequence_++;
   }
 }
 

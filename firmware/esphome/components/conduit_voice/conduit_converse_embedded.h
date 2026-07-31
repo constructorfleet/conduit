@@ -2,12 +2,17 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace esphome::conduit_voice {
 
 static constexpr int CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ = 16000;
 static constexpr int CONDUIT_VOICE_AUDIO_CHANNELS = 1;
 static constexpr int CONDUIT_VOICE_AUDIO_BITS_PER_SAMPLE = 16;
+static constexpr uint8_t CONDUIT_VOICE_WWD2_AUDIO_ENCODING_PCM_SIGNED_LE = 1;
+static constexpr size_t CONDUIT_VOICE_WWD2_HEADER_BYTES = 18;
+static constexpr size_t CONDUIT_VOICE_WWD2_MAX_ASSISTANT_ID_BYTES = 64;
+static constexpr size_t CONDUIT_VOICE_WWD2_MAX_PAYLOAD_BYTES = 0xFFFF;
 static constexpr const char *CONDUIT_VOICE_CONVERSE_END_JSON = "{\"type\":\"end\"}";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_PREFIX = "/v1/pipelines/";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_SUFFIX = "/converse";
@@ -132,6 +137,54 @@ inline ConduitNotice conduit_voice_notice_parse(const char *json) {
   }
 
   return notice;
+}
+
+inline size_t conduit_voice_wwd2_packet(
+    uint8_t *out,
+    size_t capacity,
+    const char *assistant_id,
+    const uint8_t *pcm,
+    size_t pcm_len,
+    uint32_t sequence) {
+  if (out == nullptr || assistant_id == nullptr || pcm == nullptr || pcm_len == 0 ||
+      pcm_len > CONDUIT_VOICE_WWD2_MAX_PAYLOAD_BYTES) {
+    return 0;
+  }
+
+  size_t assistant_id_len = 0;
+  while (assistant_id[assistant_id_len] != '\0') {
+    assistant_id_len++;
+  }
+  if (assistant_id_len == 0 || assistant_id_len > CONDUIT_VOICE_WWD2_MAX_ASSISTANT_ID_BYTES) {
+    return 0;
+  }
+
+  const size_t packet_len = CONDUIT_VOICE_WWD2_HEADER_BYTES + assistant_id_len + pcm_len;
+  if (capacity < packet_len) {
+    return 0;
+  }
+
+  out[0] = 'W';
+  out[1] = 'W';
+  out[2] = 'D';
+  out[3] = '2';
+  out[4] = static_cast<uint8_t>(assistant_id_len);
+  out[5] = CONDUIT_VOICE_AUDIO_CHANNELS;
+  out[6] = CONDUIT_VOICE_AUDIO_BITS_PER_SAMPLE;
+  out[7] = CONDUIT_VOICE_WWD2_AUDIO_ENCODING_PCM_SIGNED_LE;
+  out[8] = static_cast<uint8_t>((CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ >> 24) & 0xFF);
+  out[9] = static_cast<uint8_t>((CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ >> 16) & 0xFF);
+  out[10] = static_cast<uint8_t>((CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ >> 8) & 0xFF);
+  out[11] = static_cast<uint8_t>(CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ & 0xFF);
+  out[12] = static_cast<uint8_t>((sequence >> 24) & 0xFF);
+  out[13] = static_cast<uint8_t>((sequence >> 16) & 0xFF);
+  out[14] = static_cast<uint8_t>((sequence >> 8) & 0xFF);
+  out[15] = static_cast<uint8_t>(sequence & 0xFF);
+  out[16] = static_cast<uint8_t>((pcm_len >> 8) & 0xFF);
+  out[17] = static_cast<uint8_t>(pcm_len & 0xFF);
+  std::memcpy(out + CONDUIT_VOICE_WWD2_HEADER_BYTES, assistant_id, assistant_id_len);
+  std::memcpy(out + CONDUIT_VOICE_WWD2_HEADER_BYTES + assistant_id_len, pcm, pcm_len);
+  return packet_len;
 }
 
 }  // namespace esphome::conduit_voice
