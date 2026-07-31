@@ -42,7 +42,7 @@ jobs:
     env:
       CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # rust-toolchain.toml pins the toolchain, and a file override beats
       # `rustup default`, so installing "stable" here would install a toolchain
       # that nothing then uses. Installing with no argument installs exactly
@@ -93,7 +93,7 @@ jobs:
     env:
       CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
       # cargo-llvm-cov instruments the build, so it needs llvm-tools; it can
       # install the component itself, but asking rustup for it keeps the
@@ -124,7 +124,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: msrv
         name: Read rust-version from Cargo.toml
         run: |
@@ -158,7 +158,7 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run firmware test suites
         run: firmware/test.sh
       # firmware/test.sh asserts on YAML *contents* by grepping, which cannot
@@ -210,7 +210,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Two pins for one toolchain only stay honest if something compares them.
       - name: Check Dockerfile matches rust-toolchain.toml
         run: |
@@ -225,12 +225,12 @@ jobs:
             exit 1
           fi
           echo "both pin Rust ${pinned}"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       # Deliberately uncached. A `type=gha,mode=max` cache of a Rust release
       # build runs to gigabytes and would evict the `check` job's rust-cache
       # entries from the same 10 GB repository budget, making the far more
       # frequent job slower to speed up this one.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -241,7 +241,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup toolchain install --no-self-update
       # Uses .cargo/audit.toml, where every ignored advisory carries a reason.
       - run: cargo install cargo-audit --locked
