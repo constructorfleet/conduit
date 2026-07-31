@@ -46,9 +46,14 @@ fn get(uri: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn health_reports_ok() {
+    // On the ops router, not this one: a liveness probe cannot present a
+    // credential, so `/health` lives on the unauthenticated listener.
     let state = AppState::new(EventBus::default());
-    let (status, body) = call(&state, get("/health")).await;
-    assert_eq!(status, StatusCode::OK);
+    let response =
+        conduit_api::ops_router(state).oneshot(get("/health")).await.expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.expect("body").to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
     assert_eq!(body["status"], "ok");
 }
 

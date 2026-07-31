@@ -3,7 +3,16 @@
 //! Two things live here and nothing else: CRUD over pipeline definitions, and
 //! a live view of the event bus. Anything that processes audio belongs in the
 //! runtime, not in the API.
+//!
+//! There are two listeners, built by [`router`] and [`ops_router`]. The service
+//! router carries everything that touches conversations or configuration and
+//! authenticates every route; the ops router carries `/health` and `/metrics`
+//! and authenticates nothing. That split is deliberate: a liveness probe cannot
+//! present a credential, and a scrape that needs one silently stops working
+//! when the token changes. What protects the ops listener is where it is bound
+//! and what the firewall publishes, not a token.
 
+pub mod auth;
 pub mod config;
 pub mod converse;
 pub mod error;
@@ -26,14 +35,16 @@ pub use state::AppState;
 /// compare against.
 pub const CONVERSE_ROUTE: &str = "/v1/pipelines/{name}/converse";
 
-/// Builds the application router.
+/// Builds the service router: conversations and configuration.
+///
+/// Every route here requires a bearer token, enforced by the handlers'
+/// extractors rather than by a middleware, so a route added without thinking
+/// about who may call it does not compile.
 ///
 /// Kept separate from serving so tests can drive it directly without binding
 /// a port.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/health", get(health))
-        .route("/metrics", get(metrics))
         .route("/v1/events", get(events::stream))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
@@ -42,6 +53,27 @@ pub fn router(state: AppState) -> Router {
             "/v1/pipelines/{name}",
             get(pipelines::get).put(pipelines::put).delete(pipelines::delete),
         )
+        // `include_headers(false)` is the default, and stated anyway: spans go
+        // to an OTLP collector, and a span carrying `Authorization` would ship
+        // every device's credential to it.
+        .layer(
+            TraceLayer::new_for_http().make_span_with(
+                tower_http::trace::DefaultMakeSpan::new().include_headers(false),
+            ),
+        )
+        .with_state(state)
+}
+
+/// Builds the ops router: `/health` and `/metrics`, unauthenticated.
+///
+/// Bound to its own port so an operator can publish the service port to the
+/// network and keep this one on the host. It exposes real operational
+/// intelligence — conversation counts, tool names, error rates — so it should
+/// not cross a trust boundary.
+pub fn ops_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

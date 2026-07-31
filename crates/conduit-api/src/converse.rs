@@ -15,6 +15,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::device::{Command, Notice};
+use conduit_core::id::DeviceId;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
@@ -23,6 +24,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::auth::DeviceCaller;
 use crate::{ApiError, AppState};
 
 /// How many captured chunks may queue before the socket reader waits.
@@ -39,14 +41,33 @@ const CAPTURE_BUFFER: usize = 32;
 ///
 /// # Errors
 ///
-/// Returns 404 if no such pipeline is stored, and 422 if it cannot be executed
-/// with the providers this server has.
+/// Returns 401 without a usable device token, 403 if that device is restricted
+/// to other pipelines, 404 if no such pipeline is stored, and 422 if it cannot
+/// be executed with the providers this server has or the requested audio format
+/// is not usable.
 pub(crate) async fn converse(
+    // First in the list on purpose: axum runs extractors in declaration order,
+    // so an unauthenticated caller is refused before anything else is parsed.
+    DeviceCaller(device): DeviceCaller,
     State(state): State<AppState>,
     Path(name): Path<String>,
     Query(format): Query<AudioFormatQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
+    // Checked before the pipeline is looked up, so a device restricted away
+    // from a pipeline cannot use the 404 to learn whether it exists.
+    if !device.may_use(&name) {
+        tracing::warn!(
+            device = %device.name,
+            pipeline = %name,
+            "rejected a device that is not permitted to use this pipeline"
+        );
+        return Err(ApiError::forbidden(format!(
+            "device `{}` is not permitted to use pipeline `{name}`",
+            device.name
+        )));
+    }
+
     let format = format.into_format()?;
     let graph = state
         .pipeline(&name)
@@ -64,8 +85,9 @@ pub(crate) async fn converse(
         .with_format(format)
         .map_err(|error| ApiError::unprocessable(error.to_string()))?;
 
-    tracing::info!(pipeline = %name, "conversation socket opened");
-    Ok(upgrade.on_upgrade(move |socket| run(socket, runner)))
+    tracing::info!(pipeline = %name, device = %device.name, "conversation socket opened");
+    let id = device.id;
+    Ok(upgrade.on_upgrade(move |socket| run(socket, runner, id)))
 }
 
 /// Device-negotiated audio format for one conversation.
@@ -94,12 +116,14 @@ impl AudioFormatQuery {
     }
 }
 
-/// Drives one turn over `socket`.
-async fn run(socket: WebSocket, runner: Runner) {
+/// Drives one turn over `socket` on behalf of `device`.
+async fn run(socket: WebSocket, runner: Runner, device: DeviceId) {
     let (mut outgoing, incoming) = socket.split();
     let (audio, captured, stopped) = capture(incoming);
 
-    let conversation = runner.run(audio);
+    // Every event this turn publishes carries the device, which is what lets an
+    // operator filter the event stream by satellite.
+    let conversation = runner.run_for_device(device, audio);
 
     // The reader cannot hold the turn's stop handle, because the turn needs the
     // audio the reader produces to exist first. So it signals, and this relays.

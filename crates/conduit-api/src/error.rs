@@ -42,6 +42,32 @@ impl ApiError {
             detail: detail.into(),
         }
     }
+
+    /// No usable credential was presented.
+    ///
+    /// The detail is deliberately the same whether the header was missing,
+    /// malformed, or carried a token nobody issued: it tells a misconfigured
+    /// client what shape to send, and tells someone guessing tokens nothing
+    /// about which ones exist.
+    #[must_use]
+    pub fn unauthorized() -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            kind: "unauthorized",
+            detail: "expected an `Authorization: Bearer <token>` header".to_owned(),
+        }
+    }
+
+    /// The credential was recognised but is not allowed to do this.
+    ///
+    /// Unlike [`ApiError::unauthorized`] this can afford to be specific: the
+    /// caller has already proved who they are, so naming what they were denied
+    /// leaks nothing and is the difference between a five-minute fix and an
+    /// afternoon.
+    #[must_use]
+    pub fn forbidden(detail: impl Into<String>) -> Self {
+        Self { status: StatusCode::FORBIDDEN, kind: "forbidden", detail: detail.into() }
+    }
 }
 
 #[derive(Serialize)]
@@ -52,6 +78,13 @@ struct Body<'a> {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(Body { error: self.kind, detail: &self.detail })).into_response()
+        let body = Json(Body { error: self.kind, detail: &self.detail });
+        if self.status == StatusCode::UNAUTHORIZED {
+            // Standard HTTP tooling looks here to learn which scheme to use,
+            // and the RFC requires it on a 401.
+            return (self.status, [(axum::http::header::WWW_AUTHENTICATE, "Bearer")], body)
+                .into_response();
+        }
+        (self.status, body).into_response()
     }
 }

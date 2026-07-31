@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use conduit_api::{router, AppState};
+use conduit_api::{ops_router, router, AppState};
 use conduit_core::bus::EventBus;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -15,6 +15,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr: SocketAddr =
         std::env::var("CONDUIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned()).parse()?;
+    let ops_addr: SocketAddr = std::env::var("CONDUIT_OPS_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:9090".to_owned())
+        .parse()?;
+
+    // Read before anything else is built: a server that cannot say who may call
+    // it should fail now, not after opening a port.
+    let access = conduit_api::config::access_from_env().await?;
 
     let (providers, registered) = conduit_api::config::from_env()?;
     for description in &registered.descriptions {
@@ -22,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = conduit_api::config::store_from_env().await?;
-    let mut state = AppState::with_store(EventBus::default(), store);
+    let mut state = AppState::with_store(EventBus::default(), store).with_access(access);
     if !registered.is_empty() {
         state = state.with_providers(providers);
     }
@@ -35,13 +42,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let ops_listener = tokio::net::TcpListener::bind(ops_addr).await?;
     tracing::info!(%addr, "conduit api listening");
+    tracing::info!(
+        %ops_addr,
+        "conduit ops listening; /health and /metrics are unauthenticated, so do not \
+         publish this port outside your trust boundary"
+    );
 
-    axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await?;
+    // One signal, both listeners: a shutdown that stopped only one would leave a
+    // half-dead server answering probes.
+    let (signal, _) = tokio::sync::broadcast::channel(1);
+    let service_signal = wait_for(signal.subscribe());
+    let ops_signal = wait_for(signal.subscribe());
+    tokio::spawn(async move {
+        shutdown().await;
+        let _ = signal.send(());
+    });
+
+    let service =
+        axum::serve(listener, router(state.clone())).with_graceful_shutdown(service_signal);
+    let ops = axum::serve(ops_listener, ops_router(state)).with_graceful_shutdown(ops_signal);
+
+    // Either listener failing takes the process down: a server missing half its
+    // surface is not a server anyone asked to run.
+    tokio::try_join!(service, ops)?;
+
     if let Some(provider) = tracer_provider {
         provider.shutdown()?;
     }
     Ok(())
+}
+
+/// Resolves when the shutdown signal is sent, or the sender is dropped.
+async fn wait_for(mut signal: tokio::sync::broadcast::Receiver<()>) {
+    let _ = signal.recv().await;
 }
 
 /// Sets up structured logs and, when configured, OTLP span export.

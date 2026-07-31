@@ -176,9 +176,14 @@ fn recording_graph() -> PipelineGraph {
         .with_edge(Edge::new("llm", "tts"))
 }
 
-/// A server listening on an ephemeral port. Stops when the test ends.
+/// Both listeners on ephemeral ports. Stops when the test ends.
+///
+/// Two of them, as the binary runs them: the service port carries conversations
+/// and requires a token, and the ops port carries `/health` and `/metrics` and
+/// requires nothing.
 struct Server {
     address: std::net::SocketAddr,
+    ops_address: std::net::SocketAddr,
     state: AppState,
 }
 
@@ -190,7 +195,15 @@ impl Server {
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        Self { address, state }
+
+        let ops_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let ops_address = ops_listener.local_addr().expect("address");
+        let ops_app = conduit_api::ops_router(state.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(ops_listener, ops_app).await;
+        });
+
+        Self { address, ops_address, state }
     }
 
     fn ws_url(&self, path: &str) -> String {
@@ -199,6 +212,11 @@ impl Server {
 
     fn http_url(&self, path: &str) -> String {
         format!("http://{}{path}", self.address)
+    }
+
+    /// A URL on the unauthenticated ops listener.
+    fn ops_url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.ops_address)
     }
 }
 
@@ -425,7 +443,7 @@ async fn a_stopped_turn_is_recorded_as_asked_for() {
     let _ = tokio::time::timeout(Duration::from_secs(10), drain).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let body = reqwest::get(server.http_url("/metrics"))
+    let body = reqwest::get(server.ops_url("/metrics"))
         .await
         .expect("request")
         .text()
@@ -500,7 +518,7 @@ async fn a_conversation_shows_up_in_the_metrics() {
     let _ = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let body = reqwest::get(server.http_url("/metrics"))
+    let body = reqwest::get(server.ops_url("/metrics"))
         .await
         .expect("request")
         .text()
@@ -514,7 +532,7 @@ async fn a_conversation_shows_up_in_the_metrics() {
 #[tokio::test]
 async fn the_scrape_endpoint_announces_the_prometheus_format() {
     let server = server_with_echo_pipeline().await;
-    let response = reqwest::get(server.http_url("/metrics")).await.expect("request");
+    let response = reqwest::get(server.ops_url("/metrics")).await.expect("request");
 
     assert!(response.status().is_success());
     let content_type = response
@@ -525,4 +543,161 @@ async fn the_scrape_endpoint_announces_the_prometheus_format() {
         .to_owned();
     assert!(content_type.starts_with("text/plain"), "{content_type}");
     assert!(response.text().await.expect("body").contains("# TYPE conduit_events_total"));
+}
+
+/// Long enough to pass the token-entropy floor.
+const DEVICE_TOKEN: &str = "converse-device-token-0000000000000000";
+const GUEST_TOKEN: &str = "converse-guest-token-00000000000000000";
+const MANAGEMENT_TOKEN: &str = "converse-management-token-000000000000";
+
+/// A server whose conversation socket requires a device token.
+///
+/// `guest` is restricted to a pipeline that is not `echo`, which is what makes
+/// the restriction observable rather than merely configured.
+async fn guarded_server() -> Server {
+    let tokens = conduit_api::auth::Tokens::parse(&format!(
+        r#"{{
+          "devices": [
+            {{ "token": "{DEVICE_TOKEN}", "device": "kitchen" }},
+            {{ "token": "{GUEST_TOKEN}", "device": "guest", "pipelines": ["guest-room"] }}
+          ],
+          "management": [{{ "token": "{MANAGEMENT_TOKEN}", "name": "ui" }}]
+        }}"#
+    ))
+    .expect("the token file parses");
+
+    let state = AppState::new(EventBus::default())
+        .with_providers(providers())
+        .with_access(conduit_api::auth::Access::Tokens(tokens));
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
+    Server::start(state).await
+}
+
+/// An upgrade request for `path` carrying `token`, or none at all.
+fn upgrade(
+    server: &Server,
+    path: &str,
+    token: Option<&str>,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request = server.ws_url(path).into_client_request().expect("a websocket request");
+    if let Some(token) = token {
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {token}").parse().expect("a header value"),
+        );
+    }
+    request
+}
+
+#[tokio::test]
+async fn a_device_token_opens_a_conversation() {
+    let server = guarded_server().await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(upgrade(
+        &server,
+        "/v1/pipelines/echo/converse",
+        Some(DEVICE_TOKEN),
+    ))
+    .await
+    .expect("an authenticated device connects");
+
+    socket.send(Message::Binary(b"hello".to_vec().into())).await.expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+
+    let collect = async {
+        let mut frames = Vec::new();
+        while let Some(frame) = socket.next().await {
+            match frame.expect("frame") {
+                Message::Close(_) => break,
+                message => frames.push(message),
+            }
+        }
+        frames
+    };
+    let frames = tokio::time::timeout(Duration::from_secs(10), collect)
+        .await
+        .expect("the server replies");
+    assert_eq!(spoken(&frames), "You said: hello.");
+}
+
+#[tokio::test]
+async fn a_conversation_without_a_token_is_refused_before_upgrading() {
+    // Refused at the handshake, so a stranger who finds the port never gets as
+    // far as talking to the assistant.
+    let server = guarded_server().await;
+    let result =
+        tokio_tungstenite::connect_async(upgrade(&server, "/v1/pipelines/echo/converse", None))
+            .await;
+    assert!(result.is_err(), "conversing without a token must fail the upgrade");
+}
+
+#[tokio::test]
+async fn a_conversation_with_an_unknown_token_is_refused() {
+    let server = guarded_server().await;
+    let result = tokio_tungstenite::connect_async(upgrade(
+        &server,
+        "/v1/pipelines/echo/converse",
+        Some("nobody-holds-this-token-0000000000000"),
+    ))
+    .await;
+    assert!(result.is_err(), "an unknown token must fail the upgrade");
+}
+
+#[tokio::test]
+async fn a_device_restricted_to_other_pipelines_is_refused() {
+    // A satellite in a guest room must not reach the pipeline whose tools
+    // unlock the front door.
+    let server = guarded_server().await;
+    let result = tokio_tungstenite::connect_async(upgrade(
+        &server,
+        "/v1/pipelines/echo/converse",
+        Some(GUEST_TOKEN),
+    ))
+    .await;
+
+    let error = result.expect_err("a restricted device must be refused").to_string();
+    assert!(error.contains("403"), "expected a 403, got {error}");
+}
+
+#[tokio::test]
+async fn the_events_of_a_conversation_name_the_device_that_started_it() {
+    // What makes `/v1/events?device=` select a satellite rather than nothing.
+    let server = guarded_server().await;
+    let mut subscription = server.state.bus.subscribe();
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(upgrade(
+        &server,
+        "/v1/pipelines/echo/converse",
+        Some(DEVICE_TOKEN),
+    ))
+    .await
+    .expect("connects");
+    socket.send(Message::Binary(b"hello".to_vec().into())).await.expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+
+    let envelope = tokio::time::timeout(Duration::from_secs(5), subscription.recv())
+        .await
+        .expect("an event")
+        .expect("bus open");
+    assert!(
+        envelope.device.is_some(),
+        "an authenticated conversation must say which device it came from"
+    );
+}
+
+#[tokio::test]
+async fn an_anonymous_server_still_tags_its_events_with_a_device() {
+    // Otherwise `?device=` would work only on an authenticated deployment, and
+    // the filter would be quietly useless on the one people try first.
+    let server = server_with_echo_pipeline().await;
+    let mut subscription = server.state.bus.subscribe();
+
+    let _ = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
+
+    let envelope = tokio::time::timeout(Duration::from_secs(5), subscription.recv())
+        .await
+        .expect("an event")
+        .expect("bus open");
+    assert!(envelope.device.is_some(), "every conversation belongs to some device");
 }

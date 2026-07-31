@@ -6,6 +6,7 @@ use axum::Json;
 use conduit_core::graph::PipelineGraph;
 use serde::Serialize;
 
+use crate::auth::ManagementCaller;
 use crate::{ApiError, AppState};
 
 /// A stored pipeline and its execution order.
@@ -22,7 +23,10 @@ pub struct PipelineView {
 /// # Errors
 ///
 /// Returns 503 if the store cannot be read.
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<String>>, ApiError> {
+pub async fn list(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<String>>, ApiError> {
     state.pipeline_names().await.map(Json).map_err(store_failure)
 }
 
@@ -44,6 +48,7 @@ fn store_failure(error: conduit_core::Error) -> ApiError {
 /// Returns 404 if no pipeline is stored under `name`, or 503 if the store
 /// cannot be read.
 pub async fn get(
+    _caller: ManagementCaller,
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<PipelineView>, ApiError> {
@@ -64,6 +69,7 @@ pub async fn get(
 ///
 /// Returns 422 if the graph fails validation.
 pub async fn put(
+    _caller: ManagementCaller,
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(graph): Json<PipelineGraph>,
@@ -80,6 +86,7 @@ pub async fn put(
 ///
 /// Returns 404 if no pipeline is stored under `name`.
 pub async fn delete(
+    _caller: ManagementCaller,
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
@@ -98,6 +105,7 @@ pub async fn delete(
 ///
 /// Returns 422 if the graph fails validation.
 pub async fn validate(
+    _caller: ManagementCaller,
     Json(graph): Json<PipelineGraph>,
 ) -> Result<Json<PipelineView>, ApiError> {
     view(graph).map(Json)
