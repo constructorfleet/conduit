@@ -1,11 +1,20 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # No `push: branches: [main]` trigger: Publish also runs on that event and
+  # calls this workflow, so a push trigger here would run every gate twice per
+  # merge. Pull requests are the gate for anything reaching main.
   pull_request:
   schedule:
     - cron: "0 6 * * 1"
+  # Publish reuses these exact jobs rather than restating them. A copy of the
+  # gates in the publish workflow is a copy that drifts, and the copy that
+  # drifts is the one guarding releases.
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,9 +43,11 @@ jobs:
       CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      # rust-toolchain.toml pins the toolchain, and a file override beats
+      # `rustup default`, so installing "stable" here would install a toolchain
+      # that nothing then uses. Installing with no argument installs exactly
+      # what the file asks for, including its clippy and rustfmt components.
+      - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2
       - run: python3 scripts/workspace_version.py check
       - run: cargo fmt --all --check
@@ -45,6 +56,124 @@ jobs:
       # The default feature set must build too, and so must the lean one.
       - run: cargo build --workspace --no-default-features
 
+  # `rust-version` in Cargo.toml is a promise to anyone building Conduit. Every
+  # other job runs the pinned modern toolchain, so without this job the declared
+  # floor is never compiled against and silently rots upward as dependencies
+  # raise their own requirements.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        name: Read rust-version from Cargo.toml
+        run: |
+          msrv=$(sed -ne 's/^rust-version = "\([0-9.]*\)"$/\1/p' Cargo.toml)
+          if [ -z "${msrv}" ]; then
+            echo "could not read workspace.package.rust-version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=${msrv}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+      # RUSTUP_TOOLCHAIN, unlike `rustup default`, outranks rust-toolchain.toml.
+      # Without it this job would quietly test the pinned toolchain twice.
+      #
+      # `--locked` matters as much as the compiler version: Cargo refuses to
+      # resolve a lockfile whose crates require a newer rustc, which is how a
+      # dependency bump that raises the real floor gets caught.
+      - env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
+        run: |
+          rustc --version
+          cargo check --locked --workspace --all-features --all-targets
+          cargo check --locked --workspace --no-default-features
+
+  # The firmware is a shipped artifact, so it needs a gate. Without this the
+  # C, C++, and ESPHome suites run only on whichever developer remembers them.
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run firmware test suites
+        run: firmware/test.sh
+      # firmware/test.sh asserts on YAML *contents* by grepping, which cannot
+      # tell a valid document from a syntactically broken one. The publish
+      # workflow tarballs these files verbatim, so a stray indent would ship.
+      #
+      # This is a syntax gate, not a full `esphome config` validation: that
+      # resolves external components over the network from pinned git refs, and
+      # a firmware gate that fails when GitHub is slow is a gate people learn to
+      # ignore. ESPHome's custom tags carry no meaning for a syntax check, so
+      # they are accepted and discarded.
+      - name: Check ESPHome YAML parses
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+          python3 - <<'PY'
+          import sys
+          import yaml
+
+
+          class EsphomeLoader(yaml.SafeLoader):
+              """Parses ESPHome YAML without interpreting its custom tags."""
+
+
+          EsphomeLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+
+          failed = False
+          for path in (
+              "firmware/esphome/conduit-sat1.yaml",
+              "firmware/esphome/conduit-voicepe.yaml",
+          ):
+              try:
+                  document = yaml.load(open(path, encoding="utf-8"), Loader=EsphomeLoader)
+              except yaml.YAMLError as error:
+                  print(f"{path}: not valid YAML: {error}", file=sys.stderr)
+                  failed = True
+                  continue
+              if not isinstance(document, dict) or "esphome" not in document:
+                  print(f"{path}: parsed, but has no top-level 'esphome' key", file=sys.stderr)
+                  failed = True
+                  continue
+              print(f"{path}: ok ({len(document)} top-level keys)")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+  # The published image is built from this Dockerfile, so a change that breaks
+  # it must fail on the pull request rather than after merge. Building without
+  # pushing needs no registry credentials.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Two pins for one toolchain only stay honest if something compares them.
+      - name: Check Dockerfile matches rust-toolchain.toml
+        run: |
+          pinned=$(sed -ne 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          image=$(sed -ne 's/^FROM rust:\([^-]*\)-bookworm AS builder$/\1/p' Dockerfile)
+          if [ -z "${pinned}" ] || [ -z "${image}" ]; then
+            echo "could not read both toolchain pins (file='${pinned}' image='${image}')" >&2
+            exit 1
+          fi
+          if [ "${pinned}" != "${image}" ]; then
+            echo "rust-toolchain.toml pins ${pinned} but Dockerfile builds on rust:${image}-bookworm" >&2
+            exit 1
+          fi
+          echo "both pin Rust ${pinned}"
+      - uses: docker/setup-buildx-action@v3
+      # Deliberately uncached. A `type=gha,mode=max` cache of a Rust release
+      # build runs to gigabytes and would evict the `check` job's rust-cache
+      # entries from the same 10 GB repository budget, making the far more
+      # frequent job slower to speed up this one.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
   # Advisories change without any commit of ours, so this runs on a schedule
   # as well as per change, and is kept separate to distinguish "this pull
   # request broke something" from "the world changed under us".
@@ -52,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install --no-self-update
       # Uses .cargo/audit.toml, where every ignored advisory carries a reason.
       - run: cargo install cargo-audit --locked
       - run: cargo audit
