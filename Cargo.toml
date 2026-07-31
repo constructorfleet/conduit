@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-api"]
+members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/Teagan42/conduit"
 [workspace.dependencies]
 conduit-core = { path = "crates/conduit-core", version = "0.1.0" }
 conduit-provider = { path = "crates/conduit-provider", version = "0.1.0" }
+conduit-runtime = { path = "crates/conduit-runtime", version = "0.1.0" }
 
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

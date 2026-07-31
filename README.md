@@ -18,6 +18,7 @@ Early. The contracts are in place; the runtime that executes them is not.
 | --- | --- |
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
+| [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD and a live event stream |
 
 ## Design
@@ -37,6 +38,12 @@ node is.
 **Providers are interfaces, not special cases.** Adding ElevenLabs means
 implementing [`TextToSpeech`](crates/conduit-provider/src/tts.rs) and registering
 it under a name. It never means editing the pipeline.
+
+A consequence worth spelling out: the runtime speaks each sentence as soon as
+the model completes it, rather than waiting for the full response. A reply of
+"Turning on the light. Anything else?" begins playing while the second sentence
+is still being generated. The bounded output channel is the backpressure — if a
+device stops draining audio, synthesis stops rather than buffering ahead.
 
 ## Running
 
@@ -87,7 +94,20 @@ cargo audit
 
 ## Next
 
-- The runtime that executes a stored graph
 - Reference providers: Whisper, Ollama, Piper
 - Device transport (WebSocket, then gRPC)
 - Persistent storage behind the pipeline store
+- Wake word, speaker identification, tools, and memory in the runtime
+
+## Known gaps
+
+Tracked here rather than as TODOs in the source.
+
+- **Metrics and traces.** [AGENTS.md](AGENTS.md) asks every significant
+  operation to expose metrics, traces, and logs. Only structured logs and
+  HTTP-level spans exist today; there is no Prometheus endpoint and no
+  OpenTelemetry export.
+- **The pipeline store is in-memory.** Restarting the API loses every stored
+  pipeline.
+- **Only linear graphs execute.** The runtime rejects router fan-out rather
+  than pretending to run it; the graph model already describes it.
