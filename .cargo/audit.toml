@@ -4,16 +4,40 @@
 # outlives its justification is how a real vulnerability gets missed.
 [advisories]
 ignore = [
-    # RUSTSEC-2023-0071 — Marvin attack on `rsa`, no fixed version available.
+    # RUSTSEC-2023-0071 — Marvin timing sidechannel in `rsa`. No fixed version
+    # exists upstream, so the only options are to drop the crate or show it is
+    # never compiled.
     #
-    # `rsa` reaches Cargo.lock through `sqlx`, which declares its MySQL driver
-    # as an optional dependency; Cargo records optional dependencies whether or
-    # not they are enabled. Conduit enables only the `postgres` driver, so the
-    # crate is compiled into nothing:
+    # `rsa` is in Cargo.lock but not in any build. Cargo.lock records the union
+    # of every resolvable dependency regardless of feature selection, so its
+    # presence there proves nothing on its own. The chain that would pull `rsa`
+    # in is `rsa <- sqlx-mysql <- sqlx`, and it stays inactive because
+    # `sqlx-mysql` is an optional dependency of `sqlx` activated only by its
+    # `mysql` feature. `conduit-store` requests `postgres`, `json`, `macros`,
+    # `migrate`, `runtime-tokio`, and `tls-rustls-ring` — never `mysql`.
     #
-    #     cargo tree --workspace --all-features -i rsa --target all
-    #     warning: nothing to print.
+    # `macros` is worth calling out because it does reach sqlx-mysql's *feature*
+    # namespace: `macros` -> `sqlx-macros/macros` -> `sqlx-macros-core/macros`,
+    # and `sqlx-macros-core` also declares an optional `sqlx-mysql`. But that
+    # dependency is only enabled by `sqlx-macros-core/mysql`, which is reached
+    # only from `sqlx/mysql`. Every other reference is weak (`sqlx-mysql?/...`),
+    # and weak features cannot activate the dependency themselves. So enabling
+    # `macros` does not compile `sqlx-mysql`, and therefore does not compile
+    # `rsa`.
     #
-    # Re-check that command if sqlx is upgraded or a MySQL backend is added.
+    # Verify against the *resolved feature graph*, not the lockfile. `-i rsa`
+    # reports "nothing to print" here, but that message is indistinguishable
+    # from a typo'd crate name, so grep the resolved package list instead:
+    #
+    #     cargo tree --workspace --all-features --target all \
+    #       --prefix none --format '{p}' | sort -u > /tmp/graph.txt
+    #     grep -c '^rsa '            /tmp/graph.txt  # expect 0
+    #     grep -c '^sqlx-mysql '     /tmp/graph.txt  # expect 0
+    #     grep -c '^sqlx-postgres '  /tmp/graph.txt  # expect 1, proves the
+    #                                                # command really works
+    #
+    # Last verified against sqlx 0.8.6 / rsa 0.9.10. Re-check if sqlx is
+    # upgraded, if a MySQL backend is added, or if any crate starts depending on
+    # `rsa` directly — in which case this ignore must be removed, not amended.
     "RUSTSEC-2023-0071",
 ]
