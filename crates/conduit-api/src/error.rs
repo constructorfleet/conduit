@@ -1,6 +1,10 @@
 //! HTTP error representation.
 
+use axum::body::Body as AxumBody;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::FromRequest;
 use axum::http::StatusCode;
+use axum::http::{header, Request};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
@@ -43,6 +47,32 @@ impl ApiError {
         }
     }
 
+    /// The request body or parameters could not be parsed.
+    #[must_use]
+    pub fn bad_request(detail: impl Into<String>) -> Self {
+        Self { status: StatusCode::BAD_REQUEST, kind: "bad_request", detail: detail.into() }
+    }
+
+    /// The request body exceeds the configured API limit.
+    #[must_use]
+    pub fn payload_too_large(detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            kind: "payload_too_large",
+            detail: detail.into(),
+        }
+    }
+
+    /// The request content type is not one this endpoint accepts.
+    #[must_use]
+    pub fn unsupported_media_type(detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            kind: "unsupported_media_type",
+            detail: detail.into(),
+        }
+    }
+
     /// No usable credential was presented.
     ///
     /// The detail is deliberately the same whether the header was missing,
@@ -68,6 +98,39 @@ impl ApiError {
     pub fn forbidden(detail: impl Into<String>) -> Self {
         Self { status: StatusCode::FORBIDDEN, kind: "forbidden", detail: detail.into() }
     }
+
+    /// Converts axum's JSON extractor failures into the API's stable JSON
+    /// error envelope.
+    #[must_use]
+    pub fn from_json_rejection(rejection: JsonRejection) -> Self {
+        let detail = rejection.body_text();
+        match rejection.status() {
+            StatusCode::PAYLOAD_TOO_LARGE => Self::payload_too_large(detail),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE => Self::unsupported_media_type(detail),
+            _ => Self::bad_request(detail),
+        }
+    }
+}
+
+/// JSON request extractor that reports failures with [`ApiError`].
+pub struct JsonBody<T>(pub T);
+
+impl<S, T> FromRequest<S> for JsonBody<T>
+where
+    S: Send + Sync,
+    axum::Json<T>: FromRequest<S, Rejection = JsonRejection>,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(
+        request: Request<AxumBody>,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        axum::Json::<T>::from_request(request, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(ApiError::from_json_rejection)
+    }
 }
 
 #[derive(Serialize)]
@@ -82,8 +145,7 @@ impl IntoResponse for ApiError {
         if self.status == StatusCode::UNAUTHORIZED {
             // Standard HTTP tooling looks here to learn which scheme to use,
             // and the RFC requires it on a 401.
-            return (self.status, [(axum::http::header::WWW_AUTHENTICATE, "Bearer")], body)
-                .into_response();
+            return (self.status, [(header::WWW_AUTHENTICATE, "Bearer")], body).into_response();
         }
         (self.status, body).into_response()
     }

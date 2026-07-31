@@ -403,7 +403,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Recorder {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn a_token_never_reaches_a_log_line_or_a_span() {
     // Spans are exported to a collector and logs are shipped off the host, so a
     // token in either is a token in a system nobody thought was holding
@@ -412,29 +412,40 @@ async fn a_token_never_reaches_a_log_line_or_a_span() {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::prelude::*;
 
-    let recorder = Recorder::default();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .json()
-            .with_writer(recorder.clone())
-            .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-            .with_filter(tracing_subscriber::EnvFilter::new("trace")),
-    );
-    let guard = tracing::subscriber::set_default(subscriber);
-
     let state = guarded();
-    // Every outcome, because each one takes a different path through the code
-    // that might mention what it was given: accepted, wrong audience, unknown.
-    let (accepted, _, _) = call(&state, as_bearer("/v1/pipelines", MANAGEMENT_TOKEN)).await;
-    assert_eq!(accepted, StatusCode::OK);
-    let (refused, _, _) = call(&state, as_bearer("/v1/events", DEVICE_TOKEN)).await;
-    assert_eq!(refused, StatusCode::FORBIDDEN);
-    let (unknown, _, _) =
-        call(&state, as_bearer("/v1/pipelines", "nobody-holds-this-token-000000000000")).await;
-    assert_eq!(unknown, StatusCode::UNAUTHORIZED);
+    let mut recorded = String::new();
+    for _ in 0..3 {
+        let recorder = Recorder::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(recorder.clone())
+                .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+                .with_filter(tracing_subscriber::EnvFilter::new("trace")),
+        );
+        let guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
 
-    drop(guard);
-    let recorded = recorder.written();
+        // Every outcome, because each one takes a different path through the
+        // code that might mention what it was given: accepted, wrong audience,
+        // unknown.
+        let (accepted, _, _) = call(&state, as_bearer("/v1/pipelines", MANAGEMENT_TOKEN)).await;
+        assert_eq!(accepted, StatusCode::OK);
+        let (refused, _, _) = call(&state, as_bearer("/v1/events", DEVICE_TOKEN)).await;
+        assert_eq!(refused, StatusCode::FORBIDDEN);
+        let (unknown, _, _) =
+            call(&state, as_bearer("/v1/pipelines", "nobody-holds-this-token-000000000000"))
+                .await;
+        assert_eq!(unknown, StatusCode::UNAUTHORIZED);
+
+        drop(guard);
+        recorded = recorder.written();
+        if !recorded.is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
     assert!(!recorded.is_empty(), "the request span must have been recorded at all");
     for token in [DEVICE_TOKEN, MANAGEMENT_TOKEN, "nobody-holds-this-token-000000000000"] {
         assert!(!recorded.contains(token), "a token was recorded: {recorded}");

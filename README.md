@@ -119,7 +119,7 @@ Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Service API listen address |
-| `CONDUIT_OPS_BIND` | `0.0.0.0:9090` | Ops listen address: `/health` and `/metrics`, unauthenticated |
+| `CONDUIT_OPS_BIND` | `0.0.0.0:9090` | Ops listen address: `/health`, `/ready`, and `/metrics`, unauthenticated |
 | `CONDUIT_TOKENS` | — | Token file; required unless `CONDUIT_ALLOW_ANONYMOUS` is set |
 | `CONDUIT_ALLOW_ANONYMOUS` | — | `1` serves the API to anyone who can reach it |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
@@ -183,14 +183,14 @@ Both routes take a management token; see [Authentication](#authentication).
 
 Conduit serves two listeners, because the two things an operator needs are in
 tension: every route that touches conversations or configuration must require a
-credential, and `/health` and `/metrics` must work without one — a liveness probe
-cannot present a credential, and a Prometheus scrape that needs one is a scrape
-that silently stops working when the token rotates.
+credential, and `/health`, `/ready`, and `/metrics` must work without one —
+probes cannot present a credential, and a Prometheus scrape that needs one is a
+scrape that silently stops working when the token rotates.
 
 | Listener | Default | Carries | Authentication |
 | --- | --- | --- | --- |
 | Service | `0.0.0.0:8080` | Conversations, pipelines, events | Bearer token, always |
-| Ops | `0.0.0.0:9090` | `/health`, `/metrics` | None |
+| Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 **Do not publish the ops port outside your trust boundary.** Its protection is
 which network can reach it, not which credential you hold, and `/metrics`
@@ -391,8 +391,9 @@ rather than being allowed to escape the directory.
 
 ## Observability
 
-`/metrics` serves Prometheus text on the ops listener — `localhost:9090/metrics`
-by default, with no credential, alongside `/health`. See
+`/health` is a liveness probe, and `/ready` verifies that the pipeline store can
+answer. `/metrics` serves Prometheus text on the ops listener —
+`localhost:9090/metrics` by default, with no credential, alongside both probes. See
 [Authentication](#authentication) for why, and for the obligation not to publish
 that port outside your trust boundary.
 

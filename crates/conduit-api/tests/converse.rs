@@ -179,8 +179,8 @@ fn recording_graph() -> PipelineGraph {
 /// Both listeners on ephemeral ports. Stops when the test ends.
 ///
 /// Two of them, as the binary runs them: the service port carries conversations
-/// and requires a token, and the ops port carries `/health` and `/metrics` and
-/// requires nothing.
+/// and requires a token, and the ops port carries `/health`, `/ready`, and
+/// `/metrics` and requires nothing.
 struct Server {
     address: std::net::SocketAddr,
     ops_address: std::net::SocketAddr,

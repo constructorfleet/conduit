@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%addr, "conduit api listening");
     tracing::info!(
         %ops_addr,
-        "conduit ops listening; /health and /metrics are unauthenticated, so do not \
+        "conduit ops listening; /health, /ready, and /metrics are unauthenticated, so do not \
          publish this port outside your trust boundary"
     );
 
