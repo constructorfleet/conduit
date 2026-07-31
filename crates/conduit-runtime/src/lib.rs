@@ -37,7 +37,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
-use conduit_core::id::{ConversationId, SpeakerId};
+use conduit_core::id::{ConversationId, DeviceId, SpeakerId};
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
@@ -236,7 +236,25 @@ impl Runner {
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
     pub fn run(&self, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, None)
+        self.start(audio, None, None)
+    }
+
+    /// Runs one turn on behalf of an identified device.
+    ///
+    /// Every event the turn publishes carries `device`, which is what makes
+    /// `/v1/events?device=` select a single satellite. The identity must come
+    /// from an authenticated device token: a value a client can choose would
+    /// make the filter select whatever it claimed.
+    ///
+    /// A device is not a speaker. It says which satellite is connected and
+    /// never who is talking, so it deliberately does not reach a tool's
+    /// permission check — see [`Runner::run_as`].
+    pub fn run_for_device(
+        &self,
+        device: DeviceId,
+        audio: ChunkStream<AudioChunk>,
+    ) -> Conversation {
+        self.start(audio, None, Some(device))
     }
 
     /// Runs one turn attributed to an identified speaker.
@@ -251,15 +269,15 @@ impl Runner {
     /// or a pipeline name in this argument would make every per-speaker policy
     /// silently wrong rather than merely unenforced.
     pub fn run_as(&self, speaker: SpeakerId, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, Some(speaker))
+        self.start(audio, Some(speaker), None)
     }
 
-    /// Spawns a turn, which is the only thing [`Runner::run`] and
-    /// [`Runner::run_as`] differ in.
+    /// Spawns a turn, which is all the `run*` methods differ in.
     fn start(
         &self,
         audio: ChunkStream<AudioChunk>,
         speaker: Option<SpeakerId>,
+        device: Option<DeviceId>,
     ) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
         let stop = Stop::new();
@@ -272,6 +290,9 @@ impl Runner {
         );
         if let Some(speaker) = speaker {
             turn = turn.with_speaker(speaker);
+        }
+        if let Some(device) = device {
+            turn = turn.with_device(device);
         }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);

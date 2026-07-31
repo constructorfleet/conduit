@@ -96,6 +96,16 @@ impl Turn {
         self
     }
 
+    /// Tags this turn's events with the device holding the conversation.
+    ///
+    /// Deliberately separate from [`Turn::with_speaker`]: this says which
+    /// satellite is connected and is never evidence of who is talking.
+    #[must_use]
+    pub fn with_device(mut self, device: conduit_core::id::DeviceId) -> Self {
+        self.emitter = self.emitter.with_device(device);
+        self
+    }
+
     /// The conversation this turn's events are filed under.
     pub fn conversation(&self) -> ConversationId {
         self.emitter.conversation()
