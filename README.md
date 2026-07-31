@@ -91,6 +91,8 @@ cargo run -p conduit-api
 | `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
 | `CONDUIT_OPENAI_STT_MODEL` | — | Enables speech recognition, e.g. `whisper-1` |
 | `CONDUIT_OPENAI_TTS_MODEL` | — | Enables synthesis, e.g. `tts-1` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Enables OTLP/HTTP span export to a collector |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | Trace-specific OTLP/HTTP endpoint; takes precedence for spans |
 
 Nothing is registered unless it is asked for, and a model named without a
 server to run it on stops the server at startup rather than failing halfway
@@ -208,7 +210,10 @@ audio path never pays for instrumentation it does not know about.
 | `conduit_stage_failures_total` | Failures by node, and whether the pipeline recovered |
 | `conduit_llm_tokens_total` | Token usage by direction |
 
-Distributed tracing is not wired up yet — see [Known gaps](#known-gaps).
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to
+export HTTP and runtime spans to an OpenTelemetry collector. Without either
+variable, Conduit keeps the same structured JSON logs and does not try to
+connect to a collector.
 
 ## Developing
 
@@ -272,13 +277,6 @@ FLAC.
 
 Tracked here rather than as TODOs in the source.
 
-- **No distributed tracing.** Metrics and structured logs are in place, and
-  every event already carries a trace id, but nothing exports spans to an
-  OpenTelemetry collector yet.
-- **Only linear graphs execute.** The runtime rejects router fan-out rather
-  than pretending to run it; the graph model already describes it.
-- **`Permission::Confirm` is refused, not asked.** Asking the speaker to
-  confirm a tool needs a turn-taking exchange the runtime does not have yet, so
-  a tool that asks for confirmation is currently denied with that explanation.
-- **`ToolOutput::spoken` is ignored.** The model receives the structured value;
-  the tool's own suggested phrasing is not yet spoken directly.
+- **Wake word, speaker identification, and memory are graph-only.** The graph
+  model describes those nodes, but the runtime still refuses them until their
+  provider contracts exist.

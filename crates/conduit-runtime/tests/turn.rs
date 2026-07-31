@@ -197,10 +197,34 @@ async fn stage_failures_reach_the_bus_and_the_caller() {
 }
 
 #[tokio::test]
-async fn rejects_topologies_it_cannot_execute() {
+async fn router_fan_out_to_tools_is_executable() {
     let graph = linear_graph()
         .with_node(Node::new("route", NodeKind::Router, "builtin"))
-        .with_edge(Edge::new("stt", "route"));
+        .with_node(Node::new("search", NodeKind::Tool, "search"))
+        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
+        .with_edge(Edge::new("llm", "route"))
+        .with_edge(Edge::from_port("route", "search", "search"))
+        .with_edge(Edge::from_port("route", "clock", "clock"))
+        .with_edge(Edge::new("search", "tts"))
+        .with_edge(Edge::new("clock", "tts"));
+
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![]))
+        .with_llm(FakeLlm::new(vec![]))
+        .with_tool(fakes::FakeTool::new("search", serde_json::json!({})))
+        .with_tool(fakes::FakeTool::new("clock", serde_json::json!({})))
+        .with_tts(FakeTts::new());
+
+    Runner::prepare(&graph, &providers, EventBus::default())
+        .expect("router fan-out to tools is executable");
+}
+
+#[tokio::test]
+async fn rejects_stages_it_cannot_execute() {
+    let graph = linear_graph()
+        .with_node(Node::new("memory", NodeKind::Memory, "builtin"))
+        .with_edge(Edge::new("llm", "memory"))
+        .with_edge(Edge::new("memory", "tts"));
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -208,8 +232,8 @@ async fn rejects_topologies_it_cannot_execute() {
         .with_tts(FakeTts::new());
 
     let error = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect_err("router fan-out is not executable yet");
-    assert!(matches!(error, Error::Config(message) if message.contains("router")));
+        .expect_err("memory is not executable yet");
+    assert!(matches!(error, Error::Config(message) if message.contains("memory")));
 }
 
 #[tokio::test]

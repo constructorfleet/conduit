@@ -246,6 +246,8 @@ impl TextToSpeech for FakeTts {
 pub enum Behaviour {
     /// Return a value.
     Succeed(serde_json::Value),
+    /// Return a value with text the runtime should speak directly.
+    Speak(serde_json::Value, String),
     /// Fail with a message.
     Fail(String),
     /// Wait for a signal, then return a value. Used to prove that speech and
@@ -323,6 +325,9 @@ impl Tool for FakeTool {
         self.invocations.lock().expect("lock").push(arguments);
         match &self.behaviour {
             Behaviour::Succeed(value) => Ok(ToolOutput::new(value.clone())),
+            Behaviour::Speak(value, spoken) => {
+                Ok(ToolOutput::new(value.clone()).with_spoken(spoken))
+            }
             Behaviour::Fail(message) => Err(Error::Config(message.clone())),
             Behaviour::WaitFor(notify, value) => {
                 notify.notified().await;

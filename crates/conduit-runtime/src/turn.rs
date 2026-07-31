@@ -194,6 +194,12 @@ impl Turn {
             return None;
         }
 
+        for spoken in outcomes.iter().filter_map(|outcome| outcome.spoken.as_ref()) {
+            if !self.speak(spoken.trim().to_owned()).await {
+                return None;
+            }
+        }
+
         Some(
             outcomes
                 .into_iter()

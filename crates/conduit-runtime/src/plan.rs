@@ -96,7 +96,7 @@ impl Plan {
             match node.kind {
                 // Endpoints describe where audio enters and leaves; the
                 // caller supplies both, so there is nothing to resolve.
-                NodeKind::Source | NodeKind::Sink => {}
+                NodeKind::Source | NodeKind::Router | NodeKind::Sink => {}
                 NodeKind::Stt => {
                     reject_duplicate(&stt, node)?;
                     stt = Some((providers.stt().require(&node.provider)?, node.id.clone()));
@@ -180,12 +180,12 @@ impl Plan {
 
 /// Rejects a second node of a kind the runtime can only run once.
 ///
-/// Allowing two would mean choosing between them, which is routing — and
-/// routing is exactly what this runtime does not do yet.
+/// Tool branches can fan out, but capture, reasoning, and synthesis are still
+/// single-stage contracts in one turn.
 fn reject_duplicate<T>(existing: &Option<T>, node: &Node) -> Result<()> {
     if existing.is_some() {
         return Err(Error::Config(format!(
-            "more than one `{}` node; this runtime executes linear pipelines only \
+            "more than one `{}` node; this runtime executes only one per turn \
              (node `{}`)",
             kind_name(node.kind),
             node.id

@@ -4,16 +4,14 @@ use std::net::SocketAddr;
 
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_sdk::trace::SdkTracerProvider;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("CONDUIT_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .json()
-        .init();
+    let tracer_provider = init_tracing()?;
 
     let addr: SocketAddr =
         std::env::var("CONDUIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_owned()).parse()?;
@@ -40,7 +38,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%addr, "conduit api listening");
 
     axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await?;
+    if let Some(provider) = tracer_provider {
+        provider.shutdown()?;
+    }
     Ok(())
+}
+
+/// Sets up structured logs and, when configured, OTLP span export.
+fn init_tracing() -> Result<Option<SdkTracerProvider>, Box<dyn std::error::Error>> {
+    let filter =
+        EnvFilter::try_from_env("CONDUIT_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_layer = tracing_subscriber::fmt::layer().json();
+
+    if otlp_enabled() {
+        let exporter = opentelemetry_otlp::SpanExporter::builder().with_http().build()?;
+        let provider = SdkTracerProvider::builder().with_batch_exporter(exporter).build();
+        let tracer = provider.tracer("conduit-api");
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+        tracing_subscriber::registry().with(filter).with(fmt_layer).with(otel_layer).init();
+        return Ok(Some(provider));
+    }
+
+    tracing_subscriber::registry().with(filter).with(fmt_layer).init();
+    Ok(None)
+}
+
+/// Whether a collector endpoint was configured for trace export.
+fn otlp_enabled() -> bool {
+    ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"]
+        .into_iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
 }
 
 /// Registers the providers this build was compiled with.

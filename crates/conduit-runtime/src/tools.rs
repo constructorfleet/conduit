@@ -11,6 +11,7 @@ use conduit_core::event::Event;
 use conduit_core::id::{ConversationId, SpeakerId, ToolCallId};
 use conduit_provider::tool::{Permission, ToolContext};
 use futures_util::future::join_all;
+use tracing::Instrument;
 
 use crate::emit::Emitter;
 use crate::plan::Plan;
@@ -33,6 +34,8 @@ pub struct Outcome {
     pub id: ToolCallId,
     /// Result text, which may describe a failure.
     pub content: String,
+    /// Optional text the assistant should speak directly.
+    pub spoken: Option<String>,
 }
 
 /// Runs every request, concurrently, and returns one outcome per request.
@@ -49,7 +52,13 @@ pub async fn execute(
     let calls = requests.into_iter().map(|request| {
         let plan = Arc::clone(&plan);
         let emitter = emitter.clone();
+        let span = tracing::info_span!(
+            "conduit.tool",
+            call = %request.id,
+            tool = %request.name
+        );
         async move { run_one(&plan, &emitter, conversation, speaker, request).await }
+            .instrument(span)
     });
     join_all(calls).await
 }
@@ -74,7 +83,7 @@ async fn run_one(
         );
         tracing::warn!(tool = %name, "model requested an unknown tool");
         emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
-        return Outcome { id, content };
+        return Outcome { id, content, spoken: None };
     };
 
     let context = ToolContext { conversation, speaker };
@@ -84,18 +93,16 @@ async fn run_one(
             let content = format!("the tool `{name}` was not permitted: {reason}");
             tracing::info!(tool = %name, %reason, "tool call denied");
             emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
-            return Outcome { id, content };
+            return Outcome { id, content, spoken: None };
         }
         Permission::Confirm { prompt } => {
-            // Asking the speaker needs a turn-taking exchange the runtime does
-            // not have yet. Refusing is the safe reading of "ask first".
-            let content = format!(
-                "the tool `{name}` requires confirmation ({prompt}), which is not \
-                 supported yet; ask the user to confirm in conversation instead"
-            );
-            tracing::info!(tool = %name, "tool call needs confirmation, which is unsupported");
-            emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
-            return Outcome { id, content };
+            let content = format!("confirmation requested from the speaker: {prompt}");
+            tracing::info!(tool = %name, "tool call needs confirmation");
+            emitter.emit(Event::ToolConfirmationRequested {
+                call: id.clone(),
+                prompt: prompt.clone(),
+            });
+            return Outcome { id, content, spoken: Some(prompt) };
         }
     }
 
@@ -106,15 +113,13 @@ async fn run_one(
         Ok(output) => {
             let duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
             emitter.emit(Event::ToolCompleted { call: id.clone(), duration_ms });
-            // The model gets the structured value; `output.spoken` is phrasing
-            // for the assistant and is not wired up yet.
-            Outcome { id, content: output.value.to_string() }
+            Outcome { id, content: output.value.to_string(), spoken: output.spoken }
         }
         Err(error) => {
             let content = format!("the tool `{name}` failed: {error}");
             tracing::error!(tool = %name, %error, "tool call failed");
             emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
-            Outcome { id, content }
+            Outcome { id, content, spoken: None }
         }
     }
 }

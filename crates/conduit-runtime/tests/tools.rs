@@ -147,6 +147,80 @@ async fn an_unpunctuated_preamble_is_still_spoken() {
 }
 
 #[tokio::test]
+async fn tool_spoken_output_is_spoken_before_the_model_continues() {
+    let call = ToolCallId::new("call_abc123");
+    let tts = FakeTts::new();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn on the lamp")]))
+        .with_llm(FakeLlm::scripted(vec![
+            vec![token("One second. "), tool_call(call.clone(), "search"), wants_tools()],
+            vec![token("All set."), stop()],
+        ]))
+        .with_tool(FakeTool::new("search", serde_json::json!({ "state": "on" })).behaving(
+            Behaviour::Speak(
+                serde_json::json!({ "state": "on" }),
+                "The lamp is on.".to_owned(),
+            ),
+        ))
+        .with_tts(tts.clone());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    run_turn(&runner).await;
+
+    assert_eq!(tts.spoken(), ["One second.", "The lamp is on.", "All set."]);
+}
+
+#[tokio::test]
+async fn a_tool_that_needs_confirmation_asks_instead_of_failing() {
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tts = FakeTts::new();
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(tts.clone());
+
+    let runner =
+        Runner::prepare(&graph_with_tool(), &providers, bus).expect("graph is executable");
+    run_turn(&runner).await;
+
+    assert!(tool.invocations().is_empty(), "confirmation must not invoke the tool yet");
+    assert_eq!(tts.spoken()[1], "Turn off the oven?");
+
+    let events = drain(&mut subscription).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmationRequested { call: id, prompt } if *id == call && prompt == "Turn off the oven?"
+        )),
+        "expected a confirmation event: {:?}",
+        names(&events)
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::ToolFailed { call: id, .. } if *id == call)),
+        "confirmation is not a tool failure: {:?}",
+        names(&events)
+    );
+
+    let result = llm.requests()[1]
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Tool)
+        .expect("a tool result message")
+        .content
+        .clone();
+    assert!(result.contains("confirmation requested"), "unexpected result: {result}");
+}
+
+#[tokio::test]
 async fn the_tool_result_goes_back_to_the_model() {
     let call = ToolCallId::new("call_abc123");
     let llm = talkative_model(call.clone());
@@ -303,6 +377,49 @@ async fn tools_requested_together_run_together() {
 
     let runner =
         Runner::prepare(&graph, &providers, EventBus::default()).expect("graph is executable");
+    run_turn(&runner).await;
+
+    assert_eq!(search.invocations().len(), 1);
+    assert_eq!(clock.invocations().len(), 1);
+}
+
+#[tokio::test]
+async fn branched_tool_graphs_execute_without_linearizing_the_topology() {
+    let first = ToolCallId::new("call_one");
+    let second = ToolCallId::new("call_two");
+    let graph = PipelineGraph::new("branched")
+        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(
+            Node::new("llm", NodeKind::Llm, "fake-llm")
+                .with_config(serde_json::json!({ "model": "fake-1" })),
+        )
+        .with_node(Node::new("search", NodeKind::Tool, "search"))
+        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
+        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "search"))
+        .with_edge(Edge::new("llm", "clock"))
+        .with_edge(Edge::new("search", "tts"))
+        .with_edge(Edge::new("clock", "tts"));
+    let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
+    let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
+        .with_llm(FakeLlm::scripted(vec![
+            vec![
+                token("Checking. "),
+                tool_call(first.clone(), "search"),
+                tool_call(second.clone(), "clock"),
+                wants_tools(),
+            ],
+            vec![token("Sunny at noon."), stop()],
+        ]))
+        .with_tool(search.clone())
+        .with_tool(clock.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph, &providers, EventBus::default())
+        .expect("branched tool graph is executable");
     run_turn(&runner).await;
 
     assert_eq!(search.invocations().len(), 1);

@@ -4,10 +4,10 @@
 //! providers once, and [`Runner::run`] then executes a turn per utterance —
 //! audio in, speech out, events throughout.
 //!
-//! The runtime executes linear pipelines today: one recognizer, one model,
-//! one synthesizer. Topologies the graph model can describe but the runtime
-//! cannot yet run, such as router fan-out, are rejected at prepare time
-//! rather than silently mishandled.
+//! The runtime executes one recognizer, one model, one synthesizer, and any
+//! number of tool branches. Stages that still have no runtime contract, such
+//! as memory and speaker identification, are rejected at prepare time rather
+//! than silently mishandled.
 //!
 //! # Example
 //!
@@ -44,6 +44,7 @@ use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::{ChunkStream, Registry};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::Instrument;
 
 pub use plan::Plan;
 
@@ -213,7 +214,8 @@ impl Runner {
         let turn =
             turn::Turn::new(Arc::clone(&self.plan), self.bus.clone(), self.format, sender);
         let id = turn.conversation();
-        tokio::spawn(turn.run(audio));
+        let span = tracing::info_span!("conduit.turn", conversation = %id);
+        tokio::spawn(turn.run(audio).instrument(span));
         Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)) }
     }
 }

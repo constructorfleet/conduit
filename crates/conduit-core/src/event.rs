@@ -174,6 +174,13 @@ pub enum Event {
         /// The invocation being started.
         call: ToolCallId,
     },
+    /// A tool asked the speaker to confirm before it may run.
+    ToolConfirmationRequested {
+        /// The invocation waiting for confirmation.
+        call: ToolCallId,
+        /// Question spoken to the speaker.
+        prompt: String,
+    },
     /// A tool returned successfully.
     ToolCompleted {
         /// The invocation that completed.
@@ -242,6 +249,7 @@ impl Event {
             | Self::LlmFinished { .. } => Stage::Reasoning,
             Self::ToolRequested { .. }
             | Self::ToolStarted { .. }
+            | Self::ToolConfirmationRequested { .. }
             | Self::ToolCompleted { .. }
             | Self::ToolFailed { .. } => Stage::Tools,
             Self::TtsStarted { .. }
