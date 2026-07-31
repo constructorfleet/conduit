@@ -1,0 +1,19 @@
+# Advisories deliberately not treated as failures.
+#
+# Each entry needs a reason that someone can re-check, because an ignore that
+# outlives its justification is how a real vulnerability gets missed.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin attack on `rsa`, no fixed version available.
+    #
+    # `rsa` reaches Cargo.lock through `sqlx`, which declares its MySQL driver
+    # as an optional dependency; Cargo records optional dependencies whether or
+    # not they are enabled. Conduit enables only the `postgres` driver, so the
+    # crate is compiled into nothing:
+    #
+    #     cargo tree --workspace --all-features -i rsa --target all
+    #     warning: nothing to print.
+    #
+    # Re-check that command if sqlx is upgraded or a MySQL backend is added.
+    "RUSTSEC-2023-0071",
+]

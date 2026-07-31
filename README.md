@@ -224,6 +224,10 @@ cargo test --workspace --all-features
 cargo audit
 ```
 
+`cargo audit` is configured by [.cargo/audit.toml](.cargo/audit.toml). One
+advisory is ignored there, with a command anyone can run to re-check that the
+reason still holds.
+
 ## Providers
 
 `conduit-openai` implements the three APIs that come closest to a lingua franca
