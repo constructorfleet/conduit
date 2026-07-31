@@ -11,7 +11,7 @@ use std::time::Duration;
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::Event;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
-use conduit_core::id::ToolCallId;
+use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_provider::llm::Role;
 use conduit_provider::stt::Transcript;
 use conduit_provider::tool::Permission;
@@ -171,15 +171,29 @@ async fn tool_spoken_output_is_spoken_before_the_model_continues() {
     assert_eq!(tts.spoken(), ["One second.", "The lamp is on.", "All set."]);
 }
 
+/// The result the model was given for `call`, in the round after it asked.
+fn tool_result(llm: &FakeLlm, round: usize) -> String {
+    llm.requests()[round]
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Tool)
+        .expect("a tool result message")
+        .content
+        .clone()
+}
+
 #[tokio::test]
-async fn a_tool_that_needs_confirmation_asks_instead_of_failing() {
+async fn a_tool_needing_confirmation_is_refused_rather_than_reported_done() {
+    // The dangerous failure this guards against: a model told something
+    // ambiguous about a lock or a purchase, deciding it succeeded, and saying
+    // so. The result must read as a refusal to anything reading it.
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
     let call = ToolCallId::new("call_abc123");
     let llm = talkative_model(call.clone());
     let tts = FakeTts::new();
     let tool = FakeTool::new("search", serde_json::json!({}))
-        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
+        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
         .with_llm(llm.clone())
@@ -190,9 +204,23 @@ async fn a_tool_that_needs_confirmation_asks_instead_of_failing() {
         Runner::prepare(&graph_with_tool(), &providers, bus).expect("graph is executable");
     run_turn(&runner).await;
 
-    assert!(tool.invocations().is_empty(), "confirmation must not invoke the tool yet");
-    assert_eq!(tts.spoken()[1], "Turn off the oven?");
+    assert!(tool.invocations().is_empty(), "a tool needing confirmation must not run");
 
+    let result = tool_result(&llm, 1);
+    assert!(result.contains("NOT run"), "the refusal must be unmissable: {result}");
+    assert!(
+        result.contains("Turn off the oven?"),
+        "the model needs the prompt to explain itself: {result}"
+    );
+
+    // Nothing asks the speaker anything, because nothing could hear an answer.
+    assert!(
+        !tts.spoken().iter().any(|spoken| spoken.contains("Turn off the oven")),
+        "an unanswerable question must not be spoken: {:?}",
+        tts.spoken()
+    );
+
+    // Still observable: an operator watching the bus sees the tool was gated.
     let events = drain(&mut subscription).await;
     assert!(
         events.iter().any(|event| matches!(
@@ -202,22 +230,85 @@ async fn a_tool_that_needs_confirmation_asks_instead_of_failing() {
         "expected a confirmation event: {:?}",
         names(&events)
     );
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::ToolFailed { call: id, .. } if *id == call)),
-        "confirmation is not a tool failure: {:?}",
-        names(&events)
-    );
+}
 
-    let result = llm.requests()[1]
-        .messages
-        .iter()
-        .find(|message| message.role == Role::Tool)
-        .expect("a tool result message")
-        .content
-        .clone();
-    assert!(result.contains("confirmation requested"), "unexpected result: {result}");
+#[tokio::test]
+async fn the_model_still_answers_after_a_confirmation_refusal() {
+    // A refusal is a fact to work with, not the end of the turn.
+    let call = ToolCallId::new("call_abc123");
+    let tts = FakeTts::new();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(talkative_model(call.clone()))
+        .with_tool(FakeTool::new("search", serde_json::json!({})).permitted(
+            Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() },
+        ))
+        .with_tts(tts.clone());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    run_turn(&runner).await;
+
+    assert_eq!(tts.spoken(), ["Sure, let me look that up.", "It is sunny."]);
+}
+
+#[tokio::test]
+async fn the_identified_speaker_reaches_the_tool() {
+    // The seam a per-speaker tool policy needs. Nothing identifies a voice in
+    // production yet, so the speaker is supplied here directly — this test is
+    // what makes the path from a turn to a permission check real ahead of the
+    // provider, rather than something to discover once one exists.
+    let call = ToolCallId::new("call_abc123");
+    let speaker = SpeakerId::new();
+    let tool = FakeTool::new("search", serde_json::json!({}));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(talkative_model(call))
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let turn = async {
+        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).audio.collect().await;
+    };
+    tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
+
+    let contexts = tool.contexts();
+    assert!(!contexts.is_empty(), "the tool must have been consulted");
+    for context in &contexts {
+        assert_eq!(
+            context.speaker,
+            Some(speaker),
+            "every check and invocation must know who is speaking"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_tool_sees_no_speaker_when_no_one_was_identified() {
+    // Pins the documented current behaviour: threading the seam did not make
+    // identification work, and a tool must keep deciding what an unknown voice
+    // may do. A device or conversation standing in for a speaker here would
+    // make every per-speaker policy silently wrong.
+    let call = ToolCallId::new("call_abc123");
+    let tool = FakeTool::new("search", serde_json::json!({}));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(talkative_model(call))
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    run_turn(&runner).await;
+
+    let contexts = tool.contexts();
+    assert!(!contexts.is_empty(), "the tool must have been consulted");
+    assert!(
+        contexts.iter().all(|context| context.speaker.is_none()),
+        "nothing identifies a voice yet: {contexts:?}"
+    );
 }
 
 #[tokio::test]

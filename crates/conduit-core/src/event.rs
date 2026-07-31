@@ -174,11 +174,15 @@ pub enum Event {
         /// The invocation being started.
         call: ToolCallId,
     },
-    /// A tool asked the speaker to confirm before it may run.
+    /// A tool required a speaker's confirmation, and so was not run.
+    ///
+    /// Nothing collects an answer yet, so this is where the call ends: the
+    /// runtime refuses it and tells the model. Read it as "a tool was blocked
+    /// on a human", not as a question awaiting a reply.
     ToolConfirmationRequested {
-        /// The invocation waiting for confirmation.
+        /// The invocation that was refused.
         call: ToolCallId,
-        /// Question spoken to the speaker.
+        /// The question a speaker would have had to answer.
         prompt: String,
     },
     /// A tool returned successfully.

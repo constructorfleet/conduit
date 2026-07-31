@@ -36,7 +36,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
-use conduit_core::id::ConversationId;
+use conduit_core::id::{ConversationId, SpeakerId};
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
@@ -210,9 +210,37 @@ impl Runner {
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
     pub fn run(&self, audio: ChunkStream<AudioChunk>) -> Conversation {
+        self.start(audio, None)
+    }
+
+    /// Runs one turn attributed to an identified speaker.
+    ///
+    /// The speaker reaches every tool's permission check, which is how a
+    /// per-speaker policy — this person may unlock the door, that one may not
+    /// — becomes enforceable. Nothing calls this in production yet, because no
+    /// provider identifies a voice; [`Runner::run`] is what the API uses, and
+    /// tools therefore see no speaker.
+    ///
+    /// The identity must come from a voice. Passing a device, a token subject,
+    /// or a pipeline name in this argument would make every per-speaker policy
+    /// silently wrong rather than merely unenforced.
+    pub fn run_as(&self, speaker: SpeakerId, audio: ChunkStream<AudioChunk>) -> Conversation {
+        self.start(audio, Some(speaker))
+    }
+
+    /// Spawns a turn, which is the only thing [`Runner::run`] and
+    /// [`Runner::run_as`] differ in.
+    fn start(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        speaker: Option<SpeakerId>,
+    ) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
-        let turn =
+        let mut turn =
             turn::Turn::new(Arc::clone(&self.plan), self.bus.clone(), self.format, sender);
+        if let Some(speaker) = speaker {
+            turn = turn.with_speaker(speaker);
+        }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
         tokio::spawn(turn.run(audio).instrument(span));
