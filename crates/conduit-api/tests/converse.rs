@@ -217,3 +217,42 @@ async fn a_server_with_no_providers_still_serves_the_rest_of_the_api() {
         tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/echo/converse")).await;
     assert!(result.is_err(), "conversing without providers must be refused");
 }
+
+#[tokio::test]
+async fn a_conversation_shows_up_in_the_metrics() {
+    // The collector is a bus subscriber, so this also proves the server wires
+    // one up: without it a scrape would stay empty however much happened.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline("echo", echo_graph());
+    conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
+    let server = Server::start(state).await;
+
+    let _ = converse(&server, "/v1/pipelines/echo/converse", "hello").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let body = reqwest::get(server.http_url("/metrics"))
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+
+    assert!(body.contains("conduit_conversations_total{outcome=\"completed\"} 1"), "{body}");
+    assert!(body.contains("conduit_time_to_first_audio_seconds_count 1"), "{body}");
+}
+
+#[tokio::test]
+async fn the_scrape_endpoint_announces_the_prometheus_format() {
+    let server = server_with_echo_pipeline().await;
+    let response = reqwest::get(server.http_url("/metrics")).await.expect("request");
+
+    assert!(response.status().is_success());
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/plain"), "{content_type}");
+    assert!(response.text().await.expect("body").contains("# TYPE conduit_events_total"));
+}

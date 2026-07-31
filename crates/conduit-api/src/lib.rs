@@ -11,6 +11,7 @@ pub mod events;
 pub mod pipelines;
 pub mod state;
 
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -25,6 +26,7 @@ pub use state::AppState;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .route("/v1/events", get(events::stream))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
@@ -35,6 +37,18 @@ pub fn router(state: AppState) -> Router {
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Prometheus scrape endpoint.
+///
+/// Served as plain text with the version Prometheus expects, so a scraper
+/// needs no special configuration.
+async fn metrics(axum::extract::State(state): axum::extract::State<AppState>) -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        state.metrics().render(),
+    )
+        .into_response()
 }
 
 /// Liveness and version probe.

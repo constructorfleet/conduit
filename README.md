@@ -23,6 +23,7 @@ echoes described under [Running](#running).
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
+| [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
 
 ## Design
@@ -151,6 +152,25 @@ socket names the conversation before sending a single sample.
 A missing or unrunnable pipeline is refused with an HTTP status *before* the
 upgrade, so a client never has to diagnose a socket that opens and then dies.
 
+## Observability
+
+`/metrics` serves Prometheus text. Nothing in the pipeline calls into the
+metrics crate: every stage already publishes what it did, so the collector is
+an ordinary bus subscriber. A new event is counted the day it is added, and the
+audio path never pays for instrumentation it does not know about.
+
+| Metric | What it answers |
+| --- | --- |
+| `conduit_time_to_first_audio_seconds` | How long before the assistant *started* speaking — the latency a person actually feels |
+| `conduit_turn_duration_seconds` | How long a whole turn took, by outcome |
+| `conduit_conversations_total` | Turns by outcome: completed, barge-in, error, timeout |
+| `conduit_conversations_active` | Turns in progress right now |
+| `conduit_tool_calls_total`, `conduit_tool_duration_seconds` | Tool volume and cost |
+| `conduit_stage_failures_total` | Failures by node, and whether the pipeline recovered |
+| `conduit_llm_tokens_total` | Token usage by direction |
+
+Distributed tracing is not wired up yet — see [Known gaps](#known-gaps).
+
 ## Developing
 
 Read [AGENTS.md](AGENTS.md) first — it is the canonical engineering standard for
@@ -210,10 +230,9 @@ FLAC.
 
 Tracked here rather than as TODOs in the source.
 
-- **Metrics and traces.** [AGENTS.md](AGENTS.md) asks every significant
-  operation to expose metrics, traces, and logs. Only structured logs and
-  HTTP-level spans exist today; there is no Prometheus endpoint and no
-  OpenTelemetry export.
+- **No distributed tracing.** Metrics and structured logs are in place, and
+  every event already carries a trace id, but nothing exports spans to an
+  OpenTelemetry collector yet.
 - **The pipeline store is in-memory.** Restarting the API loses every stored
   pipeline.
 - **Only linear graphs execute.** The runtime rejects router fan-out rather

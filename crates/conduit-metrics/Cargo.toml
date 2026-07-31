@@ -1,0 +1,20 @@
+[package]
+name = "conduit-metrics"
+description = "Prometheus metrics for Conduit, derived from the event bus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

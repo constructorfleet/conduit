@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
+use conduit_metrics::Metrics;
 use conduit_runtime::Providers;
 
 /// State shared by every request handler. Cheap to clone.
@@ -16,6 +17,8 @@ pub struct AppState {
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Option<Arc<Providers>>,
+    /// Metrics derived from the bus, rendered by the scrape endpoint.
+    metrics: Arc<Metrics>,
 }
 
 impl AppState {
@@ -25,7 +28,18 @@ impl AppState {
     /// and will replace this type's internals, not its API.
     #[must_use]
     pub fn new(bus: EventBus) -> Self {
-        Self { bus, pipelines: Arc::new(RwLock::new(BTreeMap::new())), providers: None }
+        Self {
+            bus,
+            pipelines: Arc::new(RwLock::new(BTreeMap::new())),
+            providers: None,
+            metrics: Arc::new(Metrics::new()),
+        }
+    }
+
+    /// The metrics this server exposes.
+    #[must_use]
+    pub fn metrics(&self) -> Arc<Metrics> {
+        Arc::clone(&self.metrics)
     }
 
     /// Makes `providers` available to conversations.
