@@ -87,6 +87,8 @@ merged to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`
 with matching version tags; that OCI package contains the Linux `conduit-api`
 binary and the ESPHome firmware YAMLs.
 
+Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.md).
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
