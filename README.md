@@ -77,6 +77,14 @@ a result rather than ending the turn, so the assistant can explain itself
 instead of going silent. Turns are capped at `max_tool_rounds` model calls
 (default 4) so a model that will not stop calling tools cannot loop forever.
 
+A tool decides for itself whether a call may run. A permission that is anything
+other than "allow" means the tool is not invoked and the model is told what was
+refused and why. That includes `deny_until_confirmed`, which is how a tool says
+it needs a human in the loop: Conduit cannot put a question to a speaker
+mid-turn yet, so such a call is refused rather than run, and the refusal is
+worded so a model reports the action as *not* performed. See
+[Known gaps](#known-gaps).
+
 ## Running
 
 ```sh
@@ -340,6 +348,16 @@ bounded output channel bounds memory, not time.
 reason is published when a write to the output channel fails — which means the
 client went away, whether it interrupted or simply disconnected. Read that
 metric as "the listener left", not "the user spoke over the assistant".
+
+**A tool cannot ask before it acts.** A tool that needs a human in the loop
+marks itself `deny_until_confirmed`, and there is nowhere to put the question:
+answering one would need a device to send a control message mid-turn and a
+bounded wait for the reply, neither of which exists. So such a call is refused
+outright. The refusal is deliberately blunt — the model is told the tool was
+*not* run — because anything ambiguous reads to a model as permission granted,
+and it will announce a door unlocked. Operators see these as the
+`awaiting_confirmation` tool outcome; read it as "blocked on a human", not
+"waiting for an answer".
 
 **Wake word, speaker identification, and memory are graph-only.** The graph
 model describes those nodes, but the runtime still refuses them until their

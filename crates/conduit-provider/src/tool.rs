@@ -20,6 +20,12 @@ pub struct ToolContext {
     /// The conversation that requested the tool.
     pub conversation: ConversationId,
     /// The identified speaker, or `None` when the voice is unknown.
+    ///
+    /// Always `None` today: nothing identifies a voice yet, so a tool with a
+    /// per-speaker policy must decide what an unknown speaker may do. Never
+    /// substitute the device or the conversation for it — those say which
+    /// satellite is connected, not who is talking, and a policy satisfied by
+    /// the wrong identity is worse than one that has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<SpeakerId>,
 }
@@ -56,9 +62,24 @@ impl ToolOutput {
 pub enum Permission {
     /// Run without asking.
     Allow,
-    /// Ask the speaker for confirmation first.
-    Confirm {
-        /// Question to put to the speaker.
+    /// Refuse until the speaker confirms — which, today, means refuse.
+    ///
+    /// Conduit has no way to put a question to a speaker mid-turn and collect
+    /// the answer, so the runtime treats this as a denial: the tool does not
+    /// run, and the model is told plainly that nothing happened and why. That
+    /// is the whole point of the name. A variant that promised to ask would be
+    /// more dangerous than [`Permission::Deny`] for exactly the tools that
+    /// need it most, because an unasked question reads to a model like a
+    /// granted one, and it will cheerfully report a lock opened or a purchase
+    /// made.
+    ///
+    /// Use it anyway for anything that genuinely needs a human in the loop.
+    /// It is refused now and asks later, once a mid-turn control channel and a
+    /// bounded wait exist; a tool marked [`Permission::Allow`] to work around
+    /// this would then run unconfirmed forever.
+    DenyUntilConfirmed {
+        /// The question a speaker would have to answer, published on the bus
+        /// and reported to the model so it can say what was blocked.
         prompt: String,
     },
     /// Refuse.
@@ -78,6 +99,9 @@ pub trait Tool: Provider {
     ///
     /// Checked before [`Tool::invoke`], so a denial costs nothing. The
     /// default allows everything; tools with side effects should override.
+    ///
+    /// Anything but [`Permission::Allow`] means the tool is not invoked, and
+    /// the model is told what was refused and why.
     async fn permission(
         &self,
         _arguments: &serde_json::Value,

@@ -95,14 +95,23 @@ async fn run_one(
             emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
             return Outcome { id, content, spoken: None };
         }
-        Permission::Confirm { prompt } => {
-            let content = format!("confirmation requested from the speaker: {prompt}");
-            tracing::info!(tool = %name, "tool call needs confirmation");
+        Permission::DenyUntilConfirmed { prompt } => {
+            // Refusal-shaped, and deliberately explicit about not having run.
+            // Something that merely mentioned a confirmation would read to a
+            // model as a granted one, and it would report the action done.
+            let content = format!(
+                "the tool `{name}` was NOT run: it requires confirmation (\"{prompt}\"), \
+                 and this deployment cannot ask for one. Tell the user the action \
+                 was not performed and that they must do it another way."
+            );
+            tracing::info!(tool = %name, "tool call refused pending confirmation");
             emitter.emit(Event::ToolConfirmationRequested {
                 call: id.clone(),
                 prompt: prompt.clone(),
             });
-            return Outcome { id, content, spoken: Some(prompt) };
+            // The prompt is not spoken. Asking a question nobody can answer
+            // leaves a speaker waiting; the model explains the refusal instead.
+            return Outcome { id, content, spoken: None };
         }
     }
 
