@@ -1,0 +1,7 @@
+/.git
+/.github
+/.cargo/registry
+/target
+**/.DS_Store
+**/__pycache__
+**/*.pyc

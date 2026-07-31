@@ -80,6 +80,10 @@ instead of going silent. Turns are capped at `max_tool_rounds` model calls
 cargo run -p conduit-api
 ```
 
+The published container image is `ghcr.io/<owner>/<repo>:latest`. Builds merged
+to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`, an OCI
+package containing the Linux `conduit-api` binary and the ESPHome firmware YAMLs.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
