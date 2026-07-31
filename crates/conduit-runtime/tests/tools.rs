@@ -40,7 +40,11 @@ fn graph_with_tool() -> PipelineGraph {
 /// A model that speaks, calls `search`, then speaks again.
 fn talkative_model(call: ToolCallId) -> FakeLlm {
     FakeLlm::scripted(vec![
-        vec![token("Sure, let me look that up. "), tool_call(call, "search"), wants_tools()],
+        vec![
+            token("Sure, let me look that up. "),
+            tool_call(call.clone(), "search"),
+            wants_tools(),
+        ],
         vec![token("It is sunny."), stop()],
     ])
 }
@@ -81,12 +85,12 @@ async fn run_turn(runner: &Runner) {
 
 #[tokio::test]
 async fn speaks_before_and_after_a_tool_call() {
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let tts = FakeTts::new();
     let tool = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("what is the weather")]))
-        .with_llm(talkative_model(call))
+        .with_llm(talkative_model(call.clone()))
         .with_tool(tool.clone())
         .with_tts(tts.clone());
 
@@ -102,14 +106,14 @@ async fn speaks_before_and_after_a_tool_call() {
 async fn the_preamble_is_spoken_while_the_tool_runs() {
     // The tool blocks until speech starts. If the runtime waited for tools
     // before speaking, neither side could proceed and this would time out.
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let tts = FakeTts::new();
     let tool = FakeTool::new("search", serde_json::json!({}))
         .behaving(Behaviour::WaitFor(tts.spoke(), serde_json::json!({ "ok": true })));
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
-        .with_llm(talkative_model(call))
+        .with_llm(talkative_model(call.clone()))
         .with_tool(tool.clone())
         .with_tts(tts.clone());
 
@@ -123,13 +127,13 @@ async fn the_preamble_is_spoken_while_the_tool_runs() {
 
 #[tokio::test]
 async fn an_unpunctuated_preamble_is_still_spoken() {
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let tts = FakeTts::new();
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
         // No sentence-ending punctuation before the tool call.
         .with_llm(FakeLlm::scripted(vec![
-            vec![token("Let me check"), tool_call(call, "search"), wants_tools()],
+            vec![token("Let me check"), tool_call(call.clone(), "search"), wants_tools()],
             vec![token("Sunny."), stop()],
         ]))
         .with_tool(FakeTool::new("search", serde_json::json!({})))
@@ -144,8 +148,8 @@ async fn an_unpunctuated_preamble_is_still_spoken() {
 
 #[tokio::test]
 async fn the_tool_result_goes_back_to_the_model() {
-    let call = ToolCallId::new();
-    let llm = talkative_model(call);
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
         .with_llm(llm.clone())
@@ -168,7 +172,7 @@ async fn the_tool_result_goes_back_to_the_model() {
         .iter()
         .find(|message| message.role == Role::Tool)
         .expect("a tool result message");
-    assert_eq!(result.tool_call, Some(call));
+    assert_eq!(result.tool_call, Some(call.clone()));
     assert!(result.content.contains("sunny"), "unexpected result: {}", result.content);
 
     // The assistant's own preamble stays in the history.
@@ -183,10 +187,10 @@ async fn the_tool_result_goes_back_to_the_model() {
 async fn the_lifecycle_of_a_tool_call_reaches_the_bus() {
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
-        .with_llm(talkative_model(call))
+        .with_llm(talkative_model(call.clone()))
         .with_tool(FakeTool::new("search", serde_json::json!({})))
         .with_tts(FakeTts::new());
 
@@ -209,8 +213,8 @@ async fn the_lifecycle_of_a_tool_call_reaches_the_bus() {
 async fn a_failing_tool_is_reported_and_the_model_carries_on() {
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
-    let call = ToolCallId::new();
-    let llm = talkative_model(call);
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
     let tts = FakeTts::new();
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
@@ -249,8 +253,8 @@ async fn a_failing_tool_is_reported_and_the_model_carries_on() {
 
 #[tokio::test]
 async fn a_denied_tool_is_never_invoked() {
-    let call = ToolCallId::new();
-    let llm = talkative_model(call);
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
     let tool = FakeTool::new("search", serde_json::json!({}))
         .permitted(Permission::Deny { reason: "not allowed in this room".to_owned() });
     let providers = Providers::new()
@@ -276,8 +280,8 @@ async fn a_denied_tool_is_never_invoked() {
 
 #[tokio::test]
 async fn tools_requested_together_run_together() {
-    let first = ToolCallId::new();
-    let second = ToolCallId::new();
+    let first = ToolCallId::new("call_one");
+    let second = ToolCallId::new("call_two");
     let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
 
@@ -287,8 +291,8 @@ async fn tools_requested_together_run_together() {
         .with_llm(FakeLlm::scripted(vec![
             vec![
                 token("One moment. "),
-                tool_call(first, "search"),
-                tool_call(second, "clock"),
+                tool_call(first.clone(), "search"),
+                tool_call(second.clone(), "clock"),
                 wants_tools(),
             ],
             vec![token("Sunny at noon."), stop()],
@@ -307,9 +311,9 @@ async fn tools_requested_together_run_together() {
 
 #[tokio::test]
 async fn an_unknown_tool_is_reported_rather_than_ignored() {
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let llm = FakeLlm::scripted(vec![
-        vec![token("Checking. "), tool_call(call, "teleport"), wants_tools()],
+        vec![token("Checking. "), tool_call(call.clone(), "teleport"), wants_tools()],
         vec![token("Cannot do that."), stop()],
     ]);
     let providers = Providers::new()
@@ -334,14 +338,14 @@ async fn an_unknown_tool_is_reported_rather_than_ignored() {
 
 #[tokio::test]
 async fn a_model_that_never_stops_calling_tools_is_cut_off() {
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let tool = FakeTool::new("search", serde_json::json!({}));
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("loop forever")]))
         .with_llm(
             FakeLlm::scripted(vec![vec![
                 token("Working. "),
-                tool_call(call, "search"),
+                tool_call(call.clone(), "search"),
                 wants_tools(),
             ]])
             .repeating(),
@@ -360,7 +364,7 @@ async fn a_model_that_never_stops_calling_tools_is_cut_off() {
 
 #[tokio::test]
 async fn the_round_limit_is_configurable() {
-    let call = ToolCallId::new();
+    let call = ToolCallId::new("call_abc123");
     let tool = FakeTool::new("search", serde_json::json!({}));
     let graph = PipelineGraph::new("tools")
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
@@ -379,7 +383,7 @@ async fn the_round_limit_is_configurable() {
         .with_llm(
             FakeLlm::scripted(vec![vec![
                 token("Working. "),
-                tool_call(call, "search"),
+                tool_call(call.clone(), "search"),
                 wants_tools(),
             ]])
             .repeating(),

@@ -63,7 +63,7 @@ async fn run_one(
     request: Request,
 ) -> Outcome {
     let Request { id, name, arguments } = request;
-    emitter.emit(Event::ToolRequested { call: id, name: name.clone() });
+    emitter.emit(Event::ToolRequested { call: id.clone(), name: name.clone() });
 
     let Some(tool) = plan.tools.get(&name) else {
         // Models do invent tool names. Say so instead of dropping the call.
@@ -73,7 +73,7 @@ async fn run_one(
             if known.is_empty() { "none".to_owned() } else { known.join(", ") }
         );
         tracing::warn!(tool = %name, "model requested an unknown tool");
-        emitter.emit(Event::ToolFailed { call: id, error: content.clone() });
+        emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
         return Outcome { id, content };
     };
 
@@ -83,7 +83,7 @@ async fn run_one(
         Permission::Deny { reason } => {
             let content = format!("the tool `{name}` was not permitted: {reason}");
             tracing::info!(tool = %name, %reason, "tool call denied");
-            emitter.emit(Event::ToolFailed { call: id, error: content.clone() });
+            emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
             return Outcome { id, content };
         }
         Permission::Confirm { prompt } => {
@@ -94,18 +94,18 @@ async fn run_one(
                  supported yet; ask the user to confirm in conversation instead"
             );
             tracing::info!(tool = %name, "tool call needs confirmation, which is unsupported");
-            emitter.emit(Event::ToolFailed { call: id, error: content.clone() });
+            emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
             return Outcome { id, content };
         }
     }
 
-    emitter.emit(Event::ToolStarted { call: id });
+    emitter.emit(Event::ToolStarted { call: id.clone() });
     let started = std::time::Instant::now();
 
     match tool.invoke(arguments, context).await {
         Ok(output) => {
             let duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-            emitter.emit(Event::ToolCompleted { call: id, duration_ms });
+            emitter.emit(Event::ToolCompleted { call: id.clone(), duration_ms });
             // The model gets the structured value; `output.spoken` is phrasing
             // for the assistant and is not wired up yet.
             Outcome { id, content: output.value.to_string() }
@@ -113,7 +113,7 @@ async fn run_one(
         Err(error) => {
             let content = format!("the tool `{name}` failed: {error}");
             tracing::error!(tool = %name, %error, "tool call failed");
-            emitter.emit(Event::ToolFailed { call: id, error: content.clone() });
+            emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
             Outcome { id, content }
         }
     }

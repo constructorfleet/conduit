@@ -77,17 +77,77 @@ define_id!(
     SpeakerId
 );
 define_id!(
-    /// Identifies a single tool invocation.
-    ToolCallId
-);
-define_id!(
     /// Correlates every event belonging to one trip through the pipeline.
     TraceId
 );
 
+/// Identifies a single tool invocation.
+///
+/// Unlike every other identifier here this wraps an opaque string rather than
+/// a UUID, because the language model issues it — `call_abc123` — and expects
+/// it echoed back verbatim on the matching result. A generated id could not be
+/// translated back, so the vendor's own is what travels through the pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ToolCallId(String);
+
+impl ToolCallId {
+    /// Wraps an identifier issued by a provider.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Generates an identifier, for providers that issue none of their own.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+
+    /// The identifier as the provider wrote it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ToolCallId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl From<String> for ToolCallId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl From<&str> for ToolCallId {
+    fn from(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_call_ids_keep_the_providers_own_string() {
+        let id = ToolCallId::new("call_abc123");
+        assert_eq!(id.as_str(), "call_abc123");
+        // It must survive a round trip unchanged, or the result cannot be
+        // matched to the call that produced it.
+        let json = serde_json::to_string(&id).expect("serialize");
+        assert_eq!(json, "\"call_abc123\"");
+        assert_eq!(serde_json::from_str::<ToolCallId>(&json).expect("deserialize"), id);
+    }
+
+    #[test]
+    fn generated_tool_call_ids_are_unique() {
+        assert_ne!(ToolCallId::generate(), ToolCallId::generate());
+    }
 
     #[test]
     fn ids_are_unique() {
