@@ -382,6 +382,31 @@ When uncertain, choose the simplest solution that satisfies current requirements
 
 ---
 
+# Agent Skills
+
+Per-repo configuration for agent workflow skills. Each subsection states the
+policy; the referenced file holds the command-level reference.
+
+## Issue tracker
+
+Issues and PRDs live as GitHub issues in `constructorfleet/conduit`, managed
+with the `gh` CLI. Pull requests are not treated as a request surface.
+
+This tracker is **public** — see [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+## Triage labels
+
+Triage uses five roles: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+
+## Domain docs
+
+Single-context: one `CONTEXT.md` and one `docs/adr/` at the repository root
+cover the whole workspace. Both are created lazily — their absence is not a
+defect. See [`docs/agents/domain.md`](docs/agents/domain.md).
+
+---
+
 # Definition of Done
 
 A task is complete only when:
