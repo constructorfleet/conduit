@@ -18,5 +18,20 @@ Local changes:
 - `satellite1/sat_gpio.h`: update `Satellite1GPIOPin::dump_summary` to the
   ESPHome 2026.7 signature.
 
+## Licensing
+
 The copied upstream code follows the ESPHome license split: C++ runtime files
-are GPLv3, Python component files are MIT.
+are GPLv3, Python component files are MIT. It is **not** covered by the Conduit
+root `MIT OR Apache-2.0` license.
+
+The local changes listed above modify GPLv3-licensed files; this section is the
+record of modification required by GPLv3 section 5(a).
+
+See:
+
+- [`LICENSE-VENDORED.md`](./LICENSE-VENDORED.md) — provenance, terms, and what
+  the GPLv3 mix means for distributing firmware images.
+- [`pcm5122/LICENSE-UPSTREAM`](./pcm5122/LICENSE-UPSTREAM) and
+  [`satellite1/LICENSE-UPSTREAM`](./satellite1/LICENSE-UPSTREAM) — verbatim
+  upstream license text (authoritative).
+- [`../../../NOTICE`](../../../NOTICE) — repository-wide license summary.

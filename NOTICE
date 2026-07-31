@@ -1,0 +1,51 @@
+Conduit
+Copyright (c) 2026 Teagan Glenn
+
+================================================================================
+Conduit's own code
+================================================================================
+
+Except for the vendored third-party directories listed below, all code in this
+repository is licensed under either of
+
+  * MIT license          (see LICENSE-MIT)
+  * Apache License 2.0   (see LICENSE-APACHE)
+
+at your option. This matches `license = "MIT OR Apache-2.0"` declared in
+Cargo.toml and applies to all Rust crates under crates/, the build tooling, the
+documentation, and the first-party firmware sources.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this repository by you shall be dual licensed as above, without
+any additional terms or conditions.
+
+================================================================================
+Vendored third-party components (NOT covered by the dual license above)
+================================================================================
+
+The following directories contain third-party code carrying its own upstream
+license. The MIT OR Apache-2.0 grant above does NOT apply to them.
+
+  firmware/esphome/components/pcm5122/
+  firmware/esphome/components/satellite1/
+
+    Vendored from futureproofhomes/satellite1-esphome at commit
+    592a9687206709046f475b5464941702beacb093, copyright the FutureProofHomes and
+    ESPHome authors. These follow the ESPHome license split:
+
+      - C++/runtime files (.c .cpp .h .hpp .tcc .ino) are GPLv3
+      - Python files and everything else are MIT
+
+    A verbatim copy of the upstream license text is vendored at
+    firmware/esphome/components/pcm5122/LICENSE-UPSTREAM and
+    firmware/esphome/components/satellite1/LICENSE-UPSTREAM.
+
+    Conduit modifies some of these GPLv3 files; the modifications are recorded
+    in firmware/esphome/components/SAT1_OVERLAY.md.
+
+    See firmware/esphome/components/LICENSE-VENDORED.md for details.
+
+Consequence for firmware artifacts: compiled ESPHome firmware images for the
+Satellite1 target link the GPLv3 C++ code above, so those binaries carry GPLv3
+copyleft obligations. The Rust crates under crates/ link no GPLv3 code and are
+unaffected.
