@@ -1,0 +1,18 @@
+conduit-notice-fixture 1
+# Generated from crates/conduit-core/src/device.rs by
+# `cargo test -p conduit-api --test protocol_parity`. Do not edit by hand:
+# that test regenerates this file and fails when the two differ.
+#
+# One record per line, tab separated:
+#   name <TAB> frame <TAB> expected type <TAB> field=value ...
+# Fields escape a backslash as \\, a tab as \t, a newline as \n, and a
+# carriage return as \r. Nothing else is escaped.
+started	{"type":"started","conversation":"0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0"}	started	conversation=0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0
+done	{"type":"done"}	done
+failed	{"type":"failed","error":"the model provider is offline"}	failed	error=the model provider is offline
+failed-with-quotes-and-backslashes	{"type":"failed","error":"provider said \\"type\\":\\"done\\" while loading C:\\\\models\\\\voice.onnx"}	failed	error=provider said "type":"done" while loading C:\\models\\voice.onnx
+failed-with-control-characters	{"type":"failed","error":"line one\\nline two\\ttabbed"}	failed	error=line one\nline two\ttabbed
+done-with-an-unknown-member	{"type":"done","turns":2,"detail":{"nested":[1,"two"]}}	done
+started-with-whitespace	{ "type" : "started" , "conversation" : "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0" }	started	conversation=0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0
+a-type-this-firmware-predates	{"type":"paused"}	unknown
+not-an-object	["done"]	unknown

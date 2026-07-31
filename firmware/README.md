@@ -1,7 +1,7 @@
 # Conduit Device Firmware
 
-This directory contains Conduit-owned firmware integration notes and protocol
-helpers for satellite devices.
+This directory contains the ESPHome firmware Conduit ships for satellite
+devices, plus the notes needed to build and flash it.
 
 Conduit does not speak Home Assistant Assist, Tater native satellite, ESPHome
 voice-assistant, or wake-audio UDP protocols. A Conduit firmware target must
@@ -18,6 +18,11 @@ Wire contract:
 - Send `{"type":"end"}` as a text frame when the utterance is complete.
 - Handle `{"type":"started","conversation":"..."}` before reply audio.
 - Play binary WebSocket frames from the server as reply audio.
+- Send `{"type":"stop"}` to cut a reply short. Valid at any point in the turn,
+  including after `end` and during playback — which is when it matters. Prefer
+  it over closing the socket: the server records a `stop` as an interruption and
+  a closed socket as a device that vanished, and an operator needs to tell those
+  apart.
 - Handle `{"type":"done"}` or `{"type":"failed","error":"..."}` as terminal
   text frames.
 
@@ -27,44 +32,48 @@ The canonical Rust definitions live in
 The shipping firmware for both supported boards is the ESPHome build described
 under [ESPHome Board Targets](#esphome-board-targets). Start there.
 
-## Protocol Parity Is Not Enforced
+## How Protocol Parity Is Enforced
 
-Three hand-maintained copies of this wire contract exist:
+Two copies of this wire contract exist:
 
 - `crates/conduit-core/src/device.rs` (canonical, Rust),
 - `esphome/components/conduit_voice/conduit_converse_embedded.h` (shipped
-  firmware),
-- `common/conduit_converse.h` (reference C header, see below).
+  firmware).
 
-They currently agree on all four message types (`end`, `started`, `done`,
-`failed`), on binary-versus-text framing, and on 16 kHz mono signed 16-bit
-little-endian PCM. Nothing in CI checks that they still agree: no test compares
-the C/C++ constants against `device.rs`, and `firmware/tests/` only asserts
-that specific symbols exist in the embedded header. A protocol change made in
-`device.rs` alone will not fail any build. Update all three together, by hand,
-until a real parity check exists.
+The header is hand-written rather than generated, because its parser is not
+something `serde` can emit. Two checks stand in for generation, and CI runs
+both.
 
-## Reference Scaffold (Not Built, Not Flashed)
+**Constants.** `crates/conduit-api/tests/protocol_parity.rs` reads the shipped
+header and compares its end-of-utterance frame, its stop frame, the converse
+path, the sample rate, the channel count, and the sample width against what the
+Rust definitions serialize and what the API's route declares. This catches a
+rename or a changed value. A drifted command frame is worth catching in
+particular: the server ignores a control message it cannot parse, so a device
+would go on asking for something that silently never happens.
 
-`common/`, `sat1/`, and `voicepe/` are a plain-C reference sketch of the wire
-contract. They predate the ESPHome component and **no firmware build compiles
-them**. Nothing under `esphome/` includes them; their only consumer is
-`tests/conduit_converse_test.c`, which is why they are kept rather than
-deleted.
+**Behaviour, which is the check that matters.** The same test serializes every
+canonical notice into `tests/notices.fixture`, and
+`tests/conduit_notice_fixture_test.cpp` runs those exact bytes through the real
+firmware parser and asserts the decoded type and fields. Agreeing on spelling
+is not the same as being able to read what the other side writes: the fixture
+includes a `failed` frame whose error text contains a quote, a backslash, and
+the literal `"type":"` pattern, because that field is filled from a provider's
+error message and so an upstream server's wording decides what a satellite
+parses.
 
-Do not add board drivers here expecting them to ship. Real device behavior
-lives in `esphome/components/conduit_voice/`.
+The fixture is checked in, so the firmware suite runs without a Rust build
+first. The Rust test regenerates it and fails when the result differs, which is
+what stops it from being hand-edited. To update it after a deliberate protocol
+change:
 
-`common/conduit_converse.h` provides, for reference:
+```sh
+CONDUIT_REGENERATE_FIXTURES=1 cargo test -p conduit-api --test protocol_parity
+```
 
-- the required audio format constants,
-- `CONDUIT_CONVERSE_END_JSON`,
-- pipeline-name validation matching the API storage rules,
-- `/v1/pipelines/{pipeline}/converse` path construction,
-- parsing for `started`, `done`, and `failed` notices.
-
-The shipped firmware does not use any of it. It uses its own copy,
-`esphome/components/conduit_voice/conduit_converse_embedded.h`.
+The binary WWD2 wake-audio packet format in the same header is outside the
+conversation protocol and has no parity check; it is covered only by
+`tests/conduit_voice_embedded_test.cpp`.
 
 Run the firmware helper tests with:
 
@@ -114,17 +123,60 @@ Never commit either.
 
 The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
-reply frames to the board speaker.
+reply frames to the board speaker. It exposes three actions and one condition:
 
-LED and display feedback is not wired up on either target: neither YAML defines
-a `light:` block, and the vendored `esphome/components/satellite1/light/`
-`led_ring` platform is not referenced by any target. See the per-board notes in
-`sat1/README.md` and `voicepe/README.md`.
+| Action | What it does |
+| --- | --- |
+| `conduit_voice.start` | Opens the socket and starts streaming the microphone |
+| `conduit_voice.stop` | Ends the utterance and lets the reply play out |
+| `conduit_voice.interrupt` | Sends `{"type":"stop"}`, silences the speaker, and ends the turn |
+| `conduit_voice.is_running` (condition) | Whether a turn is in progress |
+
+`stop` and `interrupt` differ in what happens to the reply: `stop` says "I have
+finished speaking, answer me", while `interrupt` says "stop talking". Only
+`interrupt` silences the local speaker, because audio already handed to it would
+otherwise keep playing after the server had cancelled the turn.
 
 Satellite1 also loads local `pcm5122` and `satellite1` component overlays from
 `esphome/components/`. These are copied from the pinned FutureProofHomes ref
 and patched only for ESPHome 2026.7's `GPIOPin::dump_summary(char *, size_t)`
 signature so the firmware actually compiles with current ESPHome.
+
+### Satellite1
+
+- Microphone capture via the `satellite1` microphone platform (`sat1_mics`),
+  downmixed to 16 kHz mono by the `conduit_voice` component.
+- Speaker playback via the `i2s_audio` speaker behind a mixer and a resampler
+  (`announcement_resampling_speaker`), through the `satellite1` DAC proxy.
+- Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
+  `conduit_voice.start`.
+- Button trigger: the `btn_action` GPIO `on_multi_click` calls
+  `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
+  running — a press during a reply cuts it off. Starting is gated on
+  `master_mute_switch`; interrupting is not, because muting must not trap someone
+  in a reply they cannot stop.
+
+Still needed: LED and display states for connecting, listening, thinking,
+speaking, and failed. The YAML defines no `light:` block, and the vendored
+`esphome/components/satellite1/light/led_ring.cpp` is not referenced by any
+target, so the LED ring is dark.
+
+### Voice PE
+
+- Microphone capture via the `i2s_audio` microphone platform (`i2s_mics`) at
+  16 kHz, downmixed to mono by the `conduit_voice` component.
+- Speaker playback via the `i2s_audio` speaker behind a resampler
+  (`announcement_resampling_speaker`), through the `aic3204` DAC.
+- Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
+  `conduit_voice.start`.
+- Button trigger: the `center_button` GPIO `on_multi_click` calls
+  `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
+  running — a press during a reply cuts it off. Starting is gated on
+  `master_mute_switch`, which also tracks the hardware mute slider; interrupting
+  is not, because muting must not trap someone in a reply they cannot stop.
+
+Still needed: LED states for connecting, listening, thinking, speaking, and
+failed. The YAML defines no `light:` block, so the LED ring is dark.
 
 When `wake_debug_udp_host` is set, the local component also streams the same
 16 kHz mono signed little-endian PCM that feeds wake-word detection to the

@@ -9,9 +9,58 @@ use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
+use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
+use conduit_provider::{ChunkStream, Provider};
 use conduit_runtime::Providers;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
+
+/// A synthesizer that speaks the text a syllable at a time, slowly.
+///
+/// Registered under the echo synthesizer's name so a pipeline can swap it in.
+/// Needed because [`EchoTts`] returns instantly: a whole turn finishes before a
+/// stop sent from a test could arrive, and the test would prove nothing about
+/// interrupting. A real synthesizer takes about as long as the speech lasts.
+#[derive(Debug, Clone, Default)]
+struct SlowTts;
+
+impl Provider for SlowTts {
+    fn name(&self) -> &str {
+        "echo-tts"
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for SlowTts {
+    async fn synthesize(
+        &self,
+        request: SynthesisRequest,
+    ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
+        let format = request.format;
+        let chunks = request.text.into_bytes();
+        Ok(Box::pin(futures_util::stream::unfold(
+            chunks.into_iter().enumerate(),
+            move |mut bytes| async move {
+                let (sequence, byte) = bytes.next()?;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let chunk = SpeechChunk {
+                    sequence: sequence as u64,
+                    format,
+                    data: bytes::Bytes::from(vec![byte]),
+                };
+                Some((Ok(chunk), bytes))
+            },
+        )))
+    }
+
+    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
+        Ok(vec![Voice {
+            id: "slow".to_owned(),
+            name: "Slow".to_owned(),
+            language: "en-US".to_owned(),
+        }])
+    }
+}
 
 /// A pipeline built on the in-memory providers: text in, text out.
 fn echo_graph() -> PipelineGraph {
@@ -28,6 +77,11 @@ fn echo_graph() -> PipelineGraph {
 
 fn providers() -> Providers {
     Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(EchoTts)
+}
+
+/// The same pipeline, but slow enough to interrupt.
+fn slow_providers() -> Providers {
+    Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(SlowTts)
 }
 
 /// A server listening on an ephemeral port. Stops when the test ends.
@@ -171,6 +225,99 @@ async fn events_from_the_turn_reach_the_event_stream() {
         envelope.conversation.map(|conversation| conversation.to_string()),
         Some(id),
         "the announced id must match the events"
+    );
+}
+
+#[tokio::test]
+async fn a_device_can_stop_the_reply_it_asked_for() {
+    // The reply is long and slow to speak, so there is something to interrupt.
+    let state = AppState::new(EventBus::default()).with_providers(slow_providers());
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
+    let server = Server::start(state).await;
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/echo/converse"))
+            .await
+            .expect("connects");
+
+    let utterance = "one. two. three. four. five. six. seven. eight";
+    socket.send(Message::Binary(utterance.as_bytes().to_vec().into())).await.expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+
+    // Wait for speech to start, so the stop lands mid-reply rather than before
+    // the turn has anything to abandon.
+    let started = async {
+        while let Some(frame) = socket.next().await {
+            if matches!(frame.expect("frame"), Message::Binary(_)) {
+                return;
+            }
+        }
+        panic!("the server never sent audio");
+    };
+    tokio::time::timeout(Duration::from_secs(10), started).await.expect("audio starts");
+
+    socket.send(Message::Text(r#"{"type":"stop"}"#.into())).await.expect("sends stop");
+
+    // The socket must terminate cleanly: a client that sees a reset cannot tell
+    // an honoured stop from a crashed server.
+    let rest = async {
+        let mut frames = Vec::new();
+        let mut closed = false;
+        while let Some(frame) = socket.next().await {
+            match frame.expect("frame") {
+                Message::Close(_) => {
+                    closed = true;
+                    break;
+                }
+                message => frames.push(message),
+            }
+        }
+        (frames, closed)
+    };
+    let (frames, closed) =
+        tokio::time::timeout(Duration::from_secs(10), rest).await.expect("the reply ends");
+
+    assert!(closed, "expected a close frame after a stop, got {frames:?}");
+    assert!(
+        !spoken(&frames).contains("eight"),
+        "the reply must be cut short, got {:?}",
+        spoken(&frames)
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_turn_is_recorded_as_asked_for() {
+    // The metric is how an operator tells interruptions from dropped clients,
+    // so the label has to be the one a stop means.
+    let state = AppState::new(EventBus::default()).with_providers(slow_providers());
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
+    conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
+    let server = Server::start(state).await;
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/echo/converse"))
+            .await
+            .expect("connects");
+    socket
+        .send(Message::Binary("one. two. three. four. five".as_bytes().to_vec().into()))
+        .await
+        .expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+    socket.send(Message::Text(r#"{"type":"stop"}"#.into())).await.expect("sends stop");
+
+    // Drain until the server is done with the turn.
+    let drain = async { while let Some(Ok(_)) = socket.next().await {} };
+    let _ = tokio::time::timeout(Duration::from_secs(10), drain).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let body = reqwest::get(server.http_url("/metrics"))
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(
+        body.contains("conduit_conversations_total{outcome=\"user_requested\"} 1"),
+        "{body}"
     );
 }
 

@@ -214,12 +214,22 @@ binary_sensor:
           - ON for at most 1s
           - OFF for at least 0.25s
         then:
+          # A press during a turn interrupts it, which is the only way a person
+          # can cut off a long reply. Sends `stop` rather than dropping the
+          # socket, so the server records an interruption and not a dead device.
           - if:
               condition:
-                switch.is_off: master_mute_switch
+                conduit_voice.is_running: conduit
               then:
-                - conduit_voice.start:
+                - conduit_voice.interrupt:
                     id: conduit
+              else:
+                - if:
+                    condition:
+                      switch.is_off: master_mute_switch
+                    then:
+                      - conduit_voice.start:
+                          id: conduit
 
 micro_wake_word:
   id: mww

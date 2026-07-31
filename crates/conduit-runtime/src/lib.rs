@@ -28,6 +28,7 @@
 mod emit;
 pub mod plan;
 pub mod sentences;
+pub mod stop;
 pub mod tools;
 mod turn;
 
@@ -47,6 +48,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
 pub use plan::Plan;
+pub use stop::Stop;
 
 /// How many synthesized chunks may be queued before synthesis waits.
 ///
@@ -151,6 +153,14 @@ pub struct Conversation {
     pub id: ConversationId,
     /// Synthesized audio, as it is produced.
     pub audio: ChunkStream<SpeechChunk>,
+    /// Asks this turn to stop talking.
+    ///
+    /// Distinct from dropping [`Conversation::audio`], which also ends the turn
+    /// but cannot say why: a turn that notices only a failed write cannot tell
+    /// an interruption from a client that vanished. Use this when a client
+    /// asked, and the cancellation is reported as
+    /// [`CancelReason::UserRequested`](conduit_core::event::CancelReason::UserRequested).
+    pub stop: Stop,
 }
 
 impl std::fmt::Debug for Conversation {
@@ -204,8 +214,9 @@ impl Runner {
     /// bus without guessing which conversation is theirs.
     ///
     /// The audio stream yields before the model has finished generating.
-    /// Dropping it stops the turn: synthesis halts and the conversation is
-    /// cancelled, which is how barge-in works.
+    /// Dropping it stops the turn, cancelled as `disconnected` — a listener
+    /// that left. A caller who *asked* to interrupt should use
+    /// [`Conversation::stop`] instead, so the two are distinguishable.
     ///
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
@@ -236,14 +247,20 @@ impl Runner {
         speaker: Option<SpeakerId>,
     ) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
-        let mut turn =
-            turn::Turn::new(Arc::clone(&self.plan), self.bus.clone(), self.format, sender);
+        let stop = Stop::new();
+        let mut turn = turn::Turn::new(
+            Arc::clone(&self.plan),
+            self.bus.clone(),
+            self.format,
+            sender,
+            stop.clone(),
+        );
         if let Some(speaker) = speaker {
             turn = turn.with_speaker(speaker);
         }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
         tokio::spawn(turn.run(audio).instrument(span));
-        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)) }
+        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop }
     }
 }

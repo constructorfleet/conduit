@@ -23,6 +23,7 @@ use tokio::sync::mpsc::Sender;
 use crate::emit::Emitter;
 use crate::plan::Plan;
 use crate::sentences;
+use crate::stop::{until_stopped, Stop};
 use crate::tools;
 
 /// What one call to the model produced.
@@ -50,6 +51,8 @@ pub struct Turn {
     /// and so that the path from here to a tool's permission check is tested
     /// rather than discovered later.
     speaker: Option<SpeakerId>,
+    /// How a client asks this turn to stop talking.
+    stop: Stop,
     /// Chunk counter, so the caller sees one monotonic stream even though each
     /// synthesis request numbers its chunks from zero.
     sequence: u64,
@@ -66,6 +69,7 @@ impl Turn {
         bus: EventBus,
         format: AudioFormat,
         output: Sender<Result<SpeechChunk>>,
+        stop: Stop,
     ) -> Self {
         Self {
             plan,
@@ -73,6 +77,7 @@ impl Turn {
             format,
             output,
             speaker: None,
+            stop,
             sequence: 0,
             speaking: false,
             spoken_ms: 0,
@@ -96,7 +101,7 @@ impl Turn {
         self.emitter.conversation()
     }
 
-    /// Runs the turn to completion.
+    /// Runs the turn to completion, or until a client asks it to stop.
     ///
     /// Never returns an error: failures are published as events and forwarded
     /// to the caller as stream items, because by this point there is no one
@@ -104,13 +109,33 @@ impl Turn {
     pub async fn run(mut self, audio: ChunkStream<AudioChunk>) {
         self.emitter.emit(Event::ConversationStarted);
 
-        let Some(transcript) = self.listen(audio).await else { return };
-        if self.converse(transcript).await.is_none() {
-            return;
-        }
+        // Raced against the whole turn rather than checked between stages, so a
+        // stop lands during whichever await is in progress — most usefully mid
+        // synthesis, which is when someone wants to interrupt. Providers are
+        // documented as safe to abandon for exactly this.
+        let stop = self.stop.clone();
+        let finished = until_stopped(&stop, self.body(audio)).await;
 
-        self.emitter.emit(Event::TtsFinished { duration_ms: self.spoken_ms });
-        self.emitter.emit(Event::ConversationCompleted);
+        match finished {
+            Some(Some(())) => {
+                self.emitter.emit(Event::TtsFinished { duration_ms: self.spoken_ms });
+                self.emitter.emit(Event::ConversationCompleted);
+            }
+            // The turn ended itself, and published why.
+            Some(None) => {}
+            None => {
+                tracing::debug!("client asked the turn to stop");
+                self.cancel(CancelReason::UserRequested);
+            }
+        }
+    }
+
+    /// The turn itself, minus the stop race and the ending events.
+    ///
+    /// Returns `None` if it published its own cancellation on the way out.
+    async fn body(&mut self, audio: ChunkStream<AudioChunk>) -> Option<()> {
+        let transcript = self.listen(audio).await?;
+        self.converse(transcript).await
     }
 
     /// Transcribes the utterance, returning the final text.
@@ -329,9 +354,10 @@ impl Turn {
             });
 
             if self.output.send(Ok(chunk)).await.is_err() {
-                // The caller hung up — barge-in, or a client that went away.
+                // The listener left. Whether they meant to is unknowable from
+                // here, so this is not reported as an interruption.
                 tracing::debug!("output closed; abandoning turn");
-                self.cancel(CancelReason::BargeIn);
+                self.cancel(CancelReason::Disconnected);
                 return false;
             }
         }

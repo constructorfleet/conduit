@@ -14,8 +14,19 @@ static constexpr size_t CONDUIT_VOICE_WWD2_HEADER_BYTES = 18;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_ASSISTANT_ID_BYTES = 64;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_PAYLOAD_BYTES = 0xFFFF;
 static constexpr const char *CONDUIT_VOICE_CONVERSE_END_JSON = "{\"type\":\"end\"}";
+// Ends the whole turn, including a reply already being spoken. The server reads
+// control frames past `end` for exactly this, and reports the cancellation as
+// asked for rather than as a device that vanished.
+static constexpr const char *CONDUIT_VOICE_CONVERSE_STOP_JSON = "{\"type\":\"stop\"}";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_PREFIX = "/v1/pipelines/";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_SUFFIX = "/converse";
+
+// A conversation id is a UUID, so 36 bytes plus room to notice something
+// longer arriving rather than writing past the end of the buffer.
+static constexpr size_t CONDUIT_VOICE_NOTICE_MAX_CONVERSATION_BYTES = 48;
+// Error text comes from a provider and has no bound of its own. Long enough to
+// be worth logging, and truncation is reported rather than hidden.
+static constexpr size_t CONDUIT_VOICE_NOTICE_MAX_ERROR_BYTES = 192;
 
 enum class ConduitNoticeType : uint8_t {
   UNKNOWN = 0,
@@ -24,12 +35,18 @@ enum class ConduitNoticeType : uint8_t {
   FAILED,
 };
 
+// Decoded values are copied out rather than pointed at, because a JSON string
+// is not its own bytes: `\n` and `\"` in the frame are one character each in
+// the value, so there is nothing in the input to point a length at.
 struct ConduitNotice {
   ConduitNoticeType type{ConduitNoticeType::UNKNOWN};
-  const char *conversation{nullptr};
+  char conversation[CONDUIT_VOICE_NOTICE_MAX_CONVERSATION_BYTES]{};
   size_t conversation_len{0};
-  const char *error{nullptr};
+  char error[CONDUIT_VOICE_NOTICE_MAX_ERROR_BYTES]{};
   size_t error_len{0};
+  // Set when a value did not fit. The value is still usable as far as it goes;
+  // a caller that must not report a partial message can check this.
+  bool truncated{false};
 };
 
 inline bool conduit_voice_pipeline_name_is_valid(const char *pipeline) {
@@ -89,29 +106,206 @@ inline bool conduit_voice_streq_literal(const char *value, size_t len, const cha
   return i == len;
 }
 
-inline const char *conduit_voice_json_string_value(const char *json, const char *key, size_t *value_len) {
-  const char *cursor = json;
-  while (*cursor != '\0') {
-    const char *candidate = cursor;
-    const char *needle = key;
-    while (*candidate == *needle && *needle != '\0') {
-      candidate++;
-      needle++;
-    }
-    if (*needle == '\0') {
-      const char *end = candidate;
-      while (*end != '\0' && *end != '"') {
-        end++;
-      }
-      if (*end == '"') {
-        *value_len = static_cast<size_t>(end - candidate);
-        return candidate;
-      }
-      return nullptr;
-    }
+inline const char *conduit_voice_json_skip_space(const char *cursor) {
+  while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' || *cursor == '\r') {
     cursor++;
   }
+  return cursor;
+}
+
+// Appends one byte, recording that it did not fit rather than writing past the
+// end. A silent overrun here would be a buffer overflow driven by a remote
+// server's error message.
+inline void conduit_voice_json_push(char *out, size_t capacity, size_t *len, bool *truncated,
+                                   char byte) {
+  if (*len + 1 < capacity) {
+    out[*len] = byte;
+    (*len)++;
+  } else {
+    *truncated = true;
+  }
+}
+
+// Appends a code point as UTF-8. Only reached via `\uXXXX`; anything above
+// ASCII already arrives as UTF-8 bytes and is copied through unchanged.
+inline void conduit_voice_json_push_utf8(char *out, size_t capacity, size_t *len, bool *truncated,
+                                        uint32_t code_point) {
+  if (code_point < 0x80) {
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(code_point));
+  } else if (code_point < 0x800) {
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0xC0 | (code_point >> 6)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | (code_point & 0x3F)));
+  } else if (code_point < 0x10000) {
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0xE0 | (code_point >> 12)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | (code_point & 0x3F)));
+  } else {
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0xF0 | (code_point >> 18)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | ((code_point >> 12) & 0x3F)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+    conduit_voice_json_push(out, capacity, len, truncated, static_cast<char>(0x80 | (code_point & 0x3F)));
+  }
+}
+
+// Reads four hex digits, or returns false. `out` is untouched on failure.
+inline bool conduit_voice_json_hex4(const char *cursor, uint32_t *out) {
+  uint32_t value = 0;
+  for (size_t i = 0; i < 4; i++) {
+    const char c = cursor[i];
+    uint32_t digit = 0;
+    if (c >= '0' && c <= '9') {
+      digit = static_cast<uint32_t>(c - '0');
+    } else if (c >= 'a' && c <= 'f') {
+      digit = static_cast<uint32_t>(c - 'a') + 10;
+    } else if (c >= 'A' && c <= 'F') {
+      digit = static_cast<uint32_t>(c - 'A') + 10;
+    } else {
+      return false;
+    }
+    value = (value << 4) | digit;
+  }
+  *out = value;
+  return true;
+}
+
+// Decodes the JSON string starting at `cursor` (which must be its opening
+// quote) into `out`, and returns the position just past its closing quote.
+//
+// Returns nullptr if the string is malformed or unterminated. Pass a null
+// `out` with zero capacity to skip a string without keeping it.
+inline const char *conduit_voice_json_read_string(const char *cursor, char *out, size_t capacity,
+                                                 size_t *out_len, bool *truncated) {
+  size_t len = 0;
+  bool overflowed = false;
+  if (*cursor != '"') {
+    return nullptr;
+  }
+  cursor++;
+
+  while (*cursor != '\0') {
+    if (*cursor == '"') {
+      if (out != nullptr && capacity > 0) {
+        out[len] = '\0';
+      }
+      if (out_len != nullptr) {
+        *out_len = len;
+      }
+      if (truncated != nullptr && overflowed) {
+        *truncated = true;
+      }
+      return cursor + 1;
+    }
+
+    if (*cursor != '\\') {
+      conduit_voice_json_push(out, capacity, &len, &overflowed, *cursor);
+      cursor++;
+      continue;
+    }
+
+    // An escape. This is the whole reason values are decoded rather than
+    // pointed at: `\"` inside a value used to end it early, and a value
+    // containing `"type":"` used to be read as the notice's own type.
+    cursor++;
+    switch (*cursor) {
+      case '"':
+      case '\\':
+      case '/':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, *cursor);
+        cursor++;
+        break;
+      case 'b':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, '\b');
+        cursor++;
+        break;
+      case 'f':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, '\f');
+        cursor++;
+        break;
+      case 'n':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, '\n');
+        cursor++;
+        break;
+      case 'r':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, '\r');
+        cursor++;
+        break;
+      case 't':
+        conduit_voice_json_push(out, capacity, &len, &overflowed, '\t');
+        cursor++;
+        break;
+      case 'u': {
+        uint32_t code_point = 0;
+        if (!conduit_voice_json_hex4(cursor + 1, &code_point)) {
+          return nullptr;
+        }
+        cursor += 5;
+        // A character outside the BMP arrives as a surrogate pair.
+        if (code_point >= 0xD800 && code_point <= 0xDBFF && cursor[0] == '\\' &&
+            cursor[1] == 'u') {
+          uint32_t low = 0;
+          if (!conduit_voice_json_hex4(cursor + 2, &low)) {
+            return nullptr;
+          }
+          if (low >= 0xDC00 && low <= 0xDFFF) {
+            code_point = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
+            cursor += 6;
+          }
+        }
+        conduit_voice_json_push_utf8(out, capacity, &len, &overflowed, code_point);
+        break;
+      }
+      default:
+        // An escape this parser does not know. Refusing is safer than guessing
+        // what the byte after the backslash was supposed to mean.
+        return nullptr;
+    }
+  }
+
   return nullptr;
+}
+
+// Skips one JSON value, whatever its type, and returns the position after it.
+//
+// Needed so that a member this firmware does not know about — including a
+// nested object or array — cannot be mistaken for the frame's own fields.
+inline const char *conduit_voice_json_skip_value(const char *cursor) {
+  cursor = conduit_voice_json_skip_space(cursor);
+  if (*cursor == '"') {
+    return conduit_voice_json_read_string(cursor, nullptr, 0, nullptr, nullptr);
+  }
+
+  if (*cursor == '{' || *cursor == '[') {
+    // Counting brackets is only correct if strings are skipped properly, since
+    // a string may contain one.
+    size_t depth = 0;
+    while (*cursor != '\0') {
+      if (*cursor == '"') {
+        cursor = conduit_voice_json_read_string(cursor, nullptr, 0, nullptr, nullptr);
+        if (cursor == nullptr) {
+          return nullptr;
+        }
+        continue;
+      }
+      if (*cursor == '{' || *cursor == '[') {
+        depth++;
+      } else if (*cursor == '}' || *cursor == ']') {
+        depth--;
+        if (depth == 0) {
+          return cursor + 1;
+        }
+      }
+      cursor++;
+    }
+    return nullptr;
+  }
+
+  // A number, `true`, `false`, or `null`: everything up to whatever ends it.
+  const char *start = cursor;
+  while (*cursor != '\0' && *cursor != ',' && *cursor != '}' && *cursor != ']' &&
+         *cursor != ' ' && *cursor != '\t' && *cursor != '\n' && *cursor != '\r') {
+    cursor++;
+  }
+  return cursor == start ? nullptr : cursor;
 }
 
 inline ConduitNotice conduit_voice_notice_parse(const char *json) {
@@ -120,20 +314,86 @@ inline ConduitNotice conduit_voice_notice_parse(const char *json) {
     return notice;
   }
 
-  size_t type_len = 0;
-  const char *type = conduit_voice_json_string_value(json, "\"type\":\"", &type_len);
-  if (type == nullptr) {
+  const char *cursor = conduit_voice_json_skip_space(json);
+  // Only an object is a notice. An array or a bare value is not one, and
+  // scanning it for a key pattern would find one in the wrong place.
+  if (*cursor != '{') {
     return notice;
+  }
+  cursor = conduit_voice_json_skip_space(cursor + 1);
+  if (*cursor == '}') {
+    return notice;
+  }
+
+  char type[16] = {};
+  size_t type_len = 0;
+  bool have_type = false;
+
+  while (*cursor != '\0') {
+    char key[32] = {};
+    size_t key_len = 0;
+    bool key_truncated = false;
+    cursor = conduit_voice_json_skip_space(cursor);
+    cursor = conduit_voice_json_read_string(cursor, key, sizeof(key), &key_len, &key_truncated);
+    if (cursor == nullptr) {
+      return ConduitNotice{};
+    }
+
+    cursor = conduit_voice_json_skip_space(cursor);
+    if (*cursor != ':') {
+      return ConduitNotice{};
+    }
+    cursor = conduit_voice_json_skip_space(cursor + 1);
+
+    const bool known_key =
+        !key_truncated && (conduit_voice_streq_literal(key, key_len, "type") ||
+                           conduit_voice_streq_literal(key, key_len, "conversation") ||
+                           conduit_voice_streq_literal(key, key_len, "error"));
+
+    if (known_key && *cursor == '"') {
+      char *out = type;
+      size_t capacity = sizeof(type);
+      size_t *len = &type_len;
+      if (conduit_voice_streq_literal(key, key_len, "conversation")) {
+        out = notice.conversation;
+        capacity = sizeof(notice.conversation);
+        len = &notice.conversation_len;
+      } else if (conduit_voice_streq_literal(key, key_len, "error")) {
+        out = notice.error;
+        capacity = sizeof(notice.error);
+        len = &notice.error_len;
+      } else {
+        have_type = true;
+      }
+      cursor = conduit_voice_json_read_string(cursor, out, capacity, len, &notice.truncated);
+    } else {
+      cursor = conduit_voice_json_skip_value(cursor);
+    }
+    if (cursor == nullptr) {
+      return ConduitNotice{};
+    }
+
+    cursor = conduit_voice_json_skip_space(cursor);
+    if (*cursor == ',') {
+      cursor++;
+      continue;
+    }
+    if (*cursor == '}') {
+      break;
+    }
+    return ConduitNotice{};
+  }
+
+  if (!have_type) {
+    return ConduitNotice{};
   }
 
   if (conduit_voice_streq_literal(type, type_len, "started")) {
     notice.type = ConduitNoticeType::STARTED;
-    notice.conversation = conduit_voice_json_string_value(json, "\"conversation\":\"", &notice.conversation_len);
   } else if (conduit_voice_streq_literal(type, type_len, "done")) {
     notice.type = ConduitNoticeType::DONE;
   } else if (conduit_voice_streq_literal(type, type_len, "failed")) {
     notice.type = ConduitNoticeType::FAILED;
-    notice.error = conduit_voice_json_string_value(json, "\"error\":\"", &notice.error_len);
   }
 
   return notice;

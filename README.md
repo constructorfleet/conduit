@@ -171,10 +171,17 @@ are JSON control messages:
 ```
 →  <binary>                  captured audio
 →  {"type":"end"}            the utterance is over
+→  {"type":"stop"}           stop talking and end the turn
 ←  {"type":"started", "conversation":"…"}
 ←  <binary>                  the reply, as each sentence is synthesized
 ←  {"type":"done"}
 ```
+
+Control frames are read for the whole turn, not only until `end`, because the
+useful moment to say "stop talking" is while the assistant is talking. A turn
+ended by `stop` is cancelled as `user_requested`; one whose socket simply died
+is cancelled as `disconnected`. Keeping those apart is the point — a metric that
+merged them could not answer how often people interrupt.
 
 Everything else about the turn — partial transcripts, tool calls, timings —
 is on `/v1/events`, tagged with the conversation id the socket announces. That
@@ -235,7 +242,7 @@ audio path never pays for instrumentation it does not know about.
 | --- | --- |
 | `conduit_time_to_first_audio_seconds` | How long before the assistant *started* speaking — the latency a person actually feels |
 | `conduit_turn_duration_seconds` | How long a whole turn took, by outcome |
-| `conduit_conversations_total` | Turns by outcome: completed, barge-in, user-requested, error |
+| `conduit_conversations_total` | Turns by outcome: `completed`, `user_requested` (a `stop` command), `disconnected` (the listener left), `error` |
 | `conduit_conversations_active` | Turns in progress right now |
 | `conduit_tool_calls_total`, `conduit_tool_duration_seconds` | Tool volume and cost, by outcome: `completed`, `failed`, `awaiting_confirmation` |
 | `conduit_tool_calls_requested_total` | Calls the model asked for; minus the outcomes above, how many are still in flight |
@@ -245,9 +252,17 @@ audio path never pays for instrumentation it does not know about.
 | `conduit_conversations_forgotten_total` | Turns evicted from tracking before they ended, so a leak of half-finished turns is visible rather than silently skewing the histograms |
 | `conduit_events_dropped_total` | Events a subscriber lost to lag, labelled with which subscriber — a consumer that cannot keep up |
 
-The collector can also label a cancellation `idle_timeout`, but nothing in the
-runtime constructs that reason yet, so the label does not appear on a real
-scrape.
+The collector can also label a cancellation `idle_timeout`, `shutdown`, or
+`barge_in`, but nothing in the runtime constructs those reasons yet, so they do
+not appear on a real scrape. `barge_in` is reserved for voice detected over the
+assistant, which is not implemented; a turn the client asked to stop is
+`user_requested` instead.
+
+Earlier versions labelled *every* turn that lost its listener `barge_in`,
+whether the client interrupted or its connection died. Those are now
+`user_requested` and `disconnected` respectively. A dashboard panel or alert
+filtering on `outcome="barge_in"` will go quiet after upgrading; point it at
+`user_requested` for interruptions, `disconnected` for lost clients, or both.
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to
 export HTTP and runtime spans to an OpenTelemetry collector. Without either
@@ -344,11 +359,12 @@ refused or implemented rather than left silent.
 never answers stalls the turn for as long as the client stays connected. The
 bounded output channel bounds memory, not time.
 
-**Barge-in is inferred, not requested.** `Command` has exactly one variant,
-`end`, so a device has no way to say "stop talking". The `barge_in` cancellation
-reason is published when a write to the output channel fails — which means the
-client went away, whether it interrupted or simply disconnected. Read that
-metric as "the listener left", not "the user spoke over the assistant".
+**Barge-in is not detected, only requested.** A client can say `stop`, and that
+turn is cancelled as `user_requested`. What no one does is *notice* someone
+speaking over the assistant: nothing runs voice activity detection during
+playback, so the `barge_in` reason has no emitter. A device that wants the
+interrupting behaviour has to decide on its own that it heard something and send
+`stop`.
 
 **A tool cannot ask before it acts.** A tool that needs a human in the loop
 marks itself `deny_until_confirmed`, and there is nowhere to put the question:

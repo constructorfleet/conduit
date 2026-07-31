@@ -44,6 +44,7 @@ class ConduitVoice : public Component {
 
   void start();
   void stop();
+  void interrupt();
   void wake_debug_event();
   bool is_running() const { return this->state_ != State::IDLE; }
 
@@ -72,6 +73,7 @@ class ConduitVoice : public Component {
   void cleanup_client_();
   std::string build_url_() const;
   void finish_utterance_();
+  bool send_command_(const char *json, const char *what);
 
   std::string server_;
   std::string scheme_{"ws"};
@@ -99,6 +101,11 @@ template<typename... Ts> class StartAction : public Action<Ts...>, public Parent
 template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<ConduitVoice> {
  public:
   void play(const Ts &...) override { this->parent_->stop(); }
+};
+
+template<typename... Ts> class InterruptAction : public Action<Ts...>, public Parented<ConduitVoice> {
+ public:
+  void play(const Ts &...) override { this->parent_->interrupt(); }
 };
 
 template<typename... Ts> class IsRunningCondition : public Condition<Ts...>, public Parented<ConduitVoice> {

@@ -241,6 +241,87 @@ impl TextToSpeech for FakeTts {
     }
 }
 
+/// A synthesizer that starts and then never finishes.
+///
+/// Lets a test interrupt a turn that is genuinely mid-reply: with a
+/// synthesizer that returns instantly, a turn ends before a stop could
+/// plausibly arrive, and the test would prove nothing about interrupting.
+#[derive(Clone)]
+pub struct HangingTts {
+    speaking: Arc<Notify>,
+}
+
+impl HangingTts {
+    pub fn new() -> Self {
+        Self { speaking: Arc::new(Notify::new()) }
+    }
+
+    /// Notified once synthesis has been asked for.
+    ///
+    /// Holds a permit if nobody is waiting yet, so a test that reaches this
+    /// after synthesis began still sees it rather than waiting forever.
+    pub fn speaking(&self) -> Arc<Notify> {
+        Arc::clone(&self.speaking)
+    }
+}
+
+impl Provider for HangingTts {
+    fn name(&self) -> &str {
+        "fake-tts"
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for HangingTts {
+    async fn synthesize(&self, _request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>> {
+        self.speaking.notify_one();
+        std::future::pending().await
+    }
+
+    async fn voices(&self) -> Result<Vec<Voice>> {
+        Ok(Vec::new())
+    }
+}
+
+/// A synthesizer that emits one byte at a time, slowly.
+///
+/// Lets a test act while a turn is mid-reply. [`FakeTts`] returns a whole
+/// sentence instantly and the output channel buffers several, so a turn using it
+/// can finish before a test's next line runs — which would make an assertion
+/// about interrupting pass or fail on timing.
+#[derive(Clone, Default)]
+pub struct SlowTts;
+
+impl Provider for SlowTts {
+    fn name(&self) -> &str {
+        "fake-tts"
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for SlowTts {
+    async fn synthesize(&self, request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>> {
+        let format = request.format;
+        Ok(Box::pin(futures_util::stream::unfold(
+            request.text.into_bytes().into_iter().enumerate(),
+            move |mut bytes| async move {
+                let (sequence, byte) = bytes.next()?;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let chunk = SpeechChunk {
+                    sequence: sequence as u64,
+                    format,
+                    data: Bytes::from(vec![byte]),
+                };
+                Some((Ok(chunk), bytes))
+            },
+        )))
+    }
+
+    async fn voices(&self) -> Result<Vec<Voice>> {
+        Ok(Vec::new())
+    }
+}
+
 /// How a fake tool behaves when invoked.
 #[derive(Clone)]
 pub enum Behaviour {
