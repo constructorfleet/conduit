@@ -38,6 +38,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: python3 scripts/workspace_version.py check
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features

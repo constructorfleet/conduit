@@ -1,0 +1,66 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: SemVer bump to apply when exact_version is empty.
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      exact_version:
+        description: Exact SemVer version, for example 0.2.0-rc.1.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  open-version-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - id: version
+        env:
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_EXACT_VERSION: ${{ inputs.exact_version }}
+        run: |
+          if [ -n "${INPUT_EXACT_VERSION}" ]; then
+            python3 scripts/workspace_version.py set "${INPUT_EXACT_VERSION}" --write
+          else
+            python3 scripts/workspace_version.py bump "${INPUT_BUMP}" --write
+          fi
+      - name: Refresh lockfile
+        run: cargo metadata --format-version 1 >/dev/null
+      - name: Validate version consistency
+        run: python3 scripts/workspace_version.py check
+      - name: Open version bump PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          branch="codex/version-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${VERSION}"
+          git push -u origin "${branch}"
+          gh pr create \
+            --draft \
+            --base main \
+            --head "${branch}" \
+            --title "chore: bump version to ${VERSION}" \
+            --body "Bumps the Conduit workspace version to ${VERSION}."
