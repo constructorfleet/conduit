@@ -19,6 +19,7 @@ Early. The contracts are in place; the runtime that executes them is not.
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
+| [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible language models — OpenAI, Ollama, vLLM, LM Studio, OpenRouter |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD and a live event stream |
 
 ## Design
@@ -115,9 +116,28 @@ cargo test --workspace
 cargo audit
 ```
 
+## Providers
+
+`conduit-openai` implements the chat completions API, which is the closest
+thing to a lingua franca among model servers. One implementation covers OpenAI,
+Ollama, vLLM, LM Studio, and OpenRouter — only the base URL changes:
+
+```rust
+// A local Ollama server, no key needed.
+OpenAi::new(OpenAiConfig {
+    base_url: "http://localhost:11434/v1".to_owned(),
+    name: "ollama".to_owned(),
+    ..OpenAiConfig::default()
+})?;
+```
+
+Because the registry keys on the provider name, differently configured servers
+coexist in one pipeline: a local model for most turns and a hosted one for the
+hard questions.
+
 ## Next
 
-- Reference providers: Whisper, Ollama, Piper
+- Reference providers: Whisper for speech, Piper for synthesis
 - Device transport (WebSocket, then gRPC)
 - Persistent storage behind the pipeline store
 - Wake word, speaker identification, and memory in the runtime

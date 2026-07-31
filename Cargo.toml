@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-api"]
+members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-openai", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"

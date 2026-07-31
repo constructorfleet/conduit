@@ -1,0 +1,31 @@
+[package]
+name = "conduit-openai"
+description = "OpenAI-compatible language model provider for Conduit, usable with OpenAI, Ollama, vLLM, and other compatible servers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[lints]
+workspace = true
