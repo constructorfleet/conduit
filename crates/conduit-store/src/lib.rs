@@ -7,6 +7,10 @@
 
 pub mod file;
 pub mod memory;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 
 pub use file::FileStore;
 pub use memory::MemoryStore;
+#[cfg(feature = "postgres")]
+pub use postgres::PostgresStore;

@@ -14,6 +14,24 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # The PostgreSQL tests skip themselves when no database is configured, so
+    # without this they would pass by not running.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conduit
+          POSTGRES_PASSWORD: conduit
+          POSTGRES_DB: conduit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,6 +41,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
+      # The default feature set must build too, and so must the lean one.
+      - run: cargo build --workspace --no-default-features
 
   # Advisories change without any commit of ours, so this runs on a schedule
   # as well as per change, and is kept separate to distinguish "this pull

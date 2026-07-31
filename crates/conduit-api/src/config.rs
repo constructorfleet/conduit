@@ -28,6 +28,8 @@ const TTS_MODEL: &str = "CONDUIT_OPENAI_TTS_MODEL";
 
 /// Directory to keep pipeline definitions in. Unset means memory only.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
+/// PostgreSQL connection URL. Takes precedence over a directory.
+const DATABASE_URL: &str = "CONDUIT_DATABASE_URL";
 
 /// Opens the pipeline store the environment asks for.
 ///
@@ -38,6 +40,26 @@ const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
 ///
 /// Returns [`Error::Config`] if the configured directory cannot be used.
 pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
+    #[cfg(feature = "postgres")]
+    if let Ok(url) = std::env::var(DATABASE_URL) {
+        if !url.is_empty() {
+            // A shared database is what more than one replica needs, so it
+            // wins over a directory only this process can see.
+            tracing::info!("storing pipelines in PostgreSQL");
+            return Ok(Arc::new(conduit_store::PostgresStore::connect(&url).await?));
+        }
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    if std::env::var(DATABASE_URL).is_ok_and(|url| !url.is_empty()) {
+        // Silently falling back to memory would lose pipelines a deployment
+        // clearly meant to keep.
+        return Err(Error::Config(format!(
+            "{DATABASE_URL} is set but this build has no PostgreSQL support; \
+             rebuild with --features postgres"
+        )));
+    }
+
     match std::env::var(PIPELINE_DIR) {
         Ok(directory) if !directory.is_empty() => {
             tracing::info!(%directory, "storing pipelines on disk");

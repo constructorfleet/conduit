@@ -84,6 +84,7 @@ cargo run -p conduit-api
 | --- | --- | --- |
 | `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
+| `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
 | `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
@@ -156,13 +157,33 @@ upgrade, so a client never has to diagnose a socket that opens and then dies.
 
 ## Storage
 
-Pipelines are kept as one JSON file each in `CONDUIT_PIPELINE_DIR` — readable,
-diffable, and editable with the tools anyone already has. Without that variable
-the server keeps them in memory and warns that a restart will lose them.
+Three backends, chosen by configuration:
 
-Both backends implement the same [`PipelineStore`](crates/conduit-provider/src/storage.rs)
-trait and are held to the same test, so which one a deployment uses is
-configuration rather than behaviour. Writes go to a temporary file and are
+| Backend | When | Set |
+| --- | --- | --- |
+| PostgreSQL | More than one API replica, or you already run one | `CONDUIT_DATABASE_URL` |
+| Files | A single node; one readable JSON file per pipeline | `CONDUIT_PIPELINE_DIR` |
+| Memory | Development; the server warns a restart will lose them | neither |
+
+A database wins over a directory, because shared state is what more than one
+replica needs and a directory only this process can see. Migrations are
+embedded and run at startup, so a new replica needs no side-car — and they are
+idempotent, so every replica running them is a no-op rather than a race.
+
+Writes are a single `INSERT … ON CONFLICT DO UPDATE`, so two replicas saving at
+once cannot interleave a read and a write into a lost update. Graphs are stored
+as `jsonb` rather than shredded into tables: the editor round-trips the whole
+document, nothing queries inside it, and shredding would cost a migration every
+time a node kind is added — while still leaving operators able to ask
+`SELECT graph->>'name'`.
+
+PostgreSQL support is on by default; `--no-default-features` drops it, and a
+build without it refuses to start when `CONDUIT_DATABASE_URL` is set rather
+than silently keeping pipelines in memory.
+
+All three implement the same [`PipelineStore`](crates/conduit-provider/src/storage.rs)
+trait and are held to the same expectations, so which one a deployment uses is
+configuration rather than behaviour. File writes go to a temporary file and are
 renamed, so a crash mid-write leaves the previous definition intact rather than
 a truncated one.
 
@@ -241,7 +262,6 @@ FLAC.
 ## Next
 
 - gRPC and MQTT device transports alongside the WebSocket one
-- A SQL storage backend, for deployments with more than one API replica
 - Wake word, speaker identification, and memory in the runtime
 
 ## Known gaps
@@ -251,9 +271,6 @@ Tracked here rather than as TODOs in the source.
 - **No distributed tracing.** Metrics and structured logs are in place, and
   every event already carries a trace id, but nothing exports spans to an
   OpenTelemetry collector yet.
-- **Only a file and memory store exist.** Pipelines persist to a directory,
-  which suits a single node; a shared SQL backend is what several API replicas
-  would need.
 - **Only linear graphs execute.** The runtime rejects router fan-out rather
   than pretending to run it; the graph model already describes it.
 - **`Permission::Confirm` is refused, not asked.** Asking the speaker to

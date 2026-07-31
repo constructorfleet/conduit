@@ -13,10 +13,30 @@ conduit-provider.workspace = true
 
 async-trait.workspace = true
 serde_json.workspace = true
+sqlx = { version = "0.8", default-features = false, features = [
+    "postgres",
+    "json",
+    "macros",
+    "migrate",
+    "runtime-tokio",
+    "tls-rustls-ring",
+], optional = true }
 tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 
+[features]
+default = []
+# PostgreSQL storage, for deployments running more than one API replica.
+postgres = ["dep:sqlx"]
+
 [dev-dependencies]
+conduit-store = { workspace = true, features = ["postgres"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "postgres",
+    "json",
+    "runtime-tokio",
+    "tls-rustls-ring",
+] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 
 [lints]
