@@ -41,3 +41,34 @@ Run the firmware helper tests with:
 ```sh
 ./firmware/test.sh
 ```
+
+## ESPHome Board Targets
+
+Conduit provides ESPHome firmware targets for the two supported satellite
+boards:
+
+- `esphome/conduit-sat1.yaml` uses FutureProofHomes Satellite1 firmware from
+  `futureproofhomes/satellite1-esphome` pinned to
+  `592a9687206709046f475b5464941702beacb093`.
+- `esphome/conduit-voicepe.yaml` uses Home Assistant Voice PE firmware from
+  `esphome/home-assistant-voice-pe` pinned to
+  `0579e7b9d8504264719c593474c85447253c9dc1`.
+
+Both targets use the board hardware definitions from the named upstream
+firmware sources without routing conversations through ESPHome's native
+`voice_assistant`. Wake-word and action-button events call the local
+`conduit_voice.start` action, which opens:
+
+```text
+ws://{conduit_server}/v1/pipelines/{conduit_pipeline}/converse
+```
+
+Set the substitutions before flashing:
+
+- `conduit_server`: host and port for Conduit, for example `192.168.1.10:8080`.
+- `conduit_pipeline`: the Conduit pipeline name.
+- `conduit_scheme`: `ws` or `wss`.
+
+The local component streams microphone audio as binary WebSocket frames, sends
+`{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
+reply frames to the board speaker.

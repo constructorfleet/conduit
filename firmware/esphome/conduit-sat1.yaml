@@ -1,0 +1,248 @@
+substitutions:
+  name: conduit-sat1
+  friendly_name: Conduit Satellite1
+  conduit_server: 192.168.1.10:8080
+  conduit_pipeline: kitchen
+  conduit_scheme: ws
+  # Official board firmware source: https://github.com/futureproofhomes/satellite1-esphome
+  satellite1_ref: 592a9687206709046f475b5464941702beacb093
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/futureproofhomes/satellite1-esphome
+      ref: ${satellite1_ref}
+    components:
+      - fusb302b
+      - i2s_audio
+      - pcm5122
+      - satellite1
+      - tas2780
+    refresh: 0s
+  - source:
+      type: local
+      path: components
+    components:
+      - conduit_voice
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.6.0
+  platformio_options:
+    board_build.flash_mode: dio
+    board_upload.maximum_size: 16777216
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+      CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+  ignore_not_found: false
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  deassert_rts_dtr: true
+  hardware_uart: USB_SERIAL_JTAG
+  level: debug
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    id: ota_esphome
+
+i2c:
+  - id: i2c_0
+    sda: GPIO5
+    scl: GPIO6
+    frequency: 400kHz
+    scan: true
+
+spi:
+  - id: spi_0
+    clk_pin: GPIO12
+    mosi_pin: GPIO11
+    miso_pin: GPIO13
+    interface: SPI2
+
+i2s_audio:
+  - id: i2s_shared
+    i2s_lrclk_pin: GPIO7
+    i2s_bclk_pin: GPIO8
+    i2s_mclk_pin: GPIO16
+    access_mode: duplex
+    i2s_mode: secondary
+
+satellite1:
+  id: satellite1_id
+  spi_id: spi_0
+  cs_pin: GPIO10
+  data_rate: 8000000
+  spi_mode: MODE3
+  xmos_rst_pin: GPIO4
+
+fusb302b:
+  id: pd_fusb302b
+  irq_pin: GPIO1
+  request_voltage: 20
+  on_power_ready:
+    then:
+      - lambda: id(pd_power_contract) = id(pd_fusb302b).contract_voltage;
+      - script.execute: tas2780_ensure_active
+
+globals:
+  - id: pd_power_contract
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: tas2780_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+audio_dac:
+  - platform: pcm5122
+    id: line_out_dac
+    i2c_id: i2c_0
+    address: 0x4D
+  - platform: tas2780
+    id: speaker_dac
+    i2c_id: i2c_0
+    address: 0x3F
+  - platform: satellite1
+    id: dac_proxy
+    speaker_dac: speaker_dac
+    line_out_dac: line_out_dac
+
+microphone:
+  - platform: satellite1
+    id: sat1_mics
+    sample_rate: 48000
+    i2s_din_pin: GPIO15
+    bits_per_sample: 32bit
+    channel: stereo
+    pdm: false
+    adc_type: external
+    i2s_audio_id: i2s_shared
+
+speaker:
+  - platform: i2s_audio
+    id: i2s_audio_speaker
+    i2s_dout_pin: GPIO9
+    i2s_audio_id: i2s_shared
+    sample_rate: 48000
+    bits_per_sample: 32bit
+    channel: stereo
+    timeout: never
+    audio_dac: dac_proxy
+    dac_type: external
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: i2s_audio_speaker
+    num_channels: 2
+    source_speakers:
+      - id: announcement_mixing_input
+        timeout: never
+      - id: media_mixing_input
+        timeout: never
+        buffer_duration: 100ms
+  - platform: resampler
+    id: announcement_resampling_speaker
+    output_speaker: announcement_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+
+script:
+  - id: tas2780_ensure_active
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: return !id(tas2780_active);
+          then:
+            - tas2780.activate:
+                mode: !lambda 'return id(pd_power_contract) >= 9 ? 2 : 0;'
+            - lambda: id(tas2780_active) = true;
+
+switch:
+  - platform: template
+    id: master_mute_switch
+    name: Mute
+    icon: mdi:microphone-off
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+binary_sensor:
+  - platform: gpio
+    id: btn_action
+    name: Action Button
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+      ignore_strapping_warning: true
+    on_multi_click:
+      - timing:
+          - ON for at most 1s
+          - OFF for at least 0.25s
+        then:
+          - if:
+              condition:
+                switch.is_off: master_mute_switch
+              then:
+                - conduit_voice.start:
+                    id: conduit
+
+micro_wake_word:
+  id: mww
+  models:
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
+      id: hey_jarvis
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
+      id: okay_nabu
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json
+      id: stop
+      internal: true
+  vad:
+  microphone:
+    microphone: sat1_mics
+    channels: 1
+    gain_factor: 6
+  stop_after_detection: false
+  on_wake_word_detected:
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          - conduit_voice.start:
+              id: conduit
+
+conduit_voice:
+  id: conduit
+  server: ${conduit_server}
+  scheme: ${conduit_scheme}
+  pipeline: ${conduit_pipeline}
+  microphone: sat1_mics
+  speaker: announcement_resampling_speaker
