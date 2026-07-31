@@ -1,3 +1,7 @@
+/*
+ * Reference scaffold only. Not compiled into any firmware image; the shipping
+ * Satellite1 firmware is firmware/esphome/conduit-sat1.yaml. See README.md.
+ */
 #ifndef CONDUIT_SAT1_CONFIG_H
 #define CONDUIT_SAT1_CONFIG_H
 
