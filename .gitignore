@@ -1,5 +1,7 @@
 /target
 **/*.rs.bk
+# Coverage report, written to the repo root by the `coverage` CI job.
+/cobertura.xml
 .DS_Store
 .env
 __pycache__/

@@ -56,6 +56,67 @@ jobs:
       # The default feature set must build too, and so must the lean one.
       - run: cargo build --workspace --no-default-features
 
+  # The repository ruleset enforces a minimum coverage percentage and a maximum
+  # drop against the default branch, and that rule blocks a merge when analysis
+  # is missing or fails — not only when coverage is low. Nothing produced
+  # coverage, so the enforced number described a measurement that was never
+  # taken.
+  #
+  # Separate from `check` rather than folded into it: coverage needs an
+  # instrumented rebuild and a second test run, and paying that on the job whose
+  # failures are the ones developers wait on would slow down every push to speed
+  # up a report nobody reads on a red build.
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Uploading to Code Quality is a write, and it is the only extra
+      # privilege this job takes.
+      code-quality: write
+    # Same reason `check` has it: the PostgreSQL tests skip themselves when no
+    # database is configured, and a coverage number computed with them skipped
+    # would understate the store crate and drift against `check`.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conduit
+          POSTGRES_PASSWORD: conduit
+          POSTGRES_DB: conduit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install --no-self-update
+      # cargo-llvm-cov instruments the build, so it needs llvm-tools; it can
+      # install the component itself, but asking rustup for it keeps the
+      # toolchain fully described by this file.
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # An instrumented build shares no artifacts with `check`'s, so a
+          # shared cache key would have the two jobs evicting each other.
+          key: coverage
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Cobertura because that is the only format Code Quality ingests. The
+      # feature set matches `check` so the number describes the code the gates
+      # actually test.
+      - run: cargo llvm-cov --workspace --all-features --cobertura --output-path cobertura.xml
+      # The action skips fork pull requests on its own — they cannot be given
+      # write scope — so measuring still runs and only the upload is dropped.
+      - uses: actions/upload-code-coverage@v1
+        with:
+          file: cobertura.xml
+          language: Rust
+          label: code-coverage/llvm-cov
+
   # `rust-version` in Cargo.toml is a promise to anyone building Conduit. Every
   # other job runs the pinned modern toolchain, so without this job the declared
   # floor is never compiled against and silently rots upward as dependencies

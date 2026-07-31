@@ -47,6 +47,18 @@ The git tag is the release record. It is created only after both the container
 image and the artifact package publish successfully, so a failed publish can be
 retried by re-running the workflow rather than needing a version bump.
 
+Creating it is idempotent. The decision that a version is unreleased is made
+before the packages are built, so two pushes landing close together can both
+reach the tagging step and race for the same tag. An existing tag is left exactly
+where it is — re-tagging would break the immutability above — and the build that
+lost the race still succeeds, because it did nothing wrong. A push that fails for
+any other reason still fails the workflow.
+
+`Publish` tags with the workflow's own `GITHUB_TOKEN`. Pushes made with it
+deliberately do not trigger other workflows, which costs nothing while nothing in
+this repository triggers on tags; adding a workflow that must react to a release
+tag means giving the tagging job a token that does.
+
 `latest` is a moving convenience tag for the newest successful `main` publish.
 `sha-<commit>` is published on every build so that whatever `latest` points at
 can always be named by something immutable — including for commits that publish
@@ -81,3 +93,22 @@ and then creates the git tag `v<version>`.
 
 Any other push to `main` publishes only `:latest` and `:sha-<commit>`, per
 [Tag Immutability](#tag-immutability).
+
+## What Guards `main`
+
+A repository ruleset governs the default branch. It is recorded here because a
+release process is only as immutable as the branch it publishes from, and the
+ruleset is otherwise visible only in repository settings.
+
+- Changes reach `main` by pull request, squash-merged, with linear history.
+  Deleting the branch and non-fast-forward pushes are refused.
+- Every `CI` job — `check`, `coverage`, `msrv`, `firmware`, `docker`, and
+  `audit` — must pass before a merge. `Publish` calls the same workflow, so a
+  release runs the gates a pull request ran.
+- CodeQL must report no errors and no high-or-higher security alerts.
+- Coverage must stay at or above 85%, and may not drop more than 3 percentage
+  points against `main`. The `coverage` job measures it; that rule blocks a merge
+  when the measurement is missing as well as when it is low, so the job existing
+  is part of the gate rather than a convenience.
+- Organization admins can bypass all of the above. That is deliberate: a gate
+  nobody can override in an emergency is a gate that gets deleted during one.
