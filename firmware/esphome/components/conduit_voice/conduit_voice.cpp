@@ -206,14 +206,17 @@ void ConduitVoice::handle_text_frame_(const char *data, size_t length) {
   ConduitNotice notice = conduit_voice_notice_parse(text.c_str());
   switch (notice.type) {
     case ConduitNoticeType::STARTED:
-      ESP_LOGD(TAG, "Conduit conversation started");
+      ESP_LOGD(TAG, "Conduit conversation started: conversation=%s", notice.conversation);
       break;
     case ConduitNoticeType::DONE:
       ESP_LOGD(TAG, "Conduit conversation done");
       this->pending_stop_ = true;
       break;
     case ConduitNoticeType::FAILED:
-      ESP_LOGE(TAG, "Conduit conversation failed");
+      // The server's reason is the only diagnosis available on-device, so log
+      // it rather than making someone read the server to learn what broke.
+      ESP_LOGE(TAG, "Conduit conversation failed: error=%s%s", notice.error,
+               notice.truncated ? " (truncated)" : "");
       this->state_ = State::FAILED;
       this->pending_stop_ = true;
       break;

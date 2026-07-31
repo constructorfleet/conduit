@@ -27,21 +27,45 @@ The canonical Rust definitions live in
 The shipping firmware for both supported boards is the ESPHome build described
 under [ESPHome Board Targets](#esphome-board-targets). Start there.
 
-## Protocol Parity Is Not Enforced
+## How Protocol Parity Is Enforced
 
-Two hand-maintained copies of this wire contract exist:
+Two copies of this wire contract exist:
 
 - `crates/conduit-core/src/device.rs` (canonical, Rust),
 - `esphome/components/conduit_voice/conduit_converse_embedded.h` (shipped
   firmware).
 
-They currently agree on all four message types (`end`, `started`, `done`,
-`failed`), on binary-versus-text framing, and on 16 kHz mono signed 16-bit
-little-endian PCM. Nothing in CI checks that they still agree: no test compares
-the embedded constants against `device.rs`, and `firmware/tests/` only asserts
-that specific symbols exist in the embedded header. A protocol change made in
-`device.rs` alone will not fail any build. Update both together, by hand, until
-a real parity check exists.
+The header is hand-written rather than generated, because its parser is not
+something `serde` can emit. Two checks stand in for generation, and CI runs
+both.
+
+**Constants.** `crates/conduit-api/tests/protocol_parity.rs` reads the shipped
+header and compares its end-of-utterance frame, converse path, sample rate,
+channel count, and sample width against what the Rust definitions serialize and
+what the API's route declares. This catches a rename or a changed value.
+
+**Behaviour, which is the check that matters.** The same test serializes every
+canonical notice into `tests/notices.fixture`, and
+`tests/conduit_notice_fixture_test.cpp` runs those exact bytes through the real
+firmware parser and asserts the decoded type and fields. Agreeing on spelling
+is not the same as being able to read what the other side writes: the fixture
+includes a `failed` frame whose error text contains a quote, a backslash, and
+the literal `"type":"` pattern, because that field is filled from a provider's
+error message and so an upstream server's wording decides what a satellite
+parses.
+
+The fixture is checked in, so the firmware suite runs without a Rust build
+first. The Rust test regenerates it and fails when the result differs, which is
+what stops it from being hand-edited. To update it after a deliberate protocol
+change:
+
+```sh
+CONDUIT_REGENERATE_FIXTURES=1 cargo test -p conduit-api --test protocol_parity
+```
+
+The binary WWD2 wake-audio packet format in the same header is outside the
+conversation protocol and has no parity check; it is covered only by
+`tests/conduit_voice_embedded_test.cpp`.
 
 Run the firmware helper tests with:
 

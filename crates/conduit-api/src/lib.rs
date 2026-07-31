@@ -19,6 +19,13 @@ use tower_http::trace::TraceLayer;
 pub use error::ApiError;
 pub use state::AppState;
 
+/// The route a device opens to hold a conversation.
+///
+/// Named rather than written inline because firmware builds the same path from
+/// its own constants, and the parity check between them needs something to
+/// compare against.
+pub const CONVERSE_ROUTE: &str = "/v1/pipelines/{name}/converse";
+
 /// Builds the application router.
 ///
 /// Kept separate from serving so tests can drive it directly without binding
@@ -30,7 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/events", get(events::stream))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
-        .route("/v1/pipelines/{name}/converse", get(converse::converse))
+        .route(CONVERSE_ROUTE, get(converse::converse))
         .route(
             "/v1/pipelines/{name}",
             get(pipelines::get).put(pipelines::put).delete(pipelines::delete),

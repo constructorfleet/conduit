@@ -49,6 +49,9 @@ require "CONDUIT_VOICE_AUDIO_SAMPLE_RATE_HZ" "$component/conduit_voice.cpp"
 require "CONDUIT_VOICE_WWD2_HEADER_BYTES" "$component/conduit_converse_embedded.h"
 require "conduit_voice_wwd2_packet" "$component/conduit_converse_embedded.h"
 require "conduit_voice_converse_path" "$component/conduit_converse_embedded.h"
+# A failure the device cannot explain is a failure someone debugs by reading the
+# server, so the parsed reason must reach the log.
+require "notice.error" "$component/conduit_voice.cpp"
 require "passive=True" "$component/__init__.py"
 require "microphone.final_validate_microphone_source_schema" "$component/__init__.py"
 require "esp32.add_idf_component(name=\"espressif/esp_websocket_client\"" "$component/__init__.py"
