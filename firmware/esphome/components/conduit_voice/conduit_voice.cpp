@@ -70,6 +70,9 @@ void ConduitVoice::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server: %s", this->server_.c_str());
   ESP_LOGCONFIG(TAG, "  Scheme: %s", this->scheme_.c_str());
   ESP_LOGCONFIG(TAG, "  Pipeline: %s", this->pipeline_.c_str());
+  // Whether a credential is configured, never the credential: this log is
+  // printed at every boot and is the first thing anyone pastes into an issue.
+  ESP_LOGCONFIG(TAG, "  Token: %s", this->token_.empty() ? "not set" : "set");
 }
 
 void ConduitVoice::start() {
@@ -85,6 +88,9 @@ void ConduitVoice::start() {
   const std::string url = this->build_url_();
   esp_websocket_client_config_t config = {};
   config.uri = url.c_str();
+  // Borrowed, not copied — `headers_` outlives the client, `url` only has to
+  // outlive this call.
+  config.headers = this->build_headers_();
   config.network_timeout_ms = 10000;
   config.reconnect_timeout_ms = 0;
   config.buffer_size = 4096;
@@ -351,6 +357,18 @@ std::string ConduitVoice::build_url_() const {
   char path[192];
   conduit_voice_converse_path(path, sizeof(path), this->pipeline_.c_str());
   return this->scheme_ + "://" + this->server_ + path;
+}
+
+// Builds the extra upgrade-request headers, returning nullptr when there are
+// none. The credential goes here rather than in the URL because the URL is
+// logged on two failure paths above and recorded into the server's trace spans.
+const char *ConduitVoice::build_headers_() {
+  if (this->token_.empty()) {
+    return nullptr;
+  }
+  // The client wants one raw block of CRLF-terminated header lines.
+  this->headers_ = "Authorization: Bearer " + this->token_ + "\r\n";
+  return this->headers_.c_str();
 }
 
 void ConduitVoice::finish_utterance_() {

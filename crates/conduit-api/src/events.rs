@@ -8,6 +8,7 @@ use conduit_core::id::{ConversationId, DeviceId, TraceId};
 use futures_util::stream::Stream;
 use serde::Deserialize;
 
+use crate::auth::ManagementCaller;
 use crate::{ApiError, AppState};
 
 /// Narrows which events a subscriber receives.
@@ -79,6 +80,7 @@ fn parse_stage(stage: &str) -> Result<Stage, ApiError> {
 ///
 /// Returns 422 if the query names an unknown stage.
 pub async fn stream(
+    _caller: ManagementCaller,
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, axum::Error>>>, ApiError> {

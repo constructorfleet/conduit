@@ -191,6 +191,8 @@ conduit_voice:
   server: ${conduit_server}
   scheme: ${conduit_scheme}
   pipeline: ${conduit_pipeline}
+  # From secrets.yaml, not a substitution: substitutions are committed.
+  token: !secret conduit_token
   debug_assistant_id: ${wake_debug_assistant_id}
   debug_udp_host: ${wake_debug_udp_host}
   debug_udp_port: ${wake_debug_udp_port}

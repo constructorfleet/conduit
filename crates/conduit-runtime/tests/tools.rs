@@ -645,3 +645,32 @@ async fn tool_nodes_must_name_a_registered_tool() {
         .expect_err("the search tool is not registered");
     assert!(matches!(error, conduit_core::Error::UnknownProvider(name) if name == "search"));
 }
+
+#[tokio::test]
+async fn authenticating_a_device_does_not_identify_a_speaker() {
+    // Conflating the two would make every per-speaker tool policy wrong:
+    // anyone who could reach the satellite would inherit whoever owns its
+    // token. A device token says which box connected, and nothing more.
+    let call = ToolCallId::new("call_abc123");
+    let tool = FakeTool::new("search", serde_json::json!({}));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(talkative_model(call))
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let _: Vec<_> = runner
+        .run_for_device(conduit_core::id::DeviceId::new(), audio_of(&["a"]))
+        .audio
+        .collect()
+        .await;
+
+    let contexts = tool.contexts();
+    assert!(!contexts.is_empty(), "the tool must have been consulted");
+    assert!(
+        contexts.iter().all(|context| context.speaker.is_none()),
+        "a device token is not a voice print: {contexts:?}"
+    );
+}

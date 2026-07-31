@@ -19,6 +19,7 @@ CONF_DEBUG_UDP_PORT = "debug_udp_port"
 CONF_DEBUG_WAKE_EVENT_URL = "debug_wake_event_url"
 CONF_SCHEME = "scheme"
 CONF_SERVER = "server"
+CONF_TOKEN = "token"
 
 conduit_voice_ns = cg.esphome_ns.namespace("conduit_voice")
 ConduitVoice = conduit_voice_ns.class_("ConduitVoice", cg.Component)
@@ -51,6 +52,17 @@ def _validate_pipeline(value):
     return value
 
 
+def _validate_token(value):
+    value = cv.string_strict(value)
+    # The token is interpolated into a raw CRLF-terminated header block, so a
+    # token containing either would inject headers of its own.
+    if any(char in value for char in "\r\n"):
+        raise cv.Invalid("Token must not contain carriage returns or newlines")
+    if value != value.strip():
+        raise cv.Invalid("Token must not begin or end with whitespace")
+    return value
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
@@ -61,6 +73,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_SERVER): cv.string_strict,
             cv.Optional(CONF_SCHEME, default="ws"): cv.one_of("ws", "wss", lower=True),
             cv.Required(CONF_PIPELINE): _validate_pipeline,
+            # Optional rather than required because a server started with
+            # CONDUIT_ALLOW_ANONYMOUS wants no credential at all; every other
+            # server refuses the upgrade without one.
+            cv.Optional(CONF_TOKEN, default=""): _validate_token,
             cv.Optional(CONF_DEBUG_ASSISTANT_ID): _validate_pipeline,
             cv.Optional(CONF_DEBUG_UDP_HOST, default=""): cv.string_strict,
             cv.Optional(CONF_DEBUG_UDP_PORT, default=6056): cv.port,
@@ -116,6 +132,7 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_server(config[CONF_SERVER]))
     cg.add(var.set_scheme(config[CONF_SCHEME]))
     cg.add(var.set_pipeline(config[CONF_PIPELINE]))
+    cg.add(var.set_token(config[CONF_TOKEN]))
     cg.add(var.set_debug_assistant_id(config.get(CONF_DEBUG_ASSISTANT_ID, config[CONF_PIPELINE])))
     cg.add(var.set_debug_udp_host(config[CONF_DEBUG_UDP_HOST]))
     cg.add(var.set_debug_udp_port(config[CONF_DEBUG_UDP_PORT]))

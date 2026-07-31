@@ -16,6 +16,8 @@ use conduit_provider::storage::PipelineStore;
 use conduit_runtime::Providers;
 use conduit_store::{FileStore, MemoryStore};
 
+use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
+
 /// Base URL of an OpenAI-compatible server.
 const BASE_URL: &str = "CONDUIT_OPENAI_BASE_URL";
 /// Bearer token for that server. Local servers usually need none.
@@ -33,6 +35,54 @@ const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
 /// PostgreSQL connection URL. Takes precedence over a directory.
 const DATABASE_URL: &str = "CONDUIT_DATABASE_URL";
+
+/// Decides who may call the service API.
+///
+/// There is no open default. A server that authenticated nobody unless
+/// configured otherwise would mean every deployment that forgot the token file
+/// is exposed and looks fine, which is the failure this exists to prevent. An
+/// operator who genuinely wants an open server says so with
+/// [`ALLOW_ANONYMOUS`], and gets a warning every time it starts.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if neither variable is set, if both are, or if the
+/// token file cannot be read, is readable by other users, or is invalid.
+pub async fn access_from_env() -> Result<Access> {
+    let file = std::env::var(TOKENS_FILE).ok().filter(|path| !path.trim().is_empty());
+    let anonymous = std::env::var(ALLOW_ANONYMOUS)
+        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "yes"));
+
+    match (file, anonymous) {
+        // Both is a contradiction, and guessing which was meant could silently
+        // discard the token file and serve the API open.
+        (Some(_), true) => Err(Error::Config(format!(
+            "{TOKENS_FILE} and {ALLOW_ANONYMOUS} are both set; pick one"
+        ))),
+        (Some(path), false) => {
+            let tokens = Tokens::load(&path).await?;
+            tracing::info!(
+                path = %path,
+                tokens = tokens.len(),
+                "authenticating callers against the token file"
+            );
+            Ok(Access::Tokens(tokens))
+        }
+        (None, true) => {
+            tracing::warn!(
+                "{ALLOW_ANONYMOUS} is set: anyone who can reach this port can talk to \
+                 the assistant, read transcripts off /v1/events, and delete pipelines"
+            );
+            Ok(Access::anonymous())
+        }
+        // Refusing to start is the whole point: an operator is never left
+        // unsure whether their deployment is protected.
+        (None, false) => Err(Error::Config(format!(
+            "no authentication is configured; set {TOKENS_FILE} to a token file, or \
+             {ALLOW_ANONYMOUS}=1 to serve the API to anyone who can reach the port"
+        ))),
+    }
+}
 
 /// Opens the pipeline store the environment asks for.
 ///

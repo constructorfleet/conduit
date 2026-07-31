@@ -21,5 +21,8 @@ RUN useradd --create-home --shell /usr/sbin/nologin conduit
 COPY --from=builder /src/target/release/conduit-api /usr/local/bin/conduit-api
 
 USER conduit
-EXPOSE 8080
+# 8080 is the authenticated service API. 9090 serves /health and /metrics with
+# no authentication at all, so publish it only within your trust boundary — a
+# `docker run -p 8080:8080` that omits 9090 is the intended default.
+EXPOSE 8080 9090
 ENTRYPOINT ["/usr/local/bin/conduit-api"]

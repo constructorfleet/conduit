@@ -575,3 +575,57 @@ async fn every_event_in_a_turn_shares_one_trace() {
     assert!(traces.len() > 1, "expected a full turn of events");
     assert!(traces.windows(2).all(|pair| pair[0] == pair[1]), "trace must not change");
 }
+
+#[tokio::test]
+async fn every_event_of_a_turn_names_the_device_it_came_from() {
+    // What makes `/v1/events?device=` able to select one satellite. Every
+    // event, not just the first: a filter that dropped the tail would show a
+    // conversation that starts and never ends.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(FakeTts::new());
+
+    let device = conduit_core::id::DeviceId::new();
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let _: Vec<_> = runner.run_for_device(device, audio_of(&["a"])).audio.collect().await;
+
+    let mut seen = 0;
+    while let Ok(Some(envelope)) =
+        tokio::time::timeout(Duration::from_secs(5), subscription.recv()).await
+    {
+        assert_eq!(
+            envelope.device,
+            Some(device),
+            "{:?} lost the device that caused it",
+            envelope.event
+        );
+        seen += 1;
+        if envelope.event.is_terminal() {
+            break;
+        }
+    }
+    assert!(seen > 1, "expected a whole turn's worth of events, saw {seen}");
+}
+
+#[tokio::test]
+async fn a_turn_nobody_authenticated_carries_no_device() {
+    // A device is only ever set from a token, so an unauthenticated turn must
+    // leave it empty rather than inventing an identity.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    let envelope = subscription.recv().await.expect("event");
+    assert_eq!(envelope.device, None);
+}

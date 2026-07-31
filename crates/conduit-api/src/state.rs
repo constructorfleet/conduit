@@ -10,6 +10,8 @@ use conduit_provider::storage::PipelineStore;
 use conduit_runtime::Providers;
 use conduit_store::MemoryStore;
 
+use crate::auth::Access;
+
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
 pub struct AppState {
@@ -21,6 +23,8 @@ pub struct AppState {
     providers: Option<Arc<Providers>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
     metrics: Arc<Metrics>,
+    /// Who is allowed to call the service API.
+    access: Arc<Access>,
 }
 
 impl AppState {
@@ -33,7 +37,32 @@ impl AppState {
     /// Creates state backed by `bus` and `pipelines`.
     #[must_use]
     pub fn with_store(bus: EventBus, pipelines: Arc<dyn PipelineStore>) -> Self {
-        Self { bus, pipelines, providers: None, metrics: Arc::new(Metrics::new()) }
+        Self {
+            bus,
+            pipelines,
+            providers: None,
+            metrics: Arc::new(Metrics::new()),
+            access: Arc::new(Access::anonymous()),
+        }
+    }
+
+    /// Requires callers to present a token from `access`.
+    ///
+    /// State starts out [`Access::anonymous`] because a library type has no way
+    /// to know what a caller intends. What makes a *deployment* safe is the
+    /// binary, which refuses to start without a token file unless the operator
+    /// asked for an open server in as many words — see
+    /// [`crate::config::access_from_env`].
+    #[must_use]
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = Arc::new(access);
+        self
+    }
+
+    /// Who is allowed to call the service API.
+    #[must_use]
+    pub fn access(&self) -> &Access {
+        &self.access
     }
 
     /// The metrics this server exposes.

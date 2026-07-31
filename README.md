@@ -118,7 +118,10 @@ Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CONDUIT_BIND` | `0.0.0.0:8080` | Listen address |
+| `CONDUIT_BIND` | `0.0.0.0:8080` | Service API listen address |
+| `CONDUIT_OPS_BIND` | `0.0.0.0:9090` | Ops listen address: `/health` and `/metrics`, unauthenticated |
+| `CONDUIT_TOKENS` | — | Token file; required unless `CONDUIT_ALLOW_ANONYMOUS` is set |
+| `CONDUIT_ALLOW_ANONYMOUS` | — | `1` serves the API to anyone who can reach it |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
@@ -153,6 +156,7 @@ cargo run -p conduit-api --features dev-providers
 ```sh
 # Store a pipeline (rejected with 422 if it does not validate)
 curl -X PUT localhost:8080/v1/pipelines/kitchen \
+  -H "authorization: Bearer $CONDUIT_MANAGEMENT_TOKEN" \
   -H 'content-type: application/json' -d '{
     "name": "kitchen",
     "nodes": [
@@ -169,8 +173,139 @@ curl -X PUT localhost:8080/v1/pipelines/kitchen \
   }'
 
 # Watch the pipeline run, live
-curl -N localhost:8080/v1/events?stages=reasoning,tools
+curl -N -H "authorization: Bearer $CONDUIT_MANAGEMENT_TOKEN" \
+  'localhost:8080/v1/events?stages=reasoning,tools'
 ```
+
+Both routes take a management token; see [Authentication](#authentication).
+
+## Authentication
+
+Conduit serves two listeners, because the two things an operator needs are in
+tension: every route that touches conversations or configuration must require a
+credential, and `/health` and `/metrics` must work without one — a liveness probe
+cannot present a credential, and a Prometheus scrape that needs one is a scrape
+that silently stops working when the token rotates.
+
+| Listener | Default | Carries | Authentication |
+| --- | --- | --- | --- |
+| Service | `0.0.0.0:8080` | Conversations, pipelines, events | Bearer token, always |
+| Ops | `0.0.0.0:9090` | `/health`, `/metrics` | None |
+
+**Do not publish the ops port outside your trust boundary.** Its protection is
+which network can reach it, not which credential you hold, and `/metrics`
+exposes real operational intelligence: conversation counts, tool names, error
+rates. Publish `8080` to your network and keep `9090` on the host — a firewall
+rule, a Kubernetes `Service` that does not name 9090, or a `docker run` that maps
+only 8080. The `0.0.0.0` default is chosen because the shipped artifact is a
+container image, where a loopback default is one every deployment must override,
+and a default everyone overrides is not a default.
+
+Tokens come in two audiences, and the split is the load-bearing part of the
+design. A device token may only open conversation sockets; a management token may
+read events and manage pipelines. A device token presented to a management route
+is refused, so a token extracted from a satellite's firmware image cannot read
+the household's transcripts.
+
+| Route | Accepts |
+| --- | --- |
+| `GET /v1/pipelines/{name}/converse` | Device, or management |
+| `GET`, `PUT`, `DELETE /v1/pipelines…` | Management only |
+| `POST /v1/pipelines/validate` | Management only |
+| `GET /v1/events` | Management only |
+
+The asymmetry is deliberate. A management token may open a conversation socket,
+because an operator holding one is already trusted with more than a conversation
+and refusing them would make the API impossible to try out by hand. A device
+token on a management route is refused, which is the direction that matters.
+
+Point `CONDUIT_TOKENS` at a JSON file:
+
+```json
+{
+  "devices": [
+    { "token": "…", "device": "kitchen", "pipelines": ["default"] },
+    { "token": "…", "device": "office" }
+  ],
+  "management": [
+    { "token": "…", "name": "ui" }
+  ]
+}
+```
+
+Each device entry names its device, which is what makes an authenticated
+conversation know *which* satellite it is talking to. That name reaches the logs,
+and each entry also gets a device id that is attached to every event the turn
+publishes — so `/v1/events?device=` finally matches something, where before
+nothing populated the field it filters on. The id is assigned when the token file
+is read, so it is stable for the life of the process but not across restarts; see
+[Known gaps](#known-gaps).
+
+`pipelines` optionally restricts a device to named pipelines — a satellite in a
+guest room need not reach the pipeline whose tools unlock the front door. Omit
+the key for the common case of any pipeline; an empty list permits nothing.
+
+Generate tokens rather than choosing them, and make them long:
+
+```sh
+openssl rand -hex 32
+```
+
+Tokens shorter than 32 characters are refused at startup. That floor matters more
+than usual, because nothing rate-limits authentication attempts yet (see
+[Known gaps](#known-gaps)) and entropy is the only defence against someone
+guessing. Tokens are stored in plaintext and protected by file
+permissions, so **the server refuses to start if the token file is group- or
+world-readable** — `chmod 600` it. Hashing them would defend only against a
+narrow disclosure, since anyone who can read the file can also read the OpenAI
+key out of the process environment. A malformed file, a file declaring no tokens,
+and a token appearing twice are all startup errors: a token that maps to two
+identities has no correct interpretation, and an ambiguous configuration should
+never run.
+
+The file is read once at startup and not watched. Changing tokens means editing
+it and restarting.
+
+Credentials travel in the `Authorization` header only:
+
+```sh
+curl -H 'authorization: Bearer <token>' localhost:8080/v1/pipelines
+```
+
+Never in a query parameter. A token in a URL ends up in device logs — the
+firmware logs the full connection URL on two failure paths — and in the request
+URI that the HTTP trace layer records into spans, which may be exported to a
+collector. Tokens are never logged, and the auth layer is positioned so the
+`Authorization` header is not captured into a span.
+
+Failures reuse the ordinary `{"error": …, "detail": …}` shape, with the kinds
+`unauthorized` and `forbidden`:
+
+| Situation | Response |
+| --- | --- |
+| Missing or malformed `Authorization` | 401 naming the expected format |
+| Unrecognised token | 401, detail identical to the above |
+| Valid token, pipeline not permitted | 403 naming the pipeline |
+
+An unrecognised token gets the *same* message as a missing one on purpose: a
+stranger probing the port must not learn whether a guessed token exists. A
+pipeline restriction is a distinct 403 because the caller is already
+authenticated, nothing further leaks, and it is the failure most likely to be
+confusing in the field. Every 401 carries `WWW-Authenticate: Bearer`.
+
+Rejections are logged at warn with the reason, and with the device or management
+name when the token was recognised, so a misconfigured satellite is
+investigatable.
+
+There is no open default: a server with neither variable set refuses to start,
+rather than leaving an operator who forgot the token file exposed and looking
+fine. To deliberately run an open server — a development box, a network you
+already trust completely — set `CONDUIT_ALLOW_ANONYMOUS=1`, which warns loudly at
+every startup. Setting both it and `CONDUIT_TOKENS` is an error rather than a
+guess about which was meant.
+
+What a device token is *not* is a speaker. It proves which satellite is
+connected, never who is talking — see [Known gaps](#known-gaps).
 
 ## Talking to a pipeline
 
@@ -209,6 +344,10 @@ Unsupported provider encodings are refused before the socket upgrades.
 
 A missing or unrunnable pipeline is refused with an HTTP status *before* the
 upgrade, so a client never has to diagnose a socket that opens and then dies.
+So is a missing, unrecognised, or insufficiently privileged device token — the
+credential is presented as an `Authorization` header on the upgrade request, and
+a device restricted away from the pipeline is refused before the pipeline is even
+looked up, so a 404 cannot be used to learn which pipelines exist.
 
 Sat1 and VoicePE firmware integration targets live in [`firmware`](firmware).
 They are Conduit WebSocket targets, not Home Assistant Assist, Tater native
@@ -252,10 +391,15 @@ rather than being allowed to escape the directory.
 
 ## Observability
 
-`/metrics` serves Prometheus text. Nothing in the pipeline calls into the
-metrics crate: every stage already publishes what it did, so the collector is
-an ordinary bus subscriber. A new event is counted the day it is added, and the
-audio path never pays for instrumentation it does not know about.
+`/metrics` serves Prometheus text on the ops listener — `localhost:9090/metrics`
+by default, with no credential, alongside `/health`. See
+[Authentication](#authentication) for why, and for the obligation not to publish
+that port outside your trust boundary.
+
+Nothing in the pipeline calls into the metrics crate: every stage already
+publishes what it did, so the collector is an ordinary bus subscriber. A new
+event is counted the day it is added, and the audio path never pays for
+instrumentation it does not know about.
 
 | Metric | What it answers |
 | --- | --- |
@@ -353,13 +497,29 @@ FLAC.
 Tracked here rather than as TODOs in the source, because a limit someone can
 read is cheaper than a limit someone discovers in production.
 
-**There is no authentication, authorization, or rate limiting on the API.** The
-only middleware on the router is request tracing. Anyone who can reach the port
-can `PUT` or `DELETE` a pipeline, open a conversation socket, and read
-transcripts and tool arguments off `/v1/events`. That is a deployment
-constraint, not a preference: bind Conduit to a trusted network, or put it
-behind a proxy that authenticates, until the API has a notion of identity of its
-own.
+**Nothing rate-limits authentication.** The API authenticates and authorizes
+every caller (see [Authentication](#authentication)), but a client that guesses
+wrong is refused and free to guess again immediately, as fast as the network
+allows. Long generated tokens are the only defence, which is why the server
+refuses ones shorter than 32 characters. Nor is there any rate limiting on
+anything else: an authenticated caller can rewrite pipelines or open sockets in a
+loop.
+
+**Tokens are static and read once.** There is no rotation, no expiry, and no
+revocation short of editing the token file and restarting. A token is plaintext
+in that file, so its protection is the file mode, which the server checks at
+startup and never rechecks.
+
+**A device id does not survive a restart.** Each token-file device entry is
+assigned a fresh id when the file is read, so `/v1/events?device=` matches within
+one run of the server but the id it matched yesterday means nothing today, and
+nothing joins events across a restart. There is also no route that reports which
+id belongs to which device name, so finding one means reading it off an event.
+Both follow from tokens being a file rather than a device registry.
+
+**Conduit serves plain HTTP.** TLS termination belongs to a proxy. On a
+plaintext LAN a bearer token is sniffable — an accepted risk for a local-first
+appliance, not a solved problem.
 
 **One node of each kind.** A second `llm` or `tts` node is rejected as a
 duplicate, so the two-model arrangement described under
@@ -409,7 +569,6 @@ missing is any implementation of them and the runtime wiring to run one. For
 `WakeWordRejected`, `AudioStarted`, `AudioChunkReceived`, `AudioFinished`,
 `SpeakerIdentified`, and `TurnStarted` are part of the vocabulary but nothing
 publishes them, so `/v1/events?stages=capture` is a valid subscription to a
-permanently silent stream. Nothing populates an envelope's device either, so
-`?device=` matches nothing. The stages that do carry traffic today are
+permanently silent stream. The stages that do carry traffic today are
 `transcription`, `conversation`, `reasoning`, `tools`, `synthesis`, and
 `diagnostics`.
