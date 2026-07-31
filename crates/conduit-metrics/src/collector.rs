@@ -27,7 +27,13 @@ const LATENCY_BUCKETS: [f64; 12] =
 ///
 /// A conversation whose end is never published would otherwise be remembered
 /// forever, turning the collector into a slow leak.
-const MAX_TRACKED: usize = 4096;
+pub const MAX_TRACKED: usize = 4096;
+
+/// Which subscription a dropped-event count belongs to.
+///
+/// The bus counts losses per subscription, and the collector can only speak for
+/// its own, so the series says whose drops these are.
+const SUBSCRIBER: &str = "metrics";
 
 /// What is known about a conversation while it runs.
 struct InFlight {
@@ -46,10 +52,12 @@ pub struct Metrics {
     turn_duration: Arc<Histogram>,
     time_to_speech: Arc<Histogram>,
     tool_calls: Arc<Counter>,
+    tool_requests: Arc<Counter>,
     tool_duration: Arc<Histogram>,
     stage_failures: Arc<Counter>,
     tokens: Arc<Counter>,
     forgotten: Arc<Counter>,
+    dropped: Arc<Counter>,
 }
 
 impl Default for Metrics {
@@ -63,13 +71,30 @@ impl Metrics {
     #[must_use]
     pub fn new() -> Self {
         let registry = Registry::new();
+        let forgotten = registry.counter(
+            "conduit_conversations_forgotten_total",
+            "Conversations dropped from tracking before they ended.",
+        );
+        let dropped = registry.counter(
+            "conduit_events_dropped_total",
+            "Events a subscription lost to lag, by subscriber.",
+        );
+        // Both are health signals whose interesting value is zero, so declare
+        // the series rather than letting a healthy process expose no sample.
+        forgotten.init(Vec::new());
+        dropped.init(labels(&[("subscriber", SUBSCRIBER)]));
+
+        let active =
+            registry.gauge("conduit_conversations_active", "Conversations in progress.");
+        // An idle process should read zero, not expose nothing.
+        active.set(Vec::new(), 0);
+
         Self {
             events: registry
                 .counter("conduit_events_total", "Events published, by pipeline stage."),
             conversations: registry
                 .counter("conduit_conversations_total", "Conversations, by outcome."),
-            active: registry
-                .gauge("conduit_conversations_active", "Conversations in progress."),
+            active,
             turn_duration: registry.histogram(
                 "conduit_turn_duration_seconds",
                 "Time from the start of a conversation to its end.",
@@ -81,6 +106,10 @@ impl Metrics {
                 &LATENCY_BUCKETS,
             ),
             tool_calls: registry.counter("conduit_tool_calls_total", "Tool calls, by outcome."),
+            tool_requests: registry.counter(
+                "conduit_tool_calls_requested_total",
+                "Tool calls the model asked for.",
+            ),
             tool_duration: registry.histogram(
                 "conduit_tool_duration_seconds",
                 "Time a tool took to run.",
@@ -89,10 +118,8 @@ impl Metrics {
             stage_failures: registry
                 .counter("conduit_stage_failures_total", "Stage failures, by node."),
             tokens: registry.counter("conduit_llm_tokens_total", "Model tokens, by direction."),
-            forgotten: registry.counter(
-                "conduit_conversations_forgotten_total",
-                "Conversations dropped from tracking before they ended.",
-            ),
+            forgotten,
+            dropped,
             registry,
         }
     }
@@ -110,21 +137,41 @@ pub struct Collector {
     in_flight: HashMap<ConversationId, InFlight>,
     /// Insertion order, so the oldest can be dropped when tracking is full.
     order: Vec<ConversationId>,
+    /// Drops already reported, so only the difference is added to the counter.
+    reported_drops: u64,
 }
 
 impl Collector {
     /// Creates a collector feeding `metrics`.
     #[must_use]
     pub fn new(metrics: Arc<Metrics>) -> Self {
-        Self { metrics, in_flight: HashMap::new(), order: Vec::new() }
+        Self { metrics, in_flight: HashMap::new(), order: Vec::new(), reported_drops: 0 }
     }
 
     /// Consumes `subscription` until the bus closes.
     pub async fn run(mut self, mut subscription: Subscription) {
         while let Some(envelope) = subscription.recv().await {
             self.record(envelope.conversation, &envelope.event);
+            self.report_drops(&subscription);
         }
+        // A lag while draining the last events would otherwise go unreported.
+        self.report_drops(&subscription);
         tracing::debug!("event bus closed; metrics collector stopping");
+    }
+
+    /// Publishes what this collector's own subscription has lost to lag.
+    ///
+    /// The bus counts losses per subscription and the collector owns its own,
+    /// so a drop reaches the registry without anything in the pipeline calling
+    /// into this crate. No other subscriber's drops are visible from here,
+    /// which is why the series names the subscriber it speaks for.
+    fn report_drops(&mut self, subscription: &Subscription) {
+        let total = subscription.dropped();
+        let unreported = total.saturating_sub(self.reported_drops);
+        if unreported > 0 {
+            self.metrics.dropped.add(labels(&[("subscriber", SUBSCRIBER)]), unreported);
+            self.reported_drops = total;
+        }
     }
 
     /// Subscribes to `bus` and runs in the background.
@@ -140,9 +187,13 @@ impl Collector {
 
         match event {
             Event::ConversationStarted => {
-                self.metrics.active.increment(Vec::new());
                 if let Some(id) = conversation {
                     self.begin(id);
+                } else {
+                    // Nothing to track, so nothing that could ever end it.
+                    tracing::debug!(
+                        "conversation started without an id; not tracked as active"
+                    );
                 }
             }
             Event::AudioStreaming { .. } => {
@@ -159,6 +210,14 @@ impl Collector {
             Event::ConversationCancelled { reason } => {
                 self.finish(conversation, cancel_name(*reason));
             }
+            Event::ToolRequested { .. } => {
+                // Its own metric rather than another `outcome` on
+                // `conduit_tool_calls_total`: that counter means "calls that
+                // resolved", and a `requested` label would double count every
+                // call, silently changing what every existing panel reads.
+                // Requests minus outcomes is then the number still in flight.
+                self.metrics.tool_requests.increment(Vec::new());
+            }
             Event::ToolCompleted { duration_ms, .. } => {
                 self.metrics.tool_calls.increment(labels(&[("outcome", "completed")]));
                 #[allow(clippy::cast_precision_loss)]
@@ -166,6 +225,13 @@ impl Collector {
             }
             Event::ToolFailed { .. } => {
                 self.metrics.tool_calls.increment(labels(&[("outcome", "failed")]));
+            }
+            Event::ToolConfirmationRequested { .. } => {
+                // The runtime answers the model and stops here, so this is where
+                // the call ends unless something resumes it.
+                self.metrics
+                    .tool_calls
+                    .increment(labels(&[("outcome", "awaiting_confirmation")]));
             }
             Event::StageFailed { node, recovered, .. } => {
                 self.metrics.stage_failures.increment(labels(&[
@@ -201,11 +267,11 @@ impl Collector {
         }
         self.in_flight.insert(id, InFlight { started: Instant::now(), spoke_at: None });
         self.order.push(id);
+        self.publish_active();
     }
 
     /// Records the end of a conversation.
     fn finish(&mut self, conversation: Option<ConversationId>, outcome: &'static str) {
-        self.metrics.active.decrement(Vec::new());
         self.metrics.conversations.increment(labels(&[("outcome", outcome)]));
 
         let Some(id) = conversation else { return };
@@ -215,7 +281,23 @@ impl Collector {
                 vec![("outcome", outcome.to_owned())],
                 entry.started.elapsed().as_secs_f64(),
             );
+            self.publish_active();
+        } else {
+            // Never tracked: begun before this collector subscribed, or evicted
+            // by `begin`. Either way its slot was already released, so counting
+            // this end again would leave the gauge permanently short.
+            tracing::debug!(%id, outcome, "conversation ended without being tracked");
         }
+    }
+
+    /// Republishes the active gauge from what is actually being tracked.
+    ///
+    /// Set rather than incremented: the tracking map is the truth, and a gauge
+    /// derived from it cannot drift the way paired increments and decrements do
+    /// when an end arrives without its start.
+    fn publish_active(&self) {
+        let tracked = i64::try_from(self.in_flight.len()).unwrap_or(i64::MAX);
+        self.metrics.active.set(Vec::new(), tracked);
     }
 }
 

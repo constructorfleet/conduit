@@ -187,6 +187,11 @@ impl Subscription {
     }
 
     /// Total events this subscription has lost to lag.
+    ///
+    /// Monotonic, so a consumer can export the difference since it last looked.
+    /// Whoever owns a subscription is the only one who can report its losses —
+    /// the bus deliberately knows nothing about metrics — so a subscriber that
+    /// wants its drops on `/metrics` reads this as it consumes.
     #[must_use]
     pub const fn dropped(&self) -> u64 {
         self.dropped
