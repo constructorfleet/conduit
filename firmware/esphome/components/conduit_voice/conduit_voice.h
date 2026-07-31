@@ -28,6 +28,7 @@ class ConduitVoice : public Component {
   void set_server(const std::string &server) { this->server_ = server; }
   void set_scheme(const std::string &scheme) { this->scheme_ = scheme; }
   void set_pipeline(const std::string &pipeline) { this->pipeline_ = pipeline; }
+  void set_token(const std::string &token) { this->token_ = token; }
   void set_microphone_source(microphone::MicrophoneSource *microphone_source) {
     this->microphone_source_ = microphone_source;
   }
@@ -72,12 +73,18 @@ class ConduitVoice : public Component {
   void send_debug_udp_(const uint8_t *data, size_t length);
   void cleanup_client_();
   std::string build_url_() const;
+  const char *build_headers_();
   void finish_utterance_();
   bool send_command_(const char *json, const char *what);
 
   std::string server_;
   std::string scheme_{"ws"};
   std::string pipeline_;
+  std::string token_;
+  // Held as a member because `esp_websocket_client_config_t::headers` borrows
+  // the string rather than copying it: a local would be freed before the client
+  // sends the upgrade request.
+  std::string headers_;
   std::string debug_assistant_id_;
   std::string debug_udp_host_;
   std::string debug_wake_event_url_;

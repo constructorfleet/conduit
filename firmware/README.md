@@ -116,10 +116,30 @@ Set the substitutions before flashing:
 - `wake_debug_event_url`: debug ingest HTTP wake endpoint, for example
   `http://192.168.1.10:8000/wake_event`. Empty disables wake-event posting.
 
-Both targets also read `wifi_ssid`, `wifi_password`, and `api_encryption_key`
-from an ESPHome `secrets.yaml` you create next to the YAML. That file holds
-credentials and is git-ignored, along with the `.esphome/` build directory.
-Never commit either.
+Both targets also read `wifi_ssid`, `wifi_password`, `api_encryption_key`, and
+`conduit_token` from an ESPHome `secrets.yaml` you create next to the YAML. That
+file holds credentials and is git-ignored, along with the `.esphome/` build
+directory. Never commit either.
+
+`conduit_token` is the device token Conduit authenticates the satellite with. It
+must match a `devices` entry in the server's token file, and each satellite
+should have its own — a token names one device, which is how the event stream
+can be filtered by satellite and how a leaked token can be revoked without
+reflashing the rest of the house. Generate it rather than choosing it:
+
+```sh
+openssl rand -hex 32
+```
+
+The component sends it as an `Authorization: Bearer` header on the upgrade
+request, never in the URL: the URL is logged on two device failure paths and is
+recorded into the server's trace spans, so a token in it would end up in device
+logs and in whatever collector those spans are exported to. The token never
+appears in the device's own logs either; `dump_config` reports only whether one
+is set.
+
+The option is optional, for a server started with `CONDUIT_ALLOW_ANONYMOUS`.
+Against any other server, omitting it means the upgrade is refused with 401.
 
 The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary

@@ -16,6 +16,15 @@ require() {
   fi
 }
 
+refute() {
+  pattern=$1
+  file=$2
+  if grep -Fq -- "$pattern" "$file"; then
+    printf 'unwanted "%s" in %s\n' "$pattern" "$file" >&2
+    return 1
+  fi
+}
+
 require "futureproofhomes/satellite1-esphome" "$sat1"
 require "592a9687206709046f475b5464941702beacb093" "$sat1"
 require "microphone: sat1_mics" "$sat1"
@@ -25,6 +34,7 @@ require "conduit_voice.interrupt" "$sat1"
 require "conduit_voice.wake_debug_event" "$sat1"
 require "debug_udp_host" "$sat1"
 require "debug_wake_event_url" "$sat1"
+require "token: !secret conduit_token" "$sat1"
 require "components:" "$sat1"
 require "- pcm5122" "$sat1"
 require "- satellite1" "$sat1"
@@ -41,6 +51,7 @@ require "conduit_voice.interrupt" "$voicepe"
 require "conduit_voice.wake_debug_event" "$voicepe"
 require "debug_udp_host" "$voicepe"
 require "debug_wake_event_url" "$voicepe"
+require "token: !secret conduit_token" "$voicepe"
 
 require "esp_websocket_client_send_bin" "$component/conduit_voice.cpp"
 require "esp_websocket_client_send_text" "$component/conduit_voice.cpp"
@@ -58,6 +69,17 @@ require "conduit_voice_converse_path" "$component/conduit_converse_embedded.h"
 # A failure the device cannot explain is a failure someone debugs by reading the
 # server, so the parsed reason must reach the log.
 require "notice.error" "$component/conduit_voice.cpp"
+# The credential goes in a header, never the URI: the URI is logged on two
+# failure paths here and recorded into the server's trace spans.
+require "config.headers = this->build_headers_()" "$component/conduit_voice.cpp"
+require "Authorization: Bearer " "$component/conduit_voice.cpp"
+# `headers` is borrowed by the client, so the string has to outlive the config.
+require "std::string headers_;" "$component/conduit_voice.h"
+require "CONF_TOKEN" "$component/__init__.py"
+require "set_token" "$component/__init__.py"
+# A boot log is the first thing anyone pastes into an issue, so it may say
+# whether a token is configured but never what it is.
+refute "this->token_.c_str()" "$component/conduit_voice.cpp"
 require "passive=True" "$component/__init__.py"
 require "microphone.final_validate_microphone_source_schema" "$component/__init__.py"
 require "esp32.add_idf_component(name=\"espressif/esp_websocket_client\"" "$component/__init__.py"
