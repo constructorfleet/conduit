@@ -45,6 +45,29 @@ the model completes it, rather than waiting for the full response. A reply of
 is still being generated. The bounded output channel is the backpressure — if a
 device stops draining audio, synthesis stops rather than buffering ahead.
 
+## Tools
+
+Models interleave speech and tool calls, and the runtime treats that as the
+normal case:
+
+```
+"Sure, let me look that up for you."   ← spoken immediately
+        │
+        ├── search(...)                ← runs *while* the preamble plays
+        │
+"It's sunny and 24 degrees."           ← spoken when the model answers
+```
+
+The preamble is only worth saying if it overlaps the work, so speech and tool
+execution are joined rather than sequenced — a tool that blocks until speech
+starts still completes. Tools requested together run together.
+
+Every call produces a result for the model, whatever happens. A tool that
+fails, is denied by its permission check, or does not exist is reported back as
+a result rather than ending the turn, so the assistant can explain itself
+instead of going silent. Turns are capped at `max_tool_rounds` model calls
+(default 4) so a model that will not stop calling tools cannot loop forever.
+
 ## Running
 
 ```sh
@@ -97,7 +120,7 @@ cargo audit
 - Reference providers: Whisper, Ollama, Piper
 - Device transport (WebSocket, then gRPC)
 - Persistent storage behind the pipeline store
-- Wake word, speaker identification, tools, and memory in the runtime
+- Wake word, speaker identification, and memory in the runtime
 
 ## Known gaps
 
@@ -111,3 +134,8 @@ Tracked here rather than as TODOs in the source.
   pipeline.
 - **Only linear graphs execute.** The runtime rejects router fan-out rather
   than pretending to run it; the graph model already describes it.
+- **`Permission::Confirm` is refused, not asked.** Asking the speaker to
+  confirm a tool needs a turn-taking exchange the runtime does not have yet, so
+  a tool that asks for confirmation is currently denied with that explanation.
+- **`ToolOutput::spoken` is ignored.** The model receives the structured value;
+  the tool's own suggested phrasing is not yet spoken directly.

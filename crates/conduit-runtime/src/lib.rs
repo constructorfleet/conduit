@@ -24,8 +24,10 @@
 //! # }
 //! ```
 
+mod emit;
 pub mod plan;
 pub mod sentences;
+pub mod tools;
 mod turn;
 
 use std::sync::Arc;
@@ -36,6 +38,7 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
+use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::{ChunkStream, Registry};
 use tokio_stream::wrappers::ReceiverStream;
@@ -54,6 +57,7 @@ pub struct Providers {
     stt: Registry<dyn SpeechToText>,
     llm: Registry<dyn LanguageModel>,
     tts: Registry<dyn TextToSpeech>,
+    tools: Registry<dyn Tool>,
 }
 
 impl Providers {
@@ -89,6 +93,17 @@ impl Providers {
         self
     }
 
+    /// Registers a tool under its own name.
+    ///
+    /// The name a graph node refers to is the provider name; the name the
+    /// model calls it by comes from the tool's own schema.
+    #[must_use]
+    pub fn with_tool<P: Tool>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.tools.insert(name, Arc::new(provider));
+        self
+    }
+
     /// The registered recognizers.
     #[must_use]
     pub const fn stt(&self) -> &Registry<dyn SpeechToText> {
@@ -105,6 +120,12 @@ impl Providers {
     #[must_use]
     pub const fn tts(&self) -> &Registry<dyn TextToSpeech> {
         &self.tts
+    }
+
+    /// The registered tools.
+    #[must_use]
+    pub const fn tools(&self) -> &Registry<dyn Tool> {
+        &self.tools
     }
 }
 

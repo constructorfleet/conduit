@@ -1,11 +1,13 @@
 //! Turning a validated graph into the concrete providers that will run it.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use conduit_core::graph::{Node, NodeKind, PipelineGraph};
 use conduit_core::{Error, Result};
-use conduit_provider::llm::LanguageModel;
+use conduit_provider::llm::{LanguageModel, ToolSpec};
 use conduit_provider::stt::SpeechToText;
+use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
 use serde::Deserialize;
 
@@ -19,7 +21,15 @@ struct LlmConfig {
     model: Option<String>,
     /// System prompt prepended to every turn.
     system: Option<String>,
+    /// Cap on model calls in one turn. See [`Plan::max_tool_rounds`].
+    max_tool_rounds: Option<usize>,
 }
+
+/// How many times a model may be called in one turn before the runtime stops.
+///
+/// A model that keeps requesting tools would otherwise loop forever while the
+/// person who asked the question waits.
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
 
 /// Configuration read from a [`NodeKind::Tts`] node.
 #[derive(Debug, Default, Deserialize)]
@@ -52,9 +62,22 @@ pub struct Plan {
     pub tts_node: String,
     /// Voice to request, when the node configured one.
     pub voice: Option<String>,
+    /// Tools offered to the model, keyed by the name it calls them by.
+    ///
+    /// Unlike the other stages a pipeline may have any number of these, so
+    /// tool nodes are collected rather than treated as one slot.
+    pub tools: BTreeMap<String, Arc<dyn Tool>>,
+    /// Cap on model calls in one turn.
+    pub max_tool_rounds: usize,
 }
 
 impl Plan {
+    /// The tool schemas to advertise to the model.
+    #[must_use]
+    pub fn tool_specs(&self) -> Vec<ToolSpec> {
+        self.tools.values().map(|tool| tool.spec()).collect()
+    }
+
     /// Resolves `graph` against `providers`.
     ///
     /// # Errors
@@ -67,6 +90,7 @@ impl Plan {
         let mut stt = None;
         let mut llm = None;
         let mut tts = None;
+        let mut tools = BTreeMap::new();
 
         for node in graph.topological_order()? {
             match node.kind {
@@ -91,7 +115,19 @@ impl Plan {
                         node.id.clone(),
                         model,
                         config.system,
+                        config.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS),
                     ));
+                }
+                NodeKind::Tool => {
+                    let tool = providers.tools().require(&node.provider)?;
+                    let name = tool.spec().name;
+                    if tools.insert(name.clone(), tool).is_some() {
+                        return Err(Error::Config(format!(
+                            "two tools are both called `{name}`; the model could not \
+                             tell them apart (node `{}`)",
+                            node.id
+                        )));
+                    }
                 }
                 NodeKind::Tts => {
                     reject_duplicate(&tts, node)?;
@@ -113,10 +149,32 @@ impl Plan {
         }
 
         let (stt, stt_node) = stt.ok_or_else(|| missing("stt"))?;
-        let (llm, llm_node, model, system) = llm.ok_or_else(|| missing("llm"))?;
+        let (llm, llm_node, model, system, max_tool_rounds) =
+            llm.ok_or_else(|| missing("llm"))?;
         let (tts, tts_node, voice) = tts.ok_or_else(|| missing("tts"))?;
 
-        Ok(Self { stt, stt_node, llm, llm_node, model, system, tts, tts_node, voice })
+        if !tools.is_empty() && !llm.supports_tools() {
+            return Err(Error::Config(format!(
+                "node `{llm_node}` uses provider `{}`, which cannot call tools, but the \
+                 pipeline defines {} of them",
+                llm.name(),
+                tools.len()
+            )));
+        }
+
+        Ok(Self {
+            stt,
+            stt_node,
+            llm,
+            llm_node,
+            model,
+            system,
+            tts,
+            tts_node,
+            voice,
+            tools,
+            max_tool_rounds,
+        })
     }
 }
 
@@ -170,6 +228,7 @@ impl std::fmt::Debug for Plan {
             .field("system", &self.system)
             .field("tts", &format_args!("{} ({})", self.tts_node, self.tts.name()))
             .field("voice", &self.voice)
+            .field("tools", &self.tools.keys().collect::<Vec<_>>())
             .finish()
     }
 }
