@@ -80,12 +80,18 @@ instead of going silent. Turns are capped at `max_tool_rounds` model calls
 cargo run -p conduit-api
 ```
 
-The published container image is `ghcr.io/<owner>/<repo>:latest`, and each
-`main` build also tags it with the Cargo package version, for example
-`ghcr.io/<owner>/<repo>:0.1.0` and `ghcr.io/<owner>/<repo>:v0.1.0`. Builds
-merged to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`
-with matching version tags; that OCI package contains the Linux `conduit-api`
-binary and the ESPHome firmware YAMLs.
+The published container image is `ghcr.io/constructorfleet/conduit:latest`. Every
+`main` build also tags it `sha-<commit>`, so whatever `latest` currently points
+at can always be named by something immutable. The first build of a new Cargo
+package version additionally tags it with that version — for example
+`ghcr.io/constructorfleet/conduit:0.1.0` and
+`ghcr.io/constructorfleet/conduit:v0.1.0` — and later builds of an
+already-released version leave those tags alone, so a version tag names one
+build forever. Bump the version to publish a new one.
+
+Builds merged to `main` publish the same set of tags for
+`ghcr.io/constructorfleet/conduit/conduit-artifacts`; that OCI package contains
+the Linux `conduit-api` binary and the ESPHome firmware YAMLs.
 
 Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.md).
 

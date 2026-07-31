@@ -29,8 +29,30 @@ python3 scripts/workspace_version.py check
   deployment changes.
 - Prerelease versions use SemVer prerelease syntax such as `0.2.0-rc.1`.
 
-Versioned package tags are immutable in intent. `latest` is only a moving
-convenience tag for the newest successful `main` publish.
+## Tag Immutability
+
+Versioned package tags are immutable, and the `Publish` workflow enforces it
+rather than trusting intent. `Publish` runs on every push to `main`, not only on
+version bumps, so it first asks whether the current version has been released:
+
+- If the git tag `v<version>` is already on the remote, this commit is a
+  follow-up to an existing release. Only `latest` and `sha-<commit>` move; the
+  `<version>` and `v<version>` tags are left pointing at the build that first
+  claimed them.
+- If it is not, the version tags are published and `Publish` then creates the
+  git tag `v<version>`, which is what makes every later push take the branch
+  above.
+
+The git tag is the release record. It is created only after both the container
+image and the artifact package publish successfully, so a failed publish can be
+retried by re-running the workflow rather than needing a version bump.
+
+`latest` is a moving convenience tag for the newest successful `main` publish.
+`sha-<commit>` is published on every build so that whatever `latest` points at
+can always be named by something immutable — including for commits that publish
+no version tag at all.
+
+To release a new version, bump the version.
 
 ## Automation
 
@@ -46,11 +68,16 @@ cargo metadata --format-version 1 >/dev/null
 python3 scripts/workspace_version.py check
 ```
 
-After a version bump PR merges, the `Publish` workflow publishes:
+After a version bump PR merges, the `Publish` workflow publishes, for both
+`ghcr.io/constructorfleet/conduit` and
+`ghcr.io/constructorfleet/conduit/conduit-artifacts`:
 
-- `ghcr.io/<owner>/<repo>:latest`
-- `ghcr.io/<owner>/<repo>:<version>`
-- `ghcr.io/<owner>/<repo>:v<version>`
-- `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`
-- `ghcr.io/<owner>/<repo>/conduit-artifacts:<version>`
-- `ghcr.io/<owner>/<repo>/conduit-artifacts:v<version>`
+- `:latest`
+- `:sha-<commit>`
+- `:<version>`
+- `:v<version>`
+
+and then creates the git tag `v<version>`.
+
+Any other push to `main` publishes only `:latest` and `:sha-<commit>`, per
+[Tag Immutability](#tag-immutability).
