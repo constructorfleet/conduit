@@ -161,6 +161,14 @@ impl Plan {
                 tools.len()
             )));
         }
+        let models = llm.models();
+        if !models.is_empty() && !models.iter().any(|served| served == &model) {
+            return Err(Error::Config(format!(
+                "node `{llm_node}` requests model `{model}`, but provider `{}` only serves: {}",
+                llm.name(),
+                models.join(", ")
+            )));
+        }
 
         Ok(Self {
             stt,

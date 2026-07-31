@@ -8,6 +8,7 @@ mod fakes;
 
 use std::time::Duration;
 
+use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
@@ -427,6 +428,47 @@ async fn requires_a_model_on_the_language_model_node() {
     let error = Runner::prepare(&graph, &providers, EventBus::default())
         .expect_err("a model must be configured");
     assert!(matches!(error, Error::Config(message) if message.contains("model")));
+}
+
+#[tokio::test]
+async fn rejects_a_model_the_provider_does_not_serve() {
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![]))
+        .with_llm(FakeLlm::new(vec![]).serving(&["real-model"]))
+        .with_tts(FakeTts::new());
+
+    let error = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect_err("the configured model must be in the provider catalogue");
+    assert!(matches!(
+        error,
+        Error::Config(message)
+            if message.contains("fake-1")
+                && message.contains("fake-llm")
+                && message.contains("real-model")
+    ));
+}
+
+#[tokio::test]
+async fn rejects_an_audio_encoding_a_provider_cannot_handle() {
+    let providers = Providers::new()
+        .with_stt(
+            FakeStt::new(vec![]).accepting_encodings(&[Encoding::PcmS16Le, Encoding::Flac]),
+        )
+        .with_llm(FakeLlm::new(vec![]))
+        .with_tts(FakeTts::new());
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+
+    let error = runner
+        .with_format(AudioFormat { encoding: Encoding::Opus, ..AudioFormat::DEFAULT })
+        .expect_err("the recognizer does not accept opus capture");
+    assert!(matches!(
+        error,
+        Error::Config(message)
+            if message.contains("stt")
+                && message.contains("fake-stt")
+                && message.contains("Opus")
+    ));
 }
 
 #[tokio::test]

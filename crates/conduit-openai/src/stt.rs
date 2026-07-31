@@ -3,6 +3,7 @@
 //! Whisper servers — OpenAI's, Speaches, `whisper.cpp`'s, `faster-whisper` —
 //! all expose this endpoint, so one implementation covers them.
 
+use conduit_core::audio::Encoding;
 use conduit_core::Result;
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::{ChunkStream, Health, Provider};
@@ -97,5 +98,9 @@ impl SpeechToText for OpenAiStt {
         let transcript =
             Transcript { language: body.language, ..Transcript::final_text(body.text.trim()) };
         Ok(Box::pin(futures_util::stream::once(async move { Ok(transcript) })))
+    }
+
+    fn supports_encoding(&self, encoding: Encoding) -> bool {
+        matches!(encoding, Encoding::PcmS16Le | Encoding::PcmF32Le | Encoding::Flac)
     }
 }

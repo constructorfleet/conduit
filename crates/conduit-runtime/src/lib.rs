@@ -201,10 +201,25 @@ impl Runner {
     }
 
     /// Sets the audio format used for capture and synthesis.
-    #[must_use]
-    pub const fn with_format(mut self, format: AudioFormat) -> Self {
+    pub fn with_format(mut self, format: AudioFormat) -> Result<Self> {
+        if !self.plan.stt.supports_encoding(format.encoding) {
+            return Err(conduit_core::Error::Config(format!(
+                "node `{}` uses provider `{}`, which cannot accept {:?} audio",
+                self.plan.stt_node,
+                self.plan.stt.name(),
+                format.encoding
+            )));
+        }
+        if !self.plan.tts.supports_encoding(format.encoding) {
+            return Err(conduit_core::Error::Config(format!(
+                "node `{}` uses provider `{}`, which cannot produce {:?} audio",
+                self.plan.tts_node,
+                self.plan.tts.name(),
+                format.encoding
+            )));
+        }
         self.format = format;
-        self
+        Ok(self)
     }
 
     /// Runs one turn, returning the synthesized reply as it is produced.
