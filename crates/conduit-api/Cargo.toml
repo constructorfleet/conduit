@@ -47,7 +47,7 @@ bytes.workspace = true
 futures-util.workspace = true
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false }
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 tower = { version = "0.5", features = ["util"] }
 
 [lints]
