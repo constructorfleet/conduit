@@ -6,11 +6,11 @@
 //!
 //! There are two listeners, built by [`router`] and [`ops_router`]. The service
 //! router carries everything that touches conversations or configuration and
-//! authenticates every route; the ops router carries `/health` and `/metrics`
-//! and authenticates nothing. That split is deliberate: a liveness probe cannot
-//! present a credential, and a scrape that needs one silently stops working
-//! when the token changes. What protects the ops listener is where it is bound
-//! and what the firewall publishes, not a token.
+//! authenticates every route; the ops router carries `/health`, `/ready`, and
+//! `/metrics` and authenticates nothing. That split is deliberate: probes
+//! cannot present a credential, and a scrape that needs one silently stops
+//! working when the token changes. What protects the ops listener is where it
+//! is bound and what the firewall publishes, not a token.
 
 pub mod auth;
 pub mod config;
@@ -20,13 +20,23 @@ pub mod events;
 pub mod pipelines;
 pub mod state;
 
+use std::time::Duration;
+
+use axum::extract::DefaultBodyLimit;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
 pub use state::AppState;
+
+/// Maximum request body accepted by the service router.
+pub const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The route a device opens to hold a conversation.
 ///
@@ -53,9 +63,12 @@ pub fn router(state: AppState) -> Router {
             "/v1/pipelines/{name}",
             get(pipelines::get).put(pipelines::put).delete(pipelines::delete),
         )
+        .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT_BYTES))
+        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, REQUEST_TIMEOUT))
         // `include_headers(false)` is the default, and stated anyway: spans go
         // to an OTLP collector, and a span carrying `Authorization` would ship
-        // every device's credential to it.
+        // every device's credential to it. Keep this outside the protective
+        // layers so every request still gets a request span.
         .layer(
             TraceLayer::new_for_http().make_span_with(
                 tower_http::trace::DefaultMakeSpan::new().include_headers(false),
@@ -64,7 +77,8 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Builds the ops router: `/health` and `/metrics`, unauthenticated.
+/// Builds the ops router: `/health`, `/ready`, and `/metrics`,
+/// unauthenticated.
 ///
 /// Bound to its own port so an operator can publish the service port to the
 /// network and keep this one on the host. It exposes real operational
@@ -73,6 +87,7 @@ pub fn router(state: AppState) -> Router {
 pub fn ops_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/ready", get(ready))
         .route("/metrics", get(metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -96,4 +111,18 @@ async fn health() -> axum::Json<serde_json::Value> {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+/// Readiness probe that verifies the pipeline store can answer.
+async fn ready(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    state.pipeline_names().await.map_err(|error| {
+        ApiError::unavailable(format!("pipeline store is not ready: {error}"))
+    })?;
+
+    Ok(axum::Json(serde_json::json!({
+        "status": "ready",
+        "version": env!("CARGO_PKG_VERSION"),
+    })))
 }

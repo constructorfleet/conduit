@@ -5,6 +5,8 @@ use axum::http::{Request, StatusCode};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::Result;
+use conduit_provider::storage::PipelineStore;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -21,6 +23,19 @@ fn valid_graph() -> PipelineGraph {
 
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
     let response = router(state.clone()).oneshot(request).await.expect("router responds");
+    let status = response.status();
+    let bytes = response.into_body().collect().await.expect("body").to_bytes();
+    let json = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("json body")
+    };
+    (status, json)
+}
+
+async fn ops_call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+    let response =
+        conduit_api::ops_router(state.clone()).oneshot(request).await.expect("router responds");
     let status = response.status();
     let bytes = response.into_body().collect().await.expect("body").to_bytes();
     let json = if bytes.is_empty() {
@@ -55,6 +70,28 @@ async fn health_reports_ok() {
     let bytes = response.into_body().collect().await.expect("body").to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
     assert_eq!(body["status"], "ok");
+}
+
+#[tokio::test]
+async fn readiness_reports_store_health() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = ops_call(&state, get("/ready")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn readiness_fails_when_the_store_cannot_be_read() {
+    let state = AppState::with_store(EventBus::default(), std::sync::Arc::new(BrokenStore));
+
+    let (status, body) = ops_call(&state, get("/ready")).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "unavailable");
+    assert!(body["detail"].as_str().expect("detail").contains("pipeline store"));
 }
 
 #[tokio::test]
@@ -95,6 +132,39 @@ async fn invalid_graphs_are_rejected_and_not_stored() {
 
     let (status, _) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn malformed_json_uses_the_api_error_shape() {
+    let state = AppState::new(EventBus::default());
+    let request = Request::builder()
+        .method("PUT")
+        .uri("/v1/pipelines/kitchen")
+        .header("content-type", "application/json")
+        .body(Body::from("{"))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "bad_request");
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("JSON")));
+}
+
+#[tokio::test]
+async fn pipeline_writes_have_a_request_body_limit() {
+    let state = AppState::new(EventBus::default());
+    let request = Request::builder()
+        .method("PUT")
+        .uri("/v1/pipelines/kitchen")
+        .header("content-type", "application/json")
+        .body(Body::from(vec![b' '; conduit_api::REQUEST_BODY_LIMIT_BYTES + 1]))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body["error"], "payload_too_large");
 }
 
 #[tokio::test]
@@ -188,4 +258,26 @@ async fn a_name_the_store_cannot_use_is_rejected() {
     let (status, body) = call(&state, request).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"], "invalid");
+}
+
+#[derive(Debug)]
+struct BrokenStore;
+
+#[async_trait::async_trait]
+impl PipelineStore for BrokenStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        Err(conduit_core::Error::Config("pipeline store is offline".to_owned()))
+    }
+
+    async fn get(&self, _name: &str) -> Result<Option<PipelineGraph>> {
+        unreachable!("readiness only lists names")
+    }
+
+    async fn put(&self, _name: &str, _graph: PipelineGraph) -> Result<bool> {
+        unreachable!("readiness only lists names")
+    }
+
+    async fn remove(&self, _name: &str) -> Result<bool> {
+        unreachable!("readiness only lists names")
+    }
 }

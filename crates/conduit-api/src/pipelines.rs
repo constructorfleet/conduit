@@ -7,6 +7,7 @@ use conduit_core::graph::PipelineGraph;
 use serde::Serialize;
 
 use crate::auth::ManagementCaller;
+use crate::error::JsonBody;
 use crate::{ApiError, AppState};
 
 /// A stored pipeline and its execution order.
@@ -72,7 +73,7 @@ pub async fn put(
     _caller: ManagementCaller,
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(graph): Json<PipelineGraph>,
+    JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<(StatusCode, Json<PipelineView>), ApiError> {
     let view = view(graph.clone())?;
     let replaced = state.put_pipeline(&name, graph).await.map_err(store_failure)?;
@@ -106,7 +107,7 @@ pub async fn delete(
 /// Returns 422 if the graph fails validation.
 pub async fn validate(
     _caller: ManagementCaller,
-    Json(graph): Json<PipelineGraph>,
+    JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<Json<PipelineView>, ApiError> {
     view(graph).map(Json)
 }
