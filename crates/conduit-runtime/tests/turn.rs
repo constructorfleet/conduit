@@ -89,11 +89,19 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
     // it cannot be known complete until the model finishes — hence synthesis
     // after LlmFinished. When a boundary arrives mid-stream, speech starts
     // earlier; see `speech_starts_before_the_model_finishes`.
+    //
+    // Two chunks in, so two AudioChunkReceived: the capture events describe the
+    // stream chunk by chunk rather than summarizing it once at the end.
     let events = drain(&mut subscription).await;
     assert_eq!(
         names(&events),
         [
             "ConversationStarted",
+            "TurnStarted",
+            "AudioStarted",
+            "AudioChunkReceived",
+            "AudioChunkReceived",
+            "AudioFinished",
             "SpeechPartial",
             "SpeechFinal",
             "LlmRequestStarted",

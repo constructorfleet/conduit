@@ -11,7 +11,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Event, FinishReason};
-use conduit_core::id::{ConversationId, SpeakerId};
+use conduit_core::id::{ConversationId, SpeakerId, TurnId};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
@@ -53,6 +53,14 @@ pub struct Turn {
     speaker: Option<SpeakerId>,
     /// How a client asks this turn to stop talking.
     stop: Stop,
+    /// This turn within its conversation.
+    ///
+    /// One per `Turn` because the runtime holds one turn per conversation
+    /// today: a socket carries a single utterance and its reply. When a
+    /// conversation spans several, the id changes per turn while the
+    /// conversation id does not — which is the distinction `TurnStarted`
+    /// exists to report.
+    turn: TurnId,
     /// Chunk counter, so the caller sees one monotonic stream even though each
     /// synthesis request numbers its chunks from zero.
     sequence: u64,
@@ -73,11 +81,12 @@ impl Turn {
     ) -> Self {
         Self {
             plan,
-            emitter: Emitter::new(bus),
+            emitter: Emitter::new(bus, format),
             format,
             output,
             speaker: None,
             stop,
+            turn: TurnId::new(),
             sequence: 0,
             speaking: false,
             spoken_ms: 0,
@@ -118,6 +127,10 @@ impl Turn {
     /// left to return an error to.
     pub async fn run(mut self, audio: ChunkStream<AudioChunk>) {
         self.emitter.emit(Event::ConversationStarted);
+        // After the conversation, before anything a turn does: a subscriber
+        // reading in order sees the conversation open, then the turn it is
+        // about to spend, and can attribute everything following to that turn.
+        self.emitter.emit(Event::TurnStarted { turn: self.turn });
 
         // Raced against the whole turn rather than checked between stages, so a
         // stop lands during whichever await is in progress — most usefully mid
@@ -150,6 +163,11 @@ impl Turn {
 
     /// Transcribes the utterance, returning the final text.
     async fn listen(&mut self, audio: ChunkStream<AudioChunk>) -> Option<String> {
+        // Reported from here rather than by whoever produced the audio, because
+        // this is the last place that sees every chunk regardless of transport:
+        // a socket, a file, or a test all reach the recognizer through here.
+        let audio = self.emitter.observe_capture(audio);
+
         let options = TranscribeOptions { format: self.format, ..TranscribeOptions::default() };
         let mut transcripts = match self.plan.stt.transcribe(audio, options).await {
             Ok(transcripts) => transcripts,

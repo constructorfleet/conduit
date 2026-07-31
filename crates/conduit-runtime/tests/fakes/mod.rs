@@ -35,6 +35,34 @@ pub fn audio_of(chunks: &[&str]) -> ChunkStream<AudioChunk> {
     Box::pin(futures_util::stream::iter(chunks))
 }
 
+/// Builds an audio stream of `count` chunks of `bytes` zeroed samples each.
+///
+/// Payload size is what the capture events report, so a test asserting on a
+/// duration needs to control it rather than count characters in a string.
+pub fn audio_of_size(count: usize, bytes: usize) -> ChunkStream<AudioChunk> {
+    let chunks: Vec<_> = (0..count)
+        .map(|sequence| {
+            Ok(AudioChunk { sequence: sequence as u64, data: Bytes::from(vec![0_u8; bytes]) })
+        })
+        .collect();
+    Box::pin(futures_util::stream::iter(chunks))
+}
+
+/// Builds an audio stream that yields `before` chunks and then fails.
+///
+/// A microphone can stop mid-utterance, and what the capture stage reports in
+/// that case is the interesting part: an operator needs to see capture end
+/// rather than watch a stream that simply stops describing itself.
+pub fn audio_failing_after(before: usize) -> ChunkStream<AudioChunk> {
+    let mut items: Vec<Result<AudioChunk>> = (0..before)
+        .map(|sequence| {
+            Ok(AudioChunk { sequence: sequence as u64, data: Bytes::from_static(b"aa") })
+        })
+        .collect();
+    items.push(Err(Error::Config("the microphone stopped".to_owned())));
+    Box::pin(futures_util::stream::iter(items))
+}
+
 /// Wraps canned items into a stream.
 fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
     Box::pin(futures_util::stream::iter(items.into_iter().map(Ok)))
@@ -45,15 +73,27 @@ fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
 pub struct FakeStt {
     transcripts: Vec<Transcript>,
     encodings: Vec<Encoding>,
+    /// Whether being handed no audio at all is a test failure.
+    demands_audio: bool,
 }
 
 impl FakeStt {
     pub fn new(transcripts: Vec<Transcript>) -> Self {
-        Self { transcripts, encodings: Vec::new() }
+        Self { transcripts, encodings: Vec::new(), demands_audio: true }
     }
 
     pub fn accepting_encodings(mut self, encodings: &[Encoding]) -> Self {
         self.encodings = encodings.to_vec();
+        self
+    }
+
+    /// Stops asserting that audio arrived.
+    ///
+    /// The assertion is normally what catches a runtime that never forwards
+    /// what it captured, so this is only for the tests whose subject *is* an
+    /// utterance with no audio in it.
+    pub fn accepting_silence(mut self) -> Self {
+        self.demands_audio = false;
         self
     }
 }
@@ -73,7 +113,7 @@ impl SpeechToText for FakeStt {
     ) -> Result<ChunkStream<Transcript>> {
         // Drain the input so a runtime that never forwards audio fails here.
         let received = audio.count().await;
-        assert!(received > 0, "the recognizer was given no audio");
+        assert!(received > 0 || !self.demands_audio, "the recognizer was given no audio");
         Ok(stream_of(self.transcripts.clone()))
     }
 

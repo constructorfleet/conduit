@@ -207,6 +207,45 @@ async fn unknown_stage_filters_are_rejected() {
     assert!(body["detail"].as_str().expect("detail").contains("telepathy"));
 }
 
+#[tokio::test]
+async fn subscribing_to_a_stage_nothing_publishes_is_refused() {
+    // `wake_word` is a real stage name that parses, and nothing emits it — so
+    // this used to be a 200 followed by silence for as long as the client was
+    // willing to wait, which is indistinguishable from a broken pipeline.
+    let state = AppState::new(EventBus::default());
+    let (status, body) = call(&state, get("/v1/events?stages=wake_word")).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = body["detail"].as_str().expect("detail");
+    assert!(detail.contains("wake_word"), "the message must name the stage: {detail}");
+    assert!(
+        detail.contains("reasoning") && detail.contains("capture"),
+        "and say what does carry traffic, including the newly emitting capture: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn one_silent_stage_refuses_the_whole_subscription() {
+    // Dropping just the silent stage would hand back a stream that quietly
+    // means something narrower than what was asked for.
+    let state = AppState::new(EventBus::default());
+    let (status, body) = call(&state, get("/v1/events?stages=reasoning,identity")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().expect("detail").contains("identity"));
+}
+
+#[tokio::test]
+async fn the_capture_stage_can_now_be_subscribed_to() {
+    // The other half of the fix: capture has an emitter, so asking for it must
+    // succeed rather than be refused along with the genuinely silent stages.
+    let state = AppState::new(EventBus::default());
+    let response = router(state)
+        .oneshot(get("/v1/events?stages=capture,conversation"))
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 /// A directory that cleans itself up.
 struct TempDir(std::path::PathBuf);
 
