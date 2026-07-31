@@ -1,3 +1,7 @@
+/*
+ * Reference scaffold only. Not compiled into any firmware image; the shipping
+ * Voice PE firmware is firmware/esphome/conduit-voicepe.yaml. See README.md.
+ */
 #ifndef CONDUIT_VOICEPE_CONFIG_H
 #define CONDUIT_VOICEPE_CONFIG_H
 

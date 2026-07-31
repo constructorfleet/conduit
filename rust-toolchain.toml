@@ -1,0 +1,13 @@
+# The toolchain every build uses, pinned so that local builds, CI, and the
+# container image all compile with the same rustc. An unpinned `stable` means a
+# clippy or rustfmt release can break the build with no commit of ours, and it
+# means a failure on one machine cannot be reproduced on another.
+#
+# Bump this deliberately, in its own commit, so the diff records which compiler
+# the project moved to. `rust-version` in Cargo.toml is the *floor* Conduit
+# supports and is verified separately by the `msrv` CI job; this is the *ceiling*
+# we develop against.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

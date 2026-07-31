@@ -104,6 +104,15 @@ impl Counter {
         self.add(labels, 1);
     }
 
+    /// Ensures `labels` exists at zero.
+    ///
+    /// A series that has never been touched renders nothing at all, which reads
+    /// as "no such metric" rather than "nothing has happened". Declaring the
+    /// series up front lets a dashboard distinguish the two.
+    pub fn init(&self, labels: Labels) {
+        self.add(labels, 0);
+    }
+
     /// Adds `amount` to the series identified by `labels`.
     pub fn add(&self, labels: Labels, amount: u64) {
         let mut series = self.series.lock().unwrap_or_else(PoisonError::into_inner);
@@ -152,6 +161,15 @@ impl Gauge {
     /// system rather than a useful signal, so the floor is deliberate.
     pub fn decrement(&self, labels: Labels) {
         self.add(labels, -1);
+    }
+
+    /// Replaces the value of the series identified by `labels`.
+    ///
+    /// Preferable to paired increments wherever the true value is already known
+    /// — a gauge derived from state cannot drift out of step with it.
+    pub fn set(&self, labels: Labels, value: i64) {
+        let mut series = self.series.lock().unwrap_or_else(PoisonError::into_inner);
+        series.insert(labels, value.max(0));
     }
 
     /// Adds `amount`, clamped at zero.
@@ -355,6 +373,30 @@ mod tests {
         gauge.decrement(Vec::new());
         assert_eq!(gauge.value(&Vec::new()), 1);
         assert!(registry.render().contains("# TYPE conduit_active gauge"));
+    }
+
+    #[test]
+    fn a_gauge_can_be_set_from_known_state() {
+        // Deriving a gauge from the truth beats hoping increments and
+        // decrements stay paired.
+        let registry = Registry::new();
+        let gauge = registry.gauge("conduit_active", "Active conversations.");
+        gauge.increment(Vec::new());
+        gauge.set(Vec::new(), 7);
+        assert_eq!(gauge.value(&Vec::new()), 7);
+        gauge.set(Vec::new(), -1);
+        assert_eq!(gauge.value(&Vec::new()), 0);
+    }
+
+    #[test]
+    fn a_declared_counter_renders_a_zero() {
+        // "Nothing has gone wrong" and "this metric does not exist" must not
+        // look the same to a scraper.
+        let registry = Registry::new();
+        let counter = registry.counter("conduit_events_dropped_total", "Drops.");
+        counter.init(labels(&[("subscriber", "metrics")]));
+        let output = registry.render();
+        assert!(output.contains("conduit_events_dropped_total{subscriber=\"metrics\"} 0"));
     }
 
     #[test]

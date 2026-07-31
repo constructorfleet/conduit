@@ -1,0 +1,65 @@
+version: 2
+
+# Dependency bumps arrive as pull requests so they go through the same CI gates
+# as any other change, instead of arriving as a surprise during an unrelated
+# release. The audit job catches advisories in what we already ship; this keeps
+# the lockfile from drifting so far behind that upgrading becomes its own
+# project.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      # Matches the Conventional Commits style the repository already uses.
+      prefix: "chore"
+      prefix-development: "chore"
+      include: scope
+    groups:
+      # One pull request per ecosystem cluster. These crates release in lockstep
+      # and upgrading them one at a time produces PRs that cannot compile.
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+          - "tracing-opentelemetry"
+      tokio-and-tower:
+        patterns:
+          - "tokio*"
+          - "tower*"
+          - "axum*"
+          - "hyper*"
+      patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    # Keeps the `rust:` and `debian:` base images in the Dockerfile current, so
+    # a stale base image is a reviewable pull request rather than a finding in a
+    # published container.
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: scope

@@ -1,3 +1,12 @@
+/*
+ * Reference sketch of the Conduit conversation wire contract. Not compiled into
+ * any firmware image: the shipping ESPHome firmware uses its own copy,
+ * firmware/esphome/components/conduit_voice/conduit_converse_embedded.h.
+ * Only firmware/tests/conduit_converse_test.c consumes this header.
+ * Canonical protocol definitions live in crates/conduit-core/src/device.rs;
+ * agreement between them is maintained by hand and is not checked by CI.
+ * See firmware/README.md.
+ */
 #ifndef CONDUIT_CONVERSE_H
 #define CONDUIT_CONVERSE_H
 

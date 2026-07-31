@@ -1,14 +1,20 @@
-//! Both backends must behave the same, or swapping them changes behaviour.
+//! The memory and file backends against the shared contract.
 //!
-//! The shared cases run against each; the rest cover what is specific to
-//! keeping pipelines on disk.
+//! All three backends must behave the same, or swapping them changes
+//! behaviour. The shared cases live in [`conformance`] and run against every
+//! backend, including PostgreSQL in `postgres.rs`; the rest of this file covers
+//! what is specific to keeping pipelines on disk.
+
+mod conformance;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::PipelineGraph;
 use conduit_provider::storage::PipelineStore;
 use conduit_store::{FileStore, MemoryStore};
+
+use conformance::{behaves_like_a_store, graph, UNUSABLE_NAMES};
 
 /// A directory that cleans itself up.
 struct TempDir(PathBuf);
@@ -34,42 +40,6 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-fn graph(name: &str) -> PipelineGraph {
-    PipelineGraph::new(name)
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
-}
-
-/// The behaviour every backend owes its callers.
-async fn behaves_like_a_store(store: Arc<dyn PipelineStore>) {
-    assert!(store.list().await.expect("lists").is_empty());
-    assert!(store.get("missing").await.expect("gets").is_none());
-    assert!(
-        !store.remove("missing").await.expect("removes"),
-        "removing nothing is not an error"
-    );
-
-    assert!(!store.put("kitchen", graph("kitchen")).await.expect("stores"), "newly created");
-    assert!(store.put("kitchen", graph("kitchen")).await.expect("stores"), "replaced");
-
-    let stored = store.get("kitchen").await.expect("gets").expect("present");
-    assert_eq!(stored, graph("kitchen"));
-
-    store.put("bedroom", graph("bedroom")).await.expect("stores");
-    assert_eq!(store.list().await.expect("lists"), ["bedroom", "kitchen"], "sorted");
-
-    assert!(store.remove("kitchen").await.expect("removes"));
-    assert_eq!(store.list().await.expect("lists"), ["bedroom"]);
-    assert!(store.get("kitchen").await.expect("gets").is_none());
-
-    // A name that could escape the store must be refused, whatever the
-    // backend does with it.
-    assert!(store.put("../escape", graph("escape")).await.is_err());
 }
 
 #[tokio::test]
@@ -159,16 +129,35 @@ async fn a_failed_write_leaves_the_previous_definition_intact() {
 }
 
 #[tokio::test]
+async fn an_orphaned_temporary_file_is_not_a_pipeline() {
+    // A crash between the write and the rename leaves `kitchen.json.tmp`
+    // behind. It is a half-written file, so it must never be listed, served,
+    // or removable as though it were the definition itself.
+    let directory = TempDir::new("orphan");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    tokio::fs::write(directory.path().join("kitchen.json.tmp"), "{not json")
+        .await
+        .expect("writes the leftover");
+
+    assert!(store.list().await.expect("lists").is_empty(), "a leftover is not a pipeline");
+    assert!(store.get("kitchen").await.expect("gets").is_none(), "nor is it servable");
+    assert!(!store.remove("kitchen").await.expect("removes"), "nor removable");
+
+    // And it does not block the write it was left over from.
+    store.put("kitchen", graph("kitchen")).await.expect("stores");
+    assert_eq!(store.list().await.expect("lists"), ["kitchen"]);
+}
+
+#[tokio::test]
 async fn a_traversing_name_cannot_reach_outside_the_directory() {
     let directory = TempDir::new("traversal");
     let store = FileStore::open(directory.path()).await.expect("opens");
 
-    for name in ["../escape", "..", "a/b", "a\\b"] {
-        assert!(store.put(name, graph("escape")).await.is_err(), "{name} must be refused");
-        assert!(store.get(name).await.is_err(), "{name} must be refused");
-        assert!(store.remove(name).await.is_err(), "{name} must be refused");
+    for name in UNUSABLE_NAMES {
+        assert!(store.put(name, graph("escape")).await.is_err(), "{name:?} must be refused");
     }
 
     let outside = directory.path().parent().expect("a parent").join("escape.json");
     assert!(!outside.exists(), "nothing may be written outside the store");
+    assert!(store.list().await.expect("lists").is_empty(), "nothing was written inside it");
 }

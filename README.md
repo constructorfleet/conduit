@@ -33,13 +33,16 @@ Three rules explain most of the code.
 
 **Everything is an event.** Stages publish to a bus rather than calling each
 other. A publisher never blocks on a subscriber — a slow event viewer drops
-events instead of stalling the audio path, and drops are counted so they stay
-visible.
+events instead of stalling the audio path. A subscription counts what it lost,
+and each subscriber exports its own losses, so a consumer that falls behind
+shows up on a dashboard rather than only in the logs.
 
 **A pipeline is data.** [`PipelineGraph`](crates/conduit-core/src/graph.rs) is a
 serializable list of nodes and edges. The API validates and stores it, the UI
-edits it, the runtime walks it. None of that requires knowing what a `whisper`
-node is.
+edits it, and the runtime resolves it into providers. None of that requires
+knowing what a `whisper` node is — though the runtime's reading of a graph is
+still shallower than the graph model implies, which
+[Known gaps](#known-gaps) spells out.
 
 **Providers are interfaces, not special cases.** Adding ElevenLabs means
 implementing [`TextToSpeech`](crates/conduit-provider/src/tts.rs) and registering
@@ -80,12 +83,18 @@ instead of going silent. Turns are capped at `max_tool_rounds` model calls
 cargo run -p conduit-api
 ```
 
-The published container image is `ghcr.io/<owner>/<repo>:latest`, and each
-`main` build also tags it with the Cargo package version, for example
-`ghcr.io/<owner>/<repo>:0.1.0` and `ghcr.io/<owner>/<repo>:v0.1.0`. Builds
-merged to `main` also publish `ghcr.io/<owner>/<repo>/conduit-artifacts:latest`
-with matching version tags; that OCI package contains the Linux `conduit-api`
-binary and the ESPHome firmware YAMLs.
+The published container image is `ghcr.io/constructorfleet/conduit:latest`. Every
+`main` build also tags it `sha-<commit>`, so whatever `latest` currently points
+at can always be named by something immutable. The first build of a new Cargo
+package version additionally tags it with that version — for example
+`ghcr.io/constructorfleet/conduit:0.1.0` and
+`ghcr.io/constructorfleet/conduit:v0.1.0` — and later builds of an
+already-released version leave those tags alone, so a version tag names one
+build forever. Bump the version to publish a new one.
+
+Builds merged to `main` publish the same set of tags for
+`ghcr.io/constructorfleet/conduit/conduit-artifacts`; that OCI package contains
+the Linux `conduit-api` binary and the ESPHome firmware YAMLs.
 
 Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.md).
 
@@ -217,11 +226,19 @@ audio path never pays for instrumentation it does not know about.
 | --- | --- |
 | `conduit_time_to_first_audio_seconds` | How long before the assistant *started* speaking — the latency a person actually feels |
 | `conduit_turn_duration_seconds` | How long a whole turn took, by outcome |
-| `conduit_conversations_total` | Turns by outcome: completed, barge-in, error, timeout |
+| `conduit_conversations_total` | Turns by outcome: completed, barge-in, user-requested, error |
 | `conduit_conversations_active` | Turns in progress right now |
-| `conduit_tool_calls_total`, `conduit_tool_duration_seconds` | Tool volume and cost |
+| `conduit_tool_calls_total`, `conduit_tool_duration_seconds` | Tool volume and cost, by outcome: `completed`, `failed`, `awaiting_confirmation` |
+| `conduit_tool_calls_requested_total` | Calls the model asked for; minus the outcomes above, how many are still in flight |
 | `conduit_stage_failures_total` | Failures by node, and whether the pipeline recovered |
 | `conduit_llm_tokens_total` | Token usage by direction |
+| `conduit_events_total` | Event volume by stage — the shape of traffic, and whether a stage has gone quiet |
+| `conduit_conversations_forgotten_total` | Turns evicted from tracking before they ended, so a leak of half-finished turns is visible rather than silently skewing the histograms |
+| `conduit_events_dropped_total` | Events a subscriber lost to lag, labelled with which subscriber — a consumer that cannot keep up |
+
+The collector can also label a cancellation `idle_timeout`, but nothing in the
+runtime constructs that reason yet, so the label does not appear on a real
+scrape.
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to
 export HTTP and runtime spans to an OpenTelemetry collector. Without either
@@ -236,7 +253,7 @@ this repository, and it applies to human and agent contributors alike.
 These four gates are what CI runs, and what "done" requires:
 
 ```sh
-cargo fmt --all
+cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo audit
@@ -271,8 +288,10 @@ OpenAi::new(OpenAiConfig {
 
 A configuration describes one *server*, not one capability, so a host serving
 all three is described once and used three times. Because the registry keys on
-the provider name, differently configured servers also coexist in one pipeline:
-a local model for most turns and a hosted one for the hard questions.
+the provider name, differently configured servers can be registered side by
+side — a local model and a hosted one — though today only one of them can be
+reached from a given pipeline, because the runtime executes a single `llm` node
+per turn.
 
 Two honest limits. Transcription takes a complete recording rather than a
 stream, so `OpenAiStt` buffers the utterance and reports no partial
@@ -288,8 +307,49 @@ FLAC.
 
 ## Known gaps
 
-Tracked here rather than as TODOs in the source.
+Tracked here rather than as TODOs in the source, because a limit someone can
+read is cheaper than a limit someone discovers in production.
 
-- **Wake word, speaker identification, and memory are graph-only.** The graph
-  model describes those nodes, but the runtime still refuses them until their
-  provider contracts exist.
+**There is no authentication, authorization, or rate limiting on the API.** The
+only middleware on the router is request tracing. Anyone who can reach the port
+can `PUT` or `DELETE` a pipeline, open a conversation socket, and read
+transcripts and tool arguments off `/v1/events`. That is a deployment
+constraint, not a preference: bind Conduit to a trusted network, or put it
+behind a proxy that authenticates, until the API has a notion of identity of its
+own.
+
+**The runtime does not honour edges.** It resolves a graph by looking at each
+node's `kind` and nothing else, then runs speech recognition, then the model,
+then synthesis, in that fixed order. A graph wired `tts -> llm -> stt` behaves
+exactly like a correctly wired one, and a graph with no edges at all is
+accepted — validation checks that the *topology* is sound, not that it describes
+the order the runtime will use. Treat edges as documentation of intent for now.
+
+**One node of each kind, and `router` nodes do nothing.** A second `llm` or
+`tts` node is rejected as a duplicate, so the two-model arrangement described
+under [Providers](#providers) cannot yet be expressed as a graph. A `router`
+node is accepted and then ignored, which is worse than refusing it; it will be
+refused or implemented rather than left silent.
+
+**Nothing times out.** A speech or model provider that accepts a request and
+never answers stalls the turn for as long as the client stays connected. The
+bounded output channel bounds memory, not time.
+
+**Barge-in is inferred, not requested.** `Command` has exactly one variant,
+`end`, so a device has no way to say "stop talking". The `barge_in` cancellation
+reason is published when a write to the output channel fails — which means the
+client went away, whether it interrupted or simply disconnected. Read that
+metric as "the listener left", not "the user spoke over the assistant".
+
+**Wake word, speaker identification, and memory are graph-only.** The graph
+model describes those nodes, but the runtime still refuses them until their
+provider contracts exist.
+
+**Several event variants have no emitter yet.** `WakeWordDetected`,
+`WakeWordRejected`, `AudioStarted`, `AudioChunkReceived`, `AudioFinished`,
+`SpeakerIdentified`, and `TurnStarted` are part of the vocabulary but nothing
+publishes them, so `/v1/events?stages=capture` is a valid subscription to a
+permanently silent stream. Nothing populates an envelope's device either, so
+`?device=` matches nothing. The stages that do carry traffic today are
+`transcription`, `conversation`, `reasoning`, `tools`, `synthesis`, and
+`diagnostics`.

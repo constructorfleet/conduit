@@ -4,3 +4,8 @@
 .env
 __pycache__/
 .venv
+/.cargo/registry
+
+# ESPHome build output and credentials (Wi-Fi password, API encryption key).
+.esphome/
+secrets.yaml

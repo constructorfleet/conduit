@@ -22,19 +22,49 @@ Wire contract:
   text frames.
 
 The canonical Rust definitions live in
-`crates/conduit-core/src/device.rs`. The files under `sat1/` and `voicepe/`
-are board integration targets for this protocol, not wrappers around any other
-assistant protocol.
+`crates/conduit-core/src/device.rs`.
 
-## Shared Helpers
+The shipping firmware for both supported boards is the ESPHome build described
+under [ESPHome Board Targets](#esphome-board-targets). Start there.
 
-`common/conduit_converse.h` provides:
+## Protocol Parity Is Not Enforced
+
+Three hand-maintained copies of this wire contract exist:
+
+- `crates/conduit-core/src/device.rs` (canonical, Rust),
+- `esphome/components/conduit_voice/conduit_converse_embedded.h` (shipped
+  firmware),
+- `common/conduit_converse.h` (reference C header, see below).
+
+They currently agree on all four message types (`end`, `started`, `done`,
+`failed`), on binary-versus-text framing, and on 16 kHz mono signed 16-bit
+little-endian PCM. Nothing in CI checks that they still agree: no test compares
+the C/C++ constants against `device.rs`, and `firmware/tests/` only asserts
+that specific symbols exist in the embedded header. A protocol change made in
+`device.rs` alone will not fail any build. Update all three together, by hand,
+until a real parity check exists.
+
+## Reference Scaffold (Not Built, Not Flashed)
+
+`common/`, `sat1/`, and `voicepe/` are a plain-C reference sketch of the wire
+contract. They predate the ESPHome component and **no firmware build compiles
+them**. Nothing under `esphome/` includes them; their only consumer is
+`tests/conduit_converse_test.c`, which is why they are kept rather than
+deleted.
+
+Do not add board drivers here expecting them to ship. Real device behavior
+lives in `esphome/components/conduit_voice/`.
+
+`common/conduit_converse.h` provides, for reference:
 
 - the required audio format constants,
 - `CONDUIT_CONVERSE_END_JSON`,
 - pipeline-name validation matching the API storage rules,
 - `/v1/pipelines/{pipeline}/converse` path construction,
 - parsing for `started`, `done`, and `failed` notices.
+
+The shipped firmware does not use any of it. It uses its own copy,
+`esphome/components/conduit_voice/conduit_converse_embedded.h`.
 
 Run the firmware helper tests with:
 
@@ -77,9 +107,19 @@ Set the substitutions before flashing:
 - `wake_debug_event_url`: debug ingest HTTP wake endpoint, for example
   `http://192.168.1.10:8000/wake_event`. Empty disables wake-event posting.
 
+Both targets also read `wifi_ssid`, `wifi_password`, and `api_encryption_key`
+from an ESPHome `secrets.yaml` you create next to the YAML. That file holds
+credentials and is git-ignored, along with the `.esphome/` build directory.
+Never commit either.
+
 The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
 reply frames to the board speaker.
+
+LED and display feedback is not wired up on either target: neither YAML defines
+a `light:` block, and the vendored `esphome/components/satellite1/light/`
+`led_ring` platform is not referenced by any target. See the per-board notes in
+`sat1/README.md` and `voicepe/README.md`.
 
 Satellite1 also loads local `pcm5122` and `satellite1` component overlays from
 `esphome/components/`. These are copied from the pinned FutureProofHomes ref

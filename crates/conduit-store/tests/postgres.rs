@@ -12,11 +12,14 @@
 
 #![cfg(feature = "postgres")]
 
+mod conformance;
+
 use std::sync::Arc;
 
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_provider::storage::PipelineStore;
 use conduit_store::PostgresStore;
+
+use conformance::{behaves_like_a_store, graph, UNUSABLE_NAMES};
 
 /// The database to test against, if one was named.
 fn base_url() -> Option<String> {
@@ -68,37 +71,13 @@ macro_rules! store_or_skip {
     };
 }
 
-fn graph(name: &str) -> PipelineGraph {
-    PipelineGraph::new(name)
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
-}
-
 #[tokio::test]
 async fn it_behaves_like_a_store() {
-    // The same expectations the file and memory backends meet, so swapping
-    // backends cannot change behaviour.
+    // Literally the same function the file and memory backends are run
+    // through, not a copy of it: a copy is how this backend came to enforce
+    // one rule fewer than the others without any test noticing.
     let store: Arc<dyn PipelineStore> = Arc::new(store_or_skip!("contract"));
-
-    assert!(store.list().await.expect("lists").is_empty());
-    assert!(store.get("missing").await.expect("gets").is_none());
-    assert!(!store.remove("missing").await.expect("removes"));
-
-    assert!(!store.put("kitchen", graph("kitchen")).await.expect("stores"), "newly created");
-    assert!(store.put("kitchen", graph("kitchen")).await.expect("stores"), "replaced");
-
-    assert_eq!(store.get("kitchen").await.expect("gets"), Some(graph("kitchen")));
-
-    store.put("bedroom", graph("bedroom")).await.expect("stores");
-    assert_eq!(store.list().await.expect("lists"), ["bedroom", "kitchen"], "sorted");
-
-    assert!(store.remove("kitchen").await.expect("removes"));
-    assert_eq!(store.list().await.expect("lists"), ["bedroom"]);
-
-    assert!(store.put("../escape", graph("escape")).await.is_err());
+    behaves_like_a_store(store).await;
 }
 
 #[tokio::test]
@@ -154,6 +133,27 @@ async fn a_concurrent_write_does_not_lose_an_update() {
     assert_eq!(created, 1, "exactly one writer may report having created the row");
     assert_eq!(store.list().await.expect("lists"), ["contended"]);
     assert!(store.get("contended").await.expect("gets").is_some());
+}
+
+#[tokio::test]
+async fn a_row_with_an_unusable_name_is_not_listed() {
+    // The table predates the rule and is writable by hand, so a name `put`
+    // would refuse can still be sitting in it. `list` feeds the API, whose
+    // callers will turn each name straight back into a request — so it must
+    // only ever return names the store would answer for. The file backend
+    // filters its directory for exactly this reason.
+    let store = store_or_skip!("unusable_names");
+    for name in UNUSABLE_NAMES {
+        sqlx::query("INSERT INTO pipelines (name, graph) VALUES ($1, $2)")
+            .bind(name)
+            .bind(serde_json::to_value(graph(name)).expect("encodes"))
+            .execute(store.pool())
+            .await
+            .expect("inserts by hand");
+    }
+    store.put("kitchen", graph("kitchen")).await.expect("stores");
+
+    assert_eq!(store.list().await.expect("lists"), ["kitchen"]);
 }
 
 #[tokio::test]

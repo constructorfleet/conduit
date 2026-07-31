@@ -4,73 +4,83 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   REGISTRY: ghcr.io
 
 jobs:
+  # Decides *what* this commit is allowed to publish. VERSIONING.md:32 makes
+  # `<version>` and `v<version>` immutable in intent and `latest` the only
+  # moving tag, but this workflow runs on every push to main, so re-pushing the
+  # version tags unconditionally overwrote a released tag on every unrelated
+  # commit.
+  #
+  # A pushed git tag is the release record: it exists exactly once per version
+  # and cannot be recreated by accident. If `v<version>` is already on the
+  # remote, this commit is a follow-up to an existing release and may only move
+  # `latest`.
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      released: ${{ steps.released.outputs.released }}
+      revision: ${{ steps.revision.outputs.short }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - id: version
         run: python3 scripts/workspace_version.py check
-
-  check:
-    runs-on: ubuntu-latest
-    # Keep publishing behind the same checks as CI.
-    services:
-      postgres:
-        image: postgres:16
+      - id: released
         env:
-          POSTGRES_USER: conduit
-          POSTGRES_PASSWORD: conduit
-          POSTGRES_DB: conduit_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      CONDUIT_TEST_POSTGRES_URL: postgres://conduit:conduit@localhost:5432/conduit_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: python3 scripts/workspace_version.py check
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: cargo build --workspace --no-default-features
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v${VERSION}")" ]; then
+            echo "v${VERSION} is already released; only 'latest' will move."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "v${VERSION} has not been released yet; version tags will be created."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: revision
+        # Every push gets an immutable, unique coordinate even when it publishes
+        # no version tag, so that whatever `latest` currently points at can
+        # always be named by something other than `latest`.
+        run: echo "short=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
 
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-audit --locked
-      - run: cargo audit
+  # Publishing runs the same gates as any pull request, by calling the same
+  # workflow rather than restating its jobs. This is what makes the firmware,
+  # MSRV, and Dockerfile gates apply to releases too.
+  gates:
+    uses: ./.github/workflows/ci.yml
 
   publish-docker:
     runs-on: ubuntu-latest
-    needs: [version, check, audit]
+    needs: [version, gates]
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - id: image
+      - id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASED: ${{ needs.version.outputs.released }}
+          REVISION: ${{ needs.version.outputs.revision }}
         run: |
           image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
-          echo "name=${image}" >> "$GITHUB_OUTPUT"
+          {
+            echo "list<<EOF"
+            echo "${image}:latest"
+            echo "${image}:sha-${REVISION}"
+            if [ "${RELEASED}" != "true" ]; then
+              echo "${image}:${VERSION}"
+              echo "${image}:v${VERSION}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -81,10 +91,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ needs.version.outputs.version }}
-            ${{ steps.image.outputs.name }}:v${{ needs.version.outputs.version }}
+          tags: ${{ steps.tags.outputs.list }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -92,13 +99,13 @@ jobs:
 
   publish-artifacts:
     runs-on: ubuntu-latest
-    needs: [version, check, audit]
+    needs: [version, gates]
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release -p conduit-api
       - name: Package Rust app and firmware YAMLs
@@ -120,12 +127,44 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: oras-project/setup-oras@v1
       - name: Publish repo package
+        env:
+          ARTIFACT: ${{ steps.artifact.outputs.name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASED: ${{ needs.version.outputs.released }}
+          REVISION: ${{ needs.version.outputs.revision }}
         run: |
-          oras push "${{ steps.artifact.outputs.name }}:${{ needs.version.outputs.version }}" \
+          # Push to the per-commit tag first, then move the mutable and, for a
+          # new version, immutable tags onto it. `oras tag` retags an existing
+          # manifest, so every tag here names one uploaded artifact set.
+          oras push "${ARTIFACT}:sha-${REVISION}" \
             --annotation "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
-            --annotation "org.opencontainers.image.version=${{ needs.version.outputs.version }}" \
+            --annotation "org.opencontainers.image.version=${VERSION}" \
             "dist/conduit-api-linux-x86_64.tar.gz:application/gzip" \
             "dist/conduit-firmware-yamls.tar.gz:application/gzip"
-          oras tag "${{ steps.artifact.outputs.name }}:${{ needs.version.outputs.version }}" latest
-          oras tag "${{ steps.artifact.outputs.name }}:${{ needs.version.outputs.version }}" "v${{ needs.version.outputs.version }}"
+          oras tag "${ARTIFACT}:sha-${REVISION}" latest
+          if [ "${RELEASED}" != "true" ]; then
+            oras tag "${ARTIFACT}:sha-${REVISION}" "${VERSION}" "v${VERSION}"
+          else
+            echo "v${VERSION} is already released; leaving its tags untouched."
+          fi
+
+  # Creates the release record only after both packages are published, so a
+  # failed publish can be retried by re-running rather than needing a version
+  # bump. The tag both marks the release and is what makes the next push to main
+  # skip the version tags.
+  tag-release:
+    runs-on: ubuntu-latest
+    needs: [version, publish-docker, publish-artifacts]
+    if: needs.version.outputs.released != 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "Conduit v${VERSION}"
+          git push origin "v${VERSION}"
