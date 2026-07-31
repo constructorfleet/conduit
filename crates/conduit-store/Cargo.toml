@@ -13,7 +13,7 @@ conduit-provider.workspace = true
 
 async-trait.workspace = true
 serde_json.workspace = true
-sqlx = { version = "0.8", default-features = false, features = [
+sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
     "json",
     "macros",
@@ -31,7 +31,7 @@ postgres = ["dep:sqlx"]
 
 [dev-dependencies]
 conduit-store = { workspace = true, features = ["postgres"] }
-sqlx = { version = "0.8", default-features = false, features = [
+sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
     "json",
     "runtime-tokio",
