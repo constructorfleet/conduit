@@ -1,7 +1,7 @@
 # Conduit Device Firmware
 
-This directory contains Conduit-owned firmware integration notes and protocol
-helpers for satellite devices.
+This directory contains the ESPHome firmware Conduit ships for satellite
+devices, plus the notes needed to build and flash it.
 
 Conduit does not speak Home Assistant Assist, Tater native satellite, ESPHome
 voice-assistant, or wake-audio UDP protocols. A Conduit firmware target must
@@ -29,42 +29,19 @@ under [ESPHome Board Targets](#esphome-board-targets). Start there.
 
 ## Protocol Parity Is Not Enforced
 
-Three hand-maintained copies of this wire contract exist:
+Two hand-maintained copies of this wire contract exist:
 
 - `crates/conduit-core/src/device.rs` (canonical, Rust),
 - `esphome/components/conduit_voice/conduit_converse_embedded.h` (shipped
-  firmware),
-- `common/conduit_converse.h` (reference C header, see below).
+  firmware).
 
 They currently agree on all four message types (`end`, `started`, `done`,
 `failed`), on binary-versus-text framing, and on 16 kHz mono signed 16-bit
 little-endian PCM. Nothing in CI checks that they still agree: no test compares
-the C/C++ constants against `device.rs`, and `firmware/tests/` only asserts
+the embedded constants against `device.rs`, and `firmware/tests/` only asserts
 that specific symbols exist in the embedded header. A protocol change made in
-`device.rs` alone will not fail any build. Update all three together, by hand,
-until a real parity check exists.
-
-## Reference Scaffold (Not Built, Not Flashed)
-
-`common/`, `sat1/`, and `voicepe/` are a plain-C reference sketch of the wire
-contract. They predate the ESPHome component and **no firmware build compiles
-them**. Nothing under `esphome/` includes them; their only consumer is
-`tests/conduit_converse_test.c`, which is why they are kept rather than
-deleted.
-
-Do not add board drivers here expecting them to ship. Real device behavior
-lives in `esphome/components/conduit_voice/`.
-
-`common/conduit_converse.h` provides, for reference:
-
-- the required audio format constants,
-- `CONDUIT_CONVERSE_END_JSON`,
-- pipeline-name validation matching the API storage rules,
-- `/v1/pipelines/{pipeline}/converse` path construction,
-- parsing for `started`, `done`, and `failed` notices.
-
-The shipped firmware does not use any of it. It uses its own copy,
-`esphome/components/conduit_voice/conduit_converse_embedded.h`.
+`device.rs` alone will not fail any build. Update both together, by hand, until
+a real parity check exists.
 
 Run the firmware helper tests with:
 
@@ -116,15 +93,41 @@ The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
 reply frames to the board speaker.
 
-LED and display feedback is not wired up on either target: neither YAML defines
-a `light:` block, and the vendored `esphome/components/satellite1/light/`
-`led_ring` platform is not referenced by any target. See the per-board notes in
-`sat1/README.md` and `voicepe/README.md`.
-
 Satellite1 also loads local `pcm5122` and `satellite1` component overlays from
 `esphome/components/`. These are copied from the pinned FutureProofHomes ref
 and patched only for ESPHome 2026.7's `GPIOPin::dump_summary(char *, size_t)`
 signature so the firmware actually compiles with current ESPHome.
+
+### Satellite1
+
+- Microphone capture via the `satellite1` microphone platform (`sat1_mics`),
+  downmixed to 16 kHz mono by the `conduit_voice` component.
+- Speaker playback via the `i2s_audio` speaker behind a mixer and a resampler
+  (`announcement_resampling_speaker`), through the `satellite1` DAC proxy.
+- Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
+  `conduit_voice.start`.
+- Button trigger: the `btn_action` GPIO `on_multi_click` calls
+  `conduit_voice.start`. Both triggers are gated on `master_mute_switch`.
+
+Still needed: LED and display states for connecting, listening, thinking,
+speaking, and failed. The YAML defines no `light:` block, and the vendored
+`esphome/components/satellite1/light/led_ring.cpp` is not referenced by any
+target, so the LED ring is dark.
+
+### Voice PE
+
+- Microphone capture via the `i2s_audio` microphone platform (`i2s_mics`) at
+  16 kHz, downmixed to mono by the `conduit_voice` component.
+- Speaker playback via the `i2s_audio` speaker behind a resampler
+  (`announcement_resampling_speaker`), through the `aic3204` DAC.
+- Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
+  `conduit_voice.start`.
+- Button trigger: the `center_button` GPIO `on_multi_click` calls
+  `conduit_voice.start`. Both triggers are gated on `master_mute_switch`,
+  which also tracks the hardware mute slider.
+
+Still needed: LED states for connecting, listening, thinking, speaking, and
+failed. The YAML defines no `light:` block, so the LED ring is dark.
 
 When `wake_debug_udp_host` is set, the local component also streams the same
 16 kHz mono signed little-endian PCM that feeds wake-word detection to the
