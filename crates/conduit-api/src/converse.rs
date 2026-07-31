@@ -5,6 +5,10 @@
 //! the turn — partial transcripts, tool calls, timings — is on the event
 //! stream, tagged with the conversation id this socket announces, so the
 //! audio path stays free of anything that is not audio.
+//!
+//! Control messages flow for the whole turn, not only until the utterance
+//! ends, because the useful moment to say "stop talking" is while the assistant
+//! is talking.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -60,10 +64,23 @@ pub async fn converse(
 /// Drives one turn over `socket`.
 async fn run(socket: WebSocket, runner: Runner) {
     let (mut outgoing, incoming) = socket.split();
-    let (audio, captured) = capture(incoming);
+    let (audio, captured, stopped) = capture(incoming);
 
     let conversation = runner.run(audio);
+
+    // The reader cannot hold the turn's stop handle, because the turn needs the
+    // audio the reader produces to exist first. So it signals, and this relays.
+    // Ends by itself when the reader stops: the sender drops, and the receiver
+    // resolves with an error.
+    let stop = conversation.stop.clone();
+    let relay = tokio::spawn(async move {
+        if stopped.await.is_ok() {
+            stop.request();
+        }
+    });
+
     if send(&mut outgoing, Notice::Started { conversation: conversation.id }).await.is_err() {
+        relay.abort();
         return;
     }
 
@@ -74,8 +91,10 @@ async fn run(socket: WebSocket, runner: Runner) {
             Ok(chunk) => {
                 use futures_util::SinkExt;
                 if outgoing.send(Message::Binary(chunk.data)).await.is_err() {
-                    // The device hung up. Dropping the stream cancels the turn.
+                    // The device hung up. Dropping the stream cancels the turn,
+                    // reported as a disconnection rather than an interruption.
                     tracing::debug!("device disconnected mid-reply");
+                    relay.abort();
                     return;
                 }
             }
@@ -100,33 +119,62 @@ async fn run(socket: WebSocket, runner: Runner) {
 
     // The reader holds the other half until the client stops sending.
     captured.abort();
+    // Nothing left to stop.
+    relay.abort();
 }
 
-/// Turns incoming frames into an audio stream.
+/// Turns incoming frames into an audio stream, watching for a stop.
 ///
-/// Returns the stream and a handle to the task filling it, so the caller can
-/// stop reading once the turn is over.
+/// Returns the audio, a handle to the task filling it so the caller can stop
+/// reading once the turn is over, and a receiver that resolves if the client
+/// asks the turn to stop.
+///
+/// Reading continues past the end of the utterance, because a stop is most
+/// useful while the assistant is already talking — a reader that finished with
+/// the audio would never see one.
 fn capture(
     mut incoming: futures_util::stream::SplitStream<WebSocket>,
-) -> (ChunkStream<AudioChunk>, tokio::task::AbortHandle) {
+) -> (ChunkStream<AudioChunk>, tokio::task::AbortHandle, tokio::sync::oneshot::Receiver<()>) {
     let (sender, receiver) = mpsc::channel(CAPTURE_BUFFER);
+    let (stopped, on_stop) = tokio::sync::oneshot::channel();
 
     let task = tokio::spawn(async move {
         let mut sequence = 0_u64;
+        // Taken to end the utterance. Dropping it is what tells the recognizer
+        // to produce its final transcript.
+        let mut sender = Some(sender);
+
         while let Some(frame) = incoming.next().await {
             let Ok(frame) = frame else { break };
             match frame {
                 Message::Binary(data) => {
+                    let Some(audio) = &sender else {
+                        // Audio after the utterance ended belongs to a turn this
+                        // socket is not holding.
+                        tracing::warn!("ignoring audio sent after the end of the utterance");
+                        continue;
+                    };
                     let chunk = AudioChunk { sequence, data };
                     sequence += 1;
-                    if sender.send(Ok(chunk)).await.is_err() {
+                    if audio.send(Ok(chunk)).await.is_err() {
                         break;
                     }
                 }
                 Message::Text(text) => match serde_json::from_str::<Command>(&text) {
-                    // Closing the sender ends the utterance, which is what
-                    // tells the recognizer to produce its final transcript.
-                    Ok(Command::End) => break,
+                    Ok(Command::End) => {
+                        // Reading continues, in case a stop follows.
+                        sender = None;
+                    }
+                    Ok(Command::Stop) => {
+                        tracing::debug!("device asked the turn to stop");
+                        let _ = stopped.send(());
+                        break;
+                    }
+                    // `Command` is non-exhaustive: a newer client may send
+                    // something this server predates.
+                    Ok(unknown) => {
+                        tracing::warn!(?unknown, "ignoring unsupported command");
+                    }
                     Err(error) => {
                         tracing::warn!(%error, %text, "ignoring unreadable control frame");
                     }
@@ -138,7 +186,7 @@ fn capture(
         }
     });
 
-    (Box::pin(ReceiverStream::new(receiver)), task.abort_handle())
+    (Box::pin(ReceiverStream::new(receiver)), task.abort_handle(), on_stop)
 }
 
 /// Sends one control frame.

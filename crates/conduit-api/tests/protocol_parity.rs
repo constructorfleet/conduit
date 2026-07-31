@@ -235,6 +235,16 @@ fn the_firmware_sends_the_end_command_this_server_parses() {
 }
 
 #[test]
+fn the_firmware_sends_the_stop_command_this_server_parses() {
+    let header = firmware_header();
+    assert_eq!(
+        firmware_string(&header, "CONDUIT_VOICE_CONVERSE_STOP_JSON"),
+        serde_json::to_string(&Command::Stop).expect("serializes"),
+        "a device would ask for a stop this server ignores as an unknown command"
+    );
+}
+
+#[test]
 fn the_firmware_builds_the_route_this_server_serves() {
     let header = firmware_header();
     let prefix = firmware_string(&header, "CONDUIT_VOICE_CONVERSE_PATH_PREFIX");

@@ -18,6 +18,11 @@ Wire contract:
 - Send `{"type":"end"}` as a text frame when the utterance is complete.
 - Handle `{"type":"started","conversation":"..."}` before reply audio.
 - Play binary WebSocket frames from the server as reply audio.
+- Send `{"type":"stop"}` to cut a reply short. Valid at any point in the turn,
+  including after `end` and during playback — which is when it matters. Prefer
+  it over closing the socket: the server records a `stop` as an interruption and
+  a closed socket as a device that vanished, and an operator needs to tell those
+  apart.
 - Handle `{"type":"done"}` or `{"type":"failed","error":"..."}` as terminal
   text frames.
 
@@ -40,9 +45,12 @@ something `serde` can emit. Two checks stand in for generation, and CI runs
 both.
 
 **Constants.** `crates/conduit-api/tests/protocol_parity.rs` reads the shipped
-header and compares its end-of-utterance frame, converse path, sample rate,
-channel count, and sample width against what the Rust definitions serialize and
-what the API's route declares. This catches a rename or a changed value.
+header and compares its end-of-utterance frame, its stop frame, the converse
+path, the sample rate, the channel count, and the sample width against what the
+Rust definitions serialize and what the API's route declares. This catches a
+rename or a changed value. A drifted command frame is worth catching in
+particular: the server ignores a control message it cannot parse, so a device
+would go on asking for something that silently never happens.
 
 **Behaviour, which is the check that matters.** The same test serializes every
 canonical notice into `tests/notices.fixture`, and
@@ -115,7 +123,19 @@ Never commit either.
 
 The local component streams microphone audio as binary WebSocket frames, sends
 `{"type":"end"}` when stopped, parses Conduit text notices, and writes binary
-reply frames to the board speaker.
+reply frames to the board speaker. It exposes three actions and one condition:
+
+| Action | What it does |
+| --- | --- |
+| `conduit_voice.start` | Opens the socket and starts streaming the microphone |
+| `conduit_voice.stop` | Ends the utterance and lets the reply play out |
+| `conduit_voice.interrupt` | Sends `{"type":"stop"}`, silences the speaker, and ends the turn |
+| `conduit_voice.is_running` (condition) | Whether a turn is in progress |
+
+`stop` and `interrupt` differ in what happens to the reply: `stop` says "I have
+finished speaking, answer me", while `interrupt` says "stop talking". Only
+`interrupt` silences the local speaker, because audio already handed to it would
+otherwise keep playing after the server had cancelled the turn.
 
 Satellite1 also loads local `pcm5122` and `satellite1` component overlays from
 `esphome/components/`. These are copied from the pinned FutureProofHomes ref
@@ -131,7 +151,10 @@ signature so the firmware actually compiles with current ESPHome.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
   `conduit_voice.start`.
 - Button trigger: the `btn_action` GPIO `on_multi_click` calls
-  `conduit_voice.start`. Both triggers are gated on `master_mute_switch`.
+  `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
+  running — a press during a reply cuts it off. Starting is gated on
+  `master_mute_switch`; interrupting is not, because muting must not trap someone
+  in a reply they cannot stop.
 
 Still needed: LED and display states for connecting, listening, thinking,
 speaking, and failed. The YAML defines no `light:` block, and the vendored
@@ -147,8 +170,10 @@ target, so the LED ring is dark.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
   `conduit_voice.start`.
 - Button trigger: the `center_button` GPIO `on_multi_click` calls
-  `conduit_voice.start`. Both triggers are gated on `master_mute_switch`,
-  which also tracks the hardware mute slider.
+  `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
+  running — a press during a reply cuts it off. Starting is gated on
+  `master_mute_switch`, which also tracks the hardware mute slider; interrupting
+  is not, because muting must not trap someone in a reply they cannot stop.
 
 Still needed: LED states for connecting, listening, thinking, speaking, and
 failed. The YAML defines no `light:` block, so the LED ring is dark.

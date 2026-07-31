@@ -11,9 +11,21 @@ use crate::id::ConversationId;
 /// What a client can say that is not audio.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Command {
     /// The utterance is over; answer it.
     End,
+    /// Stop talking and end the turn.
+    ///
+    /// Distinct from a socket that simply closes: this says the client chose to
+    /// interrupt, which is why the turn cancels with
+    /// [`CancelReason::UserRequested`] rather than
+    /// [`CancelReason::Disconnected`]. A device that only dropped the
+    /// connection would leave those indistinguishable.
+    ///
+    /// [`CancelReason::UserRequested`]: crate::event::CancelReason::UserRequested
+    /// [`CancelReason::Disconnected`]: crate::event::CancelReason::Disconnected
+    Stop,
 }
 
 /// What the server says that is not audio.
@@ -43,6 +55,13 @@ mod tests {
         let json = serde_json::to_string(&Command::End).expect("serializes");
         assert_eq!(json, r#"{"type":"end"}"#);
         assert_eq!(serde_json::from_str::<Command>(&json).expect("parses"), Command::End);
+    }
+
+    #[test]
+    fn stop_command_matches_the_wire_protocol() {
+        let json = serde_json::to_string(&Command::Stop).expect("serializes");
+        assert_eq!(json, r#"{"type":"stop"}"#);
+        assert_eq!(serde_json::from_str::<Command>(&json).expect("parses"), Command::Stop);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Runner};
-use fakes::{audio_of, FailingStt, FakeLlm, FakeStt, FakeTts};
+use fakes::{audio_of, FailingStt, FakeLlm, FakeStt, FakeTts, HangingTts, SlowTts};
 use futures_util::StreamExt;
 
 /// mic -> stt -> llm -> tts, the shape the runtime can execute today.
@@ -192,6 +192,180 @@ async fn stage_failures_reach_the_bus_and_the_caller() {
             Event::ConversationCancelled { reason: CancelReason::Error }
         )),
         "expected the turn to be cancelled: {:?}",
+        names(&events)
+    );
+}
+
+/// The reason a turn's cancellation was published with, if it was cancelled.
+fn cancelled_with(events: &[Event]) -> Option<CancelReason> {
+    events.iter().find_map(|event| match event {
+        Event::ConversationCancelled { reason } => Some(*reason),
+        _ => None,
+    })
+}
+
+#[tokio::test]
+async fn an_explicit_stop_cancels_the_turn_as_user_requested() {
+    // An operator has to be able to tell someone who interrupted from someone
+    // whose connection died, so these must not share a reason.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let tts = HangingTts::new();
+    let speaking = tts.speaking();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("tell me a long story")]))
+        .with_llm(FakeLlm::new(vec!["Once upon a time. "]))
+        .with_tts(tts);
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+
+    // Interrupt a turn that is genuinely talking, not one that already ended.
+    tokio::time::timeout(Duration::from_secs(5), speaking.notified())
+        .await
+        .expect("the turn starts speaking");
+    conversation.stop.request();
+
+    let events = drain(&mut subscription).await;
+    assert_eq!(
+        cancelled_with(&events),
+        Some(CancelReason::UserRequested),
+        "a stop must be reported as asked for: {:?}",
+        names(&events)
+    );
+}
+
+#[tokio::test]
+async fn a_stop_asked_for_before_the_turn_speaks_still_ends_it() {
+    // Nothing synchronizes a client's stop with the turn's progress, so one
+    // that arrives during recognition must not be dropped on the floor.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(HangingTts::new());
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    conversation.stop.request();
+
+    let events = drain(&mut subscription).await;
+    assert_eq!(
+        cancelled_with(&events),
+        Some(CancelReason::UserRequested),
+        "{:?}",
+        names(&events)
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_turn_stops_producing_audio() {
+    // Stopping has to feel like stopping: the audio stream must end rather than
+    // the turn quietly continuing to synthesize.
+    let bus = EventBus::default();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["One. ", "Two. ", "Three."]))
+        .with_tts(SlowTts);
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let mut conversation = runner.run(audio_of(&["a"]));
+
+    // Interrupt after the reply has started, so a truncated stream means the
+    // stop cut it short rather than the turn never having begun.
+    let first = tokio::time::timeout(Duration::from_secs(5), conversation.audio.next())
+        .await
+        .expect("audio starts");
+    assert!(first.is_some(), "expected the turn to speak before being stopped");
+    conversation.stop.request();
+
+    let rest = tokio::time::timeout(Duration::from_secs(5), conversation.audio.count())
+        .await
+        .expect("the audio stream ends");
+    // `One. Two. Three.` is 14 spoken bytes, one chunk each.
+    assert!(rest < 13, "expected a truncated reply, got {} more chunk(s)", rest);
+}
+
+#[tokio::test]
+async fn a_listener_that_leaves_is_cancelled_as_disconnected() {
+    // Dropping the audio is how a client vanishes. It says nothing about
+    // whether anyone meant to interrupt, so it must not claim barge-in.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["One. ", "Two. ", "Three. ", "Four."]))
+        .with_tts(SlowTts);
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+    let mut conversation = runner.run(audio_of(&["a"]));
+
+    // Leave mid-reply. Leaving before it starts would end the turn through the
+    // same path, but this is the case an operator actually sees.
+    let _ = tokio::time::timeout(Duration::from_secs(5), conversation.audio.next())
+        .await
+        .expect("audio starts");
+    drop(conversation.audio);
+
+    let events = drain(&mut subscription).await;
+    assert_eq!(
+        cancelled_with(&events),
+        Some(CancelReason::Disconnected),
+        "{:?}",
+        names(&events)
+    );
+}
+
+#[tokio::test]
+async fn nothing_the_runtime_does_reports_barge_in() {
+    // The reason is reserved for voice detected over the assistant, which
+    // nothing implements. Emitting it for anything else is what let a panel
+    // counting interruptions quietly count dropped connections instead.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["One. ", "Two."]))
+        .with_tts(SlowTts);
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
+
+    // Every way a turn can end: a stop, a listener leaving, a failure, and a
+    // reply nobody interrupts.
+    let stopped = runner.run(audio_of(&["a"]));
+    stopped.stop.request();
+    let mut events = drain(&mut subscription).await;
+
+    let dropped = runner.run(audio_of(&["a"]));
+    drop(dropped.audio);
+    events.extend(drain(&mut subscription).await);
+
+    let completed = runner.run(audio_of(&["a"]));
+    let _: Vec<_> = completed.audio.collect().await;
+    events.extend(drain(&mut subscription).await);
+
+    let failing = Providers::new()
+        .with_stt(FailingStt)
+        .with_llm(FakeLlm::new(vec!["unused"]))
+        .with_tts(FakeTts::new());
+    let failing_bus = EventBus::default();
+    let mut failures = failing_bus.subscribe();
+    let failing_runner =
+        Runner::prepare(&linear_graph(), &failing, failing_bus).expect("graph is executable");
+    let _: Vec<_> = failing_runner.run(audio_of(&["a"])).audio.collect().await;
+    events.extend(drain(&mut failures).await);
+
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::ConversationCancelled { reason: CancelReason::BargeIn }
+        )),
+        "nothing may report barge-in: {:?}",
         names(&events)
     );
 }

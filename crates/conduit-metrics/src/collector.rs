@@ -325,6 +325,7 @@ fn cancel_name(reason: CancelReason) -> &'static str {
         CancelReason::BargeIn => "barge_in",
         CancelReason::IdleTimeout => "idle_timeout",
         CancelReason::UserRequested => "user_requested",
+        CancelReason::Disconnected => "disconnected",
         CancelReason::Error => "error",
         CancelReason::Shutdown => "shutdown",
         _ => "cancelled",

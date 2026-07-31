@@ -14,6 +14,10 @@ static constexpr size_t CONDUIT_VOICE_WWD2_HEADER_BYTES = 18;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_ASSISTANT_ID_BYTES = 64;
 static constexpr size_t CONDUIT_VOICE_WWD2_MAX_PAYLOAD_BYTES = 0xFFFF;
 static constexpr const char *CONDUIT_VOICE_CONVERSE_END_JSON = "{\"type\":\"end\"}";
+// Ends the whole turn, including a reply already being spoken. The server reads
+// control frames past `end` for exactly this, and reports the cancellation as
+// asked for rather than as a device that vanished.
+static constexpr const char *CONDUIT_VOICE_CONVERSE_STOP_JSON = "{\"type\":\"stop\"}";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_PREFIX = "/v1/pipelines/";
 static constexpr const char *CONDUIT_VOICE_CONVERSE_PATH_SUFFIX = "/converse";
 

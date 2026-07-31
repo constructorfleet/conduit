@@ -29,6 +29,9 @@ StartAction = conduit_voice_ns.class_(
 StopAction = conduit_voice_ns.class_(
     "StopAction", automation.Action, cg.Parented.template(ConduitVoice)
 )
+InterruptAction = conduit_voice_ns.class_(
+    "InterruptAction", automation.Action, cg.Parented.template(ConduitVoice)
+)
 IsRunningCondition = conduit_voice_ns.class_(
     "IsRunningCondition", automation.Condition, cg.Parented.template(ConduitVoice)
 )
@@ -150,6 +153,23 @@ async def start_action_to_code(
     synchronous=True,
 )
 async def stop_action_to_code(
+    config: ConfigType,
+    action_id: ID,
+    template_arg: cg.TemplateArguments,
+    args: TemplateArgsType,
+):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+@automation.register_action(
+    "conduit_voice.interrupt",
+    InterruptAction,
+    CONDUIT_VOICE_ACTION_SCHEMA,
+    synchronous=True,
+)
+async def interrupt_action_to_code(
     config: ConfigType,
     action_id: ID,
     template_arg: cg.TemplateArguments,

@@ -301,11 +301,21 @@ pub enum Stage {
 #[non_exhaustive]
 pub enum CancelReason {
     /// The user spoke over the assistant.
+    ///
+    /// Reserved for voice activity detected during playback, which nothing
+    /// implements, so nothing publishes this. It previously stood in for a
+    /// failed write to the device — a reading that made a panel counting
+    /// interruptions actually count dropped connections. That case is now
+    /// [`CancelReason::Disconnected`].
     BargeIn,
     /// No input arrived before the idle timeout.
     IdleTimeout,
-    /// A client or operator cancelled explicitly.
+    /// A client or operator cancelled explicitly, e.g. a device sending
+    /// [`Command::Stop`](crate::device::Command::Stop).
     UserRequested,
+    /// The client stopped listening: the socket closed, or a write to it
+    /// failed. Says nothing about whether anyone meant to interrupt.
+    Disconnected,
     /// A stage failed unrecoverably.
     Error,
     /// The service is shutting down.

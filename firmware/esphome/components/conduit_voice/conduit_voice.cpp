@@ -124,6 +124,34 @@ void ConduitVoice::stop() {
   this->finish_utterance_();
 }
 
+void ConduitVoice::interrupt() {
+  if (this->state_ == State::IDLE) {
+    return;
+  }
+  // Nothing has been sent yet, so there is no turn to interrupt — but the
+  // socket is opening, and dropping it would look like a device that vanished.
+  // Say `end` on connect and let the turn finish; a caller who wants silence
+  // now should use `stop`.
+  if (this->state_ == State::CONNECTING) {
+    this->send_end_on_connect_ = true;
+    return;
+  }
+
+  if (this->microphone_source_ != nullptr && this->microphone_source_->is_running()) {
+    this->microphone_source_->stop();
+  }
+  // Stop the speaker locally as well as asking the server: audio already handed
+  // to the speaker would otherwise keep playing after the reply was cancelled.
+  if (this->speaker_ != nullptr && this->speaker_->is_running()) {
+    this->speaker_->stop();
+  }
+
+  if (!this->send_command_(CONDUIT_VOICE_CONVERSE_STOP_JSON, "stop")) {
+    return;
+  }
+  this->state_ = State::STOPPING;
+}
+
 void ConduitVoice::wake_debug_event() {
   if (this->debug_wake_event_url_.empty()) {
     return;
@@ -330,26 +358,36 @@ void ConduitVoice::finish_utterance_() {
     this->send_end_on_connect_ = true;
     return;
   }
-  if (this->client_ == nullptr || !esp_websocket_client_is_connected(this->client_)) {
-    this->pending_stop_ = true;
-    return;
-  }
 
   if (this->microphone_source_ != nullptr && this->microphone_source_->is_running()) {
     this->microphone_source_->stop();
   }
 
-  int written = esp_websocket_client_send_text(
-      this->client_,
-      CONDUIT_VOICE_CONVERSE_END_JSON,
-      std::strlen(CONDUIT_VOICE_CONVERSE_END_JSON),
-      pdMS_TO_TICKS(100));
-  if (written < 0) {
-    ESP_LOGE(TAG, "Failed to send end-of-utterance marker to Conduit");
-    this->pending_stop_ = true;
+  if (!this->send_command_(CONDUIT_VOICE_CONVERSE_END_JSON, "end-of-utterance")) {
     return;
   }
   this->state_ = State::STOPPING;
+}
+
+// Sends one control frame. Returns false if there was nothing to send it on or
+// the write failed, having already arranged for the session to end.
+bool ConduitVoice::send_command_(const char *json, const char *what) {
+  if (this->client_ == nullptr || !esp_websocket_client_is_connected(this->client_)) {
+    this->pending_stop_ = true;
+    return false;
+  }
+
+  int written = esp_websocket_client_send_text(
+      this->client_,
+      json,
+      std::strlen(json),
+      pdMS_TO_TICKS(100));
+  if (written < 0) {
+    ESP_LOGE(TAG, "Failed to send %s to Conduit", what);
+    this->pending_stop_ = true;
+    return false;
+  }
+  return true;
 }
 
 }  // namespace esphome::conduit_voice
