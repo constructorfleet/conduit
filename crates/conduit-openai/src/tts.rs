@@ -11,6 +11,7 @@ use conduit_provider::{ChunkStream, Health, Provider};
 use futures_util::StreamExt;
 use serde::Serialize;
 
+use crate::failure::Failure;
 use crate::http::Http;
 use crate::OpenAiConfig;
 
@@ -131,7 +132,10 @@ impl TextToSpeech for OpenAiTts {
                 sequence += 1;
                 Ok(chunk)
             }
-            Err(error) => Err(Error::provider(&name, error)),
+            // Audio that stops arriving partway through is classified like any
+            // other transport failure, so a caller can tell a stalled server
+            // from a rejected request.
+            Err(error) => Err(Error::provider(&name, Failure::transport(&error))),
         });
 
         Ok(Box::pin(chunks))

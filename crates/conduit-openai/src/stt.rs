@@ -92,7 +92,13 @@ impl SpeechToText for OpenAiStt {
 
         let response =
             self.http.send(self.http.post("audio/transcriptions").multipart(form)).await?;
-        let body: Response = response.json().await.map_err(|error| self.http.failure(error))?;
+        // A body that is not the documented shape will not become one on a
+        // second attempt. `body_failure` says so, while still reporting a body
+        // that stalled halfway as the timeout it is.
+        let body: Response = response
+            .json()
+            .await
+            .map_err(|error| self.http.body_failure("transcription", error))?;
 
         let transcript =
             Transcript { language: body.language, ..Transcript::final_text(body.text.trim()) };

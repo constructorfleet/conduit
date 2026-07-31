@@ -116,6 +116,7 @@ Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
 | `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
 | `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
+| `CONDUIT_OPENAI_READ_TIMEOUT_SECS` | `60` | How long a provider may go silent mid-response; `0` removes the bound |
 | `CONDUIT_OPENAI_STT_MODEL` | — | Enables speech recognition, e.g. `whisper-1` |
 | `CONDUIT_OPENAI_TTS_MODEL` | — | Enables synthesis, e.g. `tts-1` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Enables OTLP/HTTP span export to a collector |
