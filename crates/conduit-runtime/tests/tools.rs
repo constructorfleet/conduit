@@ -11,7 +11,7 @@ use std::time::Duration;
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::Event;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
-use conduit_core::id::ToolCallId;
+use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_provider::llm::Role;
 use conduit_provider::stt::Transcript;
 use conduit_provider::tool::Permission;
@@ -250,6 +250,65 @@ async fn the_model_still_answers_after_a_confirmation_refusal() {
     run_turn(&runner).await;
 
     assert_eq!(tts.spoken(), ["Sure, let me look that up.", "It is sunny."]);
+}
+
+#[tokio::test]
+async fn the_identified_speaker_reaches_the_tool() {
+    // The seam a per-speaker tool policy needs. Nothing identifies a voice in
+    // production yet, so the speaker is supplied here directly — this test is
+    // what makes the path from a turn to a permission check real ahead of the
+    // provider, rather than something to discover once one exists.
+    let call = ToolCallId::new("call_abc123");
+    let speaker = SpeakerId::new();
+    let tool = FakeTool::new("search", serde_json::json!({}));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(talkative_model(call))
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let turn = async {
+        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).audio.collect().await;
+    };
+    tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
+
+    let contexts = tool.contexts();
+    assert!(!contexts.is_empty(), "the tool must have been consulted");
+    for context in &contexts {
+        assert_eq!(
+            context.speaker,
+            Some(speaker),
+            "every check and invocation must know who is speaking"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_tool_sees_no_speaker_when_no_one_was_identified() {
+    // Pins the documented current behaviour: threading the seam did not make
+    // identification work, and a tool must keep deciding what an unknown voice
+    // may do. A device or conversation standing in for a speaker here would
+    // make every per-speaker policy silently wrong.
+    let call = ToolCallId::new("call_abc123");
+    let tool = FakeTool::new("search", serde_json::json!({}));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(talkative_model(call))
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    run_turn(&runner).await;
+
+    let contexts = tool.contexts();
+    assert!(!contexts.is_empty(), "the tool must have been consulted");
+    assert!(
+        contexts.iter().all(|context| context.speaker.is_none()),
+        "nothing identifies a voice yet: {contexts:?}"
+    );
 }
 
 #[tokio::test]

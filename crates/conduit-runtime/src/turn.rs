@@ -11,7 +11,7 @@ use std::sync::Arc;
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Event, FinishReason};
-use conduit_core::id::ConversationId;
+use conduit_core::id::{ConversationId, SpeakerId};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
@@ -41,6 +41,15 @@ pub struct Turn {
     emitter: Emitter,
     format: AudioFormat,
     output: Sender<Result<SpeechChunk>>,
+    /// Who is speaking, when anything has identified them.
+    ///
+    /// Always `None` in production today: no speaker identification provider
+    /// exists and nothing runs one, so the turn has nothing to learn an
+    /// identity from. It is a field rather than a hardcoded argument at the
+    /// call site so that wiring identification up is a matter of setting it,
+    /// and so that the path from here to a tool's permission check is tested
+    /// rather than discovered later.
+    speaker: Option<SpeakerId>,
     /// Chunk counter, so the caller sees one monotonic stream even though each
     /// synthesis request numbers its chunks from zero.
     sequence: u64,
@@ -63,10 +72,23 @@ impl Turn {
             emitter: Emitter::new(bus),
             format,
             output,
+            speaker: None,
             sequence: 0,
             speaking: false,
             spoken_ms: 0,
         }
+    }
+
+    /// Attributes this turn to an identified speaker.
+    ///
+    /// The identity must come from a voice, not from a device, a token, or a
+    /// pipeline: those name which satellite is connected, and a per-speaker
+    /// tool policy satisfied by the wrong identity is worse than one satisfied
+    /// by none.
+    #[must_use]
+    pub const fn with_speaker(mut self, speaker: SpeakerId) -> Self {
+        self.speaker = Some(speaker);
+        self
     }
 
     /// The conversation this turn's events are filed under.
@@ -177,7 +199,7 @@ impl Turn {
             Arc::clone(&self.plan),
             self.emitter.clone(),
             self.emitter.conversation(),
-            None,
+            self.speaker,
             round.requests.clone(),
         );
 

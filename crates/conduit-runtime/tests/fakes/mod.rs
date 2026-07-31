@@ -262,6 +262,11 @@ pub struct FakeTool {
     behaviour: Behaviour,
     permission: Permission,
     invocations: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// The context of every invocation and every permission check, so a test
+    /// can assert on who the runtime said was speaking. Permission checks are
+    /// recorded too: a denied tool never reaches `invoke`, and the whole point
+    /// of the speaker is deciding that denial.
+    contexts: Arc<Mutex<Vec<ToolContext>>>,
 }
 
 impl FakeTool {
@@ -272,6 +277,7 @@ impl FakeTool {
             behaviour: Behaviour::Succeed(value),
             permission: Permission::Allow,
             invocations: Arc::new(Mutex::new(Vec::new())),
+            contexts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -290,6 +296,11 @@ impl FakeTool {
     /// The arguments of every invocation, in order.
     pub fn invocations(&self) -> Vec<serde_json::Value> {
         self.invocations.lock().expect("lock").clone()
+    }
+
+    /// The context of every permission check and invocation, in order.
+    pub fn contexts(&self) -> Vec<ToolContext> {
+        self.contexts.lock().expect("lock").clone()
     }
 }
 
@@ -312,17 +323,19 @@ impl Tool for FakeTool {
     async fn permission(
         &self,
         _arguments: &serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> Permission {
+        self.contexts.lock().expect("lock").push(context.clone());
         self.permission.clone()
     }
 
     async fn invoke(
         &self,
         arguments: serde_json::Value,
-        _context: ToolContext,
+        context: ToolContext,
     ) -> Result<ToolOutput> {
         self.invocations.lock().expect("lock").push(arguments);
+        self.contexts.lock().expect("lock").push(context);
         match &self.behaviour {
             Behaviour::Succeed(value) => Ok(ToolOutput::new(value.clone())),
             Behaviour::Speak(value, spoken) => {

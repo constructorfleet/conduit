@@ -77,13 +77,14 @@ a result rather than ending the turn, so the assistant can explain itself
 instead of going silent. Turns are capped at `max_tool_rounds` model calls
 (default 4) so a model that will not stop calling tools cannot loop forever.
 
-A tool decides for itself whether a call may run. A permission that is anything
-other than "allow" means the tool is not invoked and the model is told what was
-refused and why. That includes `deny_until_confirmed`, which is how a tool says
-it needs a human in the loop: Conduit cannot put a question to a speaker
-mid-turn yet, so such a call is refused rather than run, and the refusal is
-worded so a model reports the action as *not* performed. See
-[Known gaps](#known-gaps).
+A tool decides for itself whether a call may run, and it gets the conversation
+and — once a voice has been identified — the speaker to decide with. A
+permission that is anything other than "allow" means the tool is not invoked
+and the model is told what was refused and why. That includes
+`deny_until_confirmed`, which is how a tool says it needs a human in the loop:
+Conduit cannot put a question to a speaker mid-turn yet, so such a call is
+refused rather than run, and the refusal is worded so a model reports the
+action as *not* performed. See [Known gaps](#known-gaps).
 
 ## Running
 
@@ -359,9 +360,20 @@ and it will announce a door unlocked. Operators see these as the
 `awaiting_confirmation` tool outcome; read it as "blocked on a human", not
 "waiting for an answer".
 
+**Nothing identifies a speaker, so tools cannot enforce per-speaker policy.**
+A tool's permission check receives an optional speaker, and it is always absent:
+no speaker identification provider exists and nothing runs one, so a tool that
+would allow an action for one household member and refuse it for another has
+nothing to branch on. The path from a turn to the permission check exists and is
+tested, so registering a provider is the remaining work — but until then, treat
+every voice as unidentified. Nothing substitutes the device or the conversation
+for a speaker, and nothing should: those name which satellite is connected, and
+a policy satisfied by the wrong identity is worse than one satisfied by none.
+
 **Wake word, speaker identification, and memory are graph-only.** The graph
-model describes those nodes, but the runtime still refuses them until their
-provider contracts exist.
+model describes those nodes, but the runtime refuses them: for wake word,
+speaker identification, and memory the provider traits exist, and what is
+missing is any implementation of them and the runtime wiring to run one.
 
 **Several event variants have no emitter yet.** `WakeWordDetected`,
 `WakeWordRejected`, `AudioStarted`, `AudioChunkReceived`, `AudioFinished`,
