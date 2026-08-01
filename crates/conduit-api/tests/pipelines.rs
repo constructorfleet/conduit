@@ -996,8 +996,12 @@ struct TempDir(std::path::PathBuf);
 
 impl TempDir {
     fn new() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self(std::env::temp_dir().join(format!(
-            "conduit-api-{}",
+            "conduit-api-{}-{}-{}",
+            std::process::id(),
+            sequence,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
