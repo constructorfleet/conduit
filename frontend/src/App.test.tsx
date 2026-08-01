@@ -977,6 +977,10 @@ describe("Providers workspace", () => {
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
     );
 
+    expect(
+      screen.getByRole("heading", { name: "Configure provider" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("OpenAI Responses")).toHaveLength(1);
     expect(screen.queryByDisplayValue("openai")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("llm-4")).toBeInTheDocument();
     expect(screen.getByLabelText("Provider label")).toHaveDisplayValue(

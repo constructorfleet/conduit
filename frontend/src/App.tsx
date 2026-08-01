@@ -1071,7 +1071,7 @@ function ProviderAddDialog({
         <div className="provider-card-header">
           <div>
             <p className="eyebrow">Add Provider</p>
-            <h2>{draftProvider ? draftProvider.label : "Choose type"}</h2>
+            <h2>{draftProvider ? "Configure provider" : "Choose type"}</h2>
           </div>
           <div className="provider-card-controls">
             {draftProvider ? (
@@ -2169,8 +2169,11 @@ function ComponentConfigFields({
   const required = new Set(component.schema.required);
 
   return (
-    <fieldset className="component-config-fields" disabled={readOnly}>
-      <legend>{component.label}</legend>
+    <fieldset
+      className="component-config-fields"
+      disabled={readOnly}
+      aria-label={`${component.label} configuration`}
+    >
       {Object.entries(component.schema.properties).map(([field, property]) => {
         const requiredLabel = required.has(field) ? " required" : "";
         const label = `${field}${requiredLabel}`;

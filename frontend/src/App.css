@@ -767,13 +767,6 @@ button {
   padding: 10px;
 }
 
-.component-config-fields legend {
-  padding: 0 4px;
-  color: var(--strong);
-  font-size: 12px;
-  font-weight: 800;
-}
-
 .provider-config-editor,
 .provider-definition-form {
   display: grid;
