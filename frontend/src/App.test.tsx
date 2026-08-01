@@ -2,11 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import App, {
-  OverviewPanel,
-  type PipelineGraph,
-  type PipelineView,
-} from "./App";
+import App, { OverviewPanel } from "./App";
+import type { PipelineGraph, PipelineView } from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
@@ -348,6 +345,27 @@ describe("First-Run Guided Setup", () => {
 });
 
 describe("Events turn reconstruction", () => {
+  it("groups reconstructed events into visual component stages", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={successfulTurnEvents()} />);
+
+    await enterEventsSection(user);
+
+    expect(screen.getByText("Stage Timeline")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "transcription stage" }),
+    ).toHaveTextContent("Speech Final");
+    expect(
+      screen.getByRole("group", { name: "reasoning stage" }),
+    ).toHaveTextContent("Llm Token");
+    expect(
+      screen.getByRole("group", { name: "tools stage" }),
+    ).toHaveTextContent("Tool Requested");
+    expect(
+      screen.getByRole("group", { name: "synthesis stage" }),
+    ).toHaveTextContent("Tts Finished");
+  });
+
   it("renders a successful turn as an ordered component story", async () => {
     const user = userEvent.setup();
     render(<App initialEvents={successfulTurnEvents()} />);
@@ -476,6 +494,28 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("supports undo, test run, and multiple frontend-only node actions", async () => {
+    const user = userEvent.setup();
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add fallback TTS" }));
+
+    expect(screen.getByText("memory")).toBeInTheDocument();
+    expect(screen.getByText("tts_fallback")).toBeInTheDocument();
+    expect(screen.getByText("2 unsaved edits")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Undo last edit" }));
+    expect(screen.queryByText("tts_fallback")).not.toBeInTheDocument();
+    expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Run test turn" }));
+    expect(
+      screen.getByText("Test turn queued for kitchen"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps graph editing read-only on small screens", async () => {
     const user = userEvent.setup();
     render(
@@ -502,6 +542,87 @@ describe("Pipelines graph editor", () => {
     expect(
       screen.queryByRole("button", { name: "Validate Graph" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("Providers workspace", () => {
+  it("renders provider status from the snapshot and filters by stage", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterProvidersSection(user);
+
+    expect(
+      screen.getByRole("heading", { name: "Providers" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("piper-local")).toBeInTheDocument();
+    expect(
+      screen.getByText("no successful reachability check yet"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "TTS" }));
+    expect(screen.getByText("1 visible")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "LLM" }));
+    expect(screen.getByText("0 visible")).toBeInTheDocument();
+    expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
+  });
+
+  it("supports frontend-only provider reachability and fallback actions", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Test piper-local" }));
+
+    expect(screen.getByText("Reachability check passed")).toBeInTheDocument();
+    expect(screen.getByText("reachable")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use fallback" }));
+    expect(
+      screen.getByText("Fallback selected for piper-local"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("Settings workspace", () => {
+  it("stores operator settings in local UI state", async () => {
+    const user = userEvent.setup();
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await enterSettingsSection(user);
+    await user.clear(screen.getByLabelText("Deployment name"));
+    await user.type(screen.getByLabelText("Deployment name"), "clinic-prod");
+    await user.click(screen.getByLabelText("Local-only mode"));
+    await user.click(screen.getByRole("button", { name: "90 d" }));
+    await user.selectOptions(screen.getByLabelText("Log level"), "debug");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(
+      screen.getByText("Settings saved for clinic-prod"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Local-only mode")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "90 d" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Log level")).toHaveValue("debug");
+  });
+
+  it("requires explicit confirmation before resetting local console state", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterSettingsSection(user);
+    await user.click(screen.getByRole("button", { name: "Reset local state" }));
+    await user.click(screen.getByRole("button", { name: "Confirm reset" }));
+
+    expect(screen.getByText("Type RESET to confirm")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Reset confirmation"), "RESET");
+    await user.click(screen.getByRole("button", { name: "Confirm reset" }));
+
+    expect(screen.getByText("Local console state reset")).toBeInTheDocument();
   });
 });
 
@@ -532,6 +653,16 @@ function successfulTurnEvents(): EventEnvelope[] {
 async function enterPipelinesSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
   await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+}
+
+async function enterProvidersSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Providers" }));
+}
+
+async function enterSettingsSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
 }
 
 function pipelineView(): PipelineView {
