@@ -6,6 +6,7 @@ import {
   CircleCheck,
   KeyRound,
   Network,
+  Plus,
   Radio,
   Settings,
   SlidersHorizontal,
@@ -42,7 +43,29 @@ const sections = [
 
 type SectionId = (typeof sections)[number]["id"];
 
-function App() {
+export interface PipelineGraphDraft {
+  name: string;
+  nodes: PipelineNodeDraft[];
+  edges: PipelineEdgeDraft[];
+}
+
+interface PipelineNodeDraft {
+  id: string;
+  kind: "source" | "stt" | "llm" | "tts" | "sink";
+  provider: string;
+}
+
+interface PipelineEdgeDraft {
+  from: string;
+  to: string;
+}
+
+interface AppProps {
+  initialSnapshot?: OperatorStatusSnapshot;
+  onPipelineSaved?: (graph: PipelineGraphDraft) => void;
+}
+
+function App({ initialSnapshot, onPipelineSaved }: AppProps = {}) {
   const [access, setAccess] = useState<OperatorAccess>(() =>
     loadOperatorAccess(),
   );
@@ -56,6 +79,8 @@ function App() {
     <OperatorWorkspace
       access={access}
       activeSection={activeSection}
+      initialSnapshot={initialSnapshot}
+      onPipelineSaved={onPipelineSaved}
       onSectionChange={setActiveSection}
       onClearAccess={() => {
         clearOperatorAccess();
@@ -142,19 +167,30 @@ function OperatorAccessScreen({
 function OperatorWorkspace({
   access,
   activeSection,
+  initialSnapshot,
+  onPipelineSaved,
   onSectionChange,
   onClearAccess,
 }: {
   access: OperatorAccess;
   activeSection: SectionId;
+  initialSnapshot?: OperatorStatusSnapshot;
+  onPipelineSaved?: (graph: PipelineGraphDraft) => void;
   onSectionChange: (section: SectionId) => void;
   onClearAccess: () => void;
 }) {
   const snapshotClient = useMemo(
-    () => createSnapshotClient({ baseUrl: window.location.origin, access }),
-    [access],
+    () =>
+      createSnapshotClient({
+        baseUrl: window.location.origin,
+        access,
+        snapshot: initialSnapshot,
+      }),
+    [access, initialSnapshot],
   );
+  const [snapshot, setSnapshot] = useState(snapshotClient.snapshot);
   const eventPlan = useMemo(() => initialEventStreamPlan(), []);
+  const firstRun = snapshot?.runtime.launch_state === "first_run_setup";
   const accessLabel =
     access.mode === "anonymous"
       ? "Anonymous operator access"
@@ -208,7 +244,10 @@ function OperatorWorkspace({
           <div>
             <p className="eyebrow">{accessLabel}</p>
             <h1>
-              {sections.find((section) => section.id === activeSection)?.label}
+              {firstRun
+                ? "First-Run Setup"
+                : sections.find((section) => section.id === activeSection)
+                    ?.label}
             </h1>
           </div>
           <div className="runtime-strip">
@@ -227,8 +266,13 @@ function OperatorWorkspace({
 
         <SectionPanel
           section={activeSection}
-          snapshot={snapshotClient.snapshot}
+          snapshot={snapshot}
           eventPosture={eventPlan.posture}
+          onPipelineSaved={(graph) => {
+            onPipelineSaved?.(graph);
+            setSnapshot((current) => promoteSavedPipeline(current, graph));
+            onSectionChange("overview");
+          }}
         />
       </section>
     </main>
@@ -239,11 +283,17 @@ function SectionPanel({
   section,
   snapshot,
   eventPosture,
+  onPipelineSaved,
 }: {
   section: SectionId;
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
+  onPipelineSaved: (graph: PipelineGraphDraft) => void;
 }) {
+  if (snapshot?.runtime.launch_state === "first_run_setup") {
+    return <GuidedSetupPanel onPipelineSaved={onPipelineSaved} />;
+  }
+
   if (section === "overview") {
     return <OverviewPanel snapshot={snapshot} eventPosture={eventPosture} />;
   }
@@ -264,6 +314,130 @@ function SectionPanel({
         </div>
       ))}
     </div>
+  );
+}
+
+function GuidedSetupPanel({
+  onPipelineSaved,
+}: {
+  onPipelineSaved: (graph: PipelineGraphDraft) => void;
+}) {
+  const [pipelineName, setPipelineName] = useState("default");
+  const [sttProvider, setSttProvider] = useState("whisper");
+  const [llmProvider, setLlmProvider] = useState("openai");
+  const [ttsProvider, setTtsProvider] = useState("piper");
+  const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
+  const [toolSetupSkipped, setToolSetupSkipped] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = pipelineName.trim();
+    if (!name) {
+      setError("Pipeline name is required");
+      return;
+    }
+    if (!sttProvider.trim() || !llmProvider.trim() || !ttsProvider.trim()) {
+      setError("Provider settings are required");
+      return;
+    }
+
+    setError(null);
+    onPipelineSaved(
+      buildMinimalVoiceLoopGraph({
+        name,
+        sttProvider: sttProvider.trim(),
+        llmProvider: llmProvider.trim(),
+        ttsProvider: ttsProvider.trim(),
+      }),
+    );
+  }
+
+  return (
+    <form className="guided-setup" onSubmit={save}>
+      <section className="setup-band" aria-labelledby="guided-setup-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Minimal voice loop</p>
+            <h2 id="guided-setup-title">Guided Setup</h2>
+          </div>
+          <StatusPill
+            label="Tools"
+            value={toolSetupSkipped ? "skipped" : "optional"}
+            tone="neutral"
+          />
+        </div>
+
+        <div className="setup-grid">
+          <label className="field">
+            <span>Pipeline name</span>
+            <input
+              value={pipelineName}
+              onChange={(event) => setPipelineName(event.target.value)}
+            />
+          </label>
+
+          <div className="setup-actions">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setProviderSettingsOpen((open) => !open)}
+            >
+              <Boxes size={17} aria-hidden="true" />
+              Configure Providers
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setToolSetupSkipped(true)}
+            >
+              <Plus size={17} aria-hidden="true" />
+              Skip tool setup
+            </button>
+          </div>
+        </div>
+
+        {providerSettingsOpen ? (
+          <div className="provider-settings" aria-label="Provider Settings">
+            <label className="field">
+              <span>Speech-to-text provider</span>
+              <input
+                value={sttProvider}
+                onChange={(event) => setSttProvider(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Language model provider</span>
+              <input
+                value={llmProvider}
+                onChange={(event) => setLlmProvider(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Text-to-speech provider</span>
+              <input
+                value={ttsProvider}
+                onChange={(event) => setTtsProvider(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+
+        {toolSetupSkipped ? (
+          <div className="calm-state">
+            <CircleCheck size={18} aria-hidden="true" />
+            <span>Tool setup skipped</span>
+          </div>
+        ) : null}
+
+        {error ? <p className="form-error">{error}</p> : null}
+
+        <button className="primary-action" type="submit">
+          <CircleCheck size={17} aria-hidden="true" />
+          Validate and Save
+        </button>
+      </section>
+    </form>
   );
 }
 
@@ -346,6 +520,98 @@ export function OverviewPanel({
       </div>
     </div>
   );
+}
+
+function buildMinimalVoiceLoopGraph({
+  name,
+  sttProvider,
+  llmProvider,
+  ttsProvider,
+}: {
+  name: string;
+  sttProvider: string;
+  llmProvider: string;
+  ttsProvider: string;
+}): PipelineGraphDraft {
+  return {
+    name,
+    nodes: [
+      { id: "mic", kind: "source", provider: "websocket" },
+      { id: "stt", kind: "stt", provider: sttProvider },
+      { id: "llm", kind: "llm", provider: llmProvider },
+      { id: "tts", kind: "tts", provider: ttsProvider },
+      { id: "speaker", kind: "sink", provider: "websocket" },
+    ],
+    edges: [
+      { from: "mic", to: "stt" },
+      { from: "stt", to: "llm" },
+      { from: "llm", to: "tts" },
+      { from: "tts", to: "speaker" },
+    ],
+  };
+}
+
+function promoteSavedPipeline(
+  snapshot: OperatorStatusSnapshot | null,
+  graph: PipelineGraphDraft,
+): OperatorStatusSnapshot | null {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    runtime: {
+      ...snapshot.runtime,
+      launch_state: "operations_workspace",
+    },
+    pipelines: [
+      {
+        name: graph.name,
+        usable: true,
+        health: {
+          state: "unproven",
+          summary: "awaiting first successful turn",
+          last_successful_turn: null,
+          last_failed_turn: null,
+        },
+        components: [
+          {
+            kind: "capture",
+            provider: "websocket",
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "transcription",
+            provider:
+              graph.nodes.find((node) => node.id === "stt")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "reasoning",
+            provider:
+              graph.nodes.find((node) => node.id === "llm")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "synthesis",
+            provider:
+              graph.nodes.find((node) => node.id === "tts")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+        ],
+        affected_providers: [],
+      },
+    ],
+  };
 }
 
 function StaleBanner({ snapshot }: { snapshot: OperatorStatusSnapshot }) {

@@ -225,10 +225,123 @@ describe("Overview operations workspace", () => {
   });
 });
 
+describe("First-Run Guided Setup", () => {
+  it("routes no-pipeline launch state into Guided Setup", async () => {
+    const user = userEvent.setup();
+    render(<App initialSnapshot={firstRunSnapshot()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "First-Run Setup" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Guided Setup" }),
+    ).toBeInTheDocument();
+  });
+
+  it("invokes inline Provider Settings and allows optional tool setup to be skipped", async () => {
+    const user = userEvent.setup();
+    render(<App initialSnapshot={firstRunSnapshot()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Configure Providers" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Skip tool setup" }));
+
+    expect(screen.getByLabelText("Speech-to-text provider")).toHaveValue(
+      "whisper",
+    );
+    expect(screen.getByLabelText("Language model provider")).toHaveValue(
+      "openai",
+    );
+    expect(screen.getByLabelText("Text-to-speech provider")).toHaveValue(
+      "piper",
+    );
+    expect(screen.getByText("Tool setup skipped")).toBeInTheDocument();
+  });
+
+  it("reports validation feedback before saving an incomplete voice loop", async () => {
+    const user = userEvent.setup();
+    render(<App initialSnapshot={firstRunSnapshot()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(screen.getByText("Pipeline name is required")).toBeInTheDocument();
+  });
+
+  it("saves a real minimal voice-loop graph and transitions to Operations Workspace", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: unknown[] = [];
+    render(
+      <App
+        initialSnapshot={firstRunSnapshot()}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.type(screen.getByLabelText("Pipeline name"), "kitchen");
+    await user.click(screen.getByRole("button", { name: "Skip tool setup" }));
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(savedGraphs).toEqual([
+      {
+        name: "kitchen",
+        nodes: [
+          { id: "mic", kind: "source", provider: "websocket" },
+          { id: "stt", kind: "stt", provider: "whisper" },
+          { id: "llm", kind: "llm", provider: "openai" },
+          { id: "tts", kind: "tts", provider: "piper" },
+          { id: "speaker", kind: "sink", provider: "websocket" },
+        ],
+        edges: [
+          { from: "mic", to: "stt" },
+          { from: "stt", to: "llm" },
+          { from: "llm", to: "tts" },
+          { from: "tts", to: "speaker" },
+        ],
+      },
+    ]);
+    expect(
+      screen.getByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Current Exceptions" }),
+    ).toBeInTheDocument();
+  });
+});
+
 function snapshotFixture(): OperatorStatusSnapshot {
   return JSON.parse(
     JSON.stringify(operatorStatusSnapshotFixture),
   ) as OperatorStatusSnapshot;
+}
+
+function firstRunSnapshot(): OperatorStatusSnapshot {
+  const snapshot = healthySnapshot();
+  snapshot.runtime.launch_state = "first_run_setup";
+  snapshot.pipelines = [];
+  snapshot.active_turns = [];
+  snapshot.recent_failures = [];
+  snapshot.satellites = {
+    connected: [],
+    recently_active: [],
+    recent_window_seconds: 300,
+  };
+  return snapshot;
 }
 
 function healthySnapshot(): OperatorStatusSnapshot {

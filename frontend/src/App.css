@@ -266,6 +266,40 @@ button {
   gap: 14px;
 }
 
+.guided-setup {
+  display: block;
+}
+
+.setup-band {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.setup-grid,
+.provider-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.setup-grid {
+  grid-template-columns: minmax(220px, 320px) minmax(260px, 1fr);
+  align-items: end;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.provider-settings {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
 .exception-band {
   padding: 16px;
 }
@@ -521,6 +555,8 @@ button {
   .panel-grid,
   .overview-grid,
   .exception-list,
+  .setup-grid,
+  .provider-settings,
   .section-band {
     grid-template-columns: 1fr;
   }

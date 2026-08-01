@@ -28,6 +28,12 @@ connected satellites separate from recently active satellites, preserves the
 last known snapshot as Stale State when the event stream disconnects, and
 expects a refreshed status snapshot before clearing stale state after reconnect.
 
+When `/v1/status` reports `runtime.launch_state` as `first_run_setup`, the app
+routes into Guided Setup. Guided Setup builds a minimal source-to-sink voice
+loop graph, invokes reusable Provider Settings inline, lets optional tool setup
+be skipped, validates required fields, and transitions back to Overview after
+the pipeline graph is saved.
+
 Generated TypeScript contracts and reviewable JSON fixtures live under
 `src/contracts`. Rust owns those artifacts. After an intentional API or event
 contract change, update them from the repository root with:
