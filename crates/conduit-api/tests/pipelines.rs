@@ -186,6 +186,34 @@ async fn validate_checks_without_storing() {
 }
 
 #[tokio::test]
+async fn component_catalog_exposes_configuration_schemas() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/pipeline-components")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["components"][0]["id"], "openai.responses");
+    assert_eq!(body["components"][0]["kind"], "llm");
+    assert_eq!(
+        body["components"][0]["schema"]["properties"]["base_url"],
+        serde_json::json!({ "type": "string", "format": "url" })
+    );
+    assert_eq!(
+        body["components"][0]["schema"]["required"],
+        serde_json::json!(["base_url", "model"])
+    );
+    assert_eq!(
+        body["components"][1]["schema"]["properties"]["streaming"],
+        serde_json::json!({ "type": "boolean" })
+    );
+    assert_eq!(body["components"][2]["id"], "wyoming");
+    assert_eq!(
+        body["components"][2]["schema"]["properties"]["url"],
+        serde_json::json!({ "type": "string", "format": "url" })
+    );
+}
+
+#[tokio::test]
 async fn deleting_a_missing_pipeline_is_a_404() {
     let state = AppState::new(EventBus::default());
     let request = Request::builder()

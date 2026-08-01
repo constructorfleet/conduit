@@ -85,6 +85,12 @@ Setting `CONDUIT_OPENAI_BASE_URL` or `CONDUIT_OPENAI_API_KEY` registers an
 OpenAI-compatible language model provider. The language model node in the
 pipeline supplies the model name in node config.
 
+The service exposes `GET /v1/pipeline-components` so the Operator Console can
+render provider-specific node configuration forms from component schemas. Those
+forms write into `graph.nodes[].config`; provider registration is still
+controlled by the server environment until Conduit grows a runtime plugin
+loader.
+
 Setting an STT or TTS model without a base URL or API key is an error. The
 server refuses to start rather than registering a speech stage with no server.
 

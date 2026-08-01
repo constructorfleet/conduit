@@ -30,7 +30,10 @@ import "./App.css";
 import { createSnapshotClient } from "./apiClient";
 import type { OperatorDataMode, SnapshotState } from "./apiClient";
 import type {
+  ComponentConfigProperty,
   NodeKind,
+  PipelineComponentCatalog,
+  PipelineComponentDescriptor,
   PipelineGraph,
   PipelineNode,
   PipelineView,
@@ -77,6 +80,7 @@ interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
+  initialComponentCatalog?: PipelineComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen?: boolean;
   dataMode?: OperatorDataMode;
@@ -88,6 +92,7 @@ function App({
   initialSnapshot,
   initialEvents,
   initialEventPosture,
+  initialComponentCatalog,
   initialPipelineViews,
   initialSmallScreen = false,
   dataMode = defaultDataMode(),
@@ -109,6 +114,7 @@ function App({
       activeSection={activeSection}
       initialEvents={initialEvents}
       initialEventPosture={initialEventPosture}
+      initialComponentCatalog={initialComponentCatalog}
       initialPipelineViews={initialPipelineViews}
       initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
@@ -203,6 +209,7 @@ function OperatorWorkspace({
   activeSection,
   initialEvents,
   initialEventPosture,
+  initialComponentCatalog,
   initialPipelineViews,
   initialSmallScreen,
   initialSnapshot,
@@ -216,6 +223,7 @@ function OperatorWorkspace({
   activeSection: SectionId;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
+  initialComponentCatalog?: PipelineComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
@@ -245,6 +253,10 @@ function OperatorWorkspace({
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
+  const [componentCatalog, setComponentCatalog] =
+    useState<PipelineComponentCatalog>(
+      () => initialComponentCatalog ?? { components: [] },
+    );
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const smallScreen = useSmallScreenMode(initialSmallScreen);
   const eventPlan = useMemo(() => {
@@ -299,16 +311,23 @@ function OperatorWorkspace({
         setSnapshotState("loading");
         setLoadError(null);
 
-        const [loadedSnapshot, loadedPipelineViews, loadedTurns] =
-          await Promise.all([
-            snapshotClient.loadSnapshot(),
-            initialPipelineViews
-              ? Promise.resolve([...initialPipelineViews])
-              : snapshotClient.loadPipelineViews(),
-            initialEvents
-              ? Promise.resolve({ turns: [] })
-              : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
-          ]);
+        const [
+          loadedSnapshot,
+          loadedPipelineViews,
+          loadedComponentCatalog,
+          loadedTurns,
+        ] = await Promise.all([
+          snapshotClient.loadSnapshot(),
+          initialPipelineViews
+            ? Promise.resolve([...initialPipelineViews])
+            : snapshotClient.loadPipelineViews(),
+          initialComponentCatalog
+            ? Promise.resolve(initialComponentCatalog)
+            : snapshotClient.loadComponentCatalog(),
+          initialEvents
+            ? Promise.resolve({ turns: [] })
+            : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
+        ]);
 
         if (cancelled) {
           return;
@@ -325,6 +344,7 @@ function OperatorWorkspace({
 
         setSnapshot(loadedSnapshot);
         setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
+        setComponentCatalog(initialComponentCatalog ?? loadedComponentCatalog);
         setTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
       } catch (caught) {
@@ -334,6 +354,7 @@ function OperatorWorkspace({
 
         setSnapshot(null);
         setPipelineViews(initialPipelineViews ?? []);
+        setComponentCatalog(initialComponentCatalog ?? { components: [] });
         setSnapshotState("error");
         setLoadError(
           caught instanceof Error
@@ -351,6 +372,7 @@ function OperatorWorkspace({
   }, [
     access.mode,
     initialEvents,
+    initialComponentCatalog,
     initialPipelineViews,
     initialSnapshot,
     snapshotClient,
@@ -446,6 +468,7 @@ function OperatorWorkspace({
           section={activeSection}
           events={initialEvents ?? eventEnvelopeFixtures}
           turnSnapshot={turnSnapshot}
+          componentCatalog={componentCatalog}
           pipelineViews={pipelineViews}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
@@ -468,6 +491,7 @@ function SectionPanel({
   section,
   events,
   turnSnapshot,
+  componentCatalog,
   pipelineViews,
   snapshot,
   eventPosture,
@@ -480,6 +504,7 @@ function SectionPanel({
   section: SectionId;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
+  componentCatalog: PipelineComponentCatalog;
   pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
@@ -521,6 +546,7 @@ function SectionPanel({
   if (section === "pipelines") {
     return (
       <PipelinesPanel
+        componentCatalog={componentCatalog}
         pipelineViews={pipelineViews}
         readOnly={initialSmallScreen}
         snapshot={snapshot}
@@ -1239,12 +1265,14 @@ function EventsPanel({
 }
 
 function PipelinesPanel({
+  componentCatalog,
   pipelineViews,
   readOnly,
   snapshot,
   onPipelineStored,
   onPipelineValidate,
 }: {
+  componentCatalog: PipelineComponentCatalog;
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
   snapshot: OperatorStatusSnapshot | null;
@@ -1266,13 +1294,24 @@ function PipelinesPanel({
     null,
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState(
+    () => selectedView?.graph.nodes[0]?.id ?? "",
+  );
   const selectedHealth = snapshot?.pipelines.find(
     (pipeline) => pipeline.name === selectedView?.graph.name,
   );
+  const selectedNode =
+    draft?.nodes.find((node) => node.id === selectedNodeId) ??
+    draft?.nodes[0] ??
+    null;
+  const selectedComponent = selectedNode
+    ? componentForNode(componentCatalog, selectedNode)
+    : null;
 
   function selectPipeline(view: PipelineView) {
     setSelectedName(view.graph.name);
     setDraft(cloneGraph(view.graph));
+    setSelectedNodeId(view.graph.nodes[0]?.id ?? "");
     setHistory([]);
     setValidation(null);
     setNotice(null);
@@ -1316,6 +1355,44 @@ function PipelinesPanel({
         edges: [...edges, { from, to: id }, ...(to ? [{ from: id, to }] : [])],
       };
     });
+  }
+
+  function updateSelectedNodeConfig(
+    field: string,
+    property: ComponentConfigProperty,
+    value: string | boolean,
+  ) {
+    if (!selectedNode) {
+      return;
+    }
+
+    applyDraftEdit((graph) => ({
+      ...graph,
+      nodes: graph.nodes.map((node) => {
+        if (node.id !== selectedNode.id) {
+          return node;
+        }
+
+        const config =
+          node.config &&
+          typeof node.config === "object" &&
+          !Array.isArray(node.config)
+            ? { ...(node.config as Record<string, unknown>) }
+            : {};
+        if (property.type === "boolean") {
+          config[field] = value === true;
+        } else if (typeof value === "string" && value.length > 0) {
+          config[field] = value;
+        } else {
+          delete config[field];
+        }
+
+        return {
+          ...node,
+          config: Object.keys(config).length > 0 ? config : undefined,
+        };
+      }),
+    }));
   }
 
   function addToolNode() {
@@ -1481,6 +1558,34 @@ function PipelinesPanel({
             {selectedHealth?.health.summary ?? "No snapshot health available"}
           </p>
 
+          <div className="component-config-form">
+            <label className="field">
+              <span>Node</span>
+              <select
+                value={selectedNode?.id ?? ""}
+                onChange={(event) => setSelectedNodeId(event.target.value)}
+              >
+                {draft.nodes.map((node, index) => (
+                  <option value={node.id} key={node.id}>
+                    {index + 1}. {node.id} / {node.kind}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedNode && selectedComponent ? (
+              <ComponentConfigForm
+                component={selectedComponent}
+                node={selectedNode}
+                readOnly={readOnly}
+                onChange={updateSelectedNodeConfig}
+              />
+            ) : selectedNode ? (
+              <p className="muted-text">
+                No configuration schema for {selectedNode.provider}
+              </p>
+            ) : null}
+          </div>
+
           <div className="compact-list">
             {selectedHealth?.components.map((component) => (
               <div className="metric-row" key={component.kind}>
@@ -1568,6 +1673,97 @@ function PipelinesPanel({
         </aside>
       </div>
     </div>
+  );
+}
+
+function ComponentConfigForm({
+  component,
+  node,
+  readOnly,
+  onChange,
+}: {
+  component: PipelineComponentDescriptor;
+  node: PipelineNode;
+  readOnly: boolean;
+  onChange: (
+    field: string,
+    property: ComponentConfigProperty,
+    value: string | boolean,
+  ) => void;
+}) {
+  const config =
+    node.config &&
+    typeof node.config === "object" &&
+    !Array.isArray(node.config)
+      ? (node.config as Record<string, unknown>)
+      : {};
+  const required = new Set(component.schema.required);
+
+  return (
+    <fieldset className="component-config-fields" disabled={readOnly}>
+      <legend>{component.label}</legend>
+      {Object.entries(component.schema.properties).map(([field, property]) => {
+        const requiredLabel = required.has(field) ? " required" : "";
+        const label = `${field}${requiredLabel}`;
+        if (property.type === "boolean") {
+          return (
+            <label className="check-row" key={field}>
+              <input
+                type="checkbox"
+                checked={config[field] === true}
+                onChange={(event) =>
+                  onChange(field, property, event.target.checked)
+                }
+              />
+              <span>{field}</span>
+            </label>
+          );
+        }
+
+        return (
+          <label className="field" key={field}>
+            <span>{label}</span>
+            <input
+              type={property.format === "url" ? "url" : "text"}
+              pattern={property.pattern}
+              required={required.has(field)}
+              value={typeof config[field] === "string" ? config[field] : ""}
+              onChange={(event) =>
+                onChange(field, property, event.target.value)
+              }
+            />
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
+function componentForNode(
+  catalog: PipelineComponentCatalog,
+  node: PipelineNode,
+): PipelineComponentDescriptor | null {
+  const exact = catalog.components.find(
+    (component) =>
+      component.id === node.provider && component.kind === node.kind,
+  );
+  if (exact) {
+    return exact;
+  }
+
+  if (node.provider === "openai") {
+    const openAiCompletions = catalog.components.find(
+      (component) =>
+        component.id === "openai.completions" && component.kind === node.kind,
+    );
+    if (openAiCompletions) {
+      return openAiCompletions;
+    }
+  }
+
+  return (
+    catalog.components.find((component) => component.id === node.provider) ??
+    null
   );
 }
 

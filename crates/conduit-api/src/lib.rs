@@ -64,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/turns/{turn_id}", get(turns::get))
         .route("/v1/turns/{turn_id}/events", get(turns::events))
         .route("/v1/pipelines", get(pipelines::list))
+        .route("/v1/pipeline-components", get(pipelines::components))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route(CONVERSE_ROUTE, get(converse::converse))
         .route(

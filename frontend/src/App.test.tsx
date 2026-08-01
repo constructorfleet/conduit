@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { OverviewPanel } from "./App";
-import type { PipelineGraph, PipelineView } from "./contracts/client";
+import type {
+  PipelineComponentCatalog,
+  PipelineGraph,
+  PipelineView,
+} from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
@@ -723,6 +727,37 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("renders schema-driven component configuration fields into saved node config", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.selectOptions(screen.getByLabelText("Node"), "llm");
+    await user.type(
+      screen.getByLabelText("base_url required"),
+      "https://api.openai.com/v1",
+    );
+    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.click(screen.getByLabelText("streaming"));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(
+      savedGraphs[0]?.nodes.find((node) => node.id === "llm")?.config,
+    ).toEqual({
+      base_url: "https://api.openai.com/v1",
+      model: "gpt.5",
+      streaming: true,
+    });
+  });
+
   it("persists saved graph edits across reloads", async () => {
     const user = userEvent.setup();
     mockOperatorApi({
@@ -983,6 +1018,27 @@ function pipelineView(): PipelineView {
   };
 }
 
+function componentCatalog(): PipelineComponentCatalog {
+  return {
+    components: [
+      {
+        id: "openai.completions",
+        label: "OpenAI Completions",
+        kind: "llm",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[a-z0-9.]+" },
+            streaming: { type: "boolean" },
+          },
+          required: ["base_url", "model"],
+        },
+      },
+    ],
+  };
+}
+
 function liveApiPipelineView(): PipelineView {
   const graph: PipelineGraph = {
     name: "garage",
@@ -1058,10 +1114,12 @@ function liveApiSnapshot(): OperatorStatusSnapshot {
 function mockOperatorApi({
   snapshot = snapshotFixture(),
   pipelineViews = [pipelineView()],
+  componentCatalog: catalog = componentCatalog(),
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
   pipelineViews?: PipelineView[];
+  componentCatalog?: PipelineComponentCatalog;
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
@@ -1080,6 +1138,10 @@ function mockOperatorApi({
 
       if (route === "/v1/pipelines" && method === "GET") {
         return jsonResponse([...pipelines.keys()]);
+      }
+
+      if (route === "/v1/pipeline-components" && method === "GET") {
+        return jsonResponse(catalog);
       }
 
       if (route.startsWith("/v1/pipelines/")) {
