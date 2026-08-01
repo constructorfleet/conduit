@@ -2644,11 +2644,6 @@ function PipelinesPanel({
               className="pipeline-atom-map"
               style={{ transform: `scale(${graphZoom / 100})` }}
             >
-              <span className="atom-entry-link" aria-label="Pipeline start">
-                Start
-                <ArrowRight size={16} aria-hidden="true" />
-                {atomFlowNodes[0]?.id}
-              </span>
               {atomFlowNodes.map((node) => {
                 const outgoingEdges = atomEdges.filter(
                   (edge) =>
