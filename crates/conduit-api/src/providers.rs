@@ -5,7 +5,7 @@ use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use conduit_provider::storage::{
-    ProviderCapability, ProviderDefinition, ProviderDefinitionVariant,
+    McpTransport, ProviderCapability, ProviderDefinition, ProviderDefinitionVariant,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -187,9 +187,20 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         | ProviderDefinitionVariant::WyomingTts { url, .. } => {
             validate_absolute_url("url", url)?;
         }
-        ProviderDefinitionVariant::McpTool { .. } => {}
+        ProviderDefinitionVariant::McpTool { transport } => {
+            validate_mcp_transport(transport)?;
+        }
     }
     Ok(())
+}
+
+fn validate_mcp_transport(transport: &McpTransport) -> Result<(), ApiError> {
+    match transport {
+        McpTransport::Sse { url } | McpTransport::StreamableHttp { url } => {
+            validate_http_url("url", url)
+        }
+        McpTransport::Stdio { .. } => Ok(()),
+    }
 }
 
 fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {
