@@ -992,6 +992,12 @@ describe("Pipelines graph editor", () => {
     const graph = screen.getByLabelText("Pipeline graph");
     const memoryOrbital = within(graph).getByLabelText("Move memory augment");
     const toolOrbital = within(graph).getByLabelText("Move confirm augment");
+    expect(memoryOrbital).toHaveStyle({
+      "--orbit-x": "0px",
+      "--orbit-y": "-78px",
+      "--orbit-start-x": "0px",
+      "--orbit-start-y": "-78px",
+    });
     expect(memoryOrbital).not.toHaveAttribute(
       "data-orbit-slot",
       toolOrbital.getAttribute("data-orbit-slot") ?? "",

@@ -895,9 +895,9 @@ button {
 
 .atom-orbital {
   position: absolute;
-  left: calc(50% + var(--orbit-x));
-  top: calc(50% + var(--orbit-y));
-  transform: translate(-50%, -50%);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) translate(var(--orbit-x), var(--orbit-y));
   pointer-events: auto;
   cursor: grab;
   touch-action: none;
