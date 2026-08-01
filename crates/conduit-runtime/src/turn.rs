@@ -90,9 +90,10 @@ impl Turn {
         idle: Option<Duration>,
     ) -> Self {
         let progress = Progress::default();
+        let pipeline = plan.pipeline.clone();
         Self {
             plan,
-            emitter: Emitter::new(bus, format, progress.clone()),
+            emitter: Emitter::new(bus, pipeline, format, progress.clone()),
             format,
             output,
             speaker: None,

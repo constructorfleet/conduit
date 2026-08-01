@@ -19,6 +19,8 @@ pub struct Emitter {
     bus: EventBus,
     trace: TraceId,
     conversation: ConversationId,
+    /// Pipeline this turn is executing.
+    pipeline: String,
     /// Which satellite this turn belongs to, when the caller knew.
     device: Option<DeviceId>,
     /// The format captured audio arrives in, reported by the capture events.
@@ -36,11 +38,17 @@ impl Emitter {
     /// asked separately to report would eventually be asked in one place and
     /// forgotten in another, and the stage that forgot would be exactly the one
     /// nothing could time out.
-    pub fn new(bus: EventBus, format: AudioFormat, progress: Progress) -> Self {
+    pub fn new(
+        bus: EventBus,
+        pipeline: impl Into<String>,
+        format: AudioFormat,
+        progress: Progress,
+    ) -> Self {
         Self {
             bus,
             trace: TraceId::new(),
             conversation: ConversationId::new(),
+            pipeline: pipeline.into(),
             device: None,
             format,
             progress,
@@ -62,8 +70,9 @@ impl Emitter {
     /// Publishes `event` for this turn.
     pub fn emit(&self, event: Event) {
         self.progress.reached(event.stage());
-        let mut envelope =
-            Envelope::new(self.trace, event).with_conversation(self.conversation);
+        let mut envelope = Envelope::new(self.trace, event)
+            .with_conversation(self.conversation)
+            .with_pipeline(self.pipeline.clone());
         if let Some(device) = self.device {
             envelope = envelope.with_device(device);
         }

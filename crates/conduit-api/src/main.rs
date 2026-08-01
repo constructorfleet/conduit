@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let state = with_dev_providers(state);
     conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
+    conduit_api::status::StatusCollector::spawn(state.status(), &state.bus);
     if state.providers().is_none() {
         tracing::warn!(
             "no providers are configured; conversations will be refused until \

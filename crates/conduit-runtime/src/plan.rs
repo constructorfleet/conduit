@@ -44,6 +44,8 @@ struct TtsConfig {
 /// Resolution happens once, at prepare time, so a turn never pays for a
 /// registry lookup and a misconfigured graph fails before any audio arrives.
 pub struct Plan {
+    /// Pipeline this plan executes.
+    pub pipeline: String,
     /// Recognizer, and the node that selected it.
     pub stt: Arc<dyn SpeechToText>,
     /// Node id of the recognizer, used when reporting failures.
@@ -195,6 +197,7 @@ impl Plan {
         }
 
         Ok(Self {
+            pipeline: graph.name.clone(),
             stt,
             stt_node,
             llm,

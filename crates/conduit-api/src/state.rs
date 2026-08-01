@@ -12,6 +12,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
 
 use crate::auth::Access;
+use crate::status::RuntimeStatus;
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
@@ -24,6 +25,8 @@ pub struct AppState {
     providers: Option<Arc<Providers>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
     metrics: Arc<Metrics>,
+    /// Runtime status projection used by the Operator Console.
+    status: RuntimeStatus,
     /// Who is allowed to call the service API.
     access: Arc<Access>,
     /// How long a turn may publish nothing before it is abandoned.
@@ -45,6 +48,7 @@ impl AppState {
             pipelines,
             providers: None,
             metrics: Arc::new(Metrics::new()),
+            status: RuntimeStatus::new(),
             access: Arc::new(Access::anonymous()),
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
         }
@@ -91,6 +95,12 @@ impl AppState {
     #[must_use]
     pub fn metrics(&self) -> Arc<Metrics> {
         Arc::clone(&self.metrics)
+    }
+
+    /// Runtime status projection used by the Operator Console.
+    #[must_use]
+    pub fn status(&self) -> RuntimeStatus {
+        self.status.clone()
     }
 
     /// Makes `providers` available to conversations.

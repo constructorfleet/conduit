@@ -5,9 +5,21 @@
 //! vocabulary and small semantic helpers; runtime projection code belongs in
 //! the status API implementation.
 
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
+use axum::extract::State;
 use chrono::{DateTime, Utc};
+use conduit_core::bus::{EventBus, Subscription};
+use conduit_core::event::{CancelReason, Envelope, Event};
+use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
+use conduit_runtime::Runner;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+use crate::auth::ManagementCaller;
+use crate::{ApiError, AppState};
 
 /// Coherent source-of-truth snapshot for the Operator Console.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,7 +131,7 @@ pub struct ComponentHealth {
 }
 
 /// Pipeline component kinds surfaced to operators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
     /// Audio capture from a satellite.
@@ -347,4 +359,495 @@ pub enum TurnResult {
     Failed,
     /// The turn ended before completion.
     Cancelled,
+}
+
+/// Runtime status projection fed by the event bus.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeStatus {
+    inner: Arc<RwLock<Projection>>,
+}
+
+impl RuntimeStatus {
+    /// Builds an empty runtime status projection.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records one envelope into the projection.
+    pub async fn record(&self, envelope: &Envelope) {
+        self.inner.write().await.record(envelope);
+    }
+
+    async fn project(&self) -> Projection {
+        self.inner.read().await.clone()
+    }
+}
+
+/// Subscribes to the event bus and keeps [`RuntimeStatus`] current.
+pub struct StatusCollector;
+
+impl StatusCollector {
+    /// Subscribes to `bus` and runs in the background.
+    pub fn spawn(status: RuntimeStatus, bus: &EventBus) -> tokio::task::JoinHandle<()> {
+        let subscription = bus.subscribe();
+        tokio::spawn(async move { run_collector(status, subscription).await })
+    }
+}
+
+async fn run_collector(status: RuntimeStatus, mut subscription: Subscription) {
+    while let Some(envelope) = subscription.recv().await {
+        status.record(&envelope).await;
+    }
+    tracing::debug!("event bus closed; status collector stopping");
+}
+
+/// `GET /v1/status` — coherent operator status snapshot.
+pub(crate) async fn get(
+    // First so auth is checked before any store or projection work.
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+) -> Result<axum::Json<OperatorStatusSnapshot>, ApiError> {
+    Ok(axum::Json(snapshot(&state).await?))
+}
+
+async fn snapshot(state: &AppState) -> Result<OperatorStatusSnapshot, ApiError> {
+    let generated_at = Utc::now();
+    let projection = state.status().project().await;
+    let names = state
+        .pipeline_names()
+        .await
+        .map_err(|error| ApiError::unavailable(error.to_string()))?;
+    let providers = state.providers();
+
+    let mut pipelines = Vec::new();
+    for name in names {
+        let graph = state
+            .pipeline(&name)
+            .await
+            .map_err(|error| ApiError::unavailable(error.to_string()))?
+            .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
+        pipelines.push(project_pipeline(&name, &graph, providers.as_deref(), &projection));
+    }
+
+    let launch_state = if pipelines.iter().any(|pipeline| pipeline.usable) {
+        LaunchState::OperationsWorkspace
+    } else {
+        LaunchState::FirstRunSetup
+    };
+
+    Ok(OperatorStatusSnapshot {
+        generated_at,
+        runtime: RuntimeState { launch_state, stale_state: StaleState::Fresh },
+        pipelines,
+        providers: Vec::new(),
+        satellites: SatelliteStatus {
+            connected: Vec::new(),
+            recently_active: Vec::new(),
+            recent_window_seconds: 300,
+        },
+        active_turns: projection
+            .active_turns
+            .values()
+            .map(|turn| ActiveTurnStatus {
+                pipeline: turn.pipeline.clone(),
+                conversation: turn.conversation,
+                turn: turn.turn,
+                trace: turn.trace,
+                started_at: turn.started_at,
+                invoked_components: turn.invoked_components.iter().copied().collect(),
+            })
+            .collect(),
+        recent_failures: projection
+            .pipelines
+            .values()
+            .flat_map(|pipeline| pipeline.recent_failures.iter().cloned())
+            .collect(),
+        event_stream: default_event_stream_contract(),
+    })
+}
+
+fn project_pipeline(
+    name: &str,
+    graph: &PipelineGraph,
+    providers: Option<&conduit_runtime::Providers>,
+    projection: &Projection,
+) -> PipelineStatus {
+    let usable = providers.is_some_and(|providers| {
+        Runner::prepare(graph, providers, EventBus::default()).is_ok()
+    });
+    let runtime = projection.pipelines.get(name);
+    let unresolved_failures =
+        runtime.map_or_else(BTreeSet::new, |runtime| runtime.unresolved_failures.clone());
+    let last_successful_turn = runtime.and_then(|runtime| runtime.last_successful_turn);
+    let last_failed_turn = runtime.and_then(|runtime| runtime.last_failed_turn);
+
+    let state = if !usable {
+        PipelineHealthState::NotRunnable
+    } else if !unresolved_failures.is_empty() {
+        PipelineHealthState::Unhealthy
+    } else if last_successful_turn.is_some() {
+        PipelineHealthState::Healthy
+    } else {
+        PipelineHealthState::Unproven
+    };
+
+    let summary = match state {
+        PipelineHealthState::NotRunnable => "pipeline is not runnable".to_owned(),
+        PipelineHealthState::Unproven => {
+            "no successful turn has proven this pipeline".to_owned()
+        }
+        PipelineHealthState::Healthy => "last invoked turn completed successfully".to_owned(),
+        PipelineHealthState::Degraded => {
+            "pipeline has provider or component warnings".to_owned()
+        }
+        PipelineHealthState::Unhealthy => {
+            "a runtime failure remains uncleared by a later successful turn".to_owned()
+        }
+    };
+
+    PipelineStatus {
+        name: name.to_owned(),
+        usable,
+        health: PipelineHealth { state, summary, last_successful_turn, last_failed_turn },
+        components: project_components(graph, runtime, usable),
+        affected_providers: Vec::new(),
+    }
+}
+
+fn project_components(
+    graph: &PipelineGraph,
+    runtime: Option<&PipelineRuntime>,
+    usable: bool,
+) -> Vec<ComponentHealth> {
+    graph
+        .topological_order()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|node| {
+            let kind = component_for_node_kind(node.kind)?;
+            let recorded = runtime.and_then(|runtime| runtime.components.get(&kind));
+            let state = recorded.map_or(
+                if usable {
+                    ComponentHealthState::Unproven
+                } else {
+                    ComponentHealthState::NotConfigured
+                },
+                |component| component.state,
+            );
+            Some(ComponentHealth {
+                kind,
+                provider: Some(node.provider.clone()),
+                state,
+                detail: recorded.and_then(|component| component.detail.clone()),
+                last_turn: recorded.and_then(|component| component.last_turn),
+            })
+        })
+        .collect()
+}
+
+fn component_for_node_kind(kind: NodeKind) -> Option<ComponentKind> {
+    match kind {
+        NodeKind::Stt => Some(ComponentKind::Transcription),
+        NodeKind::Llm => Some(ComponentKind::Reasoning),
+        NodeKind::Tool => Some(ComponentKind::Tools),
+        NodeKind::Tts => Some(ComponentKind::Synthesis),
+        _ => None,
+    }
+}
+
+fn default_event_stream_contract() -> EventStreamContract {
+    EventStreamContract {
+        route: "/v1/events".to_owned(),
+        stale_state_on_disconnect: StaleState::Stale,
+        refresh_snapshot_after_reconnect: true,
+        bindings: vec![
+            SnapshotEventBinding {
+                resource: SnapshotResource::PipelineHealth,
+                events: vec![
+                    "TurnStarted".to_owned(),
+                    "StageFailed".to_owned(),
+                    "ConversationCompleted".to_owned(),
+                    "ConversationCancelled".to_owned(),
+                ],
+            },
+            SnapshotEventBinding {
+                resource: SnapshotResource::ActiveTurns,
+                events: vec![
+                    "TurnStarted".to_owned(),
+                    "ConversationCompleted".to_owned(),
+                    "ConversationCancelled".to_owned(),
+                ],
+            },
+            SnapshotEventBinding {
+                resource: SnapshotResource::RecentFailures,
+                events: vec!["StageFailed".to_owned(), "ConversationCompleted".to_owned()],
+            },
+            SnapshotEventBinding {
+                resource: SnapshotResource::SatelliteStatus,
+                events: vec![
+                    "ConversationStarted".to_owned(),
+                    "AudioStarted".to_owned(),
+                    "ConversationCompleted".to_owned(),
+                    "ConversationCancelled".to_owned(),
+                ],
+            },
+        ],
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct Projection {
+    pipelines: HashMap<String, PipelineRuntime>,
+    active_turns: HashMap<TurnId, ActiveTurnRecord>,
+    turns_by_conversation: HashMap<ConversationId, TurnId>,
+}
+
+impl Projection {
+    fn record(&mut self, envelope: &Envelope) {
+        let Some(pipeline) = envelope.pipeline.as_ref() else {
+            return;
+        };
+        match &envelope.event {
+            Event::TurnStarted { turn } => {
+                let Some(conversation) = envelope.conversation else {
+                    return;
+                };
+                let record = ActiveTurnRecord {
+                    pipeline: pipeline.clone(),
+                    conversation,
+                    turn: *turn,
+                    trace: envelope.trace,
+                    started_at: envelope.at,
+                    invoked_components: BTreeSet::new(),
+                    failed_components: BTreeSet::new(),
+                    failure: None,
+                };
+                self.active_turns.insert(*turn, record);
+                self.turns_by_conversation.insert(conversation, *turn);
+                self.pipelines.entry(pipeline.clone()).or_default();
+            }
+            Event::SpeechFinal { .. } => {
+                self.mark_component(envelope, ComponentKind::Transcription, None);
+            }
+            Event::LlmRequestStarted { .. } => {
+                self.mark_invoked(envelope, ComponentKind::Reasoning);
+            }
+            Event::LlmFinished { .. } => {
+                self.mark_component(envelope, ComponentKind::Reasoning, None);
+            }
+            Event::ToolRequested { .. } | Event::ToolStarted { .. } => {
+                self.mark_invoked(envelope, ComponentKind::Tools);
+            }
+            Event::ToolCompleted { .. } => {
+                self.mark_component(envelope, ComponentKind::Tools, None);
+            }
+            Event::ToolFailed { error, .. } => {
+                self.mark_component(envelope, ComponentKind::Tools, Some(error.clone()));
+            }
+            Event::TtsStarted { .. } => {
+                self.mark_invoked(envelope, ComponentKind::Synthesis);
+            }
+            Event::TtsFinished { .. } => {
+                self.mark_component(envelope, ComponentKind::Synthesis, None);
+            }
+            Event::StageFailed { node, error, recovered } => {
+                if !recovered {
+                    let component = component_for_node_name(node);
+                    self.mark_component(envelope, component, Some(error.clone()));
+                }
+            }
+            Event::ConversationCancelled { reason } => {
+                self.finish_cancelled(envelope, *reason);
+            }
+            Event::ConversationCompleted => {
+                self.finish_completed(envelope);
+            }
+            _ => {}
+        }
+    }
+
+    fn active_turn_mut(&mut self, envelope: &Envelope) -> Option<&mut ActiveTurnRecord> {
+        let conversation = envelope.conversation?;
+        let turn = self.turns_by_conversation.get(&conversation)?;
+        self.active_turns.get_mut(turn)
+    }
+
+    fn mark_invoked(&mut self, envelope: &Envelope, component: ComponentKind) {
+        if let Some(turn) = self.active_turn_mut(envelope) {
+            turn.invoked_components.insert(component);
+        }
+    }
+
+    fn mark_component(
+        &mut self,
+        envelope: &Envelope,
+        component: ComponentKind,
+        error: Option<String>,
+    ) {
+        let Some(pipeline) = envelope.pipeline.clone() else {
+            return;
+        };
+        if let Some(error) = error {
+            let turn_id = envelope.conversation.and_then(|conversation| {
+                self.turns_by_conversation.get(&conversation).copied()
+            });
+            {
+                let runtime = self.pipelines.entry(pipeline.clone()).or_default();
+                let entry = runtime.components.entry(component).or_default();
+                entry.last_turn = turn_id;
+                entry.state = ComponentHealthState::Unhealthy;
+                entry.detail = Some(error.clone());
+                runtime.unresolved_failures.insert(component);
+            }
+            if let Some(turn) = turn_id.and_then(|turn| self.active_turns.get_mut(&turn)) {
+                turn.invoked_components.insert(component);
+                turn.failed_components.insert(component);
+                turn.failure = Some(FailureRecord {
+                    pipeline,
+                    turn: Some(turn.turn),
+                    component,
+                    provider: None,
+                    message: error,
+                    at: envelope.at,
+                });
+            }
+        } else {
+            let turn_id = envelope.conversation.and_then(|conversation| {
+                self.turns_by_conversation.get(&conversation).copied()
+            });
+            let unresolved = self
+                .pipelines
+                .get(&pipeline)
+                .is_some_and(|runtime| runtime.unresolved_failures.contains(&component));
+            {
+                let runtime = self.pipelines.entry(pipeline).or_default();
+                let entry = runtime.components.entry(component).or_default();
+                entry.last_turn = turn_id;
+                if !unresolved {
+                    entry.state = ComponentHealthState::Healthy;
+                    entry.detail = Some("last invoked turn completed".to_owned());
+                }
+            }
+            if let Some(turn) = turn_id.and_then(|turn| self.active_turns.get_mut(&turn)) {
+                turn.invoked_components.insert(component);
+            }
+        }
+    }
+
+    fn finish_cancelled(&mut self, envelope: &Envelope, reason: CancelReason) {
+        let Some(turn) = self.take_active_turn(envelope) else {
+            return;
+        };
+        if let Some(failure) = turn.failure {
+            let runtime = self.pipelines.entry(turn.pipeline.clone()).or_default();
+            runtime.last_failed_turn = failure.turn;
+            runtime.last_successful_turn = None;
+            runtime.recent_failures.insert(0, failure.into_runtime_failure());
+        } else if reason == CancelReason::Error {
+            let runtime = self.pipelines.entry(turn.pipeline.clone()).or_default();
+            runtime.last_failed_turn = Some(turn.turn);
+            runtime.last_successful_turn = None;
+        }
+    }
+
+    fn finish_completed(&mut self, envelope: &Envelope) {
+        let Some(turn) = self.take_active_turn(envelope) else {
+            return;
+        };
+        let runtime = self.pipelines.entry(turn.pipeline.clone()).or_default();
+        if turn.failed_components.is_empty() {
+            for component in &turn.invoked_components {
+                runtime.unresolved_failures.remove(component);
+                let entry = runtime.components.entry(*component).or_default();
+                entry.state = ComponentHealthState::Healthy;
+                entry.detail = Some("last invoked turn completed".to_owned());
+                entry.last_turn = Some(turn.turn);
+            }
+            if runtime.unresolved_failures.is_empty() {
+                runtime.last_successful_turn = Some(turn.turn);
+                runtime.last_failed_turn = None;
+                runtime.recent_failures.clear();
+            }
+        } else {
+            runtime.last_failed_turn = Some(turn.turn);
+            runtime.last_successful_turn = None;
+        }
+    }
+
+    fn take_active_turn(&mut self, envelope: &Envelope) -> Option<ActiveTurnRecord> {
+        let conversation = envelope.conversation?;
+        let turn = self.turns_by_conversation.remove(&conversation)?;
+        self.active_turns.remove(&turn)
+    }
+}
+
+fn component_for_node_name(node: &str) -> ComponentKind {
+    let lower = node.to_ascii_lowercase();
+    if lower.contains("stt") || lower.contains("transcri") {
+        ComponentKind::Transcription
+    } else if lower.contains("tool") {
+        ComponentKind::Tools
+    } else if lower.contains("tts") || lower.contains("synth") {
+        ComponentKind::Synthesis
+    } else {
+        ComponentKind::Reasoning
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PipelineRuntime {
+    last_successful_turn: Option<TurnId>,
+    last_failed_turn: Option<TurnId>,
+    unresolved_failures: BTreeSet<ComponentKind>,
+    components: HashMap<ComponentKind, ComponentRuntime>,
+    recent_failures: Vec<RuntimeFailure>,
+}
+
+#[derive(Debug, Clone)]
+struct ComponentRuntime {
+    state: ComponentHealthState,
+    detail: Option<String>,
+    last_turn: Option<TurnId>,
+}
+
+impl Default for ComponentRuntime {
+    fn default() -> Self {
+        Self { state: ComponentHealthState::Unproven, detail: None, last_turn: None }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTurnRecord {
+    pipeline: String,
+    conversation: ConversationId,
+    turn: TurnId,
+    trace: TraceId,
+    started_at: DateTime<Utc>,
+    invoked_components: BTreeSet<ComponentKind>,
+    failed_components: BTreeSet<ComponentKind>,
+    failure: Option<FailureRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct FailureRecord {
+    pipeline: String,
+    turn: Option<TurnId>,
+    component: ComponentKind,
+    provider: Option<String>,
+    message: String,
+    at: DateTime<Utc>,
+}
+
+impl FailureRecord {
+    fn into_runtime_failure(self) -> RuntimeFailure {
+        RuntimeFailure {
+            pipeline: self.pipeline,
+            turn: self.turn,
+            component: self.component,
+            provider: self.provider,
+            message: self.message,
+            at: self.at,
+        }
+    }
 }

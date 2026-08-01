@@ -23,6 +23,8 @@ pub struct Envelope {
     pub device: Option<DeviceId>,
     /// The conversation the event belongs to, if any.
     pub conversation: Option<ConversationId>,
+    /// The pipeline the event belongs to, if any.
+    pub pipeline: Option<String>,
     /// What happened.
     pub event: Event,
 }
@@ -37,6 +39,7 @@ impl Envelope {
             at: Utc::now(),
             device: None,
             conversation: None,
+            pipeline: None,
             event,
         }
     }
@@ -52,6 +55,13 @@ impl Envelope {
     #[must_use]
     pub fn with_conversation(mut self, conversation: ConversationId) -> Self {
         self.conversation = Some(conversation);
+        self
+    }
+
+    /// Attaches the pipeline that produced the event.
+    #[must_use]
+    pub fn with_pipeline(mut self, pipeline: impl Into<String>) -> Self {
+        self.pipeline = Some(pipeline.into());
         self
     }
 }
@@ -405,7 +415,8 @@ mod tests {
     fn envelope_round_trips() {
         let envelope = Envelope::new(TraceId::new(), Event::ConversationStarted)
             .with_device(DeviceId::new())
-            .with_conversation(ConversationId::new());
+            .with_conversation(ConversationId::new())
+            .with_pipeline("kitchen");
         let json = serde_json::to_string(&envelope).expect("serialize");
         let decoded: Envelope = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, envelope);
