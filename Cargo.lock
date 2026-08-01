@@ -323,7 +323,6 @@ dependencies = [
  "conduit-core",
  "conduit-provider",
  "futures-util",
- "serde",
  "serde_json",
  "tokio",
  "tokio-stream",

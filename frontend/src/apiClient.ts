@@ -2,6 +2,8 @@ import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
   PipelineComponentCatalog,
   PipelineGraph,
+  PipelineTestRequest,
+  PipelineTestResult,
   PipelineView,
   RawTurnEvents,
   TurnList,
@@ -37,6 +39,10 @@ export interface SnapshotClient {
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
   savePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
   validatePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
+  runPipelineTest: (
+    name: string,
+    request?: PipelineTestRequest,
+  ) => Promise<PipelineTestResult>;
 }
 
 export function createSnapshotClient(
@@ -72,6 +78,7 @@ export function createSnapshotClient(
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
     savePipeline: (graph) => client.putPipeline(graph.name, graph),
     validatePipeline: (graph) => client.validatePipeline(graph),
+    runPipelineTest: (name, request) => client.testPipeline(name, request),
   };
 }
 
@@ -101,6 +108,13 @@ function createMockSnapshotClient(
     validatePipeline: async (graph) => ({
       graph,
       order: graph.nodes.map((node) => node.id),
+    }),
+    runPipelineTest: async (name, request) => ({
+      pipeline: name,
+      conversation: "00000000-0000-0000-0000-000000000999",
+      status: "completed",
+      audio_bytes: 24,
+      reply_text: `You said: ${request?.utterance ?? "conduit test"}.`,
     }),
   };
 }

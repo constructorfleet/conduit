@@ -82,15 +82,19 @@ The `conduit-api` crate enables PostgreSQL support by default. A
 | `CONDUIT_OPENAI_TTS_MODEL` | unset | Registers `OpenAiTts` using this speech model. |
 
 Setting `CONDUIT_OPENAI_BASE_URL` or `CONDUIT_OPENAI_API_KEY` registers an
-OpenAI-compatible language model provider. The language model node in the
-pipeline supplies the model name in node config.
+OpenAI-compatible language model provider. Pipeline graph nodes select
+registered providers by id; provider-specific settings are not stored in the
+graph.
 
 The service exposes `GET /v1/pipeline-components` so the Operator Console can
 render provider-specific configuration forms from component schemas. Operators
 configure provider instances with stable IDs on the Providers page, then select
-those IDs from pipeline nodes. Provider instance definitions are currently
-operator-console state; provider registration is still controlled by the server
-environment until Conduit grows a server-side provider store and runtime plugin
+those IDs from pipeline nodes.
+
+Provider instance definitions are still stored by the Operator Console.
+Pipeline graphs store only the selected provider id on each node; runtime
+component settings do not belong to graph nodes. Provider definitions remain UI
+definitions until Conduit grows a server-side provider store and runtime plugin
 loader.
 
 Setting an STT or TTS model without a base URL or API key is an error. The

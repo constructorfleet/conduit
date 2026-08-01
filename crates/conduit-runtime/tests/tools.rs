@@ -26,10 +26,7 @@ use futures_util::StreamExt;
 fn graph_with_tool() -> PipelineGraph {
     PipelineGraph::new("tools")
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
         .with_node(Node::new("search", NodeKind::Tool, "search"))
         .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
@@ -538,10 +535,7 @@ async fn branched_tool_graphs_execute_without_linearizing_the_topology() {
     let second = ToolCallId::new("call_two");
     let graph = PipelineGraph::new("branched")
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
         .with_node(Node::new("search", NodeKind::Tool, "search"))
         .with_node(Node::new("clock", NodeKind::Tool, "clock"))
         .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
@@ -629,50 +623,11 @@ async fn a_model_that_never_stops_calling_tools_is_cut_off() {
 }
 
 #[tokio::test]
-async fn the_round_limit_is_configurable() {
-    let call = ToolCallId::new("call_abc123");
-    let tool = FakeTool::new("search", serde_json::json!({}));
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1", "max_tool_rounds": 2 })),
-        )
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("search", "tts"));
-
-    let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![Transcript::final_text("loop")]))
-        .with_llm(
-            FakeLlm::scripted(vec![vec![
-                token("Working. "),
-                tool_call(call.clone(), "search"),
-                wants_tools(),
-            ]])
-            .repeating(),
-        )
-        .with_tool(tool.clone())
-        .with_tts(FakeTts::new());
-
-    let runner =
-        Runner::prepare(&graph, &providers, EventBus::default()).expect("graph is executable");
-    run_turn(&runner).await;
-
-    assert_eq!(tool.invocations().len(), 2, "two rounds means two invocations");
-}
-
-#[tokio::test]
 async fn a_pipeline_without_tools_offers_the_model_none() {
     let llm = FakeLlm::new(vec!["Hello."]);
     let graph = PipelineGraph::new("plain")
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"));

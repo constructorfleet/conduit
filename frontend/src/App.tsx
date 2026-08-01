@@ -79,6 +79,17 @@ const sections = [
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 
+const LINEAR_STAGE_ORDER: NodeKind[] = [
+  "source",
+  "wake_word",
+  "stt",
+  "speaker_id",
+  "router",
+  "llm",
+  "tts",
+  "sink",
+];
+
 type SectionId = (typeof sections)[number]["id"];
 
 export type PipelineValidationResult =
@@ -86,6 +97,8 @@ export type PipelineValidationResult =
 type PipelineValidator = (
   graph: PipelineGraph,
 ) => PipelineValidationResult | Promise<PipelineValidationResult>;
+type PipelineTester = (name: string) => Promise<string>;
+type ProviderTester = (providerId: string) => Promise<string>;
 
 interface PipelineEditorDraftState {
   draft: PipelineGraph;
@@ -116,6 +129,7 @@ interface AppProps {
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: PipelineValidator;
+  onPipelineTest?: PipelineTester;
 }
 
 function App({
@@ -128,6 +142,7 @@ function App({
   dataMode = defaultDataMode(),
   onPipelineSaved,
   onPipelineValidate,
+  onPipelineTest,
 }: AppProps = {}) {
   const [access, setAccess] = useState<OperatorAccess>(() =>
     loadOperatorAccess(),
@@ -151,6 +166,7 @@ function App({
       dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
       onPipelineValidate={onPipelineValidate}
+      onPipelineTest={onPipelineTest}
       onSectionChange={setActiveSection}
       onClearAccess={() => {
         clearOperatorAccess();
@@ -246,6 +262,7 @@ function OperatorWorkspace({
   dataMode,
   onPipelineSaved,
   onPipelineValidate,
+  onPipelineTest,
   onSectionChange,
   onClearAccess,
 }: {
@@ -260,6 +277,7 @@ function OperatorWorkspace({
   dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: PipelineValidator;
+  onPipelineTest?: PipelineTester;
   onSectionChange: (section: SectionId) => void;
   onClearAccess: () => void;
 }) {
@@ -321,7 +339,7 @@ function OperatorWorkspace({
     setPipelineViews((current) =>
       upsertPipelineView(current, view.graph, view.order),
     );
-    setSnapshot((current) => promoteSavedPipeline(current, view.graph));
+    await refreshSnapshotFromApi();
     onSectionChange("overview");
   }
 
@@ -331,6 +349,51 @@ function OperatorWorkspace({
     setPipelineViews((current) =>
       upsertPipelineView(current, view.graph, view.order),
     );
+    await refreshSnapshotFromApi();
+  }
+
+  async function runPipelineTest(name: string): Promise<string> {
+    const result = await snapshotClient.runPipelineTest(name, {
+      utterance: "conduit test",
+    });
+    await refreshSnapshotFromApi();
+    return `Test turn completed for ${result.pipeline}: ${
+      result.reply_text || `${result.audio_bytes} audio bytes`
+    }`;
+  }
+
+  async function runProviderTest(providerId: string): Promise<string> {
+    const loadedSnapshot = await refreshSnapshotFromApi();
+    const provider = loadedSnapshot.providers.find(
+      (candidate) => candidate.id === providerId,
+    );
+    if (!provider) {
+      return `Provider ${providerId} is not in the latest status snapshot`;
+    }
+    if (provider.reachable) {
+      return `Provider ${provider.id} is reachable`;
+    }
+    return `Provider ${provider.id} is ${provider.state}${
+      provider.message ? `: ${provider.message}` : ""
+    }`;
+  }
+
+  async function refreshSnapshotFromApi(): Promise<OperatorStatusSnapshot> {
+    const loadedSnapshot = await snapshotClient.loadSnapshot();
+    setSnapshot(loadedSnapshot);
+    setProviderDefinitions((current) =>
+      mergeProviderDefinitions(
+        defaultProviderDefinitions(
+          componentCatalog,
+          pipelineViews,
+          loadedSnapshot,
+        ),
+        current,
+      ),
+    );
+    setSnapshotState("live");
+    setLoadError(null);
+    return loadedSnapshot;
   }
 
   useEffect(() => {
@@ -381,18 +444,54 @@ function OperatorWorkspace({
           return;
         }
 
-        setSnapshot(loadedSnapshot);
-        setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
-        setComponentCatalog(initialComponentCatalog ?? loadedComponentCatalog);
+        const basePipelineViews = initialPipelineViews ?? loadedPipelineViews;
+        const baseComponentCatalog =
+          initialComponentCatalog ?? loadedComponentCatalog;
+        const loadedProviderDefinitions = loadProviderDefinitions(
+          baseComponentCatalog,
+          basePipelineViews,
+          loadedSnapshot,
+        );
+        let nextSnapshot = loadedSnapshot;
+        let nextPipelineViews = basePipelineViews;
+
+        if (!initialPipelineViews) {
+          const repairedPipelineViews = basePipelineViews.map((view) => ({
+            ...view,
+            graph: normalizePipelineGraph(view.graph),
+          }));
+          const changedViews = repairedPipelineViews.filter(
+            (view, index) =>
+              !pipelineGraphsEqual(view.graph, basePipelineViews[index].graph),
+          );
+
+          if (changedViews.length > 0) {
+            const savedViews = await Promise.all(
+              changedViews.map((view) =>
+                snapshotClient.savePipeline(view.graph),
+              ),
+            );
+            const savedByName = new Map(
+              savedViews.map((view) => [view.graph.name, view]),
+            );
+            nextPipelineViews = repairedPipelineViews.map(
+              (view) => savedByName.get(view.graph.name) ?? view,
+            );
+            nextSnapshot = await snapshotClient
+              .loadSnapshot()
+              .catch(() => loadedSnapshot);
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(nextSnapshot);
+        setPipelineViews(nextPipelineViews);
+        setComponentCatalog(baseComponentCatalog);
         setProviderDefinitions((current) =>
-          mergeProviderDefinitions(
-            current,
-            defaultProviderDefinitions(
-              initialComponentCatalog ?? loadedComponentCatalog,
-              initialPipelineViews ?? loadedPipelineViews,
-              loadedSnapshot,
-            ),
-          ),
+          mergeProviderDefinitions(loadedProviderDefinitions, current),
         );
         setTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
@@ -542,6 +641,8 @@ function OperatorWorkspace({
                 await snapshotClient.validatePipeline(graph),
               ))
           }
+          onPipelineTest={onPipelineTest ?? runPipelineTest}
+          onProviderTest={runProviderTest}
           onProviderDefinitionsChange={setProviderDefinitions}
           onPipelineStored={storePipelineGraph}
         />
@@ -568,6 +669,8 @@ function SectionPanel({
   onSectionChange,
   onPipelineStored,
   onPipelineValidate,
+  onPipelineTest,
+  onProviderTest,
   onProviderDefinitionsChange,
 }: {
   section: SectionId;
@@ -583,6 +686,8 @@ function SectionPanel({
   onSectionChange: (section: SectionId) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: PipelineValidator;
+  onPipelineTest: PipelineTester;
+  onProviderTest: ProviderTester;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   if (loadError) {
@@ -622,6 +727,7 @@ function SectionPanel({
         readOnly={initialSmallScreen}
         onPipelineStored={onPipelineStored}
         onPipelineValidate={onPipelineValidate}
+        onPipelineTest={onPipelineTest}
       />
     );
   }
@@ -633,6 +739,7 @@ function SectionPanel({
         pipelineViews={pipelineViews}
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
+        onProviderTest={onProviderTest}
         onProviderDefinitionsChange={onProviderDefinitionsChange}
       />
     );
@@ -665,6 +772,7 @@ interface ProviderDefinition {
   kind: NodeKind;
   component: string;
   config: Record<string, unknown>;
+  source: "local" | "inferred";
 }
 
 interface ProviderCardView {
@@ -681,12 +789,14 @@ function ProvidersPanel({
   pipelineViews,
   providerDefinitions,
   providers,
+  onProviderTest,
   onProviderDefinitionsChange,
 }: {
   componentCatalog: PipelineComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
+  onProviderTest: ProviderTester;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   const [filter, setFilter] = useState<ProviderFilter>("all");
@@ -719,10 +829,15 @@ function ProvidersPanel({
     ),
   ).size;
   const selectedDraftComponent = draftProvider
-    ? (componentCatalog.components.find(
-        (component) => component.id === draftProvider.component,
-      ) ?? null)
+    ? componentForProviderDefinition(componentCatalog, draftProvider)
     : null;
+  const draftProviderValidation =
+    draftProvider && selectedDraftComponent
+      ? validateProviderDefinitionConfig(draftProvider, selectedDraftComponent)
+      : ({
+          ok: false,
+          message: "Choose a provider component",
+        } satisfies PipelineValidationResult);
   const selectedKindComponents = selectedProviderKind
     ? componentCatalog.components.filter(
         (component) =>
@@ -742,6 +857,7 @@ function ProvidersPanel({
       kind: component.kind,
       component: component.id,
       config: {},
+      source: "local",
     });
     setEditingProviderId("new");
     setSelectedProviderKind(null);
@@ -762,6 +878,7 @@ function ProvidersPanel({
       kind: nodeKindForProviderKind(card.kind),
       component: card.component ?? card.id,
       config: {},
+      source: "local",
     });
     setEditingProviderId(card.id);
     setAddProviderDialogOpen(true);
@@ -803,6 +920,13 @@ function ProvidersPanel({
     if (!id || !component) {
       return;
     }
+    const validation = validateProviderDefinitionConfig(
+      draftProvider,
+      component,
+    );
+    if (!validation.ok) {
+      return;
+    }
 
     const next: ProviderDefinition = {
       ...draftProvider,
@@ -810,6 +934,7 @@ function ProvidersPanel({
       label: draftProvider.label.trim() || id,
       kind: component.kind,
       config: pruneEmptyConfig(draftProvider.config),
+      source: "local",
     };
     onProviderDefinitionsChange(
       mergeProviderDefinitions(
@@ -841,7 +966,17 @@ function ProvidersPanel({
     setAddProviderDialogOpen(true);
   }
 
-  function deleteProviderDefinition(providerId: string) {
+  function deleteProviderDefinition(provider: ProviderCardView) {
+    const affectedPipelines = provider.status?.affects_pipelines ?? [];
+    if (affectedPipelines.length > 0) {
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]: `Provider ${provider.id} is used by pipeline ${affectedPipelines.join(", ")}; remove it from those pipeline graphs before deleting it.`,
+      }));
+      return;
+    }
+
+    const providerId = provider.id;
     onProviderDefinitionsChange(
       providerDefinitions.filter((provider) => provider.id !== providerId),
     );
@@ -854,11 +989,41 @@ function ProvidersPanel({
     }));
   }
 
-  function testProvider(provider: ProviderStatus) {
-    setProviderNotices((current) => ({
-      ...current,
-      [provider.id]: "Reachability checks require the provider API",
-    }));
+  async function testProvider(provider: ProviderCardView) {
+    try {
+      let notice: string;
+      if (provider.status) {
+        notice = await onProviderTest(provider.id);
+      } else if (provider.definition) {
+        const component = componentForProviderDefinition(
+          componentCatalog,
+          provider.definition,
+        );
+        const validation = component
+          ? validateProviderDefinitionConfig(provider.definition, component)
+          : {
+              ok: false,
+              message: `Unknown component ${provider.definition.component}`,
+            };
+        notice = validation.ok
+          ? `Provider ${provider.id} configuration is valid for ${component?.label}`
+          : validation.message;
+      } else {
+        notice = `Provider ${provider.id} has no configuration to test`;
+      }
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]: notice,
+      }));
+    } catch (caught) {
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]:
+          caught instanceof Error
+            ? caught.message
+            : `Unable to test ${provider.id}`,
+      }));
+    }
   }
 
   return (
@@ -920,7 +1085,7 @@ function ProvidersPanel({
       <section className="provider-card-grid" aria-label="Provider cards">
         {visibleProviderCards.map((provider) => (
           <article
-            className={`provider-card ${provider.status?.state ?? "configured"}`}
+            className={`provider-card ${providerCardStateClass(provider)}`}
             key={provider.id}
           >
             <div className="provider-card-header">
@@ -928,13 +1093,13 @@ function ProvidersPanel({
                 {provider.kind.toUpperCase()}
               </span>
               <div className="provider-card-controls">
-                <StatusPill
-                  label="Status"
-                  value={provider.status?.state ?? "configured"}
-                  tone={
-                    provider.status?.state === "proven" ? "neutral" : "caution"
-                  }
-                />
+                {showsProviderStatusPill(provider) ? (
+                  <StatusPill
+                    label="Status"
+                    value={provider.status?.state ?? "configured"}
+                    tone="caution"
+                  />
+                ) : null}
                 <button
                   className="icon-action"
                   type="button"
@@ -943,12 +1108,12 @@ function ProvidersPanel({
                 >
                   <Settings size={17} aria-hidden="true" />
                 </button>
-                {provider.definition ? (
+                {provider.definition?.source === "local" ? (
                   <button
                     className="icon-action danger"
                     type="button"
                     aria-label={`Delete ${provider.id}`}
-                    onClick={() => deleteProviderDefinition(provider.id)}
+                    onClick={() => deleteProviderDefinition(provider)}
                   >
                     <Trash2 size={17} aria-hidden="true" />
                   </button>
@@ -987,15 +1152,13 @@ function ProvidersPanel({
               </div>
             </div>
 
-            {provider.status ? (
+            {provider.status || provider.definition ? (
               <div className="provider-actions">
                 <button
                   className="secondary-action provider-test-action"
                   type="button"
                   aria-label={`Test ${provider.id}`}
-                  onClick={() =>
-                    provider.status ? testProvider(provider.status) : null
-                  }
+                  onClick={() => testProvider(provider)}
                 >
                   <Play size={17} aria-hidden="true" />
                   Test
@@ -1017,6 +1180,7 @@ function ProvidersPanel({
           draftProvider={draftProvider}
           providerKinds={providerKinds}
           selectedComponent={selectedDraftComponent}
+          validation={draftProviderValidation}
           selectedKind={selectedProviderKind}
           selectedKindComponents={selectedKindComponents}
           onCancel={cancelDraftProvider}
@@ -1036,6 +1200,7 @@ function ProviderAddDialog({
   draftProvider,
   providerKinds,
   selectedComponent,
+  validation,
   selectedKind,
   selectedKindComponents,
   onCancel,
@@ -1049,6 +1214,7 @@ function ProviderAddDialog({
   draftProvider: ProviderDefinition | null;
   providerKinds: readonly ProviderFilter[];
   selectedComponent: PipelineComponentDescriptor | null;
+  validation: PipelineValidationResult;
   selectedKind: ProviderKind | null;
   selectedKindComponents: readonly PipelineComponentDescriptor[];
   onCancel: () => void;
@@ -1083,6 +1249,7 @@ function ProviderAddDialog({
                 className="icon-action success"
                 type="button"
                 aria-label="Save provider"
+                disabled={!validation.ok}
                 onClick={onSave}
               >
                 <Save size={17} aria-hidden="true" />
@@ -1104,6 +1271,7 @@ function ProviderAddDialog({
             componentCatalog={componentCatalog}
             draftProvider={draftProvider}
             selectedComponent={selectedComponent}
+            validation={validation}
             onConfigChange={onConfigChange}
             onDraftChange={onDraftChange}
           />
@@ -1160,12 +1328,14 @@ function ProviderEditorFields({
   componentCatalog,
   draftProvider,
   selectedComponent,
+  validation,
   onConfigChange,
   onDraftChange,
 }: {
   componentCatalog: PipelineComponentCatalog;
   draftProvider: ProviderDefinition;
   selectedComponent: PipelineComponentDescriptor | null;
+  validation: PipelineValidationResult;
   onConfigChange: (
     field: string,
     property: ComponentConfigProperty,
@@ -1204,7 +1374,7 @@ function ProviderEditorFields({
       <label className="field">
         <span>Provider component</span>
         <select
-          value={draftProvider.component}
+          value={selectedComponent?.id ?? draftProvider.component}
           onChange={(event) => {
             const component = componentCatalog.components.find(
               (candidate) => candidate.id === event.target.value,
@@ -1221,11 +1391,13 @@ function ProviderEditorFields({
             );
           }}
         >
-          {componentCatalog.components.map((component) => (
-            <option value={component.id} key={component.id}>
-              {component.label}
-            </option>
-          ))}
+          {componentCatalog.components
+            .filter((component) => component.kind === draftProvider.kind)
+            .map((component) => (
+              <option value={component.id} key={component.id}>
+                {component.label}
+              </option>
+            ))}
         </select>
       </label>
       {selectedComponent ? (
@@ -1235,6 +1407,9 @@ function ProviderEditorFields({
           readOnly={false}
           onChange={onConfigChange}
         />
+      ) : null}
+      {!validation.ok ? (
+        <p className="form-error">{validation.message}</p>
       ) : null}
     </div>
   );
@@ -1760,12 +1935,14 @@ function PipelinesPanel({
   readOnly,
   onPipelineStored,
   onPipelineValidate,
+  onPipelineTest,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
+  onPipelineTest: PipelineTester;
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
@@ -1808,6 +1985,7 @@ function PipelinesPanel({
   );
   const [graphZoom, setGraphZoom] = useState(100);
   const [graphMotionEnabled, setGraphMotionEnabled] = useState(true);
+  const [toolProviderMenuOpen, setToolProviderMenuOpen] = useState(false);
   const [draggingAugment, setDraggingAugment] =
     useState<AugmentDragState | null>(null);
   const [dragPreviewPositions, setDragPreviewPositions] = useState<
@@ -1829,6 +2007,17 @@ function PipelinesPanel({
       null)
     : null;
   const hasUnsavedEdits = history.length > 0;
+  const configuredToolProviders = providerDefinitions.filter(
+    (provider) => provider.kind === "tool",
+  );
+  const unusedToolProviders = draft
+    ? configuredToolProviders.filter(
+        (provider) =>
+          !draft.nodes.some(
+            (node) => node.kind === "tool" && node.provider === provider.id,
+          ),
+      )
+    : [];
 
   function ensurePipelineDraft(
     current: Record<string, PipelineEditorDraftState>,
@@ -2061,36 +2250,8 @@ function PipelinesPanel({
       setDraggingAugment(null);
       setDragPreviewPositions((current) => {
         const next = { ...current };
-        delete next[activeDrag.nodeId];
+        next[activeDrag.nodeId] = nextPosition;
         return next;
-      });
-      setDraftsByPipeline((current) => {
-        const currentState = current[selectedName];
-        if (!currentState) {
-          return current;
-        }
-
-        const previousDraft = cloneGraph(currentState.draft);
-        const nextDraft = {
-          ...previousDraft,
-          nodes: previousDraft.nodes.map((node) =>
-            node.id === activeDrag.nodeId
-              ? {
-                  ...node,
-                  config: withOrbitPosition(node.config, nextPosition),
-                }
-              : node,
-          ),
-        };
-        return {
-          ...current,
-          [nextDraft.name]: {
-            draft: nextDraft,
-            history: [...currentState.history, previousDraft],
-            validation: null,
-            notice: null,
-          },
-        };
       });
       activeDragPositionRef.current = null;
     }
@@ -2125,15 +2286,24 @@ function PipelinesPanel({
             id,
             kind,
             provider,
-            config: withOrbitPosition(
-              undefined,
-              nextAugmentOrbitPosition(graph, "llm"),
-            ),
           },
         ],
         edges: [...graph.edges, { from: id, to: "llm" }],
       };
     });
+  }
+
+  function addToolProviderNode(provider: ProviderDefinition) {
+    if (!draft) {
+      return;
+    }
+
+    addReasoningAugment({
+      id: uniqueNodeId(draft, toolNodeIdBase(provider.id)),
+      kind: "tool",
+      provider: provider.id,
+    });
+    setToolProviderMenuOpen(false);
   }
 
   function updateNodeProvider(nodeId: string, providerId: string) {
@@ -2143,11 +2313,9 @@ function PipelinesPanel({
         if (node.id !== nodeId) {
           return node;
         }
-
         return {
           ...node,
           provider: providerId,
-          config: undefined,
         };
       }),
     }));
@@ -2156,7 +2324,7 @@ function PipelinesPanel({
   function deleteNode(nodeId: string) {
     applyDraftEdit((graph) => {
       const target = graph.nodes.find((node) => node.id === nodeId);
-      if (!target || graph.nodes.length <= 1) {
+      if (!target || graph.nodes.length <= 1 || isEndpointNode(target)) {
         return graph;
       }
 
@@ -2208,6 +2376,17 @@ function PipelinesPanel({
   }
 
   function addToolNode() {
+    if (configuredToolProviders.length > 1) {
+      setToolProviderMenuOpen((open) => !open);
+      return;
+    }
+
+    const provider = unusedToolProviders[0];
+    if (provider) {
+      addToolProviderNode(provider);
+      return;
+    }
+
     addReasoningAugment({
       id: "confirm",
       kind: "tool",
@@ -2216,11 +2395,60 @@ function PipelinesPanel({
   }
 
   function addMemoryNode() {
+    if (!draft) {
+      return;
+    }
+
     addReasoningAugment({
-      id: "memory",
+      id: uniqueNodeId(draft, "memory"),
       kind: "memory",
       provider: "builtin.memory",
     });
+  }
+
+  function providerForCoreStage(kind: "stt" | "llm" | "tts"): string {
+    const configured = providerDefinitions.find(
+      (provider) => provider.kind === kind,
+    );
+    if (configured) {
+      return configured.id;
+    }
+    if (kind === "stt") {
+      return "whisper";
+    }
+    if (kind === "tts") {
+      return "piper";
+    }
+    return "openai";
+  }
+
+  function addCoreStageNode(kind: "stt" | "llm" | "tts") {
+    if (!draft) {
+      return;
+    }
+
+    const id = uniqueNodeId(draft, kind);
+    const provider = providerForCoreStage(kind);
+    applyDraftEdit((graph) =>
+      insertLinearStageNode(graph, {
+        id,
+        kind,
+        provider,
+      }),
+    );
+  }
+
+  function addConfiguredToolProvider(providerId: string) {
+    const provider = unusedToolProviders.find(
+      (candidate) => candidate.id === providerId,
+    );
+    if (!provider) {
+      markCurrentDraftNotice("No unused configured tool providers");
+      setToolProviderMenuOpen(false);
+      return;
+    }
+
+    addToolProviderNode(provider);
   }
 
   function undoLastEdit() {
@@ -2238,9 +2466,11 @@ function PipelinesPanel({
     }
 
     try {
-      const result = await onPipelineValidate(draft);
+      const hydratedDraft = normalizePipelineGraph(draft);
+      const result = await onPipelineValidate(hydratedDraft);
       updateCurrentDraftState((current) => ({
         ...current,
+        draft: hydratedDraft,
         validation: result,
         notice: null,
       }));
@@ -2257,10 +2487,16 @@ function PipelinesPanel({
     if (!draft || validation?.ok !== true) {
       return false;
     }
+    const hydratedDraft = normalizePipelineGraph(draft);
 
     try {
-      await onPipelineStored(draft, validation.order);
-      updateCurrentDraftAfterSave(`Saved graph for ${draft.name}`);
+      await onPipelineStored(hydratedDraft, validation.order);
+      updateCurrentDraftState((current) => ({
+        ...current,
+        draft: hydratedDraft,
+        history: [],
+        notice: `Saved graph for ${hydratedDraft.name}`,
+      }));
       return true;
     } catch (caught) {
       markCurrentDraftNotice(
@@ -2274,10 +2510,34 @@ function PipelinesPanel({
     await saveCurrentDraft();
   }
 
-  function runTestTurn() {
-    markCurrentDraftNotice(
-      `Test turn queued for ${draft?.name ?? selectedName}`,
-    );
+  async function runTestTurn() {
+    if (!draft) {
+      return;
+    }
+
+    try {
+      const hydratedDraft = normalizePipelineGraph(draft);
+      const result = await onPipelineValidate(hydratedDraft);
+      updateCurrentDraftState((current) => ({
+        ...current,
+        draft: hydratedDraft,
+        validation: result,
+        notice: null,
+      }));
+      if (!result.ok) {
+        return;
+      }
+      if (hasUnsavedEdits) {
+        await onPipelineStored(hydratedDraft, result.order);
+        updateCurrentDraftAfterSave(`Saved graph for ${hydratedDraft.name}`);
+      }
+      const message = await onPipelineTest(hydratedDraft.name);
+      markCurrentDraftNotice(message);
+    } catch (caught) {
+      markCurrentDraftNotice(
+        caught instanceof Error ? caught.message : "Unable to run test turn",
+      );
+    }
   }
 
   if (!draft || !selectedView) {
@@ -2333,7 +2593,7 @@ function PipelinesPanel({
                 className="icon-action danger"
                 type="button"
                 aria-label={`Delete ${node.id}`}
-                disabled={draftNodeCount <= 1}
+                disabled={draftNodeCount <= 1 || isEndpointNode(node)}
                 onClick={(event) => {
                   event.stopPropagation();
                   deleteNode(node.id);
@@ -2344,8 +2604,12 @@ function PipelinesPanel({
             </div>
           ) : null}
         </div>
-        <strong>{node.id}</strong>
-        <p>{node.provider}</p>
+        <strong className="node-label" title={node.id}>
+          {node.id}
+        </strong>
+        <p className="node-provider-label" title={node.provider}>
+          {node.provider}
+        </p>
         {editingNodeId === node.id ? (
           <label className="field node-provider-select">
             <span>Provider</span>
@@ -2371,6 +2635,13 @@ function PipelinesPanel({
   const atomFlowNodes = graphFlow?.mainNodes ?? [];
   const atomEdges = graphFlow?.mainEdges ?? [];
   const atomNodeById = new Map(atomFlowNodes.map((node) => [node.id, node]));
+  const missingCoreStages = (
+    [
+      { kind: "stt", label: "STT" },
+      { kind: "llm", label: "LLM" },
+      { kind: "tts", label: "TTS" },
+    ] as const
+  ).filter((stage) => !draft.nodes.some((node) => node.kind === stage.kind));
 
   function attachesFlowLinkToTarget(edge: PipelineEdge) {
     return atomNodeById.get(edge.from)?.kind === "llm";
@@ -2450,10 +2721,40 @@ function PipelinesPanel({
                 type="button"
                 aria-label="Add tool node"
                 onClick={addToolNode}
+                disabled={
+                  configuredToolProviders.length > 0 &&
+                  unusedToolProviders.length === 0
+                }
               >
                 <Plus size={16} aria-hidden="true" />
                 Tool into LLM
               </button>
+              {configuredToolProviders.length > 1 && toolProviderMenuOpen ? (
+                <div className="provider-kind-menu inline" role="menu">
+                  {unusedToolProviders.length > 0 ? (
+                    unusedToolProviders.map((provider) => (
+                      <button
+                        key={provider.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => addConfiguredToolProvider(provider.id)}
+                      >
+                        {provider.label}
+                      </button>
+                    ))
+                  ) : (
+                    <span className="provider-kind-empty">
+                      No unused configured tool providers
+                    </span>
+                  )}
+                </div>
+              ) : null}
+              {configuredToolProviders.length > 0 &&
+              unusedToolProviders.length === 0 ? (
+                <span className="provider-kind-empty">
+                  No unused configured tool providers
+                </span>
+              ) : null}
               <button
                 className="secondary-action compact-action"
                 type="button"
@@ -2463,6 +2764,18 @@ function PipelinesPanel({
                 <Plus size={16} aria-hidden="true" />
                 Memory into LLM
               </button>
+              {missingCoreStages.map((stage) => (
+                <button
+                  className="secondary-action compact-action"
+                  type="button"
+                  aria-label={`Add ${stage.label} node`}
+                  key={stage.kind}
+                  onClick={() => addCoreStageNode(stage.kind)}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  {stage.label}
+                </button>
+              ))}
             </div>
             <div className="graph-action-group">
               <button
@@ -2499,7 +2812,7 @@ function PipelinesPanel({
               type="button"
               aria-label="Delete selected node"
               title="Delete selected node"
-              disabled={!selectedNode}
+              disabled={!selectedNode || isEndpointNode(selectedNode)}
               onClick={deleteSelectedNode}
             >
               <Trash2 size={17} aria-hidden="true" />
@@ -2819,18 +3132,75 @@ function componentForNode(
   }
 
   if (node.provider === "openai") {
-    const openAiCompletions = catalog.components.find(
+    const openAiResponses = catalog.components.find(
       (component) =>
-        component.id === "openai.completions" && component.kind === node.kind,
+        component.id === "openai.responses" && component.kind === node.kind,
     );
-    if (openAiCompletions) {
-      return openAiCompletions;
+    if (openAiResponses) {
+      return openAiResponses;
+    }
+  }
+
+  if (node.kind === "stt" && isWyomingProviderName(node.provider)) {
+    const wyomingStt = catalog.components.find(
+      (component) => component.id === "wyoming" && component.kind === "stt",
+    );
+    if (wyomingStt) {
+      return wyomingStt;
+    }
+  }
+
+  if (node.kind === "tts" && isWyomingProviderName(node.provider)) {
+    const wyomingTts = catalog.components.find(
+      (component) => component.id === "wyoming.tts" && component.kind === "tts",
+    );
+    if (wyomingTts) {
+      return wyomingTts;
     }
   }
 
   return (
-    catalog.components.find((component) => component.id === node.provider) ??
-    null
+    catalog.components.find(
+      (component) =>
+        component.id === node.provider && component.kind === node.kind,
+    ) ?? null
+  );
+}
+
+function componentForProviderStatus(
+  catalog: PipelineComponentCatalog,
+  provider: ProviderStatus,
+): PipelineComponentDescriptor | null {
+  const nodeKind = nodeKindForProviderKind(provider.kind);
+  return componentForNode(catalog, {
+    id: provider.id,
+    kind: nodeKind,
+    provider: provider.id,
+  });
+}
+
+function componentForProviderDefinition(
+  catalog: PipelineComponentCatalog,
+  provider: ProviderDefinition,
+): PipelineComponentDescriptor | null {
+  const componentId =
+    provider.kind === "tts" && provider.component === "wyoming"
+      ? "wyoming.tts"
+      : provider.component;
+  return (
+    catalog.components.find(
+      (component) =>
+        component.id === componentId && component.kind === provider.kind,
+    ) ?? null
+  );
+}
+
+function isWyomingProviderName(provider: string): boolean {
+  const normalized = provider.toLowerCase();
+  return (
+    normalized.includes("wyoming") ||
+    normalized.includes("piper") ||
+    normalized.includes("whisper")
   );
 }
 
@@ -2852,7 +3222,8 @@ function providerDefinitionsForNode(
       label: node.provider,
       kind: node.kind,
       component: node.provider,
-      config: nodeConfigObject(node.config),
+      config: {},
+      source: "inferred",
     },
   ];
 }
@@ -2896,6 +3267,26 @@ function providerCardViews(
   );
 }
 
+function providerStatusIsGood(status: ProviderStatus | null): boolean {
+  return (
+    !!status &&
+    (status.reachable ||
+      status.state === "reachable" ||
+      status.state === "proven")
+  );
+}
+
+function providerCardStateClass(provider: ProviderCardView): string {
+  if (providerStatusIsGood(provider.status)) {
+    return "healthy";
+  }
+  return provider.status?.state ?? "configured";
+}
+
+function showsProviderStatusPill(provider: ProviderCardView): boolean {
+  return !providerStatusIsGood(provider.status);
+}
+
 function loadProviderDefinitions(
   catalog: PipelineComponentCatalog,
   pipelineViews: readonly PipelineView[],
@@ -2906,8 +3297,11 @@ function loadProviderDefinitions(
     if (saved) {
       const parsed = JSON.parse(saved) as ProviderDefinition[];
       return mergeProviderDefinitions(
-        parsed.filter(isProviderDefinition),
         defaultProviderDefinitions(catalog, pipelineViews, snapshot),
+        parsed.filter(isProviderDefinition).map((provider) => ({
+          ...provider,
+          source: "local",
+        })),
       );
     }
   } catch {
@@ -2918,9 +3312,18 @@ function loadProviderDefinitions(
 }
 
 function saveProviderDefinitions(definitions: readonly ProviderDefinition[]) {
+  const localDefinitions = definitions
+    .filter((provider) => provider.source === "local")
+    .map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      kind: provider.kind,
+      component: provider.component,
+      config: provider.config,
+    }));
   window.localStorage.setItem(
     PROVIDER_DEFINITIONS_STORAGE_KEY,
-    JSON.stringify(definitions),
+    JSON.stringify(localDefinitions),
   );
 }
 
@@ -2929,7 +3332,7 @@ function defaultProviderDefinitions(
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
 ): ProviderDefinition[] {
-  const fromGraphs = pipelineViews.flatMap((view) =>
+  const fromGraphs: ProviderDefinition[] = pipelineViews.flatMap((view) =>
     view.graph.nodes.flatMap((node) => {
       if (!providerKindForNodeKind(node.kind)) {
         return [];
@@ -2942,18 +3345,21 @@ function defaultProviderDefinitions(
           label: node.provider,
           kind: node.kind,
           component: component?.id ?? node.provider,
-          config: nodeConfigObject(node.config),
+          config: {},
+          source: "inferred",
         },
       ];
     }),
   );
-  const fromStatus =
+  const fromStatus: ProviderDefinition[] =
     snapshot?.providers.map((provider) => ({
       id: provider.id,
       label: provider.id,
       kind: nodeKindForProviderKind(provider.kind),
-      component: provider.id,
+      component:
+        componentForProviderStatus(catalog, provider)?.id ?? provider.id,
       config: {},
+      source: "inferred" as const,
     })) ?? [];
 
   return mergeProviderDefinitions([], [...fromGraphs, ...fromStatus]);
@@ -2997,6 +3403,38 @@ function isProviderDefinition(value: unknown): value is ProviderDefinition {
   );
 }
 
+function validateProviderDefinitionConfig(
+  provider: ProviderDefinition,
+  component: PipelineComponentDescriptor,
+): PipelineValidationResult {
+  const config = pruneEmptyConfig(provider.config);
+  const missing = component.schema.required.filter((field) => {
+    const value = config[field];
+    return typeof value !== "string" || value.trim().length === 0;
+  });
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message: `Missing required fields: ${missing.join(", ")}`,
+    };
+  }
+
+  for (const [field, property] of Object.entries(component.schema.properties)) {
+    if (!(field in config)) {
+      continue;
+    }
+    const value = config[field];
+    if (property.type === "string" && typeof value !== "string") {
+      return { ok: false, message: `${field} must be a string` };
+    }
+    if (property.type === "boolean" && typeof value !== "boolean") {
+      return { ok: false, message: `${field} must be a boolean` };
+    }
+  }
+
+  return { ok: true, order: [] };
+}
+
 function updateConfigValue(
   config: Record<string, unknown>,
   field: string,
@@ -3020,12 +3458,6 @@ function pruneEmptyConfig(
   return Object.fromEntries(
     Object.entries(config).filter(([, value]) => value !== "" && value != null),
   );
-}
-
-function nodeConfigObject(config: unknown): Record<string, unknown> {
-  return config && typeof config === "object" && !Array.isArray(config)
-    ? { ...(config as Record<string, unknown>) }
-    : {};
 }
 
 function nodeKindForProviderKind(kind: ProviderKind): NodeKind {
@@ -3723,7 +4155,9 @@ function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
       .filter((node) => node.kind === "tool" || node.kind === "memory")
       .map((node) => node.id),
   );
-  const mainNodes = graph.nodes.filter((node) => !augmentNodeIds.has(node.id));
+  const mainNodes = sortLinearNodes(
+    graph.nodes.filter((node) => !augmentNodeIds.has(node.id)),
+  );
   const mainNodeIds = new Set(mainNodes.map((node) => node.id));
   const mainEdges = graph.edges.filter(
     (edge) => mainNodeIds.has(edge.from) && mainNodeIds.has(edge.to),
@@ -3750,75 +4184,22 @@ function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
 }
 
 function orbitPositionForNode(
-  node: PipelineNode,
+  _node: PipelineNode,
   fallbackIndex: number,
 ): OrbitPosition {
-  const config = objectConfig(node.config);
-  const ui = objectConfig(config.ui);
-  const orbit = objectConfig(ui.orbit);
-  const x = typeof orbit.x === "number" ? orbit.x : undefined;
-  const y = typeof orbit.y === "number" ? orbit.y : undefined;
-  if (x !== undefined && y !== undefined) {
-    return { x, y };
-  }
-
   return defaultAugmentOrbitPosition(fallbackIndex);
-}
-
-function nextAugmentOrbitPosition(
-  graph: PipelineGraph,
-  targetId: string,
-): OrbitPosition {
-  const existingAugmentCount = graph.nodes.filter((node) => {
-    if (node.kind !== "tool" && node.kind !== "memory") {
-      return false;
-    }
-
-    return (
-      (graph.edges.find((edge) => edge.from === node.id)?.to ?? "llm") ===
-      targetId
-    );
-  }).length;
-
-  return defaultAugmentOrbitPosition(existingAugmentCount);
 }
 
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
   return {
-    x: Math.round(Math.cos(angle) * 148),
-    y: Math.round(Math.sin(angle) * 110),
+    x: Math.round(Math.cos(angle) * 175),
+    y: Math.round(Math.sin(angle) * 175),
   };
-}
-
-function withOrbitPosition(
-  config: unknown,
-  position: OrbitPosition,
-): Record<string, unknown> {
-  const configObject = objectConfig(config);
-  const ui = objectConfig(configObject.ui);
-  return {
-    ...configObject,
-    ui: {
-      ...ui,
-      orbit: {
-        x: position.x,
-        y: position.y,
-      },
-    },
-  };
-}
-
-function objectConfig(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-
-  return {};
 }
 
 function clampOrbitCoordinate(value: number): number {
-  return Math.max(-180, Math.min(180, Math.round(value)));
+  return Math.max(-360, Math.min(360, Math.round(value)));
 }
 
 function initializePipelineDrafts(
@@ -3841,6 +4222,13 @@ function cloneGraph(graph: PipelineGraph): PipelineGraph {
   return JSON.parse(JSON.stringify(graph)) as PipelineGraph;
 }
 
+function pipelineGraphsEqual(
+  left: PipelineGraph,
+  right: PipelineGraph,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function upsertPipelineView(
   views: readonly PipelineView[],
   graph: PipelineGraph,
@@ -3853,6 +4241,110 @@ function upsertPipelineView(
   }
 
   return views.map((view, index) => (index === existing ? next : view));
+}
+
+function toolNodeIdBase(providerId: string): string {
+  const normalized = providerId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `tool_${normalized || "provider"}`;
+}
+
+function uniqueNodeId(graph: PipelineGraph, base: string): string {
+  const existing = new Set(graph.nodes.map((node) => node.id));
+  if (!existing.has(base)) {
+    return base;
+  }
+
+  let suffix = 2;
+  while (existing.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}_${suffix}`;
+}
+
+function isEndpointNode(node: PipelineNode): boolean {
+  return node.kind === "source" || node.kind === "sink";
+}
+
+function linearStageRank(node: PipelineNode): number {
+  const rank = LINEAR_STAGE_ORDER.indexOf(node.kind);
+  return rank === -1 ? LINEAR_STAGE_ORDER.length : rank;
+}
+
+function sortLinearNodes(nodes: readonly PipelineNode[]): PipelineNode[] {
+  return [...nodes].sort((left, right) => {
+    const rankDelta = linearStageRank(left) - linearStageRank(right);
+    return rankDelta === 0 ? left.id.localeCompare(right.id) : rankDelta;
+  });
+}
+
+function normalizePipelineGraph(graph: PipelineGraph): PipelineGraph {
+  const augmentKinds = new Set<NodeKind>(["tool", "memory"]);
+  const linearNodes = sortLinearNodes(
+    graph.nodes.filter((node) => !augmentKinds.has(node.kind)),
+  );
+  const linearNodeIds = new Set(linearNodes.map((node) => node.id));
+  const augmentNodes = graph.nodes.filter((node) =>
+    augmentKinds.has(node.kind),
+  );
+  const linearEdges = linearNodes.slice(0, -1).map((node, index) => ({
+    from: node.id,
+    to: linearNodes[index + 1].id,
+  }));
+  const nonLinearEdges = graph.edges.filter(
+    (edge) => !(linearNodeIds.has(edge.from) && linearNodeIds.has(edge.to)),
+  );
+
+  return {
+    ...graph,
+    nodes: [...linearNodes, ...augmentNodes],
+    edges: [...linearEdges, ...dedupeEdges(nonLinearEdges)],
+  };
+}
+
+function dedupeEdges(edges: readonly PipelineEdge[]): PipelineEdge[] {
+  const seen = new Set<string>();
+  return edges.filter((edge) => {
+    const key = `${edge.from}->${edge.to}:${edge.port ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function insertLinearStageNode(
+  graph: PipelineGraph,
+  node: PipelineNode,
+): PipelineGraph {
+  const nodeRank = linearStageRank(node);
+  const existingMainNodes = graph.nodes
+    .filter((candidate) => !["tool", "memory"].includes(candidate.kind))
+    .sort((left, right) => linearStageRank(left) - linearStageRank(right));
+  const previous = [...existingMainNodes]
+    .reverse()
+    .find((candidate) => linearStageRank(candidate) < nodeRank);
+  const next = existingMainNodes.find(
+    (candidate) => linearStageRank(candidate) > nodeRank,
+  );
+  const edges = graph.edges.filter(
+    (edge) =>
+      !(previous && next && edge.from === previous.id && edge.to === next.id),
+  );
+
+  return normalizePipelineGraph({
+    ...graph,
+    nodes: [...graph.nodes, node],
+    edges: [
+      ...edges,
+      ...(previous ? [{ from: previous.id, to: node.id }] : []),
+      ...(next ? [{ from: node.id, to: next.id }] : []),
+    ],
+  });
 }
 
 function useSmallScreenMode(forcedSmallScreen: boolean) {
@@ -3885,69 +4377,6 @@ function readsSmallScreenQuery() {
   }
 
   return window.matchMedia("(max-width: 700px)").matches;
-}
-
-function promoteSavedPipeline(
-  snapshot: OperatorStatusSnapshot | null,
-  graph: PipelineGraph,
-): OperatorStatusSnapshot | null {
-  if (!snapshot) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    runtime: {
-      ...snapshot.runtime,
-      launch_state: "operations_workspace",
-    },
-    pipelines: [
-      {
-        name: graph.name,
-        usable: true,
-        health: {
-          state: "unproven",
-          summary: "awaiting first successful turn",
-          last_successful_turn: null,
-          last_failed_turn: null,
-        },
-        components: [
-          {
-            kind: "capture",
-            provider: "websocket",
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "transcription",
-            provider:
-              graph.nodes.find((node) => node.id === "stt")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "reasoning",
-            provider:
-              graph.nodes.find((node) => node.id === "llm")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "synthesis",
-            provider:
-              graph.nodes.find((node) => node.id === "tts")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-        ],
-        affected_providers: [],
-      },
-    ],
-  };
 }
 
 function StaleBanner({ snapshot }: { snapshot: OperatorStatusSnapshot }) {

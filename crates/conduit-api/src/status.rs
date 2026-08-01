@@ -570,9 +570,9 @@ async fn project_provider_statuses(
         collect_tts_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
         collect_tool_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
     }
-
     for kind in [ProviderKind::Llm, ProviderKind::Stt, ProviderKind::Tts] {
-        if provider_kind_missing(kind, &seen) {
+        if provider_kind_missing(kind, &seen) && !references.keys().any(|key| key.kind == kind)
+        {
             let id = unavailable_slot_id(kind);
             let key = ProviderKey { kind, id: id.to_owned() };
             if seen.insert(key.clone()) {

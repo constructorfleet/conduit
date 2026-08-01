@@ -230,6 +230,7 @@ the household's transcripts.
 | `GET /v1/pipelines/{name}/converse` | Device, or management |
 | `GET`, `PUT`, `DELETE /v1/pipelines…` | Management only |
 | `POST /v1/pipelines/validate` | Management only |
+| `POST /v1/pipelines/{name}/test-turn` | Management only |
 | `GET /v1/events` | Management only |
 | `GET /v1/turns`, `/v1/turns/{turn_id}`, `/v1/turns/{turn_id}/events`, `/v1/turns/live` | Management only |
 
@@ -494,6 +495,10 @@ many of them:
 | `OpenAi` | `/chat/completions` | Ollama, vLLM, LM Studio, OpenRouter |
 | `OpenAiStt` | `/audio/transcriptions` | Speaches, `whisper.cpp`, `faster-whisper` |
 | `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper |
+
+Pipeline graphs do not carry provider configuration. A graph node stores the
+stable provider id it selects; provider-specific settings belong to provider
+registration and the Providers page.
 
 Only the base URL changes:
 

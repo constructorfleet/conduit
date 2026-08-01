@@ -203,10 +203,7 @@ fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::new("mic", NodeKind::Source, "websocket"))
         .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "echo-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -217,10 +214,7 @@ fn provider_status_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::new("mic", NodeKind::Source, "websocket"))
         .with_node(Node::new("stt", NodeKind::Stt, "configured-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "configured-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "configured-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "configured-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -404,6 +398,30 @@ async fn status_reports_unavailable_provider_slots_without_a_runtime_registry() 
             }
         ])
     );
+}
+
+#[tokio::test]
+async fn concrete_missing_provider_references_replace_generic_unavailable_slots() {
+    let graph = PipelineGraph::new("kitchen")
+        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
+        .with_node(Node::new("llm", NodeKind::Llm, "qwen3:8b"))
+        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+    let state = guarded();
+    let (status, body) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    assert!(providers.iter().any(|provider| provider["id"] == "whisper"));
+    assert!(providers.iter().any(|provider| provider["id"] == "qwen3:8b"));
+    assert!(providers.iter().any(|provider| provider["id"] == "piper"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "stt"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "llm"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "tts"));
 }
 
 #[tokio::test]

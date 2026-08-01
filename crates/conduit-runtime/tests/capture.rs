@@ -23,10 +23,7 @@ use futures_util::StreamExt;
 fn linear_graph() -> PipelineGraph {
     PipelineGraph::new("capture")
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))

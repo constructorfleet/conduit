@@ -356,7 +356,6 @@ export interface PipelineNode {{
   id: IdString;
   kind: NodeKind;
   provider: string;
-  config?: unknown;
 }}
 
 export interface PipelineEdge {{
@@ -374,6 +373,27 @@ export interface PipelineGraph {{
 export interface PipelineView {{
   graph: PipelineGraph;
   order: IdString[];
+}}
+
+export type AudioEncoding = "pcm_s16_le" | "pcm_f32_le" | "opus" | "flac";
+
+export interface AudioFormat {{
+  encoding: AudioEncoding;
+  sample_rate: number;
+  channels: number;
+}}
+
+export interface PipelineTestRequest {{
+  utterance?: string;
+  format?: AudioFormat;
+}}
+
+export interface PipelineTestResult {{
+  pipeline: string;
+  conversation: IdString;
+  status: "completed";
+  audio_bytes: number;
+  reply_text: string;
 }}
 
 export type ComponentConfigValueType = "string" | "boolean";
@@ -497,6 +517,10 @@ export interface ConduitApiClient {{
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
   validatePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
+  testPipeline: (
+    name: string,
+    request?: PipelineTestRequest,
+  ) => Promise<PipelineTestResult>;
   listTurns: () => Promise<TurnList>;
   getTurn: (turnId: string) => Promise<TurnSnapshot>;
   getTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -512,6 +536,7 @@ export const conduitApiRoutes = {{
   pipelines: "/v1/pipelines",
   pipelineComponents: "/v1/pipeline-components",
   pipeline: "/v1/pipelines/{{name}}",
+  pipelineTest: "/v1/pipelines/{{name}}/test-turn",
   validatePipeline: "/v1/pipelines/validate",
 }} as const;
 
@@ -549,6 +574,11 @@ export function createConduitApiClient(
         method: "POST",
         body: JSON.stringify(graph),
       }}),
+    testPipeline: (name, testRequest = {{}}) =>
+      requestJson<PipelineTestResult>(request, config, pipelineTestRoute(name), {{
+        method: "POST",
+        body: JSON.stringify(testRequest),
+      }}),
     listTurns: () => requestJson<TurnList>(request, config, conduitApiRoutes.turns),
     getTurn: (turnId) =>
       requestJson<TurnSnapshot>(request, config, turnRoute(turnId)),
@@ -559,6 +589,13 @@ export function createConduitApiClient(
 
 function pipelineRoute(name: string): string {{
   return conduitApiRoutes.pipeline.replace("{{name}}", encodeURIComponent(name));
+}}
+
+function pipelineTestRoute(name: string): string {{
+  return conduitApiRoutes.pipelineTest.replace(
+    "{{name}}",
+    encodeURIComponent(name),
+  );
 }}
 
 function turnRoute(turnId: string): string {{

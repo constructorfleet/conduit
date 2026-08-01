@@ -5,8 +5,15 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use bytes::Bytes;
+use conduit_core::audio::AudioFormat;
 use conduit_core::graph::{NodeKind, PipelineGraph};
-use serde::Serialize;
+use conduit_core::id::ConversationId;
+use conduit_provider::stt::AudioChunk;
+use conduit_provider::ChunkStream;
+use conduit_runtime::Runner;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 
 use crate::auth::ManagementCaller;
 use crate::error::JsonBody;
@@ -80,6 +87,32 @@ pub enum ComponentConfigFormat {
 pub struct PipelineComponentCatalog {
     /// Known components, in stable display order.
     pub components: Vec<PipelineComponentDescriptor>,
+}
+
+/// Input for an operator-triggered pipeline test turn.
+#[derive(Debug, Deserialize)]
+pub struct PipelineTestRequest {
+    /// Text fed into the configured STT stage by the built-in test harness.
+    #[serde(default = "default_test_utterance")]
+    pub utterance: String,
+    /// Audio format advertised to providers for the synthetic input stream.
+    #[serde(default)]
+    pub format: AudioFormat,
+}
+
+/// Result of an operator-triggered pipeline test turn.
+#[derive(Debug, Serialize)]
+pub struct PipelineTestResult {
+    /// Pipeline that ran.
+    pub pipeline: String,
+    /// Conversation id emitted on the event stream.
+    pub conversation: ConversationId,
+    /// Completion state for the test turn.
+    pub status: &'static str,
+    /// Number of synthesized audio bytes returned by the TTS stage.
+    pub audio_bytes: usize,
+    /// Best-effort text rendering of the synthesized stream.
+    pub reply_text: String,
 }
 
 /// `GET /v1/pipelines` — names of every stored pipeline.
@@ -180,6 +213,62 @@ pub async fn validate(
     view(graph).map(Json)
 }
 
+/// `POST /v1/pipelines/{name}/test-turn` — runs a stored pipeline once.
+///
+/// # Errors
+///
+/// Returns 404 when the pipeline is missing, 422 when it cannot be prepared
+/// with the configured runtime providers, and 503 when the turn fails while
+/// running.
+pub async fn test_turn(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    JsonBody(request): JsonBody<PipelineTestRequest>,
+) -> Result<Json<PipelineTestResult>, ApiError> {
+    let graph = state
+        .pipeline(&name)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
+    let providers = state
+        .providers()
+        .ok_or_else(|| ApiError::unprocessable("no providers are configured".to_owned()))?;
+    let runner = Runner::prepare(&graph, &providers, state.bus.clone())
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?
+        .with_format(request.format)
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?
+        .with_idle_timeout(state.turn_idle_timeout());
+    let conversation = runner.run(test_audio(request.utterance));
+    let conversation_id = conversation.id;
+    let mut audio = conversation.audio;
+    let mut output = Vec::new();
+
+    while let Some(chunk) = audio.next().await {
+        let chunk = chunk.map_err(|error| ApiError::unavailable(error.to_string()))?;
+        output.extend_from_slice(&chunk.data);
+    }
+
+    Ok(Json(PipelineTestResult {
+        pipeline: name,
+        conversation: conversation_id,
+        status: "completed",
+        audio_bytes: output.len(),
+        reply_text: String::from_utf8_lossy(&output).into_owned(),
+    }))
+}
+
+fn test_audio(utterance: String) -> ChunkStream<AudioChunk> {
+    Box::pin(futures_util::stream::iter([Ok(AudioChunk {
+        sequence: 0,
+        data: Bytes::from(utterance.into_bytes()),
+    })]))
+}
+
+fn default_test_utterance() -> String {
+    "conduit test".to_owned()
+}
+
 /// Validates `graph` and pairs it with its execution order.
 fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
     let order = graph
@@ -243,6 +332,21 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                     ("model", string_property(None, None)),
                 ]),
                 required: vec!["model"],
+            },
+        },
+        PipelineComponentDescriptor {
+            id: "wyoming.tts",
+            label: "Wyoming TTS",
+            kind: NodeKind::Tts,
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("voice", string_property(None, None)),
+                    ("model", string_property(None, None)),
+                    ("mode", string_property(None, None)),
+                    ("streaming", boolean_property()),
+                ]),
+                required: vec!["url"],
             },
         },
         PipelineComponentDescriptor {

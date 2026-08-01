@@ -943,6 +943,7 @@ button {
   gap: 6px;
   align-content: center;
   width: 180px;
+  min-width: 0;
   min-height: 104px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1039,14 +1040,36 @@ button {
 }
 
 .graph-node strong {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   color: var(--strong);
 }
 
 .graph-node p,
 .pipeline-editor-status p {
+  max-width: 100%;
+  min-width: 0;
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.node-label,
+.node-provider-label {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+}
+
+.node-label {
+  -webkit-line-clamp: 2;
+}
+
+.node-provider-label {
+  -webkit-line-clamp: 2;
 }
 
 .graph-canvas-controls {
@@ -1425,6 +1448,10 @@ button {
 .provider-card.configured,
 .provider-card.unavailable {
   border-color: var(--warning-border);
+}
+
+.provider-card.healthy {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
 }
 
 .provider-card h2,
@@ -1833,13 +1860,13 @@ button {
 
 .state-text.degraded,
 .state-text.configured,
-.state-text.reachable,
 .state-text.unproven {
   color: var(--warning-text);
 }
 
 .state-text.healthy,
-.state-text.proven {
+.state-text.proven,
+.state-text.reachable {
   color: var(--success);
 }
 

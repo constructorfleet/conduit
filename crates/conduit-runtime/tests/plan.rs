@@ -15,9 +15,9 @@ use conduit_core::{Error, GraphError};
 use conduit_runtime::{Providers, Runner};
 use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
 
-/// A model node with the configuration every pipeline needs.
+/// A model node whose provider id is the model selector.
 fn llm_node(id: &str, provider: &str) -> Node {
-    Node::new(id, NodeKind::Llm, provider).with_config(serde_json::json!({ "model": "fake-1" }))
+    Node::new(id, NodeKind::Llm, provider)
 }
 
 /// stt -> llm -> tts, correctly wired.
