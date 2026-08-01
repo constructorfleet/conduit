@@ -565,7 +565,22 @@ button {
   background: var(--surface-sunken);
 }
 
-.graph-node span {
+.graph-node.unhealthy,
+.graph-node.not_configured,
+.graph-node.not_runnable {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.graph-node.degraded,
+.graph-node.unproven {
+  border-color: color-mix(in srgb, var(--warning-text) 45%, var(--border));
+}
+
+.graph-node.healthy {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.node-index {
   width: fit-content;
   border-radius: 999px;
   padding: 2px 7px;
@@ -573,6 +588,30 @@ button {
   color: var(--strong);
   font-size: 12px;
   font-weight: 800;
+}
+
+.node-health {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.node-health.unhealthy,
+.node-health.not_configured,
+.node-health.not_runnable {
+  color: var(--danger);
+}
+
+.node-health.degraded,
+.node-health.unproven {
+  color: var(--warning-text);
+}
+
+.node-health.healthy {
+  color: var(--success);
 }
 
 .graph-node strong {

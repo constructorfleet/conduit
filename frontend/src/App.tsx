@@ -29,7 +29,12 @@ import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
 import type { OperatorDataMode, SnapshotState } from "./apiClient";
-import type { NodeKind, PipelineGraph, PipelineView } from "./contracts/client";
+import type {
+  NodeKind,
+  PipelineGraph,
+  PipelineNode,
+  PipelineView,
+} from "./contracts/client";
 import {
   eventEnvelopeFixtures,
   type EventEnvelope,
@@ -41,6 +46,8 @@ import type {
   ProviderKind,
   ProviderStatus,
   RuntimeFailure,
+  ComponentHealth,
+  ComponentKind,
 } from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -500,9 +507,12 @@ function ProvidersPanel({
     .map((provider) => ({ ...provider, ...overrides[provider.id] }))
     .filter((provider) => filter === "all" || provider.kind === filter);
   const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
+  const providerIds = new Set(providers.map((provider) => provider.id));
   const referencedProviderCount = new Set(
     pipelineViews.flatMap((view) =>
-      view.graph.nodes.map((node) => node.provider),
+      view.graph.nodes
+        .map((node) => node.provider)
+        .filter((provider) => providerIds.has(provider)),
     ),
   ).size;
 
@@ -536,7 +546,7 @@ function ProvidersPanel({
           value={providers.length.toString()}
         />
         <MetricTile
-          label="Referenced by graphs"
+          label="Configured in graphs"
           value={referencedProviderCount.toString()}
         />
         <MetricTile
@@ -1185,15 +1195,29 @@ function PipelinesPanel({
       <div className="pipeline-editor-grid">
         <section className="graph-surface" aria-label="Pipeline graph">
           <div className="graph-nodes">
-            {draft.nodes.map((node, index) => (
-              <article className="graph-node" key={node.id}>
-                <span>{index + 1}</span>
-                <strong>{node.id}</strong>
-                <p>
-                  {node.kind} / {node.provider}
-                </p>
-              </article>
-            ))}
+            {draft.nodes.map((node, index) => {
+              const componentHealth = healthForGraphNode(node, selectedHealth);
+              const componentKind = componentKindForNode(node);
+              return (
+                <article
+                  aria-label={`${node.id} ${componentKind} ${componentHealth?.state ?? "untracked"}`}
+                  className={`graph-node ${componentHealth?.state ?? "untracked"}`}
+                  key={node.id}
+                  role="group"
+                >
+                  <span className="node-index">{index + 1}</span>
+                  <strong>{node.id}</strong>
+                  <p>
+                    {node.kind} / {node.provider}
+                  </p>
+                  {componentHealth ? (
+                    <span className={`node-health ${componentHealth.state}`}>
+                      {componentKind} / {componentHealth.state}
+                    </span>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
           <div className="graph-edges" aria-label="Pipeline edges">
             {draft.edges.map((edge) => (
@@ -1826,6 +1850,40 @@ function validatePipelineGraph(graph: PipelineGraph): PipelineValidationResult {
   }
 
   return { ok: true, order: graph.nodes.map((node) => node.id) };
+}
+
+function healthForGraphNode(
+  node: PipelineNode,
+  pipeline: PipelineStatus | undefined,
+): ComponentHealth | null {
+  const componentKind = componentKindForNode(node);
+  return (
+    pipeline?.components.find(
+      (component) =>
+        component.kind === componentKind &&
+        (!component.provider || component.provider === node.provider),
+    ) ??
+    pipeline?.components.find(
+      (component) => component.kind === componentKind,
+    ) ??
+    null
+  );
+}
+
+function componentKindForNode(node: PipelineNode): ComponentKind {
+  if (node.kind === "stt") {
+    return "transcription";
+  }
+  if (node.kind === "llm") {
+    return "reasoning";
+  }
+  if (node.kind === "tool") {
+    return "tools";
+  }
+  if (node.kind === "tts") {
+    return "synthesis";
+  }
+  return "capture";
 }
 
 function cloneGraph(graph: PipelineGraph): PipelineGraph {

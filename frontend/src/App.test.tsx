@@ -518,6 +518,9 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByText("mic")).toBeInTheDocument();
     expect(screen.getByText("stt")).toBeInTheDocument();
     expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "tts synthesis unhealthy" }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("unhealthy").length).toBeGreaterThan(0);
     expect(screen.getByText("synthesis / piper-local")).toBeInTheDocument();
   });
@@ -620,6 +623,8 @@ describe("Providers workspace", () => {
     expect(
       screen.getByText("no successful reachability check yet"),
     ).toBeInTheDocument();
+    expect(screen.getByText("Configured in graphs")).toBeInTheDocument();
+    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "TTS" }));
     expect(screen.getByText("1 visible")).toBeInTheDocument();
