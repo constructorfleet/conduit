@@ -9,6 +9,7 @@ npm ci
 npm run dev
 npm run lint
 npm run test
+npm run contract:check
 npm run build
 npm run format
 ```
@@ -20,3 +21,11 @@ Bearer tokens stay in `sessionStorage` unless the operator chooses
 The app shell is organized around Overview, Pipelines, Providers, Events, and
 Settings. Runtime integration starts from `/v1/status` and then applies
 `/v1/events` updates after the snapshot is loaded.
+
+Generated TypeScript contracts and reviewable JSON fixtures live under
+`src/contracts`. Rust owns those artifacts. After an intentional API or event
+contract change, update them from the repository root with:
+
+```sh
+CONDUIT_UPDATE_FRONTEND_CONTRACTS=1 cargo test -p conduit-api --test frontend_contract
+```

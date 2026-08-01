@@ -252,6 +252,93 @@ pub enum Event {
 }
 
 impl Event {
+    /// Deterministic examples for the frontend event contract.
+    ///
+    /// This is a contract surface, not a test convenience: the Operator
+    /// Console consumes typed event fixtures generated from these examples.
+    /// Keep one example for every event variant.
+    #[must_use]
+    pub fn contract_examples() -> Vec<Self> {
+        vec![
+            Self::WakeWordDetected { phrase: "hey conduit".to_owned(), confidence: 0.91 },
+            Self::WakeWordRejected { phrase: "hey conduit".to_owned(), confidence: 0.12 },
+            Self::AudioStarted { format: AudioFormat::DEFAULT },
+            Self::AudioChunkReceived { sequence: 1, bytes: 3200 },
+            Self::AudioFinished { duration_ms: 1200 },
+            Self::SpeechPartial { text: "turn on".to_owned() },
+            Self::SpeechFinal {
+                text: "turn on the kitchen lights".to_owned(),
+                confidence: Some(0.97),
+                language: Some("en-US".to_owned()),
+            },
+            Self::SpeakerIdentified { speaker: None, confidence: 0.0 },
+            Self::ConversationStarted,
+            Self::TurnStarted { turn: TurnId::from_uuid(contract_uuid(10)) },
+            Self::ConversationCancelled { reason: CancelReason::UserRequested },
+            Self::ConversationCompleted,
+            Self::LlmRequestStarted { model: "fake-llm".to_owned() },
+            Self::LlmToken { delta: "The lights are on.".to_owned() },
+            Self::LlmFinished {
+                reason: FinishReason::Stop,
+                prompt_tokens: Some(42),
+                completion_tokens: Some(7),
+            },
+            Self::ToolRequested {
+                call: ToolCallId::new("call_contract"),
+                name: "lights.turn_on".to_owned(),
+            },
+            Self::ToolStarted { call: ToolCallId::new("call_contract") },
+            Self::ToolConfirmationRequested {
+                call: ToolCallId::new("call_contract"),
+                prompt: "Turn on the kitchen lights?".to_owned(),
+            },
+            Self::ToolCompleted { call: ToolCallId::new("call_contract"), duration_ms: 34 },
+            Self::ToolFailed {
+                call: ToolCallId::new("call_contract"),
+                error: "permission denied".to_owned(),
+            },
+            Self::TtsStarted { voice: "alloy".to_owned() },
+            Self::AudioStreaming { sequence: 2, bytes: 6400 },
+            Self::TtsFinished { duration_ms: 900 },
+            Self::StageFailed {
+                node: "tts".to_owned(),
+                error: "connection refused".to_owned(),
+                recovered: false,
+            },
+        ]
+    }
+
+    /// Serialized event variant name used by the frontend event contract.
+    #[must_use]
+    pub const fn contract_type(&self) -> &'static str {
+        match self {
+            Self::WakeWordDetected { .. } => "WakeWordDetected",
+            Self::WakeWordRejected { .. } => "WakeWordRejected",
+            Self::AudioStarted { .. } => "AudioStarted",
+            Self::AudioChunkReceived { .. } => "AudioChunkReceived",
+            Self::AudioFinished { .. } => "AudioFinished",
+            Self::SpeechPartial { .. } => "SpeechPartial",
+            Self::SpeechFinal { .. } => "SpeechFinal",
+            Self::SpeakerIdentified { .. } => "SpeakerIdentified",
+            Self::ConversationStarted => "ConversationStarted",
+            Self::TurnStarted { .. } => "TurnStarted",
+            Self::ConversationCancelled { .. } => "ConversationCancelled",
+            Self::ConversationCompleted => "ConversationCompleted",
+            Self::LlmRequestStarted { .. } => "LlmRequestStarted",
+            Self::LlmToken { .. } => "LlmToken",
+            Self::LlmFinished { .. } => "LlmFinished",
+            Self::ToolRequested { .. } => "ToolRequested",
+            Self::ToolStarted { .. } => "ToolStarted",
+            Self::ToolConfirmationRequested { .. } => "ToolConfirmationRequested",
+            Self::ToolCompleted { .. } => "ToolCompleted",
+            Self::ToolFailed { .. } => "ToolFailed",
+            Self::TtsStarted { .. } => "TtsStarted",
+            Self::AudioStreaming { .. } => "AudioStreaming",
+            Self::TtsFinished { .. } => "TtsFinished",
+            Self::StageFailed { .. } => "StageFailed",
+        }
+    }
+
     /// The pipeline stage this event belongs to.
     ///
     /// Used for metric labels and for filtering event subscriptions.
@@ -288,6 +375,10 @@ impl Event {
     pub const fn is_terminal(&self) -> bool {
         matches!(self, Self::ConversationCompleted | Self::ConversationCancelled { .. })
     }
+}
+
+const fn contract_uuid(last_byte: u128) -> uuid::Uuid {
+    uuid::Uuid::from_u128(last_byte)
 }
 
 /// Coarse grouping of events by pipeline stage.

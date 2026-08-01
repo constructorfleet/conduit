@@ -125,6 +125,7 @@ cd frontend
 npm ci
 npm run lint
 npm run test
+npm run contract:check
 npm run build
 npm run format
 ```

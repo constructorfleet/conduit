@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "contract:check": "cargo test --manifest-path ../Cargo.toml -p conduit-api --test frontend_contract && tsc --noEmit -p tsconfig.app.json",
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",

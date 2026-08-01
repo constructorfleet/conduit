@@ -1,0 +1,135 @@
+{
+  "generated_at": "2026-08-01T01:02:03Z",
+  "runtime": {
+    "launch_state": "operations_workspace",
+    "stale_state": "fresh"
+  },
+  "pipelines": [
+    {
+      "name": "kitchen",
+      "usable": true,
+      "health": {
+        "state": "unhealthy",
+        "summary": "speech synthesis failed after the model completed",
+        "last_successful_turn": null,
+        "last_failed_turn": "00000000-0000-0000-0000-000000000003"
+      },
+      "components": [
+        {
+          "kind": "reasoning",
+          "provider": "openai-primary",
+          "state": "healthy",
+          "detail": "last invoked turn completed",
+          "last_turn": "00000000-0000-0000-0000-000000000003"
+        },
+        {
+          "kind": "synthesis",
+          "provider": "piper-local",
+          "state": "unhealthy",
+          "detail": "connection refused",
+          "last_turn": "00000000-0000-0000-0000-000000000003"
+        }
+      ],
+      "affected_providers": [
+        "piper-local"
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "id": "piper-local",
+      "kind": "tts",
+      "state": "configured",
+      "configured": true,
+      "reachable": false,
+      "proven_by_turn": null,
+      "message": "no successful reachability check yet",
+      "affects_pipelines": [
+        "kitchen"
+      ]
+    }
+  ],
+  "satellites": {
+    "connected": [
+      {
+        "device": "00000000-0000-0000-0000-000000000001",
+        "name": "Kitchen Satellite",
+        "connected_since": "2026-08-01T01:01:50Z",
+        "conversation": "00000000-0000-0000-0000-000000000002",
+        "pipeline": "kitchen"
+      }
+    ],
+    "recently_active": [
+      {
+        "device": "00000000-0000-0000-0000-000000000001",
+        "name": "Kitchen Satellite",
+        "last_seen_at": "2026-08-01T01:01:58Z",
+        "last_event": "TtsStarted"
+      }
+    ],
+    "recent_window_seconds": 300
+  },
+  "active_turns": [
+    {
+      "pipeline": "kitchen",
+      "conversation": "00000000-0000-0000-0000-000000000002",
+      "turn": "00000000-0000-0000-0000-000000000003",
+      "trace": "00000000-0000-0000-0000-000000000004",
+      "started_at": "2026-08-01T01:01:59Z",
+      "invoked_components": [
+        "reasoning",
+        "synthesis"
+      ]
+    }
+  ],
+  "recent_failures": [
+    {
+      "pipeline": "kitchen",
+      "turn": "00000000-0000-0000-0000-000000000003",
+      "component": "synthesis",
+      "provider": "piper-local",
+      "message": "connection refused",
+      "at": "2026-08-01T01:02:01Z"
+    }
+  ],
+  "event_stream": {
+    "route": "/v1/events",
+    "stale_state_on_disconnect": "stale",
+    "refresh_snapshot_after_reconnect": true,
+    "bindings": [
+      {
+        "resource": "pipeline_health",
+        "events": [
+          "TurnStarted",
+          "StageFailed",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
+      },
+      {
+        "resource": "active_turns",
+        "events": [
+          "TurnStarted",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
+      },
+      {
+        "resource": "recent_failures",
+        "events": [
+          "StageFailed",
+          "ConversationCompleted"
+        ]
+      },
+      {
+        "resource": "satellite_status",
+        "events": [
+          "ConversationStarted",
+          "AudioStarted",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
+      }
+    ]
+  }
+}

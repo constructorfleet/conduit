@@ -1,0 +1,487 @@
+//! Frontend contract artifact gate.
+//!
+//! Rust owns the API and event wire vocabulary. The Operator Console consumes
+//! generated TypeScript and fixtures checked in under `frontend/src/contracts`.
+//! This test fails when those artifacts drift from the Rust source of truth.
+
+use std::collections::BTreeSet;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use chrono::{TimeZone, Utc};
+use conduit_api::status::{
+    ActiveTurnStatus, ComponentHealth, ComponentHealthState, ComponentKind, ConnectedSatellite,
+    EventStreamContract, LaunchState, OperatorStatusSnapshot, PipelineHealth,
+    PipelineHealthState, PipelineStatus, ProviderKind, ProviderStatus, ProviderStatusState,
+    RecentlyActiveSatellite, RuntimeFailure, RuntimeState, SatelliteStatus,
+    SnapshotEventBinding, SnapshotResource, StaleState,
+};
+use conduit_core::event::{Envelope, Event};
+use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
+use uuid::Uuid;
+
+const UPDATE_ENV: &str = "CONDUIT_UPDATE_FRONTEND_CONTRACTS";
+
+#[test]
+fn frontend_contract_artifacts_are_current() {
+    let root = repo_root();
+    let artifacts = contract_artifacts();
+    let update = env::var_os(UPDATE_ENV).is_some();
+
+    for artifact in artifacts {
+        let path = root.join(artifact.path);
+        if update {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create contract artifact directory");
+            }
+            fs::write(&path, artifact.contents).expect("write contract artifact");
+            continue;
+        }
+
+        let actual = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("{} is missing or unreadable: {error}", artifact.path)
+        });
+        assert_eq!(
+            actual, artifact.contents,
+            "{} is stale; run `{UPDATE_ENV}=1 cargo test -p conduit-api --test frontend_contract`",
+            artifact.path
+        );
+    }
+}
+
+#[test]
+fn frontend_event_bindings_name_generated_event_variants() {
+    let event_names = Event::contract_examples()
+        .into_iter()
+        .map(|event| {
+            let json = serde_json::to_value(&event).expect("event serializes");
+            assert_eq!(
+                json["type"].as_str(),
+                Some(event.contract_type()),
+                "contract type helper must match serde"
+            );
+            event.contract_type().to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+
+    for binding in status_fixture().event_stream.bindings {
+        for event in binding.events {
+            assert!(
+                event_names.contains(&event),
+                "{event} is bound to {:?} but has no generated frontend event fixture",
+                binding.resource
+            );
+        }
+    }
+}
+
+fn contract_artifacts() -> Vec<Artifact> {
+    let status = status_fixture();
+    let events = event_fixtures();
+
+    vec![
+        Artifact { path: "frontend/src/contracts/status.ts", contents: status_types(&status) },
+        Artifact { path: "frontend/src/contracts/events.ts", contents: event_types(&events) },
+        Artifact {
+            path: "frontend/src/contracts/fixtures/status.snapshot.json",
+            contents: pretty_json(&status),
+        },
+        Artifact {
+            path: "frontend/src/contracts/fixtures/events.json",
+            contents: pretty_json(&events),
+        },
+    ]
+}
+
+struct Artifact {
+    path: &'static str,
+    contents: String,
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("crate lives under crates/conduit-api")
+        .to_path_buf()
+}
+
+fn status_fixture() -> OperatorStatusSnapshot {
+    let device = device_id(1);
+    let conversation = conversation_id(2);
+    let turn = turn_id(3);
+    let trace = trace_id(4);
+
+    OperatorStatusSnapshot {
+        generated_at: Utc.with_ymd_and_hms(2026, 8, 1, 1, 2, 3).unwrap(),
+        runtime: RuntimeState {
+            launch_state: LaunchState::OperationsWorkspace,
+            stale_state: StaleState::Fresh,
+        },
+        pipelines: vec![PipelineStatus {
+            name: "kitchen".to_owned(),
+            usable: true,
+            health: PipelineHealth {
+                state: PipelineHealthState::Unhealthy,
+                summary: "speech synthesis failed after the model completed".to_owned(),
+                last_successful_turn: None,
+                last_failed_turn: Some(turn),
+            },
+            components: vec![
+                ComponentHealth {
+                    kind: ComponentKind::Reasoning,
+                    provider: Some("openai-primary".to_owned()),
+                    state: ComponentHealthState::Healthy,
+                    detail: Some("last invoked turn completed".to_owned()),
+                    last_turn: Some(turn),
+                },
+                ComponentHealth {
+                    kind: ComponentKind::Synthesis,
+                    provider: Some("piper-local".to_owned()),
+                    state: ComponentHealthState::Unhealthy,
+                    detail: Some("connection refused".to_owned()),
+                    last_turn: Some(turn),
+                },
+            ],
+            affected_providers: vec!["piper-local".to_owned()],
+        }],
+        providers: vec![ProviderStatus {
+            id: "piper-local".to_owned(),
+            kind: ProviderKind::Tts,
+            state: ProviderStatusState::Configured,
+            configured: true,
+            reachable: false,
+            proven_by_turn: None,
+            message: Some("no successful reachability check yet".to_owned()),
+            affects_pipelines: vec!["kitchen".to_owned()],
+        }],
+        satellites: SatelliteStatus {
+            connected: vec![ConnectedSatellite {
+                device,
+                name: "Kitchen Satellite".to_owned(),
+                connected_since: Utc.with_ymd_and_hms(2026, 8, 1, 1, 1, 50).unwrap(),
+                conversation: Some(conversation),
+                pipeline: "kitchen".to_owned(),
+            }],
+            recently_active: vec![RecentlyActiveSatellite {
+                device,
+                name: "Kitchen Satellite".to_owned(),
+                last_seen_at: Utc.with_ymd_and_hms(2026, 8, 1, 1, 1, 58).unwrap(),
+                last_event: "TtsStarted".to_owned(),
+            }],
+            recent_window_seconds: 300,
+        },
+        active_turns: vec![ActiveTurnStatus {
+            pipeline: "kitchen".to_owned(),
+            conversation,
+            turn,
+            trace,
+            started_at: Utc.with_ymd_and_hms(2026, 8, 1, 1, 1, 59).unwrap(),
+            invoked_components: vec![ComponentKind::Reasoning, ComponentKind::Synthesis],
+        }],
+        recent_failures: vec![RuntimeFailure {
+            pipeline: "kitchen".to_owned(),
+            turn: Some(turn),
+            component: ComponentKind::Synthesis,
+            provider: Some("piper-local".to_owned()),
+            message: "connection refused".to_owned(),
+            at: Utc.with_ymd_and_hms(2026, 8, 1, 1, 2, 1).unwrap(),
+        }],
+        event_stream: EventStreamContract {
+            route: "/v1/events".to_owned(),
+            stale_state_on_disconnect: StaleState::Stale,
+            refresh_snapshot_after_reconnect: true,
+            bindings: vec![
+                SnapshotEventBinding {
+                    resource: SnapshotResource::PipelineHealth,
+                    events: vec![
+                        "TurnStarted".to_owned(),
+                        "StageFailed".to_owned(),
+                        "ConversationCompleted".to_owned(),
+                        "ConversationCancelled".to_owned(),
+                    ],
+                },
+                SnapshotEventBinding {
+                    resource: SnapshotResource::ActiveTurns,
+                    events: vec![
+                        "TurnStarted".to_owned(),
+                        "ConversationCompleted".to_owned(),
+                        "ConversationCancelled".to_owned(),
+                    ],
+                },
+                SnapshotEventBinding {
+                    resource: SnapshotResource::RecentFailures,
+                    events: vec!["StageFailed".to_owned(), "ConversationCompleted".to_owned()],
+                },
+                SnapshotEventBinding {
+                    resource: SnapshotResource::SatelliteStatus,
+                    events: vec![
+                        "ConversationStarted".to_owned(),
+                        "AudioStarted".to_owned(),
+                        "ConversationCompleted".to_owned(),
+                        "ConversationCancelled".to_owned(),
+                    ],
+                },
+            ],
+        },
+    }
+}
+
+fn event_fixtures() -> Vec<Envelope> {
+    Event::contract_examples()
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| Envelope {
+            id: event_id(100 + index as u128),
+            trace: trace_id(200),
+            at: Utc.with_ymd_and_hms(2026, 8, 1, 2, 0, index as u32).unwrap(),
+            device: Some(device_id(201)),
+            conversation: Some(conversation_id(202)),
+            pipeline: Some("kitchen".to_owned()),
+            event,
+        })
+        .collect()
+}
+
+fn status_types(fixture: &OperatorStatusSnapshot) -> String {
+    let mut text = generated_header().to_owned();
+    text.push_str(&format!(
+        r#"import type {{ EventType }} from "./events";
+
+export type DateTimeString = string;
+export type IdString = string;
+
+export type LaunchState = "first_run_setup" | "operations_workspace";
+export type StaleState = "fresh" | "stale";
+export type PipelineHealthState = "not_runnable" | "unproven" | "healthy" | "degraded" | "unhealthy";
+export type ComponentKind = "capture" | "transcription" | "reasoning" | "tools" | "synthesis";
+export type ComponentHealthState = "not_configured" | "unused" | "unproven" | "healthy" | "degraded" | "unhealthy";
+export type ProviderKind = "stt" | "llm" | "tool" | "tts";
+export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
+export type SnapshotResource =
+  | "runtime_state"
+  | "pipeline_health"
+  | "provider_status"
+  | "satellite_status"
+  | "active_turns"
+  | "recent_failures";
+
+export interface OperatorStatusSnapshot {{
+  generated_at: DateTimeString;
+  runtime: RuntimeState;
+  pipelines: PipelineStatus[];
+  providers: ProviderStatus[];
+  satellites: SatelliteStatus;
+  active_turns: ActiveTurnStatus[];
+  recent_failures: RuntimeFailure[];
+  event_stream: EventStreamContract;
+}}
+
+export interface RuntimeState {{
+  launch_state: LaunchState;
+  stale_state: StaleState;
+}}
+
+export interface PipelineStatus {{
+  name: string;
+  usable: boolean;
+  health: PipelineHealth;
+  components: ComponentHealth[];
+  affected_providers: string[];
+}}
+
+export interface PipelineHealth {{
+  state: PipelineHealthState;
+  summary: string;
+  last_successful_turn: IdString | null;
+  last_failed_turn: IdString | null;
+}}
+
+export interface ComponentHealth {{
+  kind: ComponentKind;
+  provider: string | null;
+  state: ComponentHealthState;
+  detail: string | null;
+  last_turn: IdString | null;
+}}
+
+export interface ProviderStatus {{
+  id: string;
+  kind: ProviderKind;
+  state: ProviderStatusState;
+  configured: boolean;
+  reachable: boolean;
+  proven_by_turn: IdString | null;
+  message: string | null;
+  affects_pipelines: string[];
+}}
+
+export interface SatelliteStatus {{
+  connected: ConnectedSatellite[];
+  recently_active: RecentlyActiveSatellite[];
+  recent_window_seconds: number;
+}}
+
+export interface ConnectedSatellite {{
+  device: IdString;
+  name: string;
+  connected_since: DateTimeString;
+  conversation: IdString | null;
+  pipeline: string;
+}}
+
+export interface RecentlyActiveSatellite {{
+  device: IdString;
+  name: string;
+  last_seen_at: DateTimeString;
+  last_event: string;
+}}
+
+export interface ActiveTurnStatus {{
+  pipeline: string;
+  conversation: IdString;
+  turn: IdString;
+  trace: IdString;
+  started_at: DateTimeString;
+  invoked_components: ComponentKind[];
+}}
+
+export interface RuntimeFailure {{
+  pipeline: string;
+  turn: IdString | null;
+  component: ComponentKind;
+  provider: string | null;
+  message: string;
+  at: DateTimeString;
+}}
+
+export interface EventStreamContract {{
+  route: string;
+  stale_state_on_disconnect: StaleState;
+  refresh_snapshot_after_reconnect: boolean;
+  bindings: SnapshotEventBinding[];
+}}
+
+export interface SnapshotEventBinding {{
+  resource: SnapshotResource;
+  events: EventType[];
+}}
+
+export const operatorStatusSnapshotFixture = {} as const satisfies OperatorStatusSnapshot;
+"#,
+        pretty_json_inline(fixture)
+    ));
+    text
+}
+
+fn event_types(fixtures: &[Envelope]) -> String {
+    let mut text = generated_header().to_owned();
+    text.push_str(&format!(
+        r#"export type DateTimeString = string;
+export type IdString = string;
+export type ToolCallId = string;
+
+export type AudioEncoding = "pcm_s16_le" | "pcm_f32_le" | "opus" | "flac";
+export type CancelReason =
+  | "barge_in"
+  | "idle_timeout"
+  | "user_requested"
+  | "disconnected"
+  | "error"
+  | "shutdown";
+export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
+
+export interface AudioFormat {{
+  encoding: AudioEncoding;
+  sample_rate: number;
+  channels: number;
+}}
+
+export interface EventEnvelope {{
+  id: IdString;
+  trace: IdString;
+  at: DateTimeString;
+  device: IdString | null;
+  conversation: IdString | null;
+  pipeline: string | null;
+  event: Event;
+}}
+
+export type Event =
+  | {{ type: "WakeWordDetected"; phrase: string; confidence: number }}
+  | {{ type: "WakeWordRejected"; phrase: string; confidence: number }}
+  | {{ type: "AudioStarted"; format: AudioFormat }}
+  | {{ type: "AudioChunkReceived"; sequence: number; bytes: number }}
+  | {{ type: "AudioFinished"; duration_ms: number }}
+  | {{ type: "SpeechPartial"; text: string }}
+  | {{ type: "SpeechFinal"; text: string; confidence: number | null; language: string | null }}
+  | {{ type: "SpeakerIdentified"; speaker: IdString | null; confidence: number }}
+  | {{ type: "ConversationStarted" }}
+  | {{ type: "TurnStarted"; turn: IdString }}
+  | {{ type: "ConversationCancelled"; reason: CancelReason }}
+  | {{ type: "ConversationCompleted" }}
+  | {{ type: "LlmRequestStarted"; model: string }}
+  | {{ type: "LlmToken"; delta: string }}
+  | {{
+      type: "LlmFinished";
+      reason: FinishReason;
+      prompt_tokens: number | null;
+      completion_tokens: number | null;
+    }}
+  | {{ type: "ToolRequested"; call: ToolCallId; name: string }}
+  | {{ type: "ToolStarted"; call: ToolCallId }}
+  | {{ type: "ToolConfirmationRequested"; call: ToolCallId; prompt: string }}
+  | {{ type: "ToolCompleted"; call: ToolCallId; duration_ms: number }}
+  | {{ type: "ToolFailed"; call: ToolCallId; error: string }}
+  | {{ type: "TtsStarted"; voice: string }}
+  | {{ type: "AudioStreaming"; sequence: number; bytes: number }}
+  | {{ type: "TtsFinished"; duration_ms: number }}
+  | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }};
+
+export type EventType = Event["type"];
+
+export const eventEnvelopeFixtures = {} as const satisfies readonly EventEnvelope[];
+"#,
+        pretty_json_inline(fixtures)
+    ));
+    text
+}
+
+fn generated_header() -> &'static str {
+    "// Generated by crates/conduit-api/tests/frontend_contract.rs. Do not edit by hand.\n\n"
+}
+
+fn pretty_json<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    let mut text = serde_json::to_string_pretty(value).expect("serialize fixture");
+    text.push('\n');
+    text
+}
+
+fn pretty_json_inline<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_string_pretty(value).expect("serialize fixture")
+}
+
+fn event_id(value: u128) -> EventId {
+    EventId::from_uuid(uuid(value))
+}
+
+fn conversation_id(value: u128) -> ConversationId {
+    ConversationId::from_uuid(uuid(value))
+}
+
+fn turn_id(value: u128) -> TurnId {
+    TurnId::from_uuid(uuid(value))
+}
+
+fn device_id(value: u128) -> DeviceId {
+    DeviceId::from_uuid(uuid(value))
+}
+
+fn trace_id(value: u128) -> TraceId {
+    TraceId::from_uuid(uuid(value))
+}
+
+fn uuid(value: u128) -> Uuid {
+    Uuid::from_u128(value)
+}
