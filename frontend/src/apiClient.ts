@@ -9,6 +9,7 @@ export type SnapshotState = "idle" | "loading" | "live" | "stale" | "error";
 export interface SnapshotClientConfig {
   baseUrl: string;
   access: OperatorAccess;
+  snapshot?: OperatorStatusSnapshot;
 }
 
 export interface SnapshotClient {
@@ -26,7 +27,9 @@ export function createSnapshotClient(
     eventRoute: "/v1/events",
     state: config.access.mode === "none" ? "idle" : "live",
     snapshot:
-      config.access.mode === "none" ? null : operatorStatusSnapshotFixture,
+      config.access.mode === "none"
+        ? null
+        : (config.snapshot ?? operatorStatusSnapshotFixture),
   };
 }
 
