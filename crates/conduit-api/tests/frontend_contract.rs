@@ -82,17 +82,22 @@ fn contract_artifacts() -> Vec<Artifact> {
     let status = status_fixture();
     let events = event_fixtures();
     let pipeline = pipeline_fixture();
+    let turn = turn_snapshot_fixture();
 
     vec![
         Artifact {
             path: "frontend/src/contracts/client.ts",
-            contents: client_types(&pipeline),
+            contents: client_types(&pipeline, &turn),
         },
         Artifact { path: "frontend/src/contracts/status.ts", contents: status_types(&status) },
         Artifact { path: "frontend/src/contracts/events.ts", contents: event_types(&events) },
         Artifact {
             path: "frontend/src/contracts/fixtures/pipeline.view.json",
             contents: pretty_json(&pipeline),
+        },
+        Artifact {
+            path: "frontend/src/contracts/fixtures/turn.snapshot.json",
+            contents: pretty_json(&turn),
         },
         Artifact {
             path: "frontend/src/contracts/fixtures/status.snapshot.json",
@@ -277,11 +282,63 @@ fn pipeline_fixture() -> PipelineView {
     PipelineView { graph, order }
 }
 
-fn client_types(fixture: &PipelineView) -> String {
+fn turn_snapshot_fixture() -> serde_json::Value {
+    serde_json::json!({
+        "turn_id": turn_id(3),
+        "conversation_id": conversation_id(2),
+        "pipeline_name": "kitchen",
+        "status": "completed",
+        "started_at": "2026-08-01T01:01:59Z",
+        "ended_at": "2026-08-01T01:02:02Z",
+        "sequence": 5,
+        "items": [
+            {
+                "kind": "spoken_segment",
+                "id": "assistant-preamble-1",
+                "sequence": 2,
+                "role": "assistant_preamble",
+                "text": "I will check the lights.",
+                "started_at": "2026-08-01T01:02:00Z",
+                "evidence": [event_id(301)]
+            },
+            {
+                "kind": "tool_batch",
+                "id": "round-1",
+                "sequence": 3,
+                "model_round": 1,
+                "calls": [
+                    {
+                        "id": "call_contract",
+                        "name": "lights.turn_on",
+                        "status": "completed",
+                        "duration_ms": 34,
+                        "evidence": [event_id(302), event_id(303), event_id(304)]
+                    }
+                ],
+                "started_at": "2026-08-01T01:02:00Z",
+                "completed_at": "2026-08-01T01:02:01Z",
+                "evidence": [event_id(300)]
+            },
+            {
+                "kind": "spoken_segment",
+                "id": "assistant-response-1",
+                "sequence": 4,
+                "role": "assistant_response",
+                "text": "The lights are on.",
+                "started_at": "2026-08-01T01:02:01Z",
+                "evidence": [event_id(305)]
+            }
+        ]
+    })
+}
+
+fn client_types(pipeline: &PipelineView, turn: &serde_json::Value) -> String {
     let mut text = generated_header().to_owned();
     text.push_str(&format!(
-        r#"import type {{ OperatorStatusSnapshot }} from "./status";
+        r#"import type {{ EventEnvelope }} from "./events";
+import type {{ OperatorStatusSnapshot }} from "./status";
 
+export type DateTimeString = string;
 export type IdString = string;
 export type NodeKind =
   | "source"
@@ -319,6 +376,87 @@ export interface PipelineView {{
   order: IdString[];
 }}
 
+export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
+export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type ToolCallStatus =
+  | "requested"
+  | "running"
+  | "completed"
+  | "failed"
+  | "denied"
+  | "awaiting_confirmation";
+
+export interface TurnList {{
+  turns: TurnSummary[];
+}}
+
+export interface TurnSummary {{
+  turn_id: IdString;
+  conversation_id: IdString;
+  pipeline_name: string;
+  status: TurnStatus;
+  started_at: DateTimeString;
+  ended_at?: DateTimeString;
+  sequence: number;
+}}
+
+export interface TurnSnapshot {{
+  turn_id: IdString;
+  conversation_id: IdString;
+  pipeline_name: string;
+  status: TurnStatus;
+  cancellation_reason?: string;
+  started_at: DateTimeString;
+  ended_at?: DateTimeString;
+  sequence: number;
+  items: ReconstructionItem[];
+}}
+
+export type ReconstructionItem = SpokenSegmentItem | ToolBatchItem;
+
+export interface SpokenSegmentItem {{
+  kind: "spoken_segment";
+  id: string;
+  sequence: number;
+  role: SpokenSegmentRole;
+  text: string;
+  started_at: DateTimeString;
+  evidence: IdString[];
+}}
+
+export interface ToolBatchItem {{
+  kind: "tool_batch";
+  id: string;
+  sequence: number;
+  model_round: number;
+  calls: ToolCall[];
+  started_at: DateTimeString;
+  completed_at?: DateTimeString;
+  evidence: IdString[];
+}}
+
+export interface ToolCall {{
+  id: IdString;
+  name?: string;
+  status: ToolCallStatus;
+  duration_ms?: number;
+  error?: string;
+  evidence: IdString[];
+}}
+
+export interface RawTurnEvents {{
+  turn_id: IdString;
+  events: EventEnvelope[];
+}}
+
+export interface TurnReconstructionUpdate {{
+  turn_id: IdString;
+  conversation_id: IdString;
+  pipeline_name: string;
+  sequence: number;
+  update: "snapshot_changed";
+}}
+
 export interface ConduitApiClientConfig {{
   baseUrl: string;
   headers?: () => HeadersInit;
@@ -333,11 +471,18 @@ export interface ConduitApiClient {{
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
   validatePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
+  listTurns: () => Promise<TurnList>;
+  getTurn: (turnId: string) => Promise<TurnSnapshot>;
+  getTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
 }}
 
 export const conduitApiRoutes = {{
   status: "/v1/status",
   events: "/v1/events",
+  turns: "/v1/turns",
+  liveTurns: "/v1/turns/live",
+  turn: "/v1/turns/{{turn_id}}",
+  turnEvents: "/v1/turns/{{turn_id}}/events",
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{{name}}",
   validatePipeline: "/v1/pipelines/validate",
@@ -371,11 +516,24 @@ export function createConduitApiClient(
         method: "POST",
         body: JSON.stringify(graph),
       }}),
+    listTurns: () => requestJson<TurnList>(request, config, conduitApiRoutes.turns),
+    getTurn: (turnId) =>
+      requestJson<TurnSnapshot>(request, config, turnRoute(turnId)),
+    getTurnEvents: (turnId) =>
+      requestJson<RawTurnEvents>(request, config, turnEventsRoute(turnId)),
   }};
 }}
 
 function pipelineRoute(name: string): string {{
   return conduitApiRoutes.pipeline.replace("{{name}}", encodeURIComponent(name));
+}}
+
+function turnRoute(turnId: string): string {{
+  return conduitApiRoutes.turn.replace("{{turn_id}}", encodeURIComponent(turnId));
+}}
+
+function turnEventsRoute(turnId: string): string {{
+  return conduitApiRoutes.turnEvents.replace("{{turn_id}}", encodeURIComponent(turnId));
 }}
 
 async function requestJson<T>(
@@ -406,8 +564,10 @@ async function requestJson<T>(
 }}
 
 export const pipelineViewFixture = {} as const satisfies PipelineView;
+export const turnSnapshotFixture = {} as const satisfies TurnSnapshot;
 "#,
-        pretty_json_inline(fixture)
+        pretty_json_inline(pipeline),
+        pretty_json_inline(turn)
     ));
     text
 }
@@ -559,6 +719,10 @@ export type CancelReason =
   | "error"
   | "shutdown";
 export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
+export type SpokenSegmentRole =
+  | "assistant_preamble"
+  | "tool_output"
+  | "assistant_response";
 
 export interface AudioFormat {{
   encoding: AudioEncoding;
@@ -598,11 +762,13 @@ export type Event =
       completion_tokens: number | null;
     }}
   | {{ type: "ToolRequested"; call: ToolCallId; name: string }}
+  | {{ type: "ToolBatchStarted"; batch: string; calls: ToolCallId[]; model_round: number }}
   | {{ type: "ToolStarted"; call: ToolCallId }}
   | {{ type: "ToolConfirmationRequested"; call: ToolCallId; prompt: string }}
   | {{ type: "ToolCompleted"; call: ToolCallId; duration_ms: number }}
   | {{ type: "ToolFailed"; call: ToolCallId; error: string }}
   | {{ type: "TtsStarted"; voice: string }}
+  | {{ type: "SpokenSegmentStarted"; segment: string; role: SpokenSegmentRole; text: string }}
   | {{ type: "AudioStreaming"; sequence: number; bytes: number }}
   | {{ type: "TtsFinished"; duration_ms: number }}
   | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }};

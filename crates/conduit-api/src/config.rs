@@ -17,6 +17,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
 use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
+use crate::turns::TurnHistoryRetention;
 
 /// Base URL of an OpenAI-compatible server.
 const BASE_URL: &str = "CONDUIT_OPENAI_BASE_URL";
@@ -34,6 +35,10 @@ const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
 /// How long a turn may publish nothing before it is abandoned, in seconds.
 /// `0` removes the bound.
 const TURN_IDLE_TIMEOUT: &str = "CONDUIT_TURN_IDLE_TIMEOUT_SECS";
+/// Maximum completed reconstructed turns retained in memory. `0` removes the bound.
+const TURN_HISTORY_MAX_TURNS: &str = "CONDUIT_TURN_HISTORY_MAX_TURNS";
+/// Maximum age for completed reconstructed turns, in seconds. `0` removes the bound.
+const TURN_HISTORY_RETENTION: &str = "CONDUIT_TURN_HISTORY_RETENTION_SECS";
 
 /// Directory to keep pipeline definitions in. Unset means memory only.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
@@ -197,6 +202,65 @@ fn turn_idle_timeout(vars: &HashMap<String, String>) -> Result<Option<Duration>>
     })
 }
 
+/// Reads turn-history retention bounds from `vars`.
+///
+/// Unset or empty values use bounded defaults. `0` removes one bound, and
+/// invalid values fail startup rather than leaving retention to guess what was
+/// meant.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if either configured value is not a whole number.
+pub fn turn_history_retention_from_vars(
+    vars: &HashMap<String, String>,
+) -> Result<TurnHistoryRetention> {
+    let retention = TurnHistoryRetention {
+        max_turns: count_or(
+            vars,
+            TURN_HISTORY_MAX_TURNS,
+            TurnHistoryRetention::default().max_turns,
+        )?,
+        max_age: seconds_or(
+            vars,
+            TURN_HISTORY_RETENTION,
+            TurnHistoryRetention::default().max_age,
+            || {
+                tracing::warn!(
+                    "{TURN_HISTORY_RETENTION} is 0, so completed turn history has no age bound"
+                );
+            },
+        )?,
+    };
+    if retention.max_turns.is_none() && retention.max_age.is_none() {
+        tracing::warn!(
+            "{TURN_HISTORY_MAX_TURNS} and {TURN_HISTORY_RETENTION} are both 0, so completed \
+             turn history is unbounded"
+        );
+    }
+    Ok(retention)
+}
+
+fn count_or(
+    vars: &HashMap<String, String>,
+    name: &str,
+    fallback: Option<usize>,
+) -> Result<Option<usize>> {
+    let Some(value) =
+        vars.get(name).map(|value| value.trim()).filter(|value| !value.is_empty())
+    else {
+        return Ok(fallback);
+    };
+
+    let count: usize = value
+        .parse()
+        .map_err(|_| Error::Config(format!("{name} must be a whole number, got `{value}`")))?;
+    if count == 0 {
+        tracing::warn!("{name} is 0, so completed turn history has no count bound");
+        return Ok(None);
+    }
+    Ok(Some(count))
+}
+
 /// Reads a duration in whole seconds from `vars`, or `fallback` if unset.
 ///
 /// `0` means no bound, and calls `on_removed` so a deployment that removed one
@@ -248,6 +312,7 @@ pub fn from_env() -> Result<(Providers, Registered)> {
 /// Returns [`Error::Config`] if a provider is configured but cannot be built.
 pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registered)> {
     let mut providers = Providers::new();
+    let _ = turn_history_retention_from_vars(vars)?;
     let mut registered =
         Registered { turn_idle_timeout: turn_idle_timeout(vars)?, ..Registered::default() };
 

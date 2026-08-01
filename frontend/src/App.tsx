@@ -34,6 +34,7 @@ import type {
   PipelineGraph,
   PipelineNode,
   PipelineView,
+  TurnSnapshot,
 } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
@@ -244,6 +245,7 @@ function OperatorWorkspace({
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
+  const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const smallScreen = useSmallScreenMode(initialSmallScreen);
   const eventPlan = useMemo(() => {
     const plan = initialEventStreamPlan();
@@ -297,12 +299,25 @@ function OperatorWorkspace({
         setSnapshotState("loading");
         setLoadError(null);
 
-        const [loadedSnapshot, loadedPipelineViews] = await Promise.all([
-          snapshotClient.loadSnapshot(),
-          initialPipelineViews
-            ? Promise.resolve([...initialPipelineViews])
-            : snapshotClient.loadPipelineViews(),
-        ]);
+        const [loadedSnapshot, loadedPipelineViews, loadedTurns] =
+          await Promise.all([
+            snapshotClient.loadSnapshot(),
+            initialPipelineViews
+              ? Promise.resolve([...initialPipelineViews])
+              : snapshotClient.loadPipelineViews(),
+            initialEvents
+              ? Promise.resolve({ turns: [] })
+              : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
+          ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const latestTurn = loadedTurns.turns[0]?.turn_id;
+        const loadedTurnSnapshot = latestTurn
+          ? await snapshotClient.loadTurn(latestTurn).catch(() => null)
+          : null;
 
         if (cancelled) {
           return;
@@ -310,6 +325,7 @@ function OperatorWorkspace({
 
         setSnapshot(loadedSnapshot);
         setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
+        setTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
       } catch (caught) {
         if (cancelled) {
@@ -332,7 +348,13 @@ function OperatorWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [access.mode, initialPipelineViews, initialSnapshot, snapshotClient]);
+  }, [
+    access.mode,
+    initialEvents,
+    initialPipelineViews,
+    initialSnapshot,
+    snapshotClient,
+  ]);
 
   if (firstRun) {
     return (
@@ -423,6 +445,7 @@ function OperatorWorkspace({
         <SectionPanel
           section={activeSection}
           events={initialEvents ?? eventEnvelopeFixtures}
+          turnSnapshot={turnSnapshot}
           pipelineViews={pipelineViews}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
@@ -444,6 +467,7 @@ function defaultDataMode(): OperatorDataMode {
 function SectionPanel({
   section,
   events,
+  turnSnapshot,
   pipelineViews,
   snapshot,
   eventPosture,
@@ -455,6 +479,7 @@ function SectionPanel({
 }: {
   section: SectionId;
   events: readonly EventEnvelope[];
+  turnSnapshot: TurnSnapshot | null;
   pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
@@ -484,7 +509,13 @@ function SectionPanel({
   }
 
   if (section === "events") {
-    return <EventsPanel events={events} eventPosture={eventPosture} />;
+    return (
+      <EventsPanel
+        events={events}
+        turnSnapshot={turnSnapshot}
+        eventPosture={eventPosture}
+      />
+    );
   }
 
   if (section === "pipelines") {
@@ -1021,15 +1052,23 @@ function MetricTile({ label, value }: { label: string; value: string }) {
 
 function EventsPanel({
   events,
+  turnSnapshot,
   eventPosture,
 }: {
   events: readonly EventEnvelope[];
+  turnSnapshot: TurnSnapshot | null;
   eventPosture: EventStreamPosture;
 }) {
   const [activeView, setActiveView] = useState<"story" | "raw">("story");
   const [filter, setFilter] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const turn = useMemo(() => reconstructTurn(events), [events]);
+  const turn = useMemo(
+    () =>
+      turnSnapshot
+        ? reconstructServerTurn(turnSnapshot)
+        : reconstructTurn(events),
+    [events, turnSnapshot],
+  );
   const rawEvents = useMemo(
     () => filterRawEvents(events, filter),
     [events, filter],
@@ -1545,7 +1584,7 @@ function EventStaleBanner() {
   );
 }
 
-type TurnStatus = "completed" | "failed" | "cancelled" | "running";
+type TurnStatus = "completed" | "failed" | "cancelled" | "running" | "degraded";
 
 interface ReconstructedTurn {
   conversation: string;
@@ -1565,24 +1604,77 @@ interface ReconstructedGroup {
 interface ReconstructedStep {
   id: string;
   at: string;
-  type: Event["type"];
+  type: string;
   component: string;
   detail: string | null;
   error: boolean;
+}
+
+function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
+  const steps = snapshot.items.flatMap((item): ReconstructedStep[] => {
+    if (item.kind === "spoken_segment") {
+      return [
+        {
+          id: item.id,
+          at: item.started_at,
+          type:
+            item.role === "assistant_preamble"
+              ? "Assistant Preamble"
+              : item.role === "tool_output"
+                ? "Tool Spoken Output"
+                : "Assistant Response",
+          component: "synthesis",
+          detail: item.text,
+          error: false,
+        },
+      ];
+    }
+
+    return [
+      {
+        id: item.id,
+        at: item.started_at,
+        type: "Tool Batch",
+        component: "tools",
+        detail: `${item.calls.length} ${item.calls.length === 1 ? "call" : "calls"} from model round ${item.model_round}`,
+        error: item.calls.some((call) =>
+          ["failed", "denied"].includes(call.status),
+        ),
+      },
+      ...item.calls.map((call) => ({
+        id: `${item.id}-${call.id}`,
+        at: item.started_at,
+        type: "Tool Call",
+        component: "tools",
+        detail: `${call.name ?? call.id} / ${call.status}`,
+        error: ["failed", "denied"].includes(call.status),
+      })),
+    ];
+  });
+
+  return {
+    conversation: snapshot.conversation_id,
+    pipeline: snapshot.pipeline_name,
+    status: snapshot.status,
+    groups: groupTurnSteps(steps),
+    steps,
+  };
 }
 
 function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
   const ordered = [...events].sort((left, right) =>
     left.at.localeCompare(right.at),
   );
-  const steps = ordered.map((envelope) => ({
-    id: envelope.id,
-    at: envelope.at,
-    type: envelope.event.type,
-    component: eventComponent(envelope.event),
-    detail: eventDetail(envelope.event),
-    error: isErrorEvent(envelope.event),
-  }));
+  const steps = ordered
+    .filter((envelope) => !isReconstructionBoundaryEvent(envelope.event))
+    .map((envelope) => ({
+      id: envelope.id,
+      at: envelope.at,
+      type: envelope.event.type,
+      component: eventComponent(envelope.event),
+      detail: eventDetail(envelope.event),
+      error: isErrorEvent(envelope.event),
+    }));
 
   return {
     conversation:
@@ -1680,6 +1772,12 @@ function isErrorEvent(event: Event): boolean {
   return event.type === "StageFailed" || event.type === "ToolFailed";
 }
 
+function isReconstructionBoundaryEvent(event: Event): boolean {
+  return (
+    event.type === "SpokenSegmentStarted" || event.type === "ToolBatchStarted"
+  );
+}
+
 function eventStepId(id: string): string {
   return `event-step-${id}`;
 }
@@ -1719,12 +1817,14 @@ function eventComponent(event: Event): string {
     case "LlmFinished":
       return "reasoning";
     case "ToolRequested":
+    case "ToolBatchStarted":
     case "ToolStarted":
     case "ToolConfirmationRequested":
     case "ToolCompleted":
     case "ToolFailed":
       return "tools";
     case "TtsStarted":
+    case "SpokenSegmentStarted":
     case "AudioStreaming":
     case "TtsFinished":
       return "synthesis";
@@ -1763,6 +1863,8 @@ function eventDetail(event: Event): string | null {
       return event.reason;
     case "ToolRequested":
       return event.name;
+    case "ToolBatchStarted":
+      return `${event.calls.length} calls from model round ${event.model_round}`;
     case "ToolStarted":
     case "ToolCompleted":
       return event.call;
@@ -1771,6 +1873,8 @@ function eventDetail(event: Event): string | null {
     case "ToolFailed":
     case "StageFailed":
       return event.error;
+    case "SpokenSegmentStarted":
+      return event.text;
     case "ConversationStarted":
     case "ConversationCompleted":
     case "TtsStarted":
@@ -1778,7 +1882,7 @@ function eventDetail(event: Event): string | null {
   }
 }
 
-function displayEventType(type: Event["type"]): string {
+function displayEventType(type: string): string {
   return type.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 

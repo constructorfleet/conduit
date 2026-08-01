@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 use crate::audio::AudioFormat;
 use crate::id::{ConversationId, DeviceId, EventId, SpeakerId, ToolCallId, TraceId, TurnId};
 
+/// Why a span of text was intentionally sent to speech synthesis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SpokenSegmentRole {
+    /// Assistant text spoken before requested tools have completed.
+    AssistantPreamble,
+    /// Text returned by a tool and spoken directly by the runtime.
+    ToolOutput,
+    /// Assistant text spoken as the final answer for a turn.
+    AssistantResponse,
+}
+
 /// An event plus the metadata needed to correlate and route it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -189,6 +202,15 @@ pub enum Event {
         /// Registered tool name.
         name: String,
     },
+    /// One model round requested a batch of tools.
+    ToolBatchStarted {
+        /// Stable batch identity for reconstruction.
+        batch: String,
+        /// Calls requested by this model response.
+        calls: Vec<ToolCallId>,
+        /// One-based model round within the turn.
+        model_round: u32,
+    },
     /// Execution of a requested tool began.
     ToolStarted {
         /// The invocation being started.
@@ -225,6 +247,15 @@ pub enum Event {
     TtsStarted {
         /// Selected voice identifier.
         voice: String,
+    },
+    /// A text span was intentionally handed to speech synthesis.
+    SpokenSegmentStarted {
+        /// Stable segment identity for reconstruction.
+        segment: String,
+        /// Why this span is being spoken.
+        role: SpokenSegmentRole,
+        /// Text sent to synthesis.
+        text: String,
     },
     /// Synthesized audio is being streamed to the device.
     AudioStreaming {
@@ -287,6 +318,11 @@ impl Event {
                 call: ToolCallId::new("call_contract"),
                 name: "lights.turn_on".to_owned(),
             },
+            Self::ToolBatchStarted {
+                batch: "round-1".to_owned(),
+                calls: vec![ToolCallId::new("call_contract")],
+                model_round: 1,
+            },
             Self::ToolStarted { call: ToolCallId::new("call_contract") },
             Self::ToolConfirmationRequested {
                 call: ToolCallId::new("call_contract"),
@@ -298,6 +334,11 @@ impl Event {
                 error: "permission denied".to_owned(),
             },
             Self::TtsStarted { voice: "alloy".to_owned() },
+            Self::SpokenSegmentStarted {
+                segment: "assistant-response-1".to_owned(),
+                role: SpokenSegmentRole::AssistantResponse,
+                text: "The lights are on.".to_owned(),
+            },
             Self::AudioStreaming { sequence: 2, bytes: 6400 },
             Self::TtsFinished { duration_ms: 900 },
             Self::StageFailed {
@@ -328,11 +369,13 @@ impl Event {
             Self::LlmToken { .. } => "LlmToken",
             Self::LlmFinished { .. } => "LlmFinished",
             Self::ToolRequested { .. } => "ToolRequested",
+            Self::ToolBatchStarted { .. } => "ToolBatchStarted",
             Self::ToolStarted { .. } => "ToolStarted",
             Self::ToolConfirmationRequested { .. } => "ToolConfirmationRequested",
             Self::ToolCompleted { .. } => "ToolCompleted",
             Self::ToolFailed { .. } => "ToolFailed",
             Self::TtsStarted { .. } => "TtsStarted",
+            Self::SpokenSegmentStarted { .. } => "SpokenSegmentStarted",
             Self::AudioStreaming { .. } => "AudioStreaming",
             Self::TtsFinished { .. } => "TtsFinished",
             Self::StageFailed { .. } => "StageFailed",
@@ -359,11 +402,13 @@ impl Event {
             | Self::LlmToken { .. }
             | Self::LlmFinished { .. } => Stage::Reasoning,
             Self::ToolRequested { .. }
+            | Self::ToolBatchStarted { .. }
             | Self::ToolStarted { .. }
             | Self::ToolConfirmationRequested { .. }
             | Self::ToolCompleted { .. }
             | Self::ToolFailed { .. } => Stage::Tools,
             Self::TtsStarted { .. }
+            | Self::SpokenSegmentStarted { .. }
             | Self::AudioStreaming { .. }
             | Self::TtsFinished { .. } => Stage::Synthesis,
             Self::StageFailed { .. } => Stage::Diagnostics,

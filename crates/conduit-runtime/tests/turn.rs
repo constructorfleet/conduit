@@ -108,6 +108,7 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
             "LlmToken",
             "LlmFinished",
             "TtsStarted",
+            "SpokenSegmentStarted",
             "AudioStreaming",
             "TtsFinished",
             "ConversationCompleted",

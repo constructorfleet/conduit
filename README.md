@@ -138,6 +138,8 @@ npm run format
 | `CONDUIT_ALLOW_ANONYMOUS` | — | `1` serves the API to anyone who can reach it |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
 | `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60` | How long a turn may publish nothing before it is abandoned; `0` removes the bound |
+| `CONDUIT_TURN_HISTORY_MAX_TURNS` | `500` | Completed reconstructed turns retained in memory; `0` removes the count bound |
+| `CONDUIT_TURN_HISTORY_RETENTION_SECS` | `86400` | Completed reconstructed turn age retained in memory; `0` removes the age bound |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
@@ -228,6 +230,7 @@ the household's transcripts.
 | `GET`, `PUT`, `DELETE /v1/pipelines…` | Management only |
 | `POST /v1/pipelines/validate` | Management only |
 | `GET /v1/events` | Management only |
+| `GET /v1/turns`, `/v1/turns/{turn_id}`, `/v1/turns/{turn_id}/events`, `/v1/turns/live` | Management only |
 
 The asymmetry is deliberate. A management token may open a conversation socket,
 because an operator holding one is already trusted with more than a conversation

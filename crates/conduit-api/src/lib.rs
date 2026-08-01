@@ -20,6 +20,7 @@ pub mod events;
 pub mod pipelines;
 pub mod state;
 pub mod status;
+pub mod turns;
 
 use std::time::Duration;
 
@@ -58,6 +59,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/events", get(events::stream))
         .route("/v1/status", get(status::get))
+        .route("/v1/turns", get(turns::list))
+        .route("/v1/turns/live", get(turns::live))
+        .route("/v1/turns/{turn_id}", get(turns::get))
+        .route("/v1/turns/{turn_id}/events", get(turns::events))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route(CONVERSE_ROUTE, get(converse::converse))

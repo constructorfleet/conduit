@@ -13,6 +13,10 @@ export type CancelReason =
   | "error"
   | "shutdown";
 export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
+export type SpokenSegmentRole =
+  | "assistant_preamble"
+  | "tool_output"
+  | "assistant_response";
 
 export interface AudioFormat {
   encoding: AudioEncoding;
@@ -52,11 +56,13 @@ export type Event =
       completion_tokens: number | null;
     }
   | { type: "ToolRequested"; call: ToolCallId; name: string }
+  | { type: "ToolBatchStarted"; batch: string; calls: ToolCallId[]; model_round: number }
   | { type: "ToolStarted"; call: ToolCallId }
   | { type: "ToolConfirmationRequested"; call: ToolCallId; prompt: string }
   | { type: "ToolCompleted"; call: ToolCallId; duration_ms: number }
   | { type: "ToolFailed"; call: ToolCallId; error: string }
   | { type: "TtsStarted"; voice: string }
+  | { type: "SpokenSegmentStarted"; segment: string; role: SpokenSegmentRole; text: string }
   | { type: "AudioStreaming"; sequence: number; bytes: number }
   | { type: "TtsFinished"; duration_ms: number }
   | { type: "StageFailed"; node: string; error: string; recovered: boolean };
@@ -275,8 +281,12 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "ToolStarted",
-      "call": "call_contract"
+      "type": "ToolBatchStarted",
+      "batch": "round-1",
+      "calls": [
+        "call_contract"
+      ],
+      "model_round": 1
     }
   },
   {
@@ -287,9 +297,8 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "ToolConfirmationRequested",
-      "call": "call_contract",
-      "prompt": "Turn on the kitchen lights?"
+      "type": "ToolStarted",
+      "call": "call_contract"
     }
   },
   {
@@ -300,9 +309,9 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "ToolCompleted",
+      "type": "ToolConfirmationRequested",
       "call": "call_contract",
-      "duration_ms": 34
+      "prompt": "Turn on the kitchen lights?"
     }
   },
   {
@@ -313,9 +322,9 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "ToolFailed",
+      "type": "ToolCompleted",
       "call": "call_contract",
-      "error": "permission denied"
+      "duration_ms": 34
     }
   },
   {
@@ -326,8 +335,9 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "TtsStarted",
-      "voice": "alloy"
+      "type": "ToolFailed",
+      "call": "call_contract",
+      "error": "permission denied"
     }
   },
   {
@@ -338,9 +348,8 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "AudioStreaming",
-      "sequence": 2,
-      "bytes": 6400
+      "type": "TtsStarted",
+      "voice": "alloy"
     }
   },
   {
@@ -351,14 +360,41 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "TtsFinished",
-      "duration_ms": 900
+      "type": "SpokenSegmentStarted",
+      "segment": "assistant-response-1",
+      "role": "assistant_response",
+      "text": "The lights are on."
     }
   },
   {
     "id": "00000000-0000-0000-0000-00000000007b",
     "trace": "00000000-0000-0000-0000-0000000000c8",
     "at": "2026-08-01T02:00:23Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "AudioStreaming",
+      "sequence": 2,
+      "bytes": 6400
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-00000000007c",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:24Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "TtsFinished",
+      "duration_ms": 900
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-00000000007d",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:25Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
