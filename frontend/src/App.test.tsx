@@ -1108,6 +1108,67 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("adds separate tool augments for distinct configured tool provider ids", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "calendar-tool",
+          label: "Calendar Tool",
+          kind: "tool",
+          component: "mcp.sse",
+          config: { url: "https://calendar.example.test/sse" },
+        },
+        {
+          id: "lights-tool",
+          label: "Lights Tool",
+          kind: "tool",
+          component: "mcp.streamable_http",
+          config: { url: "https://lights.example.test/mcp" },
+        },
+      ]),
+    );
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Calendar Tool" }));
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("menuitem", { name: "Lights Tool" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const toolNodes =
+      savedGraphs[0]?.nodes.filter((node) => node.kind === "tool") ?? [];
+    expect(toolNodes).toEqual([
+      expect.objectContaining({
+        id: "tool_calendar_tool",
+        provider: "calendar-tool",
+      }),
+      expect.objectContaining({
+        id: "tool_lights_tool",
+        provider: "lights-tool",
+      }),
+    ]);
+    expect(savedGraphs[0]?.edges).toEqual(
+      expect.arrayContaining([
+        { from: "tool_calendar_tool", to: "llm" },
+        { from: "tool_lights_tool", to: "llm" },
+      ]),
+    );
+    expect(
+      screen.getByText("No unused configured tool providers"),
+    ).toBeInTheDocument();
+  });
+
   it("persists saved graph edits across reloads", async () => {
     const user = userEvent.setup();
     mockOperatorApi({

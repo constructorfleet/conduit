@@ -1916,6 +1916,7 @@ function PipelinesPanel({
   );
   const [graphZoom, setGraphZoom] = useState(100);
   const [graphMotionEnabled, setGraphMotionEnabled] = useState(true);
+  const [toolProviderMenuOpen, setToolProviderMenuOpen] = useState(false);
   const [draggingAugment, setDraggingAugment] =
     useState<AugmentDragState | null>(null);
   const [dragPreviewPositions, setDragPreviewPositions] = useState<
@@ -1937,6 +1938,17 @@ function PipelinesPanel({
       null)
     : null;
   const hasUnsavedEdits = history.length > 0;
+  const configuredToolProviders = providerDefinitions.filter(
+    (provider) => provider.kind === "tool",
+  );
+  const unusedToolProviders = draft
+    ? configuredToolProviders.filter(
+        (provider) =>
+          !draft.nodes.some(
+            (node) => node.kind === "tool" && node.provider === provider.id,
+          ),
+      )
+    : [];
 
   function ensurePipelineDraft(
     current: Record<string, PipelineEditorDraftState>,
@@ -2244,6 +2256,19 @@ function PipelinesPanel({
     });
   }
 
+  function addToolProviderNode(provider: ProviderDefinition) {
+    if (!draft) {
+      return;
+    }
+
+    addReasoningAugment({
+      id: uniqueNodeId(draft, toolNodeIdBase(provider.id)),
+      kind: "tool",
+      provider: provider.id,
+    });
+    setToolProviderMenuOpen(false);
+  }
+
   function updateNodeProvider(nodeId: string, providerId: string) {
     applyDraftEdit((graph) => ({
       ...graph,
@@ -2316,6 +2341,17 @@ function PipelinesPanel({
   }
 
   function addToolNode() {
+    if (configuredToolProviders.length > 1) {
+      setToolProviderMenuOpen((open) => !open);
+      return;
+    }
+
+    const provider = unusedToolProviders[0];
+    if (provider) {
+      addToolProviderNode(provider);
+      return;
+    }
+
     addReasoningAugment({
       id: "confirm",
       kind: "tool",
@@ -2329,6 +2365,19 @@ function PipelinesPanel({
       kind: "memory",
       provider: "builtin.memory",
     });
+  }
+
+  function addConfiguredToolProvider(providerId: string) {
+    const provider = unusedToolProviders.find(
+      (candidate) => candidate.id === providerId,
+    );
+    if (!provider) {
+      markCurrentDraftNotice("No unused configured tool providers");
+      setToolProviderMenuOpen(false);
+      return;
+    }
+
+    addToolProviderNode(provider);
   }
 
   function undoLastEdit() {
@@ -2567,10 +2616,40 @@ function PipelinesPanel({
                 type="button"
                 aria-label="Add tool node"
                 onClick={addToolNode}
+                disabled={
+                  configuredToolProviders.length > 0 &&
+                  unusedToolProviders.length === 0
+                }
               >
                 <Plus size={16} aria-hidden="true" />
                 Tool into LLM
               </button>
+              {configuredToolProviders.length > 1 && toolProviderMenuOpen ? (
+                <div className="provider-kind-menu inline" role="menu">
+                  {unusedToolProviders.length > 0 ? (
+                    unusedToolProviders.map((provider) => (
+                      <button
+                        key={provider.id}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => addConfiguredToolProvider(provider.id)}
+                      >
+                        {provider.label}
+                      </button>
+                    ))
+                  ) : (
+                    <span className="provider-kind-empty">
+                      No unused configured tool providers
+                    </span>
+                  )}
+                </div>
+              ) : null}
+              {configuredToolProviders.length > 0 &&
+              unusedToolProviders.length === 0 ? (
+                <span className="provider-kind-empty">
+                  No unused configured tool providers
+                </span>
+              ) : null}
               <button
                 className="secondary-action compact-action"
                 type="button"
@@ -4044,6 +4123,28 @@ function upsertPipelineView(
   }
 
   return views.map((view, index) => (index === existing ? next : view));
+}
+
+function toolNodeIdBase(providerId: string): string {
+  const normalized = providerId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `tool_${normalized || "provider"}`;
+}
+
+function uniqueNodeId(graph: PipelineGraph, base: string): string {
+  const existing = new Set(graph.nodes.map((node) => node.id));
+  if (!existing.has(base)) {
+    return base;
+  }
+
+  let suffix = 2;
+  while (existing.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}_${suffix}`;
 }
 
 function useSmallScreenMode(forcedSmallScreen: boolean) {
