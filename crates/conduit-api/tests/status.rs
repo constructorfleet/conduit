@@ -12,8 +12,12 @@ use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Envelope, Event, FinishReason};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
+use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel};
+use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
+use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
+use conduit_provider::{ChunkStream, Health, Provider};
 use conduit_runtime::Providers;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{stream, SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
@@ -82,6 +86,119 @@ fn ws_request(
     request
 }
 
+fn with_status_providers(state: AppState, health: Health) -> AppState {
+    state.with_providers(
+        Providers::new()
+            .with_stt(StatusStt::new("configured-stt", health.clone()))
+            .with_llm(StatusLlm::new("configured-llm", health.clone()))
+            .with_tts(StatusTts::new("configured-tts", health)),
+    )
+}
+
+#[derive(Debug, Clone)]
+struct StatusStt {
+    name: &'static str,
+    health: Health,
+}
+
+impl StatusStt {
+    fn new(name: &'static str, health: Health) -> Self {
+        Self { name, health }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for StatusStt {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    async fn health(&self) -> Health {
+        self.health.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeechToText for StatusStt {
+    async fn transcribe(
+        &self,
+        _audio: ChunkStream<AudioChunk>,
+        _options: TranscribeOptions,
+    ) -> conduit_core::Result<ChunkStream<Transcript>> {
+        Ok(Box::pin(stream::empty()))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StatusLlm {
+    name: &'static str,
+    health: Health,
+}
+
+impl StatusLlm {
+    fn new(name: &'static str, health: Health) -> Self {
+        Self { name, health }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for StatusLlm {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    async fn health(&self) -> Health {
+        self.health.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for StatusLlm {
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> conduit_core::Result<ChunkStream<Completion>> {
+        Ok(Box::pin(stream::empty()))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StatusTts {
+    name: &'static str,
+    health: Health,
+}
+
+impl StatusTts {
+    fn new(name: &'static str, health: Health) -> Self {
+        Self { name, health }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for StatusTts {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    async fn health(&self) -> Health {
+        self.health.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for StatusTts {
+    async fn synthesize(
+        &self,
+        _request: SynthesisRequest,
+    ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
+        Ok(Vec::new())
+    }
+}
+
 fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::new("mic", NodeKind::Source, "websocket"))
@@ -91,6 +208,20 @@ fn valid_graph() -> PipelineGraph {
                 .with_config(serde_json::json!({ "model": "echo" })),
         )
         .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+}
+
+fn provider_status_graph() -> PipelineGraph {
+    PipelineGraph::new("kitchen")
+        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
+        .with_node(Node::new("stt", NodeKind::Stt, "configured-stt"))
+        .with_node(
+            Node::new("llm", NodeKind::Llm, "configured-llm")
+                .with_config(serde_json::json!({ "model": "echo" })),
+        )
+        .with_node(Node::new("tts", NodeKind::Tts, "configured-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -229,6 +360,143 @@ async fn usable_pipeline_without_real_turns_is_unproven() {
     assert_eq!(body["pipelines"][0]["usable"], true);
     assert_eq!(body["pipelines"][0]["health"]["state"], "unproven");
     assert_eq!(body["pipelines"][0]["components"][0]["state"], "unproven");
+}
+
+#[tokio::test]
+async fn status_reports_unavailable_provider_slots_without_a_runtime_registry() {
+    let state = guarded();
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["providers"],
+        serde_json::json!([
+            {
+                "id": "llm",
+                "kind": "llm",
+                "state": "unavailable",
+                "configured": false,
+                "reachable": false,
+                "proven_by_turn": null,
+                "message": "no language-model provider is registered",
+                "affects_pipelines": []
+            },
+            {
+                "id": "stt",
+                "kind": "stt",
+                "state": "unavailable",
+                "configured": false,
+                "reachable": false,
+                "proven_by_turn": null,
+                "message": "no speech-to-text provider is registered",
+                "affects_pipelines": []
+            },
+            {
+                "id": "tts",
+                "kind": "tts",
+                "state": "unavailable",
+                "configured": false,
+                "reachable": false,
+                "proven_by_turn": null,
+                "message": "no text-to-speech provider is registered",
+                "affects_pipelines": []
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn configured_provider_does_not_become_reachable_from_saved_settings() {
+    let state = with_status_providers(
+        guarded(),
+        Health::Unhealthy { reason: "upstream refused credentials".to_owned() },
+    );
+    let (status, body) = call(&state, put(&provider_status_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    let llm = providers.iter().find(|provider| provider["id"] == "configured-llm").unwrap();
+    assert_eq!(llm["kind"], "llm");
+    assert_eq!(llm["state"], "configured");
+    assert_eq!(llm["configured"], true);
+    assert_eq!(llm["reachable"], false);
+    assert_eq!(llm["proven_by_turn"], serde_json::Value::Null);
+    assert_eq!(llm["message"], "upstream refused credentials");
+    assert_eq!(llm["affects_pipelines"], serde_json::json!(["kitchen"]));
+}
+
+#[tokio::test]
+async fn reachable_provider_is_not_proven_until_a_real_turn_uses_it() {
+    let state = with_status_providers(guarded(), Health::Healthy);
+    let (status, body) = call(&state, put(&provider_status_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    let tts = providers.iter().find(|provider| provider["id"] == "configured-tts").unwrap();
+    assert_eq!(tts["kind"], "tts");
+    assert_eq!(tts["state"], "reachable");
+    assert_eq!(tts["configured"], true);
+    assert_eq!(tts["reachable"], true);
+    assert_eq!(tts["proven_by_turn"], serde_json::Value::Null);
+    assert_eq!(tts["affects_pipelines"], serde_json::json!(["kitchen"]));
+}
+
+#[tokio::test]
+async fn successful_turn_marks_invoked_providers_as_proven() {
+    let state = with_status_providers(guarded(), Health::Healthy);
+    let (status, body) = call(&state, put(&provider_status_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation = ConversationId::new();
+    let turn = TurnId::new();
+
+    publish(&state, "kitchen", conversation, Event::TurnStarted { turn });
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::SpeechFinal { text: "hello".to_owned(), confidence: None, language: None },
+    );
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::LlmRequestStarted { model: "echo".to_owned() },
+    );
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::LlmFinished {
+            reason: FinishReason::Stop,
+            prompt_tokens: None,
+            completion_tokens: None,
+        },
+    );
+    publish(&state, "kitchen", conversation, Event::TtsStarted { voice: "echo".to_owned() });
+    publish(&state, "kitchen", conversation, Event::TtsFinished { duration_ms: 20 });
+    publish(&state, "kitchen", conversation, Event::ConversationCompleted);
+
+    let body = wait_for_status(&state, |body| {
+        body["providers"].as_array().is_some_and(|providers| {
+            providers.iter().any(|provider| {
+                provider["id"] == "configured-llm" && provider["state"] == "proven"
+            })
+        })
+    })
+    .await;
+    let providers = body["providers"].as_array().expect("providers");
+    for id in ["configured-stt", "configured-llm", "configured-tts"] {
+        let provider = providers.iter().find(|provider| provider["id"] == id).unwrap();
+        assert_eq!(provider["state"], "proven");
+        assert_eq!(provider["proven_by_turn"], turn.to_string());
+    }
 }
 
 #[tokio::test]
