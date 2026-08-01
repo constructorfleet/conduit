@@ -15,6 +15,7 @@ import { pipelineViewFixture, turnSnapshotFixture } from "./contracts/client";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
+  type ProviderStatus,
 } from "./contracts/status";
 import type { OperatorAccess } from "./operatorAccess";
 
@@ -50,6 +51,7 @@ export interface SnapshotClient {
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinitionView>;
   deleteProviderDefinition: (id: string) => Promise<void>;
+  testProviderDefinition: (id: string) => Promise<ProviderStatus>;
 }
 
 export function createSnapshotClient(
@@ -93,6 +95,7 @@ export function createSnapshotClient(
     saveProviderDefinition: (definition) =>
       client.putProviderDefinition(definition.id, definition),
     deleteProviderDefinition: (id) => client.deleteProviderDefinition(id),
+    testProviderDefinition: (id) => client.testProviderDefinition(id),
   };
 }
 
@@ -136,6 +139,16 @@ function createMockSnapshotClient(
       kind: providerKindFromVariant(definition.variant.type),
     }),
     deleteProviderDefinition: async () => {},
+    testProviderDefinition: async (id) => ({
+      id,
+      kind: "llm",
+      state: "reachable",
+      configured: true,
+      reachable: true,
+      proven_by_turn: null,
+      message: null,
+      affects_pipelines: [],
+    }),
   };
 }
 

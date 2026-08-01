@@ -373,13 +373,8 @@ function OperatorWorkspace({
   }
 
   async function runProviderTest(providerId: string): Promise<string> {
-    const loadedSnapshot = await refreshSnapshotFromApi();
-    const provider = loadedSnapshot.providers.find(
-      (candidate) => candidate.id === providerId,
-    );
-    if (!provider) {
-      return `Provider ${providerId} is not in the latest status snapshot`;
-    }
+    const provider = await snapshotClient.testProviderDefinition(providerId);
+    await refreshSnapshotFromApi();
     if (provider.reachable) {
       return `Provider ${provider.id} is reachable`;
     }
@@ -1051,24 +1046,10 @@ function ProvidersPanel({
   async function testProvider(provider: ProviderCardView) {
     try {
       let notice: string;
-      if (provider.status) {
-        notice = await onProviderTest(provider.id);
-      } else if (provider.definition) {
-        const component = componentForProviderDefinition(
-          componentCatalog,
-          provider.definition,
-        );
-        const validation = component
-          ? validateProviderDefinitionConfig(provider.definition, component)
-          : {
-              ok: false,
-              message: `Unknown component ${provider.definition.component}`,
-            };
-        notice = validation.ok
-          ? `Provider ${provider.id} configuration is valid for ${component?.label}`
-          : validation.message;
-      } else {
+      if (!provider.definition) {
         notice = `Provider ${provider.id} has no configuration to test`;
+      } else {
+        notice = await onProviderTest(provider.id);
       }
       setProviderNotices((current) => ({
         ...current,

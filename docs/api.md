@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/test`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -316,6 +316,30 @@ Conflict body:
   "error": "conflict",
   "detail": "provider definition is still referenced by pipelines",
   "affected_pipelines": ["kitchen"]
+}
+```
+
+### `POST /v1/providers/{id}/test`
+
+Runs a narrow active reachability check for one saved Provider Definition
+through the active Runtime Provider Registry Snapshot. The check returns the
+same Provider Status shape used by `/v1/status`. A successful check marks the
+provider `reachable`; a failed check leaves it `configured` with the provider
+error message. The endpoint does not run a pipeline turn and does not prove the
+provider inside a real conversation.
+
+Success body:
+
+```json
+{
+  "id": "openai-primary",
+  "kind": "llm",
+  "state": "reachable",
+  "configured": true,
+  "reachable": true,
+  "proven_by_turn": null,
+  "message": null,
+  "affects_pipelines": ["kitchen"]
 }
 ```
 

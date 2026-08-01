@@ -1,7 +1,11 @@
 //! End-to-end checks of the pipeline endpoints against the real router.
 
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Request, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::get as axum_get;
+use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
@@ -85,6 +89,46 @@ fn put_json(uri: &str, body: serde_json::Value) -> Request<Body> {
 
 fn delete(uri: &str) -> Request<Body> {
     Request::builder().method("DELETE").uri(uri).body(Body::empty()).expect("request")
+}
+
+fn post(uri: &str) -> Request<Body> {
+    Request::builder().method("POST").uri(uri).body(Body::empty()).expect("request")
+}
+
+#[derive(Clone)]
+struct MockOpenAiServer {
+    address: std::net::SocketAddr,
+}
+
+impl MockOpenAiServer {
+    async fn healthy() -> Self {
+        Self::spawn(StatusCode::OK, serde_json::json!({ "data": [{ "id": "gpt-test" }] })).await
+    }
+
+    async fn failing(status: StatusCode, body: serde_json::Value) -> Self {
+        Self::spawn(status, body).await
+    }
+
+    async fn spawn(status: StatusCode, body: serde_json::Value) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let app =
+            Router::new().route("/models", axum_get(mock_models)).with_state((status, body));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self { address }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+}
+
+async fn mock_models(
+    State((status, body)): State<(StatusCode, serde_json::Value)>,
+) -> impl IntoResponse {
+    (status, Json(body))
 }
 
 #[tokio::test]
@@ -420,6 +464,78 @@ async fn redacted_provider_secret_update_keeps_the_existing_secret() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["variant"]["base_url"], "https://proxy.local/v1");
     assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+}
+
+#[tokio::test]
+async fn provider_reachability_test_marks_a_provider_reachable() {
+    let server = MockOpenAiServer::healthy().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": server.url(),
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+
+    let (status, body) = call(&state, post("/v1/providers/openai-primary/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], "openai-primary");
+    assert_eq!(body["kind"], "llm");
+    assert_eq!(body["state"], "reachable");
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["reachable"], true);
+    assert_eq!(body["proven_by_turn"], serde_json::Value::Null);
+    assert_eq!(body["message"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn provider_reachability_test_reports_actionable_failures() {
+    let server = MockOpenAiServer::failing(
+        StatusCode::UNAUTHORIZED,
+        serde_json::json!({ "error": "bad key" }),
+    )
+    .await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": server.url(),
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+
+    let (status, body) = call(&state, post("/v1/providers/openai-primary/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], "openai-primary");
+    assert_eq!(body["state"], "configured");
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["reachable"], false);
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| { message.contains("401") && message.contains("bad key") }),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn provider_reachability_test_refuses_missing_provider_definitions() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, post("/v1/providers/missing/test")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("missing")), "{body}");
 }
 
 #[tokio::test]

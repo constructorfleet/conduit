@@ -5,11 +5,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use conduit_provider::storage::{ProviderCapability, ProviderDefinition};
+use conduit_provider::Health;
 use serde::Serialize;
 
 use crate::auth::ManagementCaller;
 use crate::error::JsonBody;
 use crate::pipelines::{component_catalog, PipelineComponentCatalog};
+use crate::status::{ProviderKind, ProviderStatus, ProviderStatusState};
 use crate::{ApiError, AppState};
 
 /// A provider definition as rendered through the management API.
@@ -111,11 +113,106 @@ pub async fn delete(
     }
 }
 
+/// `POST /v1/providers/{id}/test` — active reachability check for one provider.
+pub async fn test(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderStatus>, ApiError> {
+    let definition = state
+        .provider_definition(&id)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
+    let kind = provider_kind(definition.capability());
+    let affected_pipelines = affected_pipelines(&state, &id).await?;
+    let Some(providers) = state.providers() else {
+        return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
+    };
+
+    let health = match definition.capability() {
+        ProviderCapability::Stt => match providers.stt().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+        ProviderCapability::Llm => match providers.llm().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+        ProviderCapability::Tts => match providers.tts().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+        ProviderCapability::Tool => match providers.tools().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+    };
+
+    let Some(health) = health else {
+        return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
+    };
+
+    Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
+}
+
 #[derive(Serialize)]
 struct DeleteConflict {
     error: &'static str,
     detail: &'static str,
     affected_pipelines: Vec<String>,
+}
+
+fn provider_kind(capability: ProviderCapability) -> ProviderKind {
+    match capability {
+        ProviderCapability::Stt => ProviderKind::Stt,
+        ProviderCapability::Llm => ProviderKind::Llm,
+        ProviderCapability::Tts => ProviderKind::Tts,
+        ProviderCapability::Tool => ProviderKind::Tool,
+    }
+}
+
+fn status_from_health(
+    kind: ProviderKind,
+    id: String,
+    health: Health,
+    affects_pipelines: Vec<String>,
+) -> ProviderStatus {
+    let reachable = health.is_usable();
+    let (state, message) = match health {
+        Health::Healthy => (ProviderStatusState::Reachable, None),
+        Health::Degraded { reason } => (ProviderStatusState::Reachable, Some(reason)),
+        Health::Unhealthy { reason } => (ProviderStatusState::Configured, Some(reason)),
+    };
+    ProviderStatus {
+        id,
+        kind,
+        state,
+        configured: true,
+        reachable,
+        proven_by_turn: None,
+        message,
+        affects_pipelines,
+    }
+}
+
+fn unregistered_status(
+    kind: ProviderKind,
+    id: String,
+    affects_pipelines: Vec<String>,
+) -> ProviderStatus {
+    ProviderStatus {
+        id: id.clone(),
+        kind,
+        state: ProviderStatusState::Unavailable,
+        configured: true,
+        reachable: false,
+        proven_by_turn: None,
+        message: Some(format!(
+            "provider definition `{id}` is not registered in the runtime provider snapshot"
+        )),
+        affects_pipelines,
+    }
 }
 
 async fn affected_pipelines(

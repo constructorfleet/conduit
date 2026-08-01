@@ -70,6 +70,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/providers/{id}",
             get(providers::get).put(providers::put).delete(providers::delete),
         )
+        .route("/v1/providers/{id}/test", post(providers::test))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route("/v1/pipelines/{name}/test-turn", post(pipelines::test_turn))

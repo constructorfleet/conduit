@@ -14,6 +14,7 @@ import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
+  type ProviderStatus,
 } from "./contracts/status";
 import { applySnapshotEvent, transitionEventStream } from "./eventStream";
 
@@ -1394,6 +1395,7 @@ describe("Pipelines graph editor", () => {
         config: { url: "https://lights.example.test/mcp" },
       }),
     ];
+    mockOperatorApi({ providerDefinitions });
     render(
       <App
         initialComponentCatalog={componentCatalog()}
@@ -1767,6 +1769,7 @@ describe("Providers workspace", () => {
         },
       }),
     ];
+    mockOperatorApi({ providerDefinitions });
     render(
       <App
         initialComponentCatalog={componentCatalog()}
@@ -1974,7 +1977,7 @@ describe("Providers workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("tests locally configured providers through schema validation", async () => {
+  it("tests configured providers through the backend reachability endpoint", async () => {
     const user = userEvent.setup();
     const providerDefinitions = [
       providerDefinitionFixture({
@@ -1988,6 +1991,7 @@ describe("Providers workspace", () => {
         },
       }),
     ];
+    mockOperatorApi({ providerDefinitions });
     render(
       <App
         initialComponentCatalog={componentCatalog()}
@@ -1999,9 +2003,7 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("button", { name: "Test openai-fast" }));
 
     expect(
-      screen.getByText(
-        "Provider openai-fast configuration is valid for OpenAI Responses",
-      ),
+      await screen.findByText("Provider openai-fast is reachable"),
     ).toBeInTheDocument();
   });
 });
@@ -2395,6 +2397,21 @@ function mockOperatorApi({
 
       if (route.startsWith("/v1/providers/")) {
         const id = route.slice("/v1/providers/".length);
+        if (id.endsWith("/test") && method === "POST") {
+          const providerId = id.replace(/\/test$/, "");
+          currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
+          const provider = currentSnapshot.providers.find(
+            (provider) => provider.id === providerId,
+          );
+          if (provider) {
+            return jsonResponse(provider);
+          }
+          const definition = savedProviderDefinitions.get(providerId);
+          if (!definition) {
+            return jsonResponse({ error: "not_found" }, { status: 404 });
+          }
+          return jsonResponse(providerStatusForDefinition(definition));
+        }
         if (method === "PUT") {
           const definition = JSON.parse(
             init?.body?.toString() ?? "{}",
@@ -2492,6 +2509,21 @@ function providerKindForVariant(
     return "tts";
   }
   return "tool";
+}
+
+function providerStatusForDefinition(
+  definition: ProviderDefinitionView,
+): ProviderStatus {
+  return {
+    id: definition.id,
+    kind: definition.kind,
+    state: "reachable",
+    configured: true,
+    reachable: true,
+    proven_by_turn: null,
+    message: null,
+    affects_pipelines: [],
+  };
 }
 
 function providerDefinitionFixture({
