@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipeline-components`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -229,6 +229,36 @@ disconnects, the UI must keep the last known view but mark it with Stale State.
 After reconnect, the UI refreshes `/v1/status` before applying new events.
 
 ## Pipeline Routes
+
+### `GET /v1/pipeline-components`
+
+Lists known pipeline component descriptors and the configuration schema each
+component accepts. The Operator Console uses this catalog to render provider
+instance configuration forms on the Providers page. Pipeline graphs then refer
+to configured provider IDs from `graph.nodes[].provider`.
+
+Success body:
+
+```json
+{
+  "components": [
+    {
+      "id": "openai.responses",
+      "label": "OpenAI Responses",
+      "kind": "llm",
+      "schema": {
+        "properties": {
+          "base_url": { "type": "string", "format": "url" },
+          "api_key": { "type": "string" },
+          "model": { "type": "string", "pattern": "[a-z0-9.]+" },
+          "streaming": { "type": "boolean" }
+        },
+        "required": ["base_url", "model"]
+      }
+    }
+  ]
+}
+```
 
 ### `GET /v1/pipelines`
 

@@ -1,5 +1,6 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
+  PipelineComponentCatalog,
   PipelineGraph,
   PipelineView,
   RawTurnEvents,
@@ -30,6 +31,7 @@ export interface SnapshotClient {
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
   loadPipelineViews: () => Promise<PipelineView[]>;
+  loadComponentCatalog: () => Promise<PipelineComponentCatalog>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -64,6 +66,7 @@ export function createSnapshotClient(
       const names = await client.listPipelines();
       return Promise.all(names.map((name) => client.getPipeline(name)));
     },
+    loadComponentCatalog: () => client.listPipelineComponents(),
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
@@ -87,6 +90,7 @@ function createMockSnapshotClient(
     snapshot: config.access.mode === "none" ? null : (config.snapshot ?? null),
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
     loadPipelineViews: async () => [pipelineViewFixture],
+    loadComponentCatalog: async () => ({ components: [] }),
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
     loadTurn: async () => turnSnapshotFixture,
     loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),

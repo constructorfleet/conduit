@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { OverviewPanel } from "./App";
-import type { PipelineGraph, PipelineView } from "./contracts/client";
+import type {
+  PipelineComponentCatalog,
+  PipelineGraph,
+  PipelineView,
+} from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
@@ -723,6 +727,79 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("selects a configured provider for a pipeline node", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.selectOptions(screen.getByLabelText("Node"), "llm");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(
+      savedGraphs[0]?.nodes.find((node) => node.id === "llm")?.provider,
+    ).toBe("openai");
+  });
+
+  it("uses providers configured on the Providers page as pipeline choices", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    ).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-fast");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "OpenAI Fast");
+    await user.selectOptions(
+      screen.getByLabelText("Provider component"),
+      "openai.completions",
+    );
+    await user.type(
+      screen.getByLabelText("base_url required"),
+      "https://api.openai.com/v1",
+    );
+    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.click(screen.getByLabelText("streaming"));
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await user.selectOptions(screen.getByLabelText("Node"), "llm");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai-fast");
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(savedGraphs[0]?.nodes.find((node) => node.id === "llm")).toEqual({
+      id: "llm",
+      kind: "llm",
+      provider: "openai-fast",
+    });
+  });
+
   it("persists saved graph edits across reloads", async () => {
     const user = userEvent.setup();
     mockOperatorApi({
@@ -800,6 +877,138 @@ describe("Pipelines graph editor", () => {
 });
 
 describe("Providers workspace", () => {
+  it("creates and edits schema-backed provider instances from provider cards", async () => {
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-primary");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "OpenAI Primary");
+    await user.selectOptions(
+      screen.getByLabelText("Provider component"),
+      "openai.completions",
+    );
+    await user.type(
+      screen.getByLabelText("base_url required"),
+      "https://api.openai.com/v1",
+    );
+    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByText("Provider openai-primary saved"),
+    ).toBeInTheDocument();
+    const providerCard = screen
+      .getByRole("heading", { name: "OpenAI Primary" })
+      .closest("article");
+    expect(providerCard).not.toBeNull();
+    expect(providerCard).toHaveTextContent("openai-primary");
+    expect(providerCard).toHaveTextContent("openai.completions");
+
+    await user.click(
+      within(providerCard as HTMLElement).getByRole("button", {
+        name: "Edit openai-primary",
+      }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue(
+      "openai-primary",
+    );
+    expect(screen.getByLabelText("Provider label")).toHaveDisplayValue(
+      "OpenAI Primary",
+    );
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "OpenAI Completions",
+    );
+    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+      "https://api.openai.com/v1",
+    );
+    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt.5");
+    await user.click(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "OpenAI Primary" }),
+    ).toBeInTheDocument();
+
+    const restoredProviderCard = screen
+      .getByRole("heading", { name: "OpenAI Primary" })
+      .closest("article");
+    expect(restoredProviderCard).not.toBeNull();
+    await user.click(
+      within(restoredProviderCard as HTMLElement).getByRole("button", {
+        name: "Edit openai-primary",
+      }),
+    );
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "OpenAI Main");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByRole("heading", { name: "OpenAI Main" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("OpenAI Primary")).not.toBeInTheDocument();
+  });
+
+  it("starts a new provider card from a kind menu and closes the active editor", async () => {
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Edit openai" }));
+    expect(screen.getAllByDisplayValue("openai").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    expect(screen.queryByRole("menuitem", { name: "All kinds" })).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Provider types" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Configure provider" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("OpenAI Responses")).toHaveLength(1);
+    expect(screen.queryByDisplayValue("openai")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("llm-4")).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider label")).toHaveDisplayValue(
+      "OpenAI Responses",
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    );
+    expect(screen.queryByDisplayValue("llm-4")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "OpenAI Responses" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("deletes configured provider cards", async () => {
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Delete openai" }));
+
+    expect(screen.getByText("Provider openai deleted")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "openai" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders provider status from the snapshot and filters by stage", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -809,7 +1018,7 @@ describe("Providers workspace", () => {
     expect(
       screen.getByRole("heading", { name: "Providers" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("piper-local")).toBeInTheDocument();
+    expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(
       screen.getByText("no successful reachability check yet"),
     ).toBeInTheDocument();
@@ -820,7 +1029,7 @@ describe("Providers workspace", () => {
     expect(screen.getByText("1 visible")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "LLM" }));
-    expect(screen.getByText("0 visible")).toBeInTheDocument();
+    expect(screen.getByText("1 visible")).toBeInTheDocument();
     expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
   });
 
@@ -837,7 +1046,13 @@ describe("Providers workspace", () => {
     expect(
       screen.queryByText("Reachability check passed"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("configured")).toBeInTheDocument();
+    const piperCard = screen
+      .getByRole("heading", { name: "piper-local" })
+      .closest("article");
+    expect(piperCard).not.toBeNull();
+    expect(
+      within(piperCard as HTMLElement).getByText("configured"),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Use fallback" }));
     expect(
@@ -983,6 +1198,41 @@ function pipelineView(): PipelineView {
   };
 }
 
+function componentCatalog(): PipelineComponentCatalog {
+  return {
+    components: [
+      {
+        id: "openai.responses",
+        label: "OpenAI Responses",
+        kind: "llm",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[a-z0-9.]+" },
+            streaming: { type: "boolean" },
+          },
+          required: ["base_url", "model"],
+        },
+      },
+      {
+        id: "openai.completions",
+        label: "OpenAI Completions",
+        kind: "llm",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[a-z0-9.]+" },
+            streaming: { type: "boolean" },
+          },
+          required: ["base_url", "model"],
+        },
+      },
+    ],
+  };
+}
+
 function liveApiPipelineView(): PipelineView {
   const graph: PipelineGraph = {
     name: "garage",
@@ -1058,10 +1308,12 @@ function liveApiSnapshot(): OperatorStatusSnapshot {
 function mockOperatorApi({
   snapshot = snapshotFixture(),
   pipelineViews = [pipelineView()],
+  componentCatalog: catalog = componentCatalog(),
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
   pipelineViews?: PipelineView[];
+  componentCatalog?: PipelineComponentCatalog;
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
@@ -1080,6 +1332,10 @@ function mockOperatorApi({
 
       if (route === "/v1/pipelines" && method === "GET") {
         return jsonResponse([...pipelines.keys()]);
+      }
+
+      if (route === "/v1/pipeline-components" && method === "GET") {
+        return jsonResponse(catalog);
       }
 
       if (route.startsWith("/v1/pipelines/")) {

@@ -155,6 +155,28 @@ button {
   color: var(--strong);
 }
 
+.icon-action {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--button-muted);
+  color: var(--strong);
+}
+
+.icon-action.danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+}
+
+.icon-action.success {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+}
+
 .link-action {
   display: inline-flex;
   align-items: center;
@@ -717,6 +739,140 @@ button {
   padding: 16px;
 }
 
+.panel-heading-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading-row h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 16px;
+}
+
+.component-config-form {
+  display: grid;
+  gap: 10px;
+}
+
+.component-config-fields {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.provider-config-editor,
+.provider-definition-form {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-config-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.providers-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.provider-kind-menu {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  top: calc(100% + 6px);
+  display: grid;
+  min-width: 210px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 16%);
+}
+
+.provider-kind-menu.inline {
+  position: static;
+  min-width: 0;
+  box-shadow: none;
+}
+
+.provider-kind-menu button {
+  min-height: 34px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--strong);
+  text-align: left;
+}
+
+.provider-kind-menu button:hover {
+  background: var(--selected);
+}
+
+.provider-kind-back,
+.provider-kind-empty {
+  color: var(--muted);
+}
+
+.provider-kind-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 42%);
+}
+
+.provider-add-dialog {
+  display: grid;
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+  overflow: auto;
+}
+
+.provider-add-dialog h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 18px;
+}
+
+.provider-definition-form {
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  align-items: start;
+  gap: 14px 16px;
+}
+
+.provider-add-dialog .provider-definition-form {
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.provider-definition-form .component-config-fields,
+.provider-definition-form .provider-actions {
+  grid-column: 1 / -1;
+}
+
 .validation-ok {
   margin: 0;
   color: var(--success);
@@ -793,6 +949,7 @@ button {
 .provider-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: start;
   gap: 12px;
 }
 
@@ -836,6 +993,12 @@ button {
   gap: 10px;
 }
 
+.provider-card-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .provider-kind {
   border-radius: 8px;
   padding: 7px 9px;
@@ -853,7 +1016,7 @@ button {
 
 .provider-facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 

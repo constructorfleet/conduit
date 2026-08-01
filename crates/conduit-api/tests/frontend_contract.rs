@@ -376,6 +376,31 @@ export interface PipelineView {{
   order: IdString[];
 }}
 
+export type ComponentConfigValueType = "string" | "boolean";
+export type ComponentConfigFormat = "url";
+
+export interface ComponentConfigProperty {{
+  type: ComponentConfigValueType;
+  format?: ComponentConfigFormat;
+  pattern?: string;
+}}
+
+export interface ComponentConfigSchema {{
+  properties: Record<string, ComponentConfigProperty>;
+  required: string[];
+}}
+
+export interface PipelineComponentDescriptor {{
+  id: string;
+  label: string;
+  kind: NodeKind;
+  schema: ComponentConfigSchema;
+}}
+
+export interface PipelineComponentCatalog {{
+  components: PipelineComponentDescriptor[];
+}}
+
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
 export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
@@ -467,6 +492,7 @@ export interface ConduitApiClient {{
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
   listPipelines: () => Promise<string[]>;
+  listPipelineComponents: () => Promise<PipelineComponentCatalog>;
   getPipeline: (name: string) => Promise<PipelineView>;
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
@@ -484,6 +510,7 @@ export const conduitApiRoutes = {{
   turn: "/v1/turns/{{turn_id}}",
   turnEvents: "/v1/turns/{{turn_id}}/events",
   pipelines: "/v1/pipelines",
+  pipelineComponents: "/v1/pipeline-components",
   pipeline: "/v1/pipelines/{{name}}",
   validatePipeline: "/v1/pipelines/validate",
 }} as const;
@@ -499,6 +526,12 @@ export function createConduitApiClient(
       requestJson<OperatorStatusSnapshot>(request, config, conduitApiRoutes.status),
     listPipelines: () =>
       requestJson<string[]>(request, config, conduitApiRoutes.pipelines),
+    listPipelineComponents: () =>
+      requestJson<PipelineComponentCatalog>(
+        request,
+        config,
+        conduitApiRoutes.pipelineComponents,
+      ),
     getPipeline: (name) =>
       requestJson<PipelineView>(request, config, pipelineRoute(name)),
     putPipeline: (name, graph) =>
