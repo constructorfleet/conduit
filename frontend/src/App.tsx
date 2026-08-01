@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
+  Fragment,
   type FormEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
@@ -82,6 +83,9 @@ type SectionId = (typeof sections)[number]["id"];
 
 export type PipelineValidationResult =
   { ok: true; order: string[] } | { ok: false; message: string };
+type PipelineValidator = (
+  graph: PipelineGraph,
+) => PipelineValidationResult | Promise<PipelineValidationResult>;
 
 interface PipelineEditorDraftState {
   draft: PipelineGraph;
@@ -111,7 +115,7 @@ interface AppProps {
   initialSmallScreen?: boolean;
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
-  onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
+  onPipelineValidate?: PipelineValidator;
 }
 
 function App({
@@ -255,7 +259,7 @@ function OperatorWorkspace({
   initialSnapshot?: OperatorStatusSnapshot;
   dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
-  onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
+  onPipelineValidate?: PipelineValidator;
   onSectionChange: (section: SectionId) => void;
   onClearAccess: () => void;
 }) {
@@ -531,7 +535,13 @@ function OperatorWorkspace({
           initialSmallScreen={smallScreen}
           loadError={loadError}
           onSectionChange={onSectionChange}
-          onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
+          onPipelineValidate={
+            onPipelineValidate ??
+            (async (graph) =>
+              pipelineViewToValidation(
+                await snapshotClient.validatePipeline(graph),
+              ))
+          }
           onProviderDefinitionsChange={setProviderDefinitions}
           onPipelineStored={storePipelineGraph}
         />
@@ -572,7 +582,7 @@ function SectionPanel({
   loadError: string | null;
   onSectionChange: (section: SectionId) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
-  onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
+  onPipelineValidate: PipelineValidator;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   if (loadError) {
@@ -657,10 +667,6 @@ interface ProviderDefinition {
   config: Record<string, unknown>;
 }
 
-interface ProviderOverride {
-  fallbackSelected?: boolean;
-}
-
 interface ProviderCardView {
   id: string;
   label: string;
@@ -693,16 +699,10 @@ function ProvidersPanel({
   const [addProviderDialogOpen, setAddProviderDialogOpen] = useState(false);
   const [selectedProviderKind, setSelectedProviderKind] =
     useState<ProviderKind | null>(null);
-  const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
-    {},
-  );
   const [providerNotices, setProviderNotices] = useState<
     Record<string, string>
   >({});
-  const providerCards = providerCardViews(
-    providerDefinitions,
-    providers.map((provider) => ({ ...provider, ...overrides[provider.id] })),
-  );
+  const providerCards = providerCardViews(providerDefinitions, providers);
   const visibleProviderCards = providerCards.filter(
     (provider) => filter === "all" || provider.kind === filter,
   );
@@ -861,17 +861,6 @@ function ProvidersPanel({
     }));
   }
 
-  function selectFallback(provider: ProviderStatus) {
-    setOverrides((current) => ({
-      ...current,
-      [provider.id]: {
-        ...current[provider.id],
-        fallbackSelected: true,
-        message: "Local fallback is selected",
-      },
-    }));
-  }
-
   return (
     <div className="providers-stack">
       <section className="summary-grid" aria-label="Provider summary">
@@ -1001,32 +990,17 @@ function ProvidersPanel({
             {provider.status ? (
               <div className="provider-actions">
                 <button
-                  className="secondary-action"
+                  className="secondary-action provider-test-action"
                   type="button"
+                  aria-label={`Test ${provider.id}`}
                   onClick={() =>
                     provider.status ? testProvider(provider.status) : null
                   }
                 >
                   <Play size={17} aria-hidden="true" />
-                  Test {provider.id}
-                </button>
-                <button
-                  className="secondary-action"
-                  type="button"
-                  onClick={() =>
-                    provider.status ? selectFallback(provider.status) : null
-                  }
-                >
-                  <RotateCcw size={17} aria-hidden="true" />
-                  Use fallback
+                  Test
                 </button>
               </div>
-            ) : null}
-
-            {overrides[provider.id]?.fallbackSelected ? (
-              <p className="panel-notice">
-                Fallback selected for {provider.id}
-              </p>
             ) : null}
           </article>
         ))}
@@ -1791,7 +1765,7 @@ function PipelinesPanel({
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
-  onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
+  onPipelineValidate: PipelineValidator;
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
@@ -2129,35 +2103,6 @@ function PipelinesPanel({
     };
   }, [draggingAugment, selectedName]);
 
-  function addNodeAfter({
-    id,
-    kind,
-    provider,
-    from,
-    to,
-  }: {
-    id: string;
-    kind: NodeKind;
-    provider: string;
-    from: string;
-    to?: string;
-  }) {
-    applyDraftEdit((graph) => {
-      if (graph.nodes.some((node) => node.id === id)) {
-        return graph;
-      }
-
-      const edges = graph.edges.filter(
-        (edge) => !(to && edge.from === from && edge.to === to),
-      );
-      return {
-        ...graph,
-        nodes: [...graph.nodes, { id, kind, provider }],
-        edges: [...edges, { from, to: id }, ...(to ? [{ from: id, to }] : [])],
-      };
-    });
-  }
-
   function addReasoningAugment({
     id,
     kind,
@@ -2278,16 +2223,6 @@ function PipelinesPanel({
     });
   }
 
-  function addFallbackTts() {
-    addNodeAfter({
-      id: "tts_fallback",
-      kind: "tts",
-      provider: "system-tts",
-      from: "llm",
-      to: "speaker",
-    });
-  }
-
   function undoLastEdit() {
     const previous = history.at(-1);
     if (!previous) {
@@ -2297,12 +2232,25 @@ function PipelinesPanel({
     replaceCurrentDraft(previous, history.slice(0, -1));
   }
 
-  function validateDraft() {
+  async function validateDraft() {
     if (!draft) {
       return;
     }
 
-    setCurrentValidation(onPipelineValidate(draft));
+    try {
+      const result = await onPipelineValidate(draft);
+      updateCurrentDraftState((current) => ({
+        ...current,
+        validation: result,
+        notice: null,
+      }));
+    } catch (caught) {
+      setCurrentValidation({
+        ok: false,
+        message:
+          caught instanceof Error ? caught.message : "Unable to validate graph",
+      });
+    }
   }
 
   async function saveCurrentDraft(): Promise<boolean> {
@@ -2515,15 +2463,6 @@ function PipelinesPanel({
                 <Plus size={16} aria-hidden="true" />
                 Memory into LLM
               </button>
-              <button
-                className="secondary-action compact-action"
-                type="button"
-                aria-label="Add fallback TTS"
-                onClick={addFallbackTts}
-              >
-                <Plus size={16} aria-hidden="true" />
-                Fallback TTS
-              </button>
             </div>
             <div className="graph-action-group">
               <button
@@ -2644,7 +2583,7 @@ function PipelinesPanel({
               className="pipeline-atom-map"
               style={{ transform: `scale(${graphZoom / 100})` }}
             >
-              {atomFlowNodes.map((node) => {
+              {atomFlowNodes.map((node, nodeIndex) => {
                 const outgoingEdges = atomEdges.filter(
                   (edge) =>
                     edge.from === node.id && !attachesFlowLinkToTarget(edge),
@@ -2655,83 +2594,99 @@ function PipelinesPanel({
                 );
                 const spokes = graphFlow?.spokesByTarget.get(node.id) ?? [];
                 return (
-                  <div
-                    className={`atom-flow-item ${
-                      node.kind === "llm" ? "core-flow-item" : ""
-                    }`}
-                    key={node.id}
-                  >
-                    {incomingAttachedEdges.map((edge) =>
-                      renderAtomFlowLink(edge, true),
-                    )}
-                    <div
-                      className={
-                        node.kind === "llm" ? "atom-core-wrap" : "atom-stage"
-                      }
-                    >
-                      {node.kind === "llm" ? (
-                        <>
-                          <div className="atom-orbit-ring" aria-hidden="true" />
-                          <div
-                            className={`atom-orbitals ${
-                              graphMotionEnabled ? "motion-enabled" : ""
-                            }`}
-                            aria-label={`${node.id} augments`}
-                          >
-                            {spokes.map((spoke, spokeIndex) => {
-                              const position =
-                                dragPreviewPositions[spoke.node.id] ??
-                                orbitPositionForNode(spoke.node, spokeIndex);
-                              const slot = spokeIndex + 1;
-                              return (
-                                <div
-                                  aria-label={`Move ${spoke.node.id} augment`}
-                                  className="atom-orbital"
-                                  data-orbit-slot={slot.toString()}
-                                  draggable={false}
-                                  key={spoke.node.id}
-                                  onPointerDown={(event) =>
-                                    startAugmentDrag(
-                                      spoke.node.id,
-                                      position,
-                                      event,
-                                    )
-                                  }
-                                  style={
-                                    {
-                                      "--orbit-x": `${position.x}px`,
-                                      "--orbit-y": `${position.y}px`,
-                                      "--orbit-start-x": `${position.x}px`,
-                                      "--orbit-start-y": `${position.y}px`,
-                                    } as CSSProperties
-                                  }
-                                >
-                                  {renderNodeCard({
-                                    node: spoke.node,
-                                    compact: true,
-                                  })}
-                                </div>
-                              );
-                            })}
-                            {graphMotionEnabled ? (
-                              <>
-                                <span className="atom-motion-particle particle-1" />
-                                <span className="atom-motion-particle particle-2" />
-                                <span className="atom-motion-particle particle-3" />
-                              </>
-                            ) : null}
-                          </div>
-                          <span className="atom-label">Reasoning core</span>
-                        </>
-                      ) : null}
-                      <div
-                        className={node.kind === "llm" ? "reasoning-atom" : ""}
+                  <Fragment key={node.id}>
+                    {nodeIndex === 0 ? (
+                      <span
+                        className="atom-entry-link"
+                        aria-label="Pipeline start"
                       >
-                        {renderNodeCard({ node })}
+                        Start
+                        <ArrowRight size={16} aria-hidden="true" />
+                        {node.id}
+                      </span>
+                    ) : null}
+                    <div
+                      className={`atom-flow-item ${
+                        node.kind === "llm" ? "core-flow-item" : ""
+                      }`}
+                    >
+                      {incomingAttachedEdges.map((edge) =>
+                        renderAtomFlowLink(edge, true),
+                      )}
+                      <div
+                        className={
+                          node.kind === "llm" ? "atom-core-wrap" : "atom-stage"
+                        }
+                      >
+                        {node.kind === "llm" ? (
+                          <>
+                            <div
+                              className="atom-orbit-ring"
+                              aria-hidden="true"
+                            />
+                            <div
+                              className={`atom-orbitals ${
+                                graphMotionEnabled ? "motion-enabled" : ""
+                              }`}
+                              aria-label={`${node.id} augments`}
+                            >
+                              {spokes.map((spoke, spokeIndex) => {
+                                const position =
+                                  dragPreviewPositions[spoke.node.id] ??
+                                  orbitPositionForNode(spoke.node, spokeIndex);
+                                const slot = spokeIndex + 1;
+                                return (
+                                  <div
+                                    aria-label={`Move ${spoke.node.id} augment`}
+                                    className="atom-orbital"
+                                    data-orbit-slot={slot.toString()}
+                                    draggable={false}
+                                    key={spoke.node.id}
+                                    onPointerDown={(event) =>
+                                      startAugmentDrag(
+                                        spoke.node.id,
+                                        position,
+                                        event,
+                                      )
+                                    }
+                                    style={
+                                      {
+                                        "--orbit-x": `${position.x}px`,
+                                        "--orbit-y": `${position.y}px`,
+                                        "--orbit-start-x": `${position.x}px`,
+                                        "--orbit-start-y": `${position.y}px`,
+                                      } as CSSProperties
+                                    }
+                                  >
+                                    {renderNodeCard({
+                                      node: spoke.node,
+                                      compact: true,
+                                    })}
+                                  </div>
+                                );
+                              })}
+                              {graphMotionEnabled ? (
+                                <>
+                                  <span className="atom-motion-particle particle-1" />
+                                  <span className="atom-motion-particle particle-2" />
+                                  <span className="atom-motion-particle particle-3" />
+                                </>
+                              ) : null}
+                            </div>
+                            <span className="atom-label">Reasoning core</span>
+                          </>
+                        ) : null}
+                        <div
+                          className={
+                            node.kind === "llm" ? "reasoning-atom" : ""
+                          }
+                        >
+                          {renderNodeCard({ node })}
+                        </div>
                       </div>
+                      {outgoingEdges.map((edge) => renderAtomFlowLink(edge))}
                     </div>
-                    {outgoingEdges.map((edge) => renderAtomFlowLink(edge))}
-                  </div>
+                  </Fragment>
                 );
               })}
             </div>
@@ -3744,23 +3699,10 @@ function defaultPipelineViews(
   return [{ graph, order: graph.nodes.map((node) => node.id) }];
 }
 
-function validatePipelineGraph(graph: PipelineGraph): PipelineValidationResult {
-  if (graph.nodes.length === 0) {
-    return { ok: false, message: "graph has no nodes" };
-  }
-
-  const ids = new Set(graph.nodes.map((node) => node.id));
-  const dangling = graph.edges.find(
-    (edge) => !ids.has(edge.from) || !ids.has(edge.to),
-  );
-  if (dangling) {
-    return {
-      ok: false,
-      message: `unknown node in edge ${dangling.from} -> ${dangling.to}`,
-    };
-  }
-
-  return { ok: true, order: graph.nodes.map((node) => node.id) };
+function pipelineViewToValidation(
+  view: PipelineView,
+): PipelineValidationResult {
+  return { ok: true, order: view.order };
 }
 
 function componentKindForNode(node: PipelineNode): ComponentKind {
@@ -3854,8 +3796,8 @@ function nextAugmentOrbitPosition(
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
   return {
-    x: Math.round(Math.cos(angle) * 118),
-    y: Math.round(Math.sin(angle) * 78),
+    x: Math.round(Math.cos(angle) * 148),
+    y: Math.round(Math.sin(angle) * 110),
   };
 }
 
