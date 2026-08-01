@@ -385,16 +385,20 @@ function OperatorWorkspace({
           loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
-          onPipelineSaved={(graph) => {
-            onPipelineSaved?.(graph);
-            setPipelineViews((current) => upsertPipelineView(current, graph));
-            setSnapshot((current) => promoteSavedPipeline(current, graph));
-            onSectionChange("overview");
-          }}
-          onPipelineStored={(graph, order) => {
+          onPipelineSaved={async (graph) => {
+            const view = await snapshotClient.savePipeline(graph);
             onPipelineSaved?.(graph);
             setPipelineViews((current) =>
-              upsertPipelineView(current, graph, order),
+              upsertPipelineView(current, view.graph, view.order),
+            );
+            setSnapshot((current) => promoteSavedPipeline(current, view.graph));
+            onSectionChange("overview");
+          }}
+          onPipelineStored={async (graph) => {
+            const view = await snapshotClient.savePipeline(graph);
+            onPipelineSaved?.(view.graph);
+            setPipelineViews((current) =>
+              upsertPipelineView(current, view.graph, view.order),
             );
           }}
         />
@@ -428,8 +432,8 @@ function SectionPanel({
   initialSmallScreen: boolean;
   loadError: string | null;
   onSectionChange: (section: SectionId) => void;
-  onPipelineSaved: (graph: PipelineGraph) => void;
-  onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
+  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
+  onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
   if (loadError) {
@@ -1133,14 +1137,20 @@ function PipelinesPanel({
     setValidation(onPipelineValidate(draft));
   }
 
-  function saveDraft() {
+  async function saveDraft() {
     if (!draft || validation?.ok !== true) {
       return;
     }
 
-    onPipelineStored(draft, validation.order);
-    setHistory([]);
-    setNotice(`Saved graph for ${draft.name}`);
+    try {
+      await onPipelineStored(draft, validation.order);
+      setHistory([]);
+      setNotice(`Saved graph for ${draft.name}`);
+    } catch (caught) {
+      setNotice(
+        caught instanceof Error ? caught.message : "Unable to save graph",
+      );
+    }
   }
 
   function runTestTurn() {
@@ -1560,7 +1570,7 @@ function filterRawEvents(
 function GuidedSetupPanel({
   onPipelineSaved,
 }: {
-  onPipelineSaved: (graph: PipelineGraph) => void;
+  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
   const [sttProvider, setSttProvider] = useState("whisper");
@@ -1568,9 +1578,10 @@ function GuidedSetupPanel({
   const [ttsProvider, setTtsProvider] = useState("piper");
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [toolSetupSkipped, setToolSetupSkipped] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function save(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = pipelineName.trim();
     if (!name) {
@@ -1583,14 +1594,23 @@ function GuidedSetupPanel({
     }
 
     setError(null);
-    onPipelineSaved(
-      buildMinimalVoiceLoopGraph({
-        name,
-        sttProvider: sttProvider.trim(),
-        llmProvider: llmProvider.trim(),
-        ttsProvider: ttsProvider.trim(),
-      }),
-    );
+    setSaving(true);
+    try {
+      await onPipelineSaved(
+        buildMinimalVoiceLoopGraph({
+          name,
+          sttProvider: sttProvider.trim(),
+          llmProvider: llmProvider.trim(),
+          ttsProvider: ttsProvider.trim(),
+        }),
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to save pipeline",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1672,9 +1692,9 @@ function GuidedSetupPanel({
 
         {error ? <p className="form-error">{error}</p> : null}
 
-        <button className="primary-action" type="submit">
+        <button className="primary-action" type="submit" disabled={saving}>
           <CircleCheck size={17} aria-hidden="true" />
-          Validate and Save
+          {saving ? "Saving" : "Validate and Save"}
         </button>
       </section>
     </form>

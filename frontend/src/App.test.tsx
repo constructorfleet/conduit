@@ -390,6 +390,38 @@ describe("First-Run Guided Setup", () => {
       screen.getByRole("heading", { name: "Current Exceptions" }),
     ).toBeInTheDocument();
   });
+
+  it("persists Guided Setup pipeline saves across reloads", async () => {
+    const user = userEvent.setup();
+    mockOperatorApi({ snapshot: firstRunSnapshot(), pipelineViews: [] });
+    const firstLoad = render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.type(screen.getByLabelText("Pipeline name"), "kitchen");
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument();
+
+    firstLoad.unmount();
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First-Run Setup" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByText("kitchen")).toBeInTheDocument();
+    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+  });
 });
 
 describe("Events turn reconstruction", () => {
@@ -556,6 +588,31 @@ describe("Pipelines graph editor", () => {
       from: "llm",
       to: "confirm",
     });
+  });
+
+  it("persists saved graph edits across reloads", async () => {
+    const user = userEvent.setup();
+    mockOperatorApi({
+      snapshot: snapshotFixture(),
+      pipelineViews: [pipelineView()],
+    });
+    const firstLoad = render(<App />);
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(
+      await screen.findByText("Saved graph for kitchen"),
+    ).toBeInTheDocument();
+
+    firstLoad.unmount();
+    render(<App />);
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(await screen.findByText("confirm")).toBeInTheDocument();
+    expect(screen.getByText("llm -> confirm")).toBeInTheDocument();
   });
 
   it("supports undo, test run, and multiple frontend-only node actions", async () => {
@@ -838,35 +895,125 @@ function mockOperatorApi({
   snapshot?: OperatorStatusSnapshot;
   pipelineViews?: PipelineView[];
 } = {}) {
+  let currentSnapshot = snapshot;
   const pipelines = new Map(
     pipelineViews.map((view) => [view.graph.name, view] as const),
   );
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = input instanceof URL ? input : new URL(input.toString());
-    const route = decodeURIComponent(url.pathname);
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof URL ? input : new URL(input.toString());
+      const route = decodeURIComponent(url.pathname);
+      const method = init?.method ?? "GET";
 
-    if (route === "/v1/status") {
-      return jsonResponse(snapshot);
-    }
-
-    if (route === "/v1/pipelines") {
-      return jsonResponse([...pipelines.keys()]);
-    }
-
-    if (route.startsWith("/v1/pipelines/")) {
-      const name = route.slice("/v1/pipelines/".length);
-      const view = pipelines.get(name);
-      if (!view) {
-        return jsonResponse({ error: "not_found" }, { status: 404 });
+      if (route === "/v1/status" && method === "GET") {
+        return jsonResponse(currentSnapshot);
       }
-      return jsonResponse(view);
-    }
 
-    return jsonResponse({ error: "not_found" }, { status: 404 });
-  });
+      if (route === "/v1/pipelines" && method === "GET") {
+        return jsonResponse([...pipelines.keys()]);
+      }
+
+      if (route.startsWith("/v1/pipelines/")) {
+        const name = route.slice("/v1/pipelines/".length);
+        if (method === "PUT") {
+          const graph = JSON.parse(
+            init?.body?.toString() ?? "{}",
+          ) as PipelineGraph;
+          const view: PipelineView = {
+            graph,
+            order: graph.nodes.map((node) => node.id),
+          };
+          pipelines.set(name, view);
+          currentSnapshot = snapshotWithStoredPipeline(currentSnapshot, graph);
+          return jsonResponse(view);
+        }
+
+        const view = pipelines.get(name);
+        if (!view) {
+          return jsonResponse({ error: "not_found" }, { status: 404 });
+        }
+        return jsonResponse(view);
+      }
+
+      return jsonResponse({ error: "not_found" }, { status: 404 });
+    },
+  );
 
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function snapshotWithStoredPipeline(
+  snapshot: OperatorStatusSnapshot,
+  graph: PipelineGraph,
+): OperatorStatusSnapshot {
+  return {
+    ...snapshot,
+    runtime: {
+      ...snapshot.runtime,
+      launch_state: "operations_workspace",
+    },
+    pipelines: [
+      ...snapshot.pipelines.filter((pipeline) => pipeline.name !== graph.name),
+      {
+        name: graph.name,
+        usable: true,
+        health: {
+          state: "unproven",
+          summary: "awaiting first successful turn",
+          last_successful_turn: null,
+          last_failed_turn: null,
+        },
+        components: [
+          {
+            kind: "capture",
+            provider: "websocket",
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "transcription",
+            provider:
+              graph.nodes.find((node) => node.kind === "stt")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "reasoning",
+            provider:
+              graph.nodes.find((node) => node.kind === "llm")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+          {
+            kind: "tools",
+            provider:
+              graph.nodes.find((node) => node.kind === "tool")?.provider ??
+              null,
+            state: graph.nodes.some((node) => node.kind === "tool")
+              ? "unproven"
+              : "unused",
+            detail: graph.nodes.some((node) => node.kind === "tool")
+              ? "pipeline saved"
+              : null,
+            last_turn: null,
+          },
+          {
+            kind: "synthesis",
+            provider:
+              graph.nodes.find((node) => node.kind === "tts")?.provider ?? null,
+            state: "unproven",
+            detail: "pipeline saved",
+            last_turn: null,
+          },
+        ],
+        affected_providers: [],
+      },
+    ],
+  };
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
