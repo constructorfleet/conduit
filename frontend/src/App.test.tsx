@@ -1,8 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import App, { OverviewPanel } from "./App";
+import App, {
+  OverviewPanel,
+  type PipelineGraph,
+  type PipelineView,
+} from "./App";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
@@ -13,6 +17,7 @@ import { applySnapshotEvent, transitionEventStream } from "./eventStream";
 beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
+  mockSmallScreen(false);
 });
 
 describe("Operator Console shell", () => {
@@ -421,6 +426,85 @@ describe("Events turn reconstruction", () => {
   });
 });
 
+describe("Pipelines graph editor", () => {
+  it("renders a real stored pipeline graph with health and component overlays", async () => {
+    const user = userEvent.setup();
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await enterPipelinesSection(user);
+
+    expect(
+      screen.getByRole("heading", { name: "Graph Editor" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("mic")).toBeInTheDocument();
+    expect(screen.getByText("stt")).toBeInTheDocument();
+    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getAllByText("unhealthy").length).toBeGreaterThan(0);
+    expect(screen.getByText("synthesis / piper-local")).toBeInTheDocument();
+  });
+
+  it("validates edits through the pipeline validation seam before saving", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+        onPipelineValidate={(graph) =>
+          graph.nodes.some((node) => node.id === "confirm")
+            ? { ok: true, order: graph.nodes.map((node) => node.id) }
+            : { ok: false, message: "graph is disconnected" }
+        }
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+
+    expect(screen.getByText("graph is disconnected")).toBeInTheDocument();
+    expect(savedGraphs).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(screen.getByText("Validation passed")).toBeInTheDocument();
+    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toContain("confirm");
+    expect(savedGraphs[0]?.edges).toContainEqual({
+      from: "llm",
+      to: "confirm",
+    });
+  });
+
+  it("keeps graph editing read-only on small screens", async () => {
+    const user = userEvent.setup();
+    render(
+      <App initialPipelineViews={[pipelineView()]} initialSmallScreen={true} />,
+    );
+
+    await enterPipelinesSection(user);
+
+    expect(screen.getByText("Read-only on small screens")).toBeInTheDocument();
+    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add tool node" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("derives read-only graph mode from the current viewport", async () => {
+    const user = userEvent.setup();
+    mockSmallScreen(true);
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await enterPipelinesSection(user);
+
+    expect(screen.getByText("Read-only on small screens")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Validate Graph" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 function snapshotFixture(): OperatorStatusSnapshot {
   return JSON.parse(
     JSON.stringify(operatorStatusSnapshotFixture),
@@ -443,6 +527,51 @@ function successfulTurnEvents(): EventEnvelope[] {
       envelope.event.type !== "ToolFailed" &&
       envelope.event.type !== "StageFailed",
   );
+}
+
+async function enterPipelinesSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+}
+
+function pipelineView(): PipelineView {
+  const graph: PipelineGraph = {
+    name: "kitchen",
+    nodes: [
+      { id: "mic", kind: "source", provider: "websocket" },
+      { id: "stt", kind: "stt", provider: "whisper" },
+      { id: "llm", kind: "llm", provider: "openai" },
+      { id: "tts", kind: "tts", provider: "piper-local" },
+      { id: "speaker", kind: "sink", provider: "websocket" },
+    ],
+    edges: [
+      { from: "mic", to: "stt" },
+      { from: "stt", to: "llm" },
+      { from: "llm", to: "tts" },
+      { from: "tts", to: "speaker" },
+    ],
+  };
+  return {
+    graph,
+    order: graph.nodes.map((node) => node.id),
+  };
+}
+
+function mockSmallScreen(matches: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string): MediaQueryList => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }),
+  });
 }
 
 function firstRunSnapshot(): OperatorStatusSnapshot {

@@ -39,6 +39,12 @@ component story for a conversation turn from generated event envelopes. Raw
 event inspection is secondary and filterable, while stale or disconnected event
 streams keep the last reconstructed turn visible with Stale State marked.
 
+The Pipelines section starts with a first-party React/SVG graph editor
+foundation rather than a drag-and-drop graph package. That keeps the initial
+surface tied to Conduit's real `PipelineGraph` JSON shape and backend validation
+API seams while leaving room to adopt a heavier graph library when advanced
+desktop editing needs it. Small screens render graphs read-only.
+
 Generated TypeScript contracts and reviewable JSON fixtures live under
 `src/contracts`. Rust owns those artifacts. After an intentional API or event
 contract change, update them from the repository root with:
