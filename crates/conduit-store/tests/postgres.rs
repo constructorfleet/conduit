@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use conduit_provider::storage::PipelineStore;
 use conduit_store::PostgresStore;
+use sqlx::AssertSqlSafe;
 
 use conformance::{behaves_like_a_store, graph, UNUSABLE_NAMES};
 
@@ -37,15 +38,20 @@ fn scoped_url(base: &str, schema: &str) -> String {
 }
 
 /// Creates an empty schema and connects to it.
-async fn store_in(schema: &str) -> Option<PostgresStore> {
+///
+/// `schema` is `&'static str` rather than `&str` so that the claim below — that
+/// it is never user input — is enforced by the compiler instead of by a comment.
+/// A schema name cannot be a bind parameter, so it has to be interpolated.
+async fn store_in(schema: &'static str) -> Option<PostgresStore> {
     let base = base_url()?;
     let admin = sqlx::postgres::PgPool::connect(&base).await.expect("connects");
-    // The schema name is a literal in this file, never user input.
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    // Audited for injection, as `AssertSqlSafe` requires: every caller passes a
+    // literal, which the `&'static str` above is what guarantees.
+    sqlx::query(AssertSqlSafe(format!("DROP SCHEMA IF EXISTS {schema} CASCADE")))
         .execute(&admin)
         .await
         .expect("drops any leftovers");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
         .expect("creates the schema");

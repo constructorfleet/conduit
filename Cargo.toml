@@ -5,10 +5,11 @@ members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-run
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# The real floor, not an aspiration: `home 0.5.12` (reached via
-# sqlx-postgres -> sqlx -> conduit-store) requires 1.88, so 1.87 cannot resolve
-# this workspace at all. Verified by the `msrv` CI job, which reads this value.
-rust-version = "1.88"
+# The real floor, not an aspiration: `sqlx 0.9` and its `sqlx-core`,
+# `sqlx-macros`, and `sqlx-postgres` crates (reached via conduit-store) declare
+# 1.94, so anything older cannot resolve this workspace at all. Verified by the
+# `msrv` CI job, which reads this value.
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Teagan42/conduit"
 
