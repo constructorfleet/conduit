@@ -2595,16 +2595,6 @@ function PipelinesPanel({
                 const spokes = graphFlow?.spokesByTarget.get(node.id) ?? [];
                 return (
                   <Fragment key={node.id}>
-                    {nodeIndex === 0 ? (
-                      <span
-                        className="atom-entry-link"
-                        aria-label="Pipeline start"
-                      >
-                        Start
-                        <ArrowRight size={16} aria-hidden="true" />
-                        {node.id}
-                      </span>
-                    ) : null}
                     <div
                       className={`atom-flow-item ${
                         node.kind === "llm" ? "core-flow-item" : ""
