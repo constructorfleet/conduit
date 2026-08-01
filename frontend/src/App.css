@@ -130,6 +130,18 @@ button {
   color: var(--strong);
 }
 
+.link-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin-top: 10px;
+  padding: 0 8px;
+  background: var(--button-muted);
+  color: var(--strong);
+  font-size: 12px;
+}
+
 .workspace-shell {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
@@ -268,6 +280,125 @@ button {
 
 .guided-setup {
   display: block;
+}
+
+.events-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.events-tabs {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--surface);
+}
+
+.events-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--text);
+}
+
+.events-tabs button.selected {
+  background: var(--selected);
+  color: var(--strong);
+}
+
+.event-reconstruction,
+.raw-events {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.event-story {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event-step {
+  display: grid;
+  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.event-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.event-meta strong {
+  color: var(--strong);
+  font-size: 13px;
+}
+
+.event-meta span,
+.event-meta time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.event-step p {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.raw-filter {
+  max-width: 360px;
+}
+
+.raw-event-list {
+  display: grid;
+  gap: 8px;
+}
+
+.raw-event {
+  display: grid;
+  grid-template-columns: 170px 90px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.raw-event strong {
+  color: var(--strong);
+}
+
+.raw-event span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.raw-event code {
+  min-width: 0;
+  color: var(--text);
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  overflow-wrap: anywhere;
 }
 
 .setup-band {
@@ -555,6 +686,8 @@ button {
   .panel-grid,
   .overview-grid,
   .exception-list,
+  .event-step,
+  .raw-event,
   .setup-grid,
   .provider-settings,
   .section-band {

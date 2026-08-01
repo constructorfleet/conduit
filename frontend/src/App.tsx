@@ -5,6 +5,7 @@ import {
   CircleAlert,
   CircleCheck,
   KeyRound,
+  ListFilter,
   Network,
   Plus,
   Radio,
@@ -17,6 +18,11 @@ import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
+import {
+  eventEnvelopeFixtures,
+  type EventEnvelope,
+  type Event,
+} from "./contracts/events";
 import type {
   OperatorStatusSnapshot,
   PipelineStatus,
@@ -62,10 +68,17 @@ interface PipelineEdgeDraft {
 
 interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
+  initialEvents?: readonly EventEnvelope[];
+  initialEventPosture?: EventStreamPosture;
   onPipelineSaved?: (graph: PipelineGraphDraft) => void;
 }
 
-function App({ initialSnapshot, onPipelineSaved }: AppProps = {}) {
+function App({
+  initialSnapshot,
+  initialEvents,
+  initialEventPosture,
+  onPipelineSaved,
+}: AppProps = {}) {
   const [access, setAccess] = useState<OperatorAccess>(() =>
     loadOperatorAccess(),
   );
@@ -79,6 +92,8 @@ function App({ initialSnapshot, onPipelineSaved }: AppProps = {}) {
     <OperatorWorkspace
       access={access}
       activeSection={activeSection}
+      initialEvents={initialEvents}
+      initialEventPosture={initialEventPosture}
       initialSnapshot={initialSnapshot}
       onPipelineSaved={onPipelineSaved}
       onSectionChange={setActiveSection}
@@ -167,6 +182,8 @@ function OperatorAccessScreen({
 function OperatorWorkspace({
   access,
   activeSection,
+  initialEvents,
+  initialEventPosture,
   initialSnapshot,
   onPipelineSaved,
   onSectionChange,
@@ -174,6 +191,8 @@ function OperatorWorkspace({
 }: {
   access: OperatorAccess;
   activeSection: SectionId;
+  initialEvents?: readonly EventEnvelope[];
+  initialEventPosture?: EventStreamPosture;
   initialSnapshot?: OperatorStatusSnapshot;
   onPipelineSaved?: (graph: PipelineGraphDraft) => void;
   onSectionChange: (section: SectionId) => void;
@@ -189,7 +208,12 @@ function OperatorWorkspace({
     [access, initialSnapshot],
   );
   const [snapshot, setSnapshot] = useState(snapshotClient.snapshot);
-  const eventPlan = useMemo(() => initialEventStreamPlan(), []);
+  const eventPlan = useMemo(() => {
+    const plan = initialEventStreamPlan();
+    return initialEventPosture
+      ? { ...plan, posture: initialEventPosture }
+      : plan;
+  }, [initialEventPosture]);
   const firstRun = snapshot?.runtime.launch_state === "first_run_setup";
   const accessLabel =
     access.mode === "anonymous"
@@ -266,8 +290,10 @@ function OperatorWorkspace({
 
         <SectionPanel
           section={activeSection}
+          events={initialEvents ?? eventEnvelopeFixtures}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
+          onSectionChange={onSectionChange}
           onPipelineSaved={(graph) => {
             onPipelineSaved?.(graph);
             setSnapshot((current) => promoteSavedPipeline(current, graph));
@@ -281,13 +307,17 @@ function OperatorWorkspace({
 
 function SectionPanel({
   section,
+  events,
   snapshot,
   eventPosture,
+  onSectionChange,
   onPipelineSaved,
 }: {
   section: SectionId;
+  events: readonly EventEnvelope[];
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
+  onSectionChange: (section: SectionId) => void;
   onPipelineSaved: (graph: PipelineGraphDraft) => void;
 }) {
   if (snapshot?.runtime.launch_state === "first_run_setup") {
@@ -295,13 +325,22 @@ function SectionPanel({
   }
 
   if (section === "overview") {
-    return <OverviewPanel snapshot={snapshot} eventPosture={eventPosture} />;
+    return (
+      <OverviewPanel
+        snapshot={snapshot}
+        eventPosture={eventPosture}
+        onOpenFailureEvents={() => onSectionChange("events")}
+      />
+    );
   }
 
-  const content: Record<Exclude<SectionId, "overview">, string[]> = {
+  if (section === "events") {
+    return <EventsPanel events={events} eventPosture={eventPosture} />;
+  }
+
+  const content: Record<Exclude<SectionId, "overview" | "events">, string[]> = {
     pipelines: ["Guided Setup", "Graph Editor", "Validation"],
     providers: ["Provider Settings", "Reachability", "Real turn proof"],
-    events: ["Turn Reconstruction", "Raw stream"],
     settings: ["Operator Access", "Deployment", "Snapshot plus events"],
   };
 
@@ -314,6 +353,284 @@ function SectionPanel({
         </div>
       ))}
     </div>
+  );
+}
+
+function EventsPanel({
+  events,
+  eventPosture,
+}: {
+  events: readonly EventEnvelope[];
+  eventPosture: EventStreamPosture;
+}) {
+  const [activeView, setActiveView] = useState<"story" | "raw">("story");
+  const [filter, setFilter] = useState("");
+  const turn = useMemo(() => reconstructTurn(events), [events]);
+  const rawEvents = useMemo(
+    () => filterRawEvents(events, filter),
+    [events, filter],
+  );
+  const stale = eventPosture === "stale" || eventPosture === "disconnected";
+
+  return (
+    <div className="events-stack">
+      {stale ? <EventStaleBanner /> : null}
+
+      <div className="events-tabs" role="tablist" aria-label="Events views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "story"}
+          className={activeView === "story" ? "selected" : ""}
+          onClick={() => setActiveView("story")}
+        >
+          <Workflow size={16} aria-hidden="true" />
+          Turn Reconstruction
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "raw"}
+          className={activeView === "raw" ? "selected" : ""}
+          onClick={() => setActiveView("raw")}
+        >
+          <ListFilter size={16} aria-hidden="true" />
+          Raw stream
+        </button>
+      </div>
+
+      {activeView === "story" ? (
+        <section className="event-reconstruction" aria-labelledby="turn-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">
+                {turn.pipeline} / {turn.conversation}
+              </p>
+              <h2 id="turn-title">Turn Reconstruction</h2>
+            </div>
+            <StatusPill
+              label="Turn"
+              value={turn.status}
+              tone={turn.status === "failed" ? "caution" : "neutral"}
+            />
+          </div>
+
+          <ol className="event-story">
+            {turn.steps.map((step) => (
+              <li className="event-step" key={step.id}>
+                <div className="event-meta">
+                  <strong>{step.type}</strong>
+                  <span>{step.component}</span>
+                  <time dateTime={step.at}>{formatTime(step.at)}</time>
+                </div>
+                {step.detail ? <p>{step.detail}</p> : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : (
+        <section className="raw-events" aria-labelledby="raw-events-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Secondary inspection</p>
+              <h2 id="raw-events-title">Raw stream</h2>
+            </div>
+            <StatusPill
+              label="Visible"
+              value={rawEvents.length.toString()}
+              tone="neutral"
+            />
+          </div>
+
+          <label className="field raw-filter">
+            <span>Filter events</span>
+            <input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          </label>
+
+          <div className="raw-event-list">
+            {rawEvents.map((envelope) => (
+              <article className="raw-event" key={envelope.id}>
+                <strong>{envelope.event.type}</strong>
+                <span>{formatTime(envelope.at)}</span>
+                <code>{JSON.stringify(envelope.event)}</code>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function EventStaleBanner() {
+  return (
+    <section className="stale-banner" aria-label="Stale state">
+      <CircleAlert size={18} aria-hidden="true" />
+      <div>
+        <strong>Stale state</strong>
+        <span>Last known event stream remains visible</span>
+      </div>
+      <span className="mini-badge">Reconnect refresh required</span>
+    </section>
+  );
+}
+
+type TurnStatus = "completed" | "failed" | "cancelled" | "running";
+
+interface ReconstructedTurn {
+  conversation: string;
+  pipeline: string;
+  status: TurnStatus;
+  steps: ReconstructedStep[];
+}
+
+interface ReconstructedStep {
+  id: string;
+  at: string;
+  type: Event["type"];
+  component: string;
+  detail: string | null;
+}
+
+function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
+  const ordered = [...events].sort((left, right) =>
+    left.at.localeCompare(right.at),
+  );
+  const steps = ordered.map((envelope) => ({
+    id: envelope.id,
+    at: envelope.at,
+    type: envelope.event.type,
+    component: eventComponent(envelope.event),
+    detail: eventDetail(envelope.event),
+  }));
+
+  return {
+    conversation:
+      ordered.find((envelope) => envelope.conversation)?.conversation ??
+      "unknown conversation",
+    pipeline:
+      ordered.find((envelope) => envelope.pipeline)?.pipeline ??
+      "unknown pipeline",
+    status: turnStatus(ordered),
+    steps,
+  };
+}
+
+function turnStatus(events: readonly EventEnvelope[]): TurnStatus {
+  if (events.some((envelope) => envelope.event.type === "StageFailed")) {
+    return "failed";
+  }
+  if (events.some((envelope) => envelope.event.type === "ToolFailed")) {
+    return "failed";
+  }
+  if (
+    events.some((envelope) => envelope.event.type === "ConversationCancelled")
+  ) {
+    return "cancelled";
+  }
+  if (
+    events.some((envelope) => envelope.event.type === "ConversationCompleted")
+  ) {
+    return "completed";
+  }
+  return "running";
+}
+
+function eventComponent(event: Event): string {
+  switch (event.type) {
+    case "WakeWordDetected":
+    case "WakeWordRejected":
+    case "AudioStarted":
+    case "AudioChunkReceived":
+    case "AudioFinished":
+      return "capture";
+    case "SpeechPartial":
+    case "SpeechFinal":
+    case "SpeakerIdentified":
+      return "transcription";
+    case "ConversationStarted":
+    case "TurnStarted":
+    case "ConversationCancelled":
+    case "ConversationCompleted":
+      return "conversation";
+    case "LlmRequestStarted":
+    case "LlmToken":
+    case "LlmFinished":
+      return "reasoning";
+    case "ToolRequested":
+    case "ToolStarted":
+    case "ToolConfirmationRequested":
+    case "ToolCompleted":
+    case "ToolFailed":
+      return "tools";
+    case "TtsStarted":
+    case "AudioStreaming":
+    case "TtsFinished":
+      return "synthesis";
+    case "StageFailed":
+      return event.node;
+  }
+}
+
+function eventDetail(event: Event): string | null {
+  switch (event.type) {
+    case "WakeWordDetected":
+    case "WakeWordRejected":
+      return `${event.phrase} (${Math.round(event.confidence * 100)}%)`;
+    case "AudioStarted":
+      return `${event.format.encoding}, ${event.format.sample_rate} Hz, ${event.format.channels} channel`;
+    case "AudioChunkReceived":
+    case "AudioStreaming":
+      return `sequence ${event.sequence}, ${event.bytes} bytes`;
+    case "AudioFinished":
+    case "TtsFinished":
+      return `${event.duration_ms} ms`;
+    case "SpeechPartial":
+    case "SpeechFinal":
+      return event.text;
+    case "SpeakerIdentified":
+      return event.speaker ?? "unknown speaker";
+    case "TurnStarted":
+      return event.turn;
+    case "ConversationCancelled":
+      return event.reason;
+    case "LlmRequestStarted":
+      return event.model;
+    case "LlmToken":
+      return event.delta;
+    case "LlmFinished":
+      return event.reason;
+    case "ToolRequested":
+      return event.name;
+    case "ToolStarted":
+    case "ToolCompleted":
+      return event.call;
+    case "ToolConfirmationRequested":
+      return event.prompt;
+    case "ToolFailed":
+    case "StageFailed":
+      return event.error;
+    case "ConversationStarted":
+    case "ConversationCompleted":
+    case "TtsStarted":
+      return "boundary";
+  }
+}
+
+function filterRawEvents(
+  events: readonly EventEnvelope[],
+  filter: string,
+): readonly EventEnvelope[] {
+  const needle = filter.trim().toLowerCase();
+  if (!needle) {
+    return events;
+  }
+
+  return events.filter((envelope) =>
+    JSON.stringify(envelope).toLowerCase().includes(needle),
   );
 }
 
@@ -444,9 +761,11 @@ function GuidedSetupPanel({
 export function OverviewPanel({
   snapshot,
   eventPosture,
+  onOpenFailureEvents,
 }: {
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
+  onOpenFailureEvents?: () => void;
 }) {
   if (!snapshot) {
     return (
@@ -500,10 +819,15 @@ export function OverviewPanel({
               <FailureItem
                 key={`${failure.pipeline}-${failure.at}`}
                 failure={failure}
+                onOpenEvents={onOpenFailureEvents}
               />
             ))}
             {unhealthyPipelines.map((pipeline) => (
-              <PipelineException key={pipeline.name} pipeline={pipeline} />
+              <PipelineException
+                key={pipeline.name}
+                pipeline={pipeline}
+                onOpenEvents={onOpenFailureEvents}
+              />
             ))}
             {providerWarnings.map((provider) => (
               <ProviderWarning key={provider.id} provider={provider} />
@@ -632,7 +956,13 @@ function StaleBanner({ snapshot }: { snapshot: OperatorStatusSnapshot }) {
   );
 }
 
-function FailureItem({ failure }: { failure: RuntimeFailure }) {
+function FailureItem({
+  failure,
+  onOpenEvents,
+}: {
+  failure: RuntimeFailure;
+  onOpenEvents?: () => void;
+}) {
   return (
     <article className="exception-item critical">
       <CircleAlert size={17} aria-hidden="true" />
@@ -643,12 +973,24 @@ function FailureItem({ failure }: { failure: RuntimeFailure }) {
           {failure.component}
           {failure.provider ? ` / ${failure.provider}` : ""}
         </span>
+        {failure.turn && onOpenEvents ? (
+          <button className="link-action" type="button" onClick={onOpenEvents}>
+            <Radio size={15} aria-hidden="true" />
+            Open turn events
+          </button>
+        ) : null}
       </div>
     </article>
   );
 }
 
-function PipelineException({ pipeline }: { pipeline: PipelineStatus }) {
+function PipelineException({
+  pipeline,
+  onOpenEvents,
+}: {
+  pipeline: PipelineStatus;
+  onOpenEvents?: () => void;
+}) {
   const affected = pipeline.components.filter((component) =>
     ["degraded", "unhealthy", "not_configured"].includes(component.state),
   );
@@ -664,6 +1006,12 @@ function PipelineException({ pipeline }: { pipeline: PipelineStatus }) {
             ? affected.map((component) => component.kind).join(", ")
             : pipeline.health.state}
         </span>
+        {pipeline.health.last_failed_turn && onOpenEvents ? (
+          <button className="link-action" type="button" onClick={onOpenEvents}>
+            <Radio size={15} aria-hidden="true" />
+            Open turn events
+          </button>
+        ) : null}
       </div>
     </article>
   );
