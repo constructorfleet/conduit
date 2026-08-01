@@ -470,6 +470,42 @@ describe("First-Run Guided Setup", () => {
     expect(screen.getByText("kitchen")).toBeInTheDocument();
     expect(screen.getByText("mic -> stt")).toBeInTheDocument();
   });
+
+  it("leaves First-Run Setup after reload when the pipeline API has a saved graph but status is stale", async () => {
+    const user = userEvent.setup();
+    mockOperatorApi({
+      snapshot: firstRunSnapshot(),
+      pipelineViews: [],
+      updateSnapshotOnPipelineSave: false,
+    });
+    const firstLoad = render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.type(screen.getByLabelText("Pipeline name"), "kitchen");
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument();
+
+    firstLoad.unmount();
+    render(<App />);
+
+    expect(
+      await screen.findByLabelText("Operator Console sections"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First-Run Setup" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByText("kitchen")).toBeInTheDocument();
+    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+  });
 });
 
 describe("Events turn reconstruction", () => {
@@ -1022,9 +1058,11 @@ function liveApiSnapshot(): OperatorStatusSnapshot {
 function mockOperatorApi({
   snapshot = snapshotFixture(),
   pipelineViews = [pipelineView()],
+  updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
   pipelineViews?: PipelineView[];
+  updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
   const pipelines = new Map(
@@ -1055,7 +1093,12 @@ function mockOperatorApi({
             order: graph.nodes.map((node) => node.id),
           };
           pipelines.set(name, view);
-          currentSnapshot = snapshotWithStoredPipeline(currentSnapshot, graph);
+          if (updateSnapshotOnPipelineSave) {
+            currentSnapshot = snapshotWithStoredPipeline(
+              currentSnapshot,
+              graph,
+            );
+          }
           return jsonResponse(view);
         }
 
