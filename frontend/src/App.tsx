@@ -7,10 +7,14 @@ import {
   KeyRound,
   ListFilter,
   Network,
+  Play,
   Plus,
   Radio,
+  RotateCcw,
+  Save,
   Settings,
-  SlidersHorizontal,
+  ShieldCheck,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import {
@@ -32,7 +36,9 @@ import {
 import type {
   OperatorStatusSnapshot,
   PipelineStatus,
+  ProviderKind,
   ProviderStatus,
+  ProviderStatusState,
   RuntimeFailure,
 } from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
@@ -417,23 +423,391 @@ function SectionPanel({
     );
   }
 
-  const content: Record<
-    Exclude<SectionId, "overview" | "events" | "pipelines">,
-    string[]
-  > = {
-    providers: ["Provider Settings", "Reachability", "Real turn proof"],
-    settings: ["Operator Access", "Deployment", "Snapshot plus events"],
-  };
+  if (section === "providers") {
+    return (
+      <ProvidersPanel
+        pipelineViews={pipelineViews}
+        providers={snapshot?.providers ?? []}
+      />
+    );
+  }
+
+  return <SettingsPanel pipelineViews={pipelineViews} access={snapshot} />;
+}
+
+type ProviderFilter = "all" | ProviderKind;
+
+interface ProviderOverride {
+  state?: ProviderStatusState;
+  reachable?: boolean;
+  message?: string;
+  fallbackSelected?: boolean;
+}
+
+function ProvidersPanel({
+  pipelineViews,
+  providers,
+}: {
+  pipelineViews: readonly PipelineView[];
+  providers: readonly ProviderStatus[];
+}) {
+  const [filter, setFilter] = useState<ProviderFilter>("all");
+  const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
+    {},
+  );
+  const visibleProviders = providers
+    .map((provider) => ({ ...provider, ...overrides[provider.id] }))
+    .filter((provider) => filter === "all" || provider.kind === filter);
+  const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
+  const referencedProviderCount = new Set(
+    pipelineViews.flatMap((view) =>
+      view.graph.nodes.map((node) => node.provider),
+    ),
+  ).size;
+
+  function testProvider(provider: ProviderStatus) {
+    setOverrides((current) => ({
+      ...current,
+      [provider.id]: {
+        ...current[provider.id],
+        state: "reachable",
+        reachable: true,
+        message: "Reachability check passed",
+      },
+    }));
+  }
+
+  function selectFallback(provider: ProviderStatus) {
+    setOverrides((current) => ({
+      ...current,
+      [provider.id]: {
+        ...current[provider.id],
+        fallbackSelected: true,
+        message: "Local fallback is selected",
+      },
+    }));
+  }
 
   return (
-    <div className="section-band">
-      {content[section].map((item) => (
-        <div className="surface" key={item}>
-          <SlidersHorizontal size={18} aria-hidden="true" />
-          <span>{item}</span>
-        </div>
-      ))}
+    <div className="providers-stack">
+      <section className="summary-grid" aria-label="Provider summary">
+        <MetricTile
+          label="Visible providers"
+          value={`${visibleProviders.length} visible`}
+        />
+        <MetricTile
+          label="Snapshot providers"
+          value={providers.length.toString()}
+        />
+        <MetricTile
+          label="Referenced by graphs"
+          value={referencedProviderCount.toString()}
+        />
+        <MetricTile
+          label="Warnings"
+          value={providers
+            .filter((provider) => provider.state !== "proven")
+            .length.toString()}
+        />
+      </section>
+
+      <div
+        className="segmented-control"
+        role="toolbar"
+        aria-label="Provider stage filter"
+      >
+        {providerKinds.map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            className={filter === kind ? "selected" : ""}
+            onClick={() => setFilter(kind)}
+          >
+            {kind === "all" ? "All" : kind.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      <section className="provider-card-grid" aria-label="Provider cards">
+        {visibleProviders.map((provider) => (
+          <article
+            className={`provider-card ${provider.state}`}
+            key={provider.id}
+          >
+            <div className="provider-card-header">
+              <span className="provider-kind">
+                {provider.kind.toUpperCase()}
+              </span>
+              <StatusPill
+                label="Status"
+                value={provider.state}
+                tone={provider.state === "proven" ? "neutral" : "caution"}
+              />
+            </div>
+            <h2>{provider.id}</h2>
+            <p>{provider.message ?? "Provider has real turn proof"}</p>
+
+            <div className="provider-facts">
+              <div>
+                <span>Configured</span>
+                <strong>{provider.configured ? "yes" : "no"}</strong>
+              </div>
+              <div>
+                <span>Reachable</span>
+                <strong>{provider.reachable ? "yes" : "no"}</strong>
+              </div>
+              <div>
+                <span>Pipelines</span>
+                <strong>
+                  {provider.affects_pipelines.join(", ") || "none"}
+                </strong>
+              </div>
+            </div>
+
+            <div className="provider-actions">
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => testProvider(provider)}
+              >
+                <Play size={17} aria-hidden="true" />
+                Test {provider.id}
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => selectFallback(provider)}
+              >
+                <RotateCcw size={17} aria-hidden="true" />
+                Use fallback
+              </button>
+            </div>
+
+            {overrides[provider.id]?.fallbackSelected ? (
+              <p className="panel-notice">
+                Fallback selected for {provider.id}
+              </p>
+            ) : null}
+          </article>
+        ))}
+        {visibleProviders.length === 0 ? (
+          <div className="overview-empty" role="status">
+            <Boxes size={18} aria-hidden="true" />
+            <span>No providers match this stage filter</span>
+          </div>
+        ) : null}
+      </section>
     </div>
+  );
+}
+
+function SettingsPanel({
+  pipelineViews,
+  access,
+}: {
+  pipelineViews: readonly PipelineView[];
+  access: OperatorStatusSnapshot | null;
+}) {
+  const [deploymentName, setDeploymentName] = useState("conduit-local");
+  const [localOnly, setLocalOnly] = useState(true);
+  const [defaultPipeline, setDefaultPipeline] = useState(
+    pipelineViews[0]?.graph.name ?? access?.pipelines[0]?.name ?? "default",
+  );
+  const [retention, setRetention] = useState("30 d");
+  const [logLevel, setLogLevel] = useState("info");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const retentionOptions = ["7 d", "30 d", "90 d", "forever"];
+
+  function saveSettings() {
+    setNotice(`Settings saved for ${deploymentName.trim() || "conduit-local"}`);
+  }
+
+  function resetLocalState() {
+    if (resetConfirmation !== "RESET") {
+      setNotice("Type RESET to confirm");
+      return;
+    }
+
+    setDeploymentName("conduit-local");
+    setLocalOnly(true);
+    setDefaultPipeline(pipelineViews[0]?.graph.name ?? "default");
+    setRetention("30 d");
+    setLogLevel("info");
+    setResetOpen(false);
+    setResetConfirmation("");
+    setNotice("Local console state reset");
+  }
+
+  return (
+    <div className="settings-stack">
+      <section className="settings-identity">
+        <ShieldCheck size={28} aria-hidden="true" />
+        <div>
+          <p className="eyebrow">Frontend-only console settings</p>
+          <h2>{deploymentName || "conduit-local"}</h2>
+          <p>
+            Snapshot{" "}
+            {access?.generated_at
+              ? formatTime(access.generated_at)
+              : "unavailable"}{" "}
+            / default pipeline {defaultPipeline}
+          </p>
+        </div>
+        <StatusPill
+          label="Network"
+          value={localOnly ? "local-only" : "outbound allowed"}
+          tone="neutral"
+        />
+      </section>
+
+      <section className="settings-card" aria-labelledby="settings-identity">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Deployment</p>
+            <h2 id="settings-identity">Identity</h2>
+          </div>
+          <button
+            className="primary-action"
+            type="button"
+            onClick={saveSettings}
+          >
+            <Save size={17} aria-hidden="true" />
+            Save settings
+          </button>
+        </div>
+
+        <div className="settings-grid">
+          <label className="field">
+            <span>Deployment name</span>
+            <input
+              value={deploymentName}
+              onChange={(event) => setDeploymentName(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Default pipeline</span>
+            <select
+              value={defaultPipeline}
+              onChange={(event) => setDefaultPipeline(event.target.value)}
+            >
+              {pipelineViews.length > 0 ? (
+                pipelineViews.map((view) => (
+                  <option key={view.graph.name} value={view.graph.name}>
+                    {view.graph.name}
+                  </option>
+                ))
+              ) : (
+                <option value={defaultPipeline}>{defaultPipeline}</option>
+              )}
+            </select>
+          </label>
+          <label className="toggle-row">
+            <span>
+              <strong>Local-only mode</strong>
+              <small>Block outbound provider calls in local UI policy.</small>
+            </span>
+            <input
+              aria-label="Local-only mode"
+              type="checkbox"
+              checked={localOnly}
+              onChange={(event) => setLocalOnly(event.target.checked)}
+            />
+          </label>
+          <label className="field">
+            <span>Log level</span>
+            <select
+              aria-label="Log level"
+              value={logLevel}
+              onChange={(event) => setLogLevel(event.target.value)}
+            >
+              {["debug", "info", "warn", "error"].map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="settings-card" aria-labelledby="retention-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Turn data</p>
+            <h2 id="retention-title">Retention</h2>
+          </div>
+          <StatusPill label="Current" value={retention} tone="neutral" />
+        </div>
+        <div
+          className="segmented-control"
+          role="toolbar"
+          aria-label="Retention"
+        >
+          {retentionOptions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={retention === option}
+              className={retention === option ? "selected" : ""}
+              onClick={() => setRetention(option)}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section
+        className="settings-card danger-zone"
+        aria-labelledby="danger-title"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Local browser state</p>
+            <h2 id="danger-title">Danger Zone</h2>
+          </div>
+          <button
+            className="danger-action"
+            type="button"
+            onClick={() => setResetOpen(true)}
+          >
+            <Trash2 size={17} aria-hidden="true" />
+            Reset local state
+          </button>
+        </div>
+        {resetOpen ? (
+          <div className="reset-confirmation">
+            <label className="field">
+              <span>Reset confirmation</span>
+              <input
+                value={resetConfirmation}
+                onChange={(event) => setResetConfirmation(event.target.value)}
+              />
+            </label>
+            <button
+              className="danger-action"
+              type="button"
+              onClick={resetLocalState}
+            >
+              Confirm reset
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      {notice ? <p className="panel-notice">{notice}</p> : null}
+    </div>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <article className="metric-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
   );
 }
 
@@ -495,6 +869,40 @@ function EventsPanel({
               tone={turn.status === "failed" ? "caution" : "neutral"}
             />
           </div>
+
+          <section className="stage-timeline" aria-labelledby="stage-title">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Visual grouping</p>
+                <h3 id="stage-title">Stage Timeline</h3>
+              </div>
+              <StatusPill
+                label="Stages"
+                value={turn.groups.length.toString()}
+                tone="neutral"
+              />
+            </div>
+            <div className="stage-track">
+              {turn.groups.map((group) => (
+                <article
+                  aria-label={`${group.component} stage`}
+                  className={`stage-group ${group.status}`}
+                  key={group.component}
+                  role="group"
+                >
+                  <div className="stage-group-header">
+                    <strong>{displayStageComponent(group.component)}</strong>
+                    <span>{group.durationLabel}</span>
+                  </div>
+                  <div className="stage-event-chips">
+                    {group.steps.map((step) => (
+                      <span key={step.id}>{displayEventType(step.type)}</span>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
 
           <ol className="event-story">
             {turn.steps.map((step) => (
@@ -569,9 +977,11 @@ function PipelinesPanel({
   const [draft, setDraft] = useState<PipelineGraph | null>(
     selectedView ? cloneGraph(selectedView.graph) : null,
   );
+  const [history, setHistory] = useState<PipelineGraph[]>([]);
   const [validation, setValidation] = useState<PipelineValidationResult | null>(
     null,
   );
+  const [notice, setNotice] = useState<string | null>(null);
   const selectedHealth = snapshot?.pipelines.find(
     (pipeline) => pipeline.name === selectedView?.graph.name,
   );
@@ -579,23 +989,91 @@ function PipelinesPanel({
   function selectPipeline(view: PipelineView) {
     setSelectedName(view.graph.name);
     setDraft(cloneGraph(view.graph));
+    setHistory([]);
     setValidation(null);
+    setNotice(null);
   }
 
-  function addToolNode() {
-    if (!draft || draft.nodes.some((node) => node.id === "confirm")) {
+  function applyDraftEdit(edit: (graph: PipelineGraph) => PipelineGraph) {
+    if (!draft) {
       return;
     }
 
-    setDraft({
-      ...draft,
-      nodes: [
-        ...draft.nodes,
-        { id: "confirm", kind: "tool", provider: "builtin.confirm" },
-      ],
-      edges: [...draft.edges, { from: "llm", to: "confirm" }],
-    });
+    setHistory((current) => [...current, cloneGraph(draft)]);
+    setDraft(edit(cloneGraph(draft)));
     setValidation(null);
+    setNotice(null);
+  }
+
+  function addNodeAfter({
+    id,
+    kind,
+    provider,
+    from,
+    to,
+  }: {
+    id: string;
+    kind: PipelineNodeKind;
+    provider: string;
+    from: string;
+    to?: string;
+  }) {
+    applyDraftEdit((graph) => {
+      if (graph.nodes.some((node) => node.id === id)) {
+        return graph;
+      }
+
+      const edges = graph.edges.filter(
+        (edge) => !(to && edge.from === from && edge.to === to),
+      );
+      return {
+        ...graph,
+        nodes: [...graph.nodes, { id, kind, provider }],
+        edges: [...edges, { from, to: id }, ...(to ? [{ from: id, to }] : [])],
+      };
+    });
+  }
+
+  function addToolNode() {
+    addNodeAfter({
+      id: "confirm",
+      kind: "tool",
+      provider: "builtin.confirm",
+      from: "llm",
+      to: "tts",
+    });
+  }
+
+  function addMemoryNode() {
+    addNodeAfter({
+      id: "memory",
+      kind: "memory",
+      provider: "builtin.memory",
+      from: "stt",
+      to: "llm",
+    });
+  }
+
+  function addFallbackTts() {
+    addNodeAfter({
+      id: "tts_fallback",
+      kind: "tts",
+      provider: "system-tts",
+      from: "llm",
+      to: "speaker",
+    });
+  }
+
+  function undoLastEdit() {
+    const previous = history.at(-1);
+    if (!previous) {
+      return;
+    }
+
+    setDraft(previous);
+    setHistory((current) => current.slice(0, -1));
+    setValidation(null);
+    setNotice(null);
   }
 
   function validateDraft() {
@@ -612,6 +1090,12 @@ function PipelinesPanel({
     }
 
     onPipelineStored(draft, validation.order);
+    setHistory([]);
+    setNotice(`Saved graph for ${draft.name}`);
+  }
+
+  function runTestTurn() {
+    setNotice(`Test turn queued for ${draft?.name ?? selectedName}`);
   }
 
   if (!draft || !selectedView) {
@@ -642,6 +1126,11 @@ function PipelinesPanel({
             </button>
           ))}
         </div>
+        {history.length > 0 ? (
+          <span className="edit-badge">
+            {history.length} unsaved {history.length === 1 ? "edit" : "edits"}
+          </span>
+        ) : null}
       </section>
 
       {readOnly ? (
@@ -707,10 +1196,43 @@ function PipelinesPanel({
               <button
                 className="secondary-action"
                 type="button"
+                disabled={history.length === 0}
+                onClick={undoLastEdit}
+              >
+                <RotateCcw size={17} aria-hidden="true" />
+                Undo last edit
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
                 onClick={addToolNode}
               >
                 <Plus size={17} aria-hidden="true" />
                 Add tool node
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={addMemoryNode}
+              >
+                <Plus size={17} aria-hidden="true" />
+                Add memory node
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={addFallbackTts}
+              >
+                <Plus size={17} aria-hidden="true" />
+                Add fallback TTS
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={runTestTurn}
+              >
+                <Play size={17} aria-hidden="true" />
+                Run test turn
               </button>
               <button
                 className="secondary-action"
@@ -726,11 +1248,13 @@ function PipelinesPanel({
                 disabled={validation?.ok !== true}
                 onClick={saveDraft}
               >
-                <Workflow size={17} aria-hidden="true" />
+                <Save size={17} aria-hidden="true" />
                 Save Graph
               </button>
             </div>
           ) : null}
+
+          {notice ? <p className="panel-notice">{notice}</p> : null}
 
           {validation ? (
             <p className={validation.ok ? "validation-ok" : "form-error"}>
@@ -762,6 +1286,14 @@ interface ReconstructedTurn {
   conversation: string;
   pipeline: string;
   status: TurnStatus;
+  groups: ReconstructedGroup[];
+  steps: ReconstructedStep[];
+}
+
+interface ReconstructedGroup {
+  component: string;
+  durationLabel: string;
+  status: "ok" | "failed" | "running";
   steps: ReconstructedStep[];
 }
 
@@ -793,8 +1325,41 @@ function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
       ordered.find((envelope) => envelope.pipeline)?.pipeline ??
       "unknown pipeline",
     status: turnStatus(ordered),
+    groups: groupTurnSteps(steps),
     steps,
   };
+}
+
+function groupTurnSteps(
+  steps: readonly ReconstructedStep[],
+): ReconstructedGroup[] {
+  const groups = new Map<string, ReconstructedStep[]>();
+  for (const step of steps) {
+    groups.set(step.component, [...(groups.get(step.component) ?? []), step]);
+  }
+
+  return Array.from(groups.entries()).map(([component, groupedSteps]) => {
+    const failed = groupedSteps.some(
+      (step) => step.type === "StageFailed" || step.type === "ToolFailed",
+    );
+    return {
+      component,
+      durationLabel: durationLabel(groupedSteps),
+      status: failed ? "failed" : "ok",
+      steps: groupedSteps,
+    };
+  });
+}
+
+function durationLabel(steps: readonly ReconstructedStep[]): string {
+  const first = Date.parse(steps[0]?.at ?? "");
+  const last = Date.parse(steps.at(-1)?.at ?? "");
+  if (!Number.isFinite(first) || !Number.isFinite(last)) {
+    return `${steps.length} events`;
+  }
+
+  const seconds = Math.max(0, (last - first) / 1000);
+  return seconds === 0 ? "instant" : `${seconds.toFixed(1)}s`;
 }
 
 function turnStatus(events: readonly EventEnvelope[]): TurnStatus {
@@ -896,6 +1461,23 @@ function eventDetail(event: Event): string | null {
     case "TtsStarted":
       return "boundary";
   }
+}
+
+function displayEventType(type: Event["type"]): string {
+  return type.replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function displayStageComponent(component: string): string {
+  return [
+    "capture",
+    "transcription",
+    "conversation",
+    "reasoning",
+    "tools",
+    "synthesis",
+  ].includes(component)
+    ? component
+    : `node: ${component}`;
 }
 
 function filterRawEvents(
