@@ -220,6 +220,63 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
+        PipelineComponentDescriptor {
+            id: "openai.transcription",
+            label: "OpenAI Transcription",
+            kind: NodeKind::Stt,
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("model", string_property(None, None)),
+                    ("stream", boolean_property()),
+                ]),
+                required: vec!["model"],
+            },
+        },
+        PipelineComponentDescriptor {
+            id: "openai.speech",
+            label: "OpenAI Speech",
+            kind: NodeKind::Tts,
+            schema: ComponentConfigSchema {
+    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("model", string_property(None, None)),
+                ]),
+                required: vec!["model"],
+            },
+        },
+        PipelineComponentDescriptor {
+            id: "mcp.sse",
+            label: "MCP SSE",
+            kind: NodeKind::Tool,
+            schema: ComponentConfigSchema {
+                properties: properties([(
+                    "url",
+                    string_property(Some(ComponentConfigFormat::Url), None),
+                )]),
+                required: vec!["url"],
+            },
+        },
+        PipelineComponentDescriptor {
+            id: "mcp.streamable_http",
+            label: "MCP Streamable HTTP",
+            kind: NodeKind::Tool,
+            schema: ComponentConfigSchema {
+                properties: properties([(
+                    "url",
+                    string_property(Some(ComponentConfigFormat::Url), None),
+                )]),
+                required: vec!["url"],
+            },
+        },
+        PipelineComponentDescriptor {
+            id: "mcp.stdio",
+            label: "MCP STDIO",
+            kind: NodeKind::Tool,
+            schema: ComponentConfigSchema {
+                properties: properties([("command", string_property(None, None))]),
+                required: vec!["command"],
+            },
+        },
     ]
 }
 
