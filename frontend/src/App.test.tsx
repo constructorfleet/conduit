@@ -306,8 +306,39 @@ describe("First-Run Guided Setup", () => {
       screen.getByRole("heading", { name: "First-Run Setup" }),
     ).toBeInTheDocument();
     expect(
+      screen.queryByLabelText("Operator Console sections"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("tab", { name: "Overview" }),
+    ).not.toBeInTheDocument();
+    expect(
       screen.getByRole("heading", { name: "Guided Setup" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps stored but unusable pipelines out of full-screen First-Run Setup", async () => {
+    const user = userEvent.setup();
+    mockOperatorApi({
+      snapshot: storedButNotUsableSnapshot(),
+      pipelineViews: [pipelineView()],
+    });
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+
+    expect(
+      await screen.findByLabelText("Operator Console sections"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "First-Run Setup" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByText("kitchen")).toBeInTheDocument();
+    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
   });
 
   it("invokes inline Provider Settings and allows optional tool setup to be skipped", async () => {
@@ -1052,6 +1083,29 @@ function firstRunSnapshot(): OperatorStatusSnapshot {
     recently_active: [],
     recent_window_seconds: 300,
   };
+  return snapshot;
+}
+
+function storedButNotUsableSnapshot(): OperatorStatusSnapshot {
+  const snapshot = snapshotWithStoredPipeline(
+    firstRunSnapshot(),
+    pipelineView().graph,
+  );
+  snapshot.runtime.launch_state = "first_run_setup";
+  snapshot.pipelines = snapshot.pipelines.map((pipeline) => ({
+    ...pipeline,
+    usable: false,
+    health: {
+      state: "not_runnable",
+      summary: "pipeline is not runnable",
+      last_successful_turn: null,
+      last_failed_turn: null,
+    },
+    components: pipeline.components.map((component) => ({
+      ...component,
+      state: component.kind === "tools" ? "unused" : "unproven",
+    })),
+  }));
   return snapshot;
 }
 

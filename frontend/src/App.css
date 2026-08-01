@@ -1,4 +1,5 @@
 .access-screen,
+.first-run-shell,
 .workspace-shell {
   min-height: 100svh;
 }
@@ -17,6 +18,27 @@
   padding: 28px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.first-run-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 24px;
+  padding: 24px;
+  background: var(--app-bg);
+}
+
+.first-run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.first-run-shell .guided-setup {
+  align-self: start;
+  width: min(100%, 860px);
+  margin: 0 auto;
 }
 
 .brand-block,

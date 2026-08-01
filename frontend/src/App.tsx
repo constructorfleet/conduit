@@ -251,13 +251,34 @@ function OperatorWorkspace({
       ? { ...plan, posture: initialEventPosture }
       : plan;
   }, [initialEventPosture]);
-  const firstRun = snapshot?.runtime.launch_state === "first_run_setup";
+  const hasStoredPipeline =
+    pipelineViews.length > 0 || (snapshot?.pipelines.length ?? 0) > 0;
+  const firstRun =
+    snapshot?.runtime.launch_state === "first_run_setup" && !hasStoredPipeline;
   const accessLabel =
     access.mode === "anonymous"
       ? "Anonymous operator access"
       : access.mode === "bearer" && access.persisted
         ? "Remembered management token"
         : "Session management token";
+
+  async function savePipeline(graph: PipelineGraph) {
+    const view = await snapshotClient.savePipeline(graph);
+    onPipelineSaved?.(view.graph);
+    setPipelineViews((current) =>
+      upsertPipelineView(current, view.graph, view.order),
+    );
+    setSnapshot((current) => promoteSavedPipeline(current, view.graph));
+    onSectionChange("overview");
+  }
+
+  async function storePipelineGraph(graph: PipelineGraph) {
+    const view = await snapshotClient.savePipeline(graph);
+    onPipelineSaved?.(view.graph);
+    setPipelineViews((current) =>
+      upsertPipelineView(current, view.graph, view.order),
+    );
+  }
 
   useEffect(() => {
     if (access.mode === "none" || initialSnapshot) {
@@ -312,6 +333,30 @@ function OperatorWorkspace({
       cancelled = true;
     };
   }, [access.mode, initialPipelineViews, initialSnapshot, snapshotClient]);
+
+  if (firstRun) {
+    return (
+      <main className="first-run-shell">
+        <header className="first-run-header">
+          <div className="rail-brand">
+            <img src={conduitLogo} alt="Conduit" />
+            <div>
+              <p>Conduit</p>
+              <strong>Operator Console</strong>
+            </div>
+          </div>
+          <div>
+            <p className="eyebrow">{accessLabel}</p>
+            <h1>First-Run Setup</h1>
+          </div>
+          <button className="sign-out" type="button" onClick={onClearAccess}>
+            Clear access
+          </button>
+        </header>
+        <GuidedSetupPanel onPipelineSaved={savePipeline} />
+      </main>
+    );
+  }
 
   return (
     <main className="workspace-shell">
@@ -385,22 +430,7 @@ function OperatorWorkspace({
           loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
-          onPipelineSaved={async (graph) => {
-            const view = await snapshotClient.savePipeline(graph);
-            onPipelineSaved?.(graph);
-            setPipelineViews((current) =>
-              upsertPipelineView(current, view.graph, view.order),
-            );
-            setSnapshot((current) => promoteSavedPipeline(current, view.graph));
-            onSectionChange("overview");
-          }}
-          onPipelineStored={async (graph) => {
-            const view = await snapshotClient.savePipeline(graph);
-            onPipelineSaved?.(view.graph);
-            setPipelineViews((current) =>
-              upsertPipelineView(current, view.graph, view.order),
-            );
-          }}
+          onPipelineStored={storePipelineGraph}
         />
       </section>
     </main>
@@ -420,7 +450,6 @@ function SectionPanel({
   initialSmallScreen,
   loadError,
   onSectionChange,
-  onPipelineSaved,
   onPipelineStored,
   onPipelineValidate,
 }: {
@@ -432,7 +461,6 @@ function SectionPanel({
   initialSmallScreen: boolean;
   loadError: string | null;
   onSectionChange: (section: SectionId) => void;
-  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
@@ -443,10 +471,6 @@ function SectionPanel({
         <span>{loadError}</span>
       </div>
     );
-  }
-
-  if (snapshot?.runtime.launch_state === "first_run_setup") {
-    return <GuidedSetupPanel onPipelineSaved={onPipelineSaved} />;
   }
 
   if (section === "overview") {
