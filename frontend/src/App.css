@@ -408,6 +408,31 @@ button {
   padding: 14px;
 }
 
+.turn-context {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 4px;
+}
+
+.turn-context span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.turn-context span:first-child {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--strong);
+}
+
 .section-heading.compact {
   margin-bottom: 10px;
 }
@@ -463,7 +488,7 @@ button {
   flex-wrap: wrap;
 }
 
-.stage-event-chips span {
+.stage-event-chip {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
@@ -473,7 +498,19 @@ button {
   background: var(--surface);
   color: var(--text);
   font-size: 11px;
+  font-weight: 750;
   line-height: 1.2;
+}
+
+.stage-event-chip.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.stage-event-chip.selected {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .event-story {
@@ -490,6 +527,18 @@ button {
   gap: 12px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
+}
+
+.event-step.error {
+  border-color: var(--danger-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--danger-bg);
+}
+
+.event-step.selected {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .event-meta {
@@ -923,6 +972,13 @@ button {
   flex-wrap: wrap;
 }
 
+.reset-instructions {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .primary-action:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -999,6 +1055,19 @@ button {
 .exception-item.critical {
   border-color: var(--danger-border);
   background: var(--danger-bg);
+}
+
+.exception-item.warning {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.exception-item.critical > svg {
+  color: var(--danger);
+}
+
+.exception-item.warning > svg {
+  color: var(--warning-text);
 }
 
 .exception-item h3,
