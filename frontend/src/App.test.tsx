@@ -949,7 +949,7 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(await screen.findByText("confirm")).toBeInTheDocument();
-    expect(screen.getByLabelText("confirm to llm")).toBeInTheDocument();
+    expect(screen.getByLabelText("Move confirm augment")).toBeInTheDocument();
   });
 
   it("supports undo, test run, and multiple frontend-only node actions", async () => {
@@ -962,7 +962,7 @@ describe("Pipelines graph editor", () => {
 
     expect(screen.getByText("memory")).toBeInTheDocument();
     expect(screen.getByText("tts_fallback")).toBeInTheDocument();
-    expect(screen.getByLabelText("memory to llm")).toBeInTheDocument();
+    expect(screen.getByLabelText("Move memory augment")).toBeInTheDocument();
     expect(screen.getByText("2 unsaved edits")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo last edit" }));
@@ -998,6 +998,7 @@ describe("Pipelines graph editor", () => {
     );
     expect(memoryOrbital).toHaveAttribute("draggable", "false");
     expect(graph.querySelector(".atom-motion-particle")).toBeInTheDocument();
+    expect(graph.querySelector(".atom-spoke-link")).not.toBeInTheDocument();
     expect(
       graph.querySelector(".atom-orbitals.motion-enabled"),
     ).toBeInTheDocument();

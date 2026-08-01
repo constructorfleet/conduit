@@ -2678,15 +2678,11 @@ function PipelinesPanel({
                                     {
                                       "--orbit-x": `${position.x}px`,
                                       "--orbit-y": `${position.y}px`,
+                                      "--orbit-start-x": `${position.x}px`,
+                                      "--orbit-start-y": `${position.y}px`,
                                     } as CSSProperties
                                   }
                                 >
-                                  <span
-                                    className="atom-spoke-link"
-                                    aria-label={`${spoke.node.id} to ${node.id}`}
-                                  >
-                                    <ArrowRight size={14} aria-hidden="true" />
-                                  </span>
                                   {renderNodeCard({
                                     node: spoke.node,
                                     compact: true,

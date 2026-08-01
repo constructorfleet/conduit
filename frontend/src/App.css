@@ -797,8 +797,7 @@ button {
 }
 
 .atom-entry-link,
-.atom-flow-link,
-.atom-spoke-link {
+.atom-flow-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -891,21 +890,13 @@ button {
   position: absolute;
   inset: -104px -118px;
   z-index: 2;
-  transform-origin: center;
   pointer-events: none;
-}
-
-.atom-orbitals.motion-enabled {
-  animation: augment-orbit 10s linear infinite;
 }
 
 .atom-orbital {
   position: absolute;
   left: calc(50% + var(--orbit-x));
   top: calc(50% + var(--orbit-y));
-  display: flex;
-  align-items: center;
-  gap: 7px;
   transform: translate(-50%, -50%);
   pointer-events: auto;
   cursor: grab;
@@ -917,17 +908,8 @@ button {
   cursor: grabbing;
 }
 
-.atom-orbitals.motion-enabled .atom-orbital > * {
-  animation: augment-counter-orbit 10s linear infinite;
-}
-
-.atom-spoke-link {
-  width: 26px;
-  height: 26px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--accent-hover);
+.atom-orbitals.motion-enabled .atom-orbital {
+  animation: augment-orbit 10s linear infinite;
 }
 
 .atom-motion-particle {
@@ -1123,14 +1105,19 @@ button {
 }
 
 @keyframes augment-orbit {
-  to {
-    transform: rotate(360deg);
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg)
+      translate(var(--orbit-start-x), var(--orbit-start-y)) rotate(0deg);
   }
-}
 
-@keyframes augment-counter-orbit {
+  50% {
+    transform: translate(-50%, -50%) rotate(180deg)
+      translate(var(--orbit-start-x), var(--orbit-start-y)) rotate(-180deg);
+  }
+
   to {
-    transform: rotate(-360deg);
+    transform: translate(-50%, -50%) rotate(360deg)
+      translate(var(--orbit-start-x), var(--orbit-start-y)) rotate(-360deg);
   }
 }
 
