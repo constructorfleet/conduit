@@ -39,7 +39,7 @@ export function initialEventStreamPlan(): EventStreamPlan {
 
   return {
     route: "/v1/events",
-    posture: "disconnected",
+    posture: "live",
     refreshSnapshotAfterReconnect: true,
     snapshotEventTypes,
   };

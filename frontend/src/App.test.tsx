@@ -226,7 +226,7 @@ describe("Overview operations workspace", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(screen.getByText("Snapshot")).toBeInTheDocument();
-    expect(screen.getByText("live")).toBeInTheDocument();
+    expect(screen.getAllByText("live").length).toBeGreaterThan(0);
   });
 
   it("loads status and pipeline graph data from the API after access", async () => {
@@ -478,6 +478,19 @@ describe("Events turn reconstruction", () => {
     expect(screen.getByText("completed")).toBeInTheDocument();
   });
 
+  it("does not mark events stale before a stream has gone stale", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={successfulTurnEvents()} />);
+
+    await enterEventsSection(user);
+
+    expect(screen.queryByLabelText("Stale state")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Reconnect refresh required"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("completed")).toBeInTheDocument();
+  });
+
   it("keeps raw event filtering secondary to reconstruction", async () => {
     const user = userEvent.setup();
     render(<App initialEvents={successfulTurnEvents()} />);
@@ -616,15 +629,20 @@ describe("Providers workspace", () => {
     expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
   });
 
-  it("supports frontend-only provider reachability and fallback actions", async () => {
+  it("does not change provider status from local reachability actions", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Test piper-local" }));
 
-    expect(screen.getByText("Reachability check passed")).toBeInTheDocument();
-    expect(screen.getByText("reachable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Reachability checks require the provider API"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Reachability check passed"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("configured")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Use fallback" }));
     expect(

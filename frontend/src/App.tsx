@@ -40,7 +40,6 @@ import type {
   PipelineStatus,
   ProviderKind,
   ProviderStatus,
-  ProviderStatusState,
   RuntimeFailure,
 } from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
@@ -480,9 +479,6 @@ function SectionPanel({
 type ProviderFilter = "all" | ProviderKind;
 
 interface ProviderOverride {
-  state?: ProviderStatusState;
-  reachable?: boolean;
-  message?: string;
   fallbackSelected?: boolean;
 }
 
@@ -497,6 +493,9 @@ function ProvidersPanel({
   const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
     {},
   );
+  const [providerNotices, setProviderNotices] = useState<
+    Record<string, string>
+  >({});
   const visibleProviders = providers
     .map((provider) => ({ ...provider, ...overrides[provider.id] }))
     .filter((provider) => filter === "all" || provider.kind === filter);
@@ -508,14 +507,9 @@ function ProvidersPanel({
   ).size;
 
   function testProvider(provider: ProviderStatus) {
-    setOverrides((current) => ({
+    setProviderNotices((current) => ({
       ...current,
-      [provider.id]: {
-        ...current[provider.id],
-        state: "reachable",
-        reachable: true,
-        message: "Reachability check passed",
-      },
+      [provider.id]: "Reachability checks require the provider API",
     }));
   }
 
@@ -629,6 +623,9 @@ function ProvidersPanel({
               <p className="panel-notice">
                 Fallback selected for {provider.id}
               </p>
+            ) : null}
+            {providerNotices[provider.id] ? (
+              <p className="panel-notice">{providerNotices[provider.id]}</p>
             ) : null}
           </article>
         ))}
