@@ -40,6 +40,58 @@ fn providers() -> Providers {
     Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(EchoTts)
 }
 
+async fn store_valid_graph_provider_definitions(state: &AppState) {
+    call(
+        state,
+        put_json(
+            "/v1/providers/whisper",
+            serde_json::json!({
+                "id": "whisper",
+                "label": "Whisper",
+                "variant": {
+                    "type": "openai_stt",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "whisper-1"
+                }
+            }),
+        ),
+    )
+    .await;
+    call(
+        state,
+        put_json(
+            "/v1/providers/ollama",
+            serde_json::json!({
+                "id": "ollama",
+                "label": "Ollama",
+                "variant": {
+                    "type": "openai_llm",
+                    "base_url": "http://localhost:11434/v1",
+                    "models": ["llama3"]
+                }
+            }),
+        ),
+    )
+    .await;
+    call(
+        state,
+        put_json(
+            "/v1/providers/piper",
+            serde_json::json!({
+                "id": "piper",
+                "label": "Piper",
+                "variant": {
+                    "type": "openai_tts",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "tts-1",
+                    "voices": []
+                }
+            }),
+        ),
+    )
+    .await;
+}
+
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
     let response = router(state.clone()).oneshot(request).await.expect("router responds");
     let status = response.status();
@@ -169,6 +221,7 @@ async fn readiness_fails_when_the_store_cannot_be_read() {
 #[tokio::test]
 async fn storing_then_reading_a_pipeline_round_trips() {
     let state = AppState::new(EventBus::default());
+    store_valid_graph_provider_definitions(&state).await;
 
     let (status, body) = call(&state, put(&valid_graph())).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -186,6 +239,7 @@ async fn storing_then_reading_a_pipeline_round_trips() {
 #[tokio::test]
 async fn replacing_a_pipeline_returns_ok_not_created() {
     let state = AppState::new(EventBus::default());
+    store_valid_graph_provider_definitions(&state).await;
     call(&state, put(&valid_graph())).await;
 
     let (status, _) = call(&state, put(&valid_graph())).await;
@@ -195,6 +249,7 @@ async fn replacing_a_pipeline_returns_ok_not_created() {
 #[tokio::test]
 async fn replacing_a_pipeline_refuses_node_configuration_fields() {
     let state = AppState::new(EventBus::default());
+    store_valid_graph_provider_definitions(&state).await;
     let original = valid_graph();
     let (status, _) = call(&state, put(&original)).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -227,6 +282,56 @@ async fn invalid_graphs_are_rejected_and_not_stored() {
     assert_eq!(body["error"], "invalid");
     assert!(body["detail"].as_str().expect("detail").contains("nowhere"));
 
+    let (status, _) = call(&state, get("/v1/pipelines/kitchen")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn storing_a_pipeline_rejects_missing_provider_definitions_and_does_not_store() {
+    let state = AppState::new(EventBus::default());
+    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
+        "llm",
+        NodeKind::Llm,
+        "missing-openai",
+    ));
+
+    let (status, body) = call(&state, put(&graph)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().is_some_and(|detail| {
+        detail.contains("missing-openai") && detail.contains("provider definition")
+    }));
+    let (status, _) = call(&state, get("/v1/pipelines/kitchen")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn storing_a_pipeline_rejects_provider_definition_kind_mismatches_and_does_not_store() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
+        "tts",
+        NodeKind::Tts,
+        "openai-primary",
+    ));
+
+    let (status, body) = call(&state, put(&graph)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().is_some_and(|detail| {
+        detail.contains("openai-primary") && detail.contains("tts") && detail.contains("llm")
+    }));
     let (status, _) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -267,55 +372,7 @@ async fn pipeline_writes_have_a_request_body_limit() {
 #[tokio::test]
 async fn validate_checks_without_storing() {
     let state = AppState::new(EventBus::default());
-    call(
-        &state,
-        put_json(
-            "/v1/providers/whisper",
-            serde_json::json!({
-                "id": "whisper",
-                "label": "Whisper",
-                "variant": {
-                    "type": "openai_stt",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "whisper-1"
-                }
-            }),
-        ),
-    )
-    .await;
-    call(
-        &state,
-        put_json(
-            "/v1/providers/ollama",
-            serde_json::json!({
-                "id": "ollama",
-                "label": "Ollama",
-                "variant": {
-                    "type": "openai_llm",
-                    "base_url": "http://localhost:11434/v1",
-                    "models": ["llama3"]
-                }
-            }),
-        ),
-    )
-    .await;
-    call(
-        &state,
-        put_json(
-            "/v1/providers/piper",
-            serde_json::json!({
-                "id": "piper",
-                "label": "Piper",
-                "variant": {
-                    "type": "openai_tts",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "tts-1",
-                    "voices": []
-                }
-            }),
-        ),
-    )
-    .await;
+    store_valid_graph_provider_definitions(&state).await;
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -415,8 +472,7 @@ async fn test_turn_runs_the_stored_pipeline_through_real_providers() {
 #[tokio::test]
 async fn test_turn_refuses_to_pretend_when_no_runtime_providers_are_configured() {
     let state = AppState::new(EventBus::default());
-    let (status, _) = call(&state, put(&echo_graph())).await;
-    assert_eq!(status, StatusCode::CREATED);
+    state.put_pipeline("echo", echo_graph()).await.expect("stores fixture graph");
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/echo/test-turn")
@@ -840,6 +896,7 @@ async fn a_stored_pipeline_survives_a_restart() {
         std::sync::Arc::new(conduit_store::FileStore::open(&directory.0).await.expect("opens"));
 
     let before = AppState::with_store(EventBus::default(), store.clone());
+    store_valid_graph_provider_definitions(&before).await;
     let (status, _) = call(&before, put(&valid_graph())).await;
     assert_eq!(status, StatusCode::CREATED);
 

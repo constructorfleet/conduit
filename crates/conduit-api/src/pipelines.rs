@@ -179,6 +179,7 @@ pub async fn put(
     Path(name): Path<String>,
     JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<(StatusCode, Json<PipelineView>), ApiError> {
+    validate_provider_references(&state, &graph).await?;
     let view = view(graph.clone())?;
     let replaced = state.put_pipeline(&name, graph).await.map_err(store_failure)?;
     let status = if replaced { StatusCode::OK } else { StatusCode::CREATED };
@@ -297,13 +298,17 @@ async fn validate_provider_references(
         };
         let definition =
             state.provider_definition(&node.provider).await.map_err(store_failure)?;
-        let Some(definition) = definition else {
+        let actual = if let Some(definition) = definition {
+            Some(definition.capability())
+        } else {
+            runtime_provider_capability(state.providers().as_deref(), &node.provider)
+        };
+        let Some(actual) = actual else {
             return Err(ApiError::unprocessable(format!(
                 "provider definition `{}` is referenced by node `{}` but does not exist",
                 node.provider, node.id
             )));
         };
-        let actual = definition.capability();
         if actual != expected {
             return Err(ApiError::unprocessable(format!(
                 "provider definition `{}` is {} but node `{}` requires {}",
@@ -315,6 +320,24 @@ async fn validate_provider_references(
         }
     }
     Ok(())
+}
+
+fn runtime_provider_capability(
+    providers: Option<&conduit_runtime::Providers>,
+    id: &str,
+) -> Option<ProviderCapability> {
+    let providers = providers?;
+    if providers.stt().get(id).is_some() {
+        Some(ProviderCapability::Stt)
+    } else if providers.llm().get(id).is_some() {
+        Some(ProviderCapability::Llm)
+    } else if providers.tools().get(id).is_some() {
+        Some(ProviderCapability::Tool)
+    } else if providers.tts().get(id).is_some() {
+        Some(ProviderCapability::Tts)
+    } else {
+        None
+    }
 }
 
 fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
