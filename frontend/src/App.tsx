@@ -87,6 +87,7 @@ type PipelineValidator = (
   graph: PipelineGraph,
 ) => PipelineValidationResult | Promise<PipelineValidationResult>;
 type PipelineTester = (name: string) => Promise<string>;
+type ProviderTester = (providerId: string) => Promise<string>;
 
 interface PipelineEditorDraftState {
   draft: PipelineGraph;
@@ -350,7 +351,23 @@ function OperatorWorkspace({
     }`;
   }
 
-  async function refreshSnapshotFromApi() {
+  async function runProviderTest(providerId: string): Promise<string> {
+    const loadedSnapshot = await refreshSnapshotFromApi();
+    const provider = loadedSnapshot.providers.find(
+      (candidate) => candidate.id === providerId,
+    );
+    if (!provider) {
+      return `Provider ${providerId} is not in the latest status snapshot`;
+    }
+    if (provider.reachable) {
+      return `Provider ${provider.id} is reachable`;
+    }
+    return `Provider ${provider.id} is ${provider.state}${
+      provider.message ? `: ${provider.message}` : ""
+    }`;
+  }
+
+  async function refreshSnapshotFromApi(): Promise<OperatorStatusSnapshot> {
     const loadedSnapshot = await snapshotClient.loadSnapshot();
     setSnapshot(loadedSnapshot);
     setProviderDefinitions((current) =>
@@ -365,6 +382,7 @@ function OperatorWorkspace({
     );
     setSnapshotState("live");
     setLoadError(null);
+    return loadedSnapshot;
   }
 
   useEffect(() => {
@@ -577,6 +595,7 @@ function OperatorWorkspace({
               ))
           }
           onPipelineTest={onPipelineTest ?? runPipelineTest}
+          onProviderTest={runProviderTest}
           onProviderDefinitionsChange={setProviderDefinitions}
           onPipelineStored={storePipelineGraph}
         />
@@ -604,6 +623,7 @@ function SectionPanel({
   onPipelineStored,
   onPipelineValidate,
   onPipelineTest,
+  onProviderTest,
   onProviderDefinitionsChange,
 }: {
   section: SectionId;
@@ -620,6 +640,7 @@ function SectionPanel({
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
+  onProviderTest: ProviderTester;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   if (loadError) {
@@ -671,6 +692,7 @@ function SectionPanel({
         pipelineViews={pipelineViews}
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
+        onProviderTest={onProviderTest}
         onProviderDefinitionsChange={onProviderDefinitionsChange}
       />
     );
@@ -719,12 +741,14 @@ function ProvidersPanel({
   pipelineViews,
   providerDefinitions,
   providers,
+  onProviderTest,
   onProviderDefinitionsChange,
 }: {
   componentCatalog: PipelineComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
+  onProviderTest: ProviderTester;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   const [filter, setFilter] = useState<ProviderFilter>("all");
@@ -893,7 +917,16 @@ function ProvidersPanel({
     setAddProviderDialogOpen(true);
   }
 
-  function deleteProviderDefinition(providerId: string) {
+  function deleteProviderDefinition(provider: ProviderCardView) {
+    if (provider.status) {
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]: `Provider ${provider.id} is registered by the server; remove it from server configuration to delete it.`,
+      }));
+      return;
+    }
+
+    const providerId = provider.id;
     onProviderDefinitionsChange(
       providerDefinitions.filter((provider) => provider.id !== providerId),
     );
@@ -906,11 +939,22 @@ function ProvidersPanel({
     }));
   }
 
-  function testProvider(provider: ProviderStatus) {
-    setProviderNotices((current) => ({
-      ...current,
-      [provider.id]: "Reachability checks require the provider API",
-    }));
+  async function testProvider(provider: ProviderStatus) {
+    try {
+      const notice = await onProviderTest(provider.id);
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]: notice,
+      }));
+    } catch (caught) {
+      setProviderNotices((current) => ({
+        ...current,
+        [provider.id]:
+          caught instanceof Error
+            ? caught.message
+            : `Unable to test ${provider.id}`,
+      }));
+    }
   }
 
   return (
@@ -1000,7 +1044,7 @@ function ProvidersPanel({
                     className="icon-action danger"
                     type="button"
                     aria-label={`Delete ${provider.id}`}
-                    onClick={() => deleteProviderDefinition(provider.id)}
+                    onClick={() => deleteProviderDefinition(provider)}
                   >
                     <Trash2 size={17} aria-hidden="true" />
                   </button>

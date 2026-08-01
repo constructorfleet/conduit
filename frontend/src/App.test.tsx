@@ -1402,25 +1402,39 @@ describe("Providers workspace", () => {
     expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
   });
 
-  it("does not change provider status from local reachability actions", async () => {
+  it("refreshes provider status from the API when testing a provider", async () => {
     const user = userEvent.setup();
+    const refreshed = snapshotFixture();
+    refreshed.providers = refreshed.providers.map((provider) =>
+      provider.id === "piper-local"
+        ? {
+            ...provider,
+            state: "reachable",
+            reachable: true,
+            message: "provider health check passed",
+          }
+        : provider,
+    );
+    mockOperatorApi({ statusSnapshots: [snapshotFixture(), refreshed] });
     render(<App />);
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Test piper-local" }));
 
     expect(
-      screen.getByText("Reachability checks require the provider API"),
+      await screen.findByText("Provider piper-local is reachable"),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Reachability check passed"),
-    ).not.toBeInTheDocument();
     const piperCard = screen
       .getByRole("heading", { name: "piper-local" })
       .closest("article");
     expect(piperCard).not.toBeNull();
     expect(
-      within(piperCard as HTMLElement).getByText("configured"),
+      within(piperCard as HTMLElement).getByText("reachable"),
+    ).toBeInTheDocument();
+    expect(
+      within(piperCard as HTMLElement).getByText(
+        "provider health check passed",
+      ),
     ).toBeInTheDocument();
 
     expect(
@@ -1436,6 +1450,37 @@ describe("Providers workspace", () => {
         name: "Test piper-local",
       }),
     ).toHaveTextContent("Test");
+  });
+
+  it("does not fake-delete providers returned by backend status", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterProvidersSection(user);
+    const piperCard = screen
+      .getByRole("heading", { name: "piper-local" })
+      .closest("article");
+    expect(piperCard).not.toBeNull();
+
+    await user.click(
+      within(piperCard as HTMLElement).getByRole("button", {
+        name: "Delete piper-local",
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        "Provider piper-local is registered by the server; remove it from server configuration to delete it.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "piper-local" }),
+    ).toBeInTheDocument();
+    expect(
+      within(piperCard as HTMLElement).getByRole("button", {
+        name: "Delete piper-local",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1768,16 +1813,19 @@ function liveApiSnapshot(): OperatorStatusSnapshot {
 
 function mockOperatorApi({
   snapshot = snapshotFixture(),
+  statusSnapshots,
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
+  statusSnapshots?: OperatorStatusSnapshot[];
   pipelineViews?: PipelineView[];
   componentCatalog?: PipelineComponentCatalog;
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
+  const pendingStatusSnapshots = [...(statusSnapshots ?? [])];
   const pipelines = new Map(
     pipelineViews.map((view) => [view.graph.name, view] as const),
   );
@@ -1788,6 +1836,7 @@ function mockOperatorApi({
       const method = init?.method ?? "GET";
 
       if (route === "/v1/status" && method === "GET") {
+        currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
         return jsonResponse(currentSnapshot);
       }
 
