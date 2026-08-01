@@ -2,6 +2,8 @@ import {
   Activity,
   Bell,
   Boxes,
+  CircleAlert,
+  CircleCheck,
   KeyRound,
   Network,
   Radio,
@@ -9,12 +11,19 @@ import {
   SlidersHorizontal,
   Workflow,
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
+import type {
+  OperatorStatusSnapshot,
+  PipelineStatus,
+  ProviderStatus,
+  RuntimeFailure,
+} from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
+import type { EventStreamPosture } from "./eventStream";
 import {
   type OperatorAccess,
   clearOperatorAccess,
@@ -216,38 +225,27 @@ function OperatorWorkspace({
           </div>
         </header>
 
-        <SectionPanel section={activeSection} />
+        <SectionPanel
+          section={activeSection}
+          snapshot={snapshotClient.snapshot}
+          eventPosture={eventPlan.posture}
+        />
       </section>
     </main>
   );
 }
 
-function SectionPanel({ section }: { section: SectionId }) {
+function SectionPanel({
+  section,
+  snapshot,
+  eventPosture,
+}: {
+  section: SectionId;
+  snapshot: OperatorStatusSnapshot | null;
+  eventPosture: EventStreamPosture;
+}) {
   if (section === "overview") {
-    return (
-      <div className="panel-grid">
-        <StatusPanel
-          title="Pipeline Health"
-          value="No snapshot loaded"
-          icon={Bell}
-        />
-        <StatusPanel
-          title="Satellites"
-          value="Awaiting /v1/status"
-          icon={Radio}
-        />
-        <StatusPanel
-          title="Recent Failures"
-          value="None loaded"
-          icon={Activity}
-        />
-        <StatusPanel
-          title="Provider Status"
-          value="Pending snapshot"
-          icon={Boxes}
-        />
-      </div>
-    );
+    return <OverviewPanel snapshot={snapshot} eventPosture={eventPosture} />;
   }
 
   const content: Record<Exclude<SectionId, "overview">, string[]> = {
@@ -269,14 +267,260 @@ function SectionPanel({ section }: { section: SectionId }) {
   );
 }
 
+export function OverviewPanel({
+  snapshot,
+  eventPosture,
+}: {
+  snapshot: OperatorStatusSnapshot | null;
+  eventPosture: EventStreamPosture;
+}) {
+  if (!snapshot) {
+    return (
+      <div className="overview-empty" role="status">
+        <Bell size={18} aria-hidden="true" />
+        <span>Awaiting operator status snapshot</span>
+      </div>
+    );
+  }
+
+  const unhealthyPipelines = snapshot.pipelines.filter((pipeline) =>
+    ["degraded", "unhealthy", "not_runnable"].includes(pipeline.health.state),
+  );
+  const providerWarnings = snapshot.providers.filter(
+    (provider) => provider.state !== "proven",
+  );
+  const exceptions =
+    snapshot.recent_failures.length +
+    unhealthyPipelines.length +
+    providerWarnings.length;
+  const stale =
+    snapshot.runtime.stale_state === "stale" ||
+    eventPosture === "stale" ||
+    eventPosture === "disconnected";
+
+  return (
+    <div className="overview-stack">
+      {stale ? <StaleBanner snapshot={snapshot} /> : null}
+
+      <section className="exception-band" aria-labelledby="exceptions-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Exception-first</p>
+            <h2 id="exceptions-title">Current Exceptions</h2>
+          </div>
+          <StatusPill
+            label="Visible"
+            value={exceptions.toString()}
+            tone={exceptions > 0 ? "caution" : "neutral"}
+          />
+        </div>
+
+        {exceptions === 0 ? (
+          <div className="calm-state">
+            <CircleCheck size={18} aria-hidden="true" />
+            <span>No current exceptions</span>
+          </div>
+        ) : (
+          <div className="exception-list">
+            {snapshot.recent_failures.map((failure) => (
+              <FailureItem
+                key={`${failure.pipeline}-${failure.at}`}
+                failure={failure}
+              />
+            ))}
+            {unhealthyPipelines.map((pipeline) => (
+              <PipelineException key={pipeline.name} pipeline={pipeline} />
+            ))}
+            {providerWarnings.map((provider) => (
+              <ProviderWarning key={provider.id} provider={provider} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <div className="overview-grid">
+        <PipelineOverview pipelines={snapshot.pipelines} />
+        <SatelliteOverview snapshot={snapshot} />
+        <TurnOverview snapshot={snapshot} />
+        <ProviderOverview providers={snapshot.providers} />
+      </div>
+    </div>
+  );
+}
+
+function StaleBanner({ snapshot }: { snapshot: OperatorStatusSnapshot }) {
+  return (
+    <section className="stale-banner" aria-label="Stale state">
+      <CircleAlert size={18} aria-hidden="true" />
+      <div>
+        <strong>Stale state</strong>
+        <span>
+          Last known snapshot from {formatTime(snapshot.generated_at)} remains
+          visible
+        </span>
+      </div>
+      {snapshot.event_stream.refresh_snapshot_after_reconnect ? (
+        <span className="mini-badge">Reconnect refresh required</span>
+      ) : null}
+    </section>
+  );
+}
+
+function FailureItem({ failure }: { failure: RuntimeFailure }) {
+  return (
+    <article className="exception-item critical">
+      <CircleAlert size={17} aria-hidden="true" />
+      <div>
+        <h3>{failure.pipeline}</h3>
+        <p>{failure.message}</p>
+        <span>
+          {failure.component}
+          {failure.provider ? ` / ${failure.provider}` : ""}
+        </span>
+      </div>
+    </article>
+  );
+}
+
+function PipelineException({ pipeline }: { pipeline: PipelineStatus }) {
+  const affected = pipeline.components.filter((component) =>
+    ["degraded", "unhealthy", "not_configured"].includes(component.state),
+  );
+
+  return (
+    <article className="exception-item">
+      <Bell size={17} aria-hidden="true" />
+      <div>
+        <h3>{pipeline.name}</h3>
+        <p>{pipeline.health.summary}</p>
+        <span>
+          {affected.length > 0
+            ? affected.map((component) => component.kind).join(", ")
+            : pipeline.health.state}
+        </span>
+      </div>
+    </article>
+  );
+}
+
+function ProviderWarning({ provider }: { provider: ProviderStatus }) {
+  return (
+    <article className="exception-item">
+      <Boxes size={17} aria-hidden="true" />
+      <div>
+        <h3>{provider.id}</h3>
+        <p>{provider.message ?? provider.state}</p>
+        <span>{provider.affects_pipelines.join(", ") || provider.kind}</span>
+      </div>
+    </article>
+  );
+}
+
+function PipelineOverview({ pipelines }: { pipelines: PipelineStatus[] }) {
+  return (
+    <StatusPanel
+      title="Pipeline Health"
+      value={`${pipelines.length} tracked`}
+      icon={Bell}
+    >
+      <div className="compact-list">
+        {pipelines.map((pipeline) => (
+          <div className="metric-row" key={pipeline.name}>
+            <span>{pipeline.name}</span>
+            <strong className={`state-text ${pipeline.health.state}`}>
+              {pipeline.health.state}
+            </strong>
+          </div>
+        ))}
+      </div>
+    </StatusPanel>
+  );
+}
+
+function SatelliteOverview({ snapshot }: { snapshot: OperatorStatusSnapshot }) {
+  return (
+    <StatusPanel title="Satellites" value="Presence and activity" icon={Radio}>
+      <div className="split-list">
+        <div>
+          <h3>Connected Satellites</h3>
+          {snapshot.satellites.connected.map((satellite) => (
+            <p key={satellite.device}>{satellite.name}</p>
+          ))}
+          {snapshot.satellites.connected.length === 0 ? (
+            <p>None connected</p>
+          ) : null}
+        </div>
+        <div>
+          <h3>Recently Active Satellites</h3>
+          {snapshot.satellites.recently_active.map((satellite) => (
+            <p key={satellite.device}>
+              {satellite.name} / {satellite.last_event}
+            </p>
+          ))}
+          {snapshot.satellites.recently_active.length === 0 ? (
+            <p>No recent activity</p>
+          ) : null}
+        </div>
+      </div>
+    </StatusPanel>
+  );
+}
+
+function TurnOverview({ snapshot }: { snapshot: OperatorStatusSnapshot }) {
+  return (
+    <StatusPanel
+      title="Active Turns"
+      value={`${snapshot.active_turns.length} running`}
+      icon={Activity}
+    >
+      <div className="compact-list">
+        {snapshot.active_turns.map((turn) => (
+          <div className="metric-row" key={turn.turn}>
+            <span>{turn.pipeline}</span>
+            <strong>
+              {turn.invoked_components.length > 0
+                ? turn.invoked_components.join(", ")
+                : "started"}
+            </strong>
+          </div>
+        ))}
+        {snapshot.active_turns.length === 0 ? <p>No active turns</p> : null}
+      </div>
+    </StatusPanel>
+  );
+}
+
+function ProviderOverview({ providers }: { providers: ProviderStatus[] }) {
+  return (
+    <StatusPanel
+      title="Provider Status"
+      value={`${providers.length} configured`}
+      icon={Boxes}
+    >
+      <div className="compact-list">
+        {providers.map((provider) => (
+          <div className="metric-row" key={provider.id}>
+            <span>{provider.id}</span>
+            <strong className={`state-text ${provider.state}`}>
+              {provider.state}
+            </strong>
+          </div>
+        ))}
+      </div>
+    </StatusPanel>
+  );
+}
+
 function StatusPanel({
   title,
   value,
   icon: Icon,
+  children,
 }: {
   title: string;
   value: string;
   icon: typeof Activity;
+  children?: ReactNode;
 }) {
   return (
     <article className="status-panel">
@@ -284,9 +528,18 @@ function StatusPanel({
       <div>
         <h2>{title}</h2>
         <p>{value}</p>
+        {children}
       </div>
     </article>
   );
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }
 
 function StatusPill({

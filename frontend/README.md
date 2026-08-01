@@ -22,6 +22,12 @@ The app shell is organized around Overview, Pipelines, Providers, Events, and
 Settings. Runtime integration starts from `/v1/status` and then applies
 `/v1/events` updates after the snapshot is loaded.
 
+The Overview section is the Operations Workspace landing surface when a usable
+pipeline exists. It renders current exceptions before baseline status, keeps
+connected satellites separate from recently active satellites, preserves the
+last known snapshot as Stale State when the event stream disconnects, and
+expects a refreshed status snapshot before clearing stale state after reconnect.
+
 Generated TypeScript contracts and reviewable JSON fixtures live under
 `src/contracts`. Rust owns those artifacts. After an intentional API or event
 contract change, update them from the repository root with:

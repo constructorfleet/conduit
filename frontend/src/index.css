@@ -5,6 +5,8 @@
   --border-strong: #aeb9c3;
   --button-muted: #e8edf0;
   --danger: #a33a2d;
+  --danger-bg: #fff0ed;
+  --danger-border: #e1a095;
   --focus: #2c7a67;
   --input: #ffffff;
   --muted: #63717d;
@@ -12,10 +14,12 @@
   --selected: #dbe7ee;
   --shadow: 0 20px 60px rgba(31, 45, 61, 0.16);
   --strong: #17212b;
+  --success: #2c7a67;
   --surface: #ffffff;
   --text: #43515d;
   --warning-bg: #fff7df;
   --warning-border: #e8c76f;
+  --warning-text: #8a5c0a;
   color: var(--text);
   background: var(--app-bg);
   font-family:
