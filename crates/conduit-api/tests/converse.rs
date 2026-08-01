@@ -174,10 +174,7 @@ impl TextToSpeech for SlowTts {
 fn echo_graph() -> PipelineGraph {
     PipelineGraph::new("echo")
         .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "echo-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -200,10 +197,7 @@ fn silent_providers() -> Providers {
 fn recording_graph() -> PipelineGraph {
     PipelineGraph::new("recording")
         .with_node(Node::new("stt", NodeKind::Stt, "recording-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "echo-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "recording-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -563,10 +557,7 @@ async fn a_pipeline_the_runtime_cannot_execute_is_refused() {
         "unrunnable",
         PipelineGraph::new("unrunnable")
             .with_node(Node::new("stt", NodeKind::Stt, "nonexistent"))
-            .with_node(
-                Node::new("llm", NodeKind::Llm, "echo-llm")
-                    .with_config(serde_json::json!({ "model": "echo" })),
-            )
+            .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
             .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
             .with_edge(Edge::new("stt", "llm"))
             .with_edge(Edge::new("llm", "tts")),

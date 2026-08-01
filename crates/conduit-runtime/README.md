@@ -25,7 +25,7 @@ The graph model can describe more than the runtime currently runs. Today the
 runtime accepts:
 
 - one `stt` node
-- one `llm` node with a `model` in config
+- one `llm` node selecting a registered provider id
 - one `tts` node
 - any number of `tool` nodes downstream of the model
 - optional `source` and `sink` endpoint nodes

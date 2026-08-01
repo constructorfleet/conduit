@@ -21,7 +21,6 @@ export interface PipelineNode {
   id: IdString;
   kind: NodeKind;
   provider: string;
-  config?: unknown;
 }
 
 export interface PipelineEdge {

@@ -47,6 +47,7 @@ pub enum NodeKind {
 
 /// One stage in a pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     /// Author-chosen identifier, unique within the graph.
     pub id: NodeId,
@@ -54,23 +55,13 @@ pub struct Node {
     pub kind: NodeKind,
     /// Registered provider name, e.g. `"whisper"` or `"piper"`.
     pub provider: String,
-    /// Provider-specific configuration, validated by the provider itself.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub config: serde_json::Value,
 }
 
 impl Node {
-    /// Creates a node with empty configuration.
+    /// Creates a graph node that selects a registered provider by id.
     #[must_use]
     pub fn new(id: impl Into<NodeId>, kind: NodeKind, provider: impl Into<String>) -> Self {
-        Self { id: id.into(), kind, provider: provider.into(), config: serde_json::Value::Null }
-    }
-
-    /// Attaches provider configuration.
-    #[must_use]
-    pub fn with_config(mut self, config: serde_json::Value) -> Self {
-        self.config = config;
-        self
+        Self { id: id.into(), kind, provider: provider.into() }
     }
 }
 

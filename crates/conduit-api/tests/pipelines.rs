@@ -26,10 +26,7 @@ fn valid_graph() -> PipelineGraph {
 fn echo_graph() -> PipelineGraph {
     PipelineGraph::new("echo")
         .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "echo-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -130,38 +127,6 @@ async fn storing_then_reading_a_pipeline_round_trips() {
 }
 
 #[tokio::test]
-async fn inline_wyoming_tts_provider_config_with_model_alias_is_valid() {
-    let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "wyoming").with_config(serde_json::json!({
-            "url": "tcp://whisper.local:10300"
-        })))
-        .with_node(Node::new("llm", NodeKind::Llm, "openai.responses").with_config(
-            serde_json::json!({
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-5"
-            }),
-        ))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper").with_config(serde_json::json!({
-            "component": "wyoming",
-            "url": "tcp://10.0.10.100:10200",
-            "model": "en_US-ryan-high",
-            "streaming": true
-        })))
-        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
-        .with_edge(Edge::new("tts", "speaker"));
-
-    let (status, body) = call(&state, put(&graph)).await;
-
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["graph"]["nodes"][3]["provider"], "piper");
-}
-
-#[tokio::test]
 async fn replacing_a_pipeline_returns_ok_not_created() {
     let state = AppState::new(EventBus::default());
     call(&state, put(&valid_graph())).await;
@@ -171,33 +136,25 @@ async fn replacing_a_pipeline_returns_ok_not_created() {
 }
 
 #[tokio::test]
-async fn replacing_a_pipeline_refuses_invalid_component_configuration() {
+async fn replacing_a_pipeline_refuses_node_configuration_fields() {
     let state = AppState::new(EventBus::default());
     let original = valid_graph();
     let (status, _) = call(&state, put(&original)).await;
     assert_eq!(status, StatusCode::CREATED);
-    let invalid = PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "wyoming").with_config(serde_json::json!({
-            "url": "tcp://whisper.local:10300"
-        })))
-        .with_node(Node::new("llm", NodeKind::Llm, "openai.responses"))
-        .with_node(Node::new("tts", NodeKind::Tts, "wyoming.tts").with_config(
-            serde_json::json!({
-                "url": "tcp://piper.local:10200"
-            }),
-        ))
-        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
-        .with_edge(Edge::new("tts", "speaker"));
+    let mut invalid = serde_json::to_value(valid_graph()).expect("serialize");
+    invalid["nodes"][1]["config"] = serde_json::json!({ "url": "tcp://whisper.local:10300" });
+    let request = Request::builder()
+        .method("PUT")
+        .uri("/v1/pipelines/kitchen")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&invalid).expect("serialize")))
+        .expect("request");
 
-    let (status, body) = call(&state, put(&invalid)).await;
+    let (status, body) = call(&state, request).await;
 
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(body["error"], "invalid");
-    assert!(body["detail"].as_str().expect("detail").contains("base_url"));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "bad_request");
+    assert!(body["detail"].as_str().expect("detail").contains("config"));
     let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider);

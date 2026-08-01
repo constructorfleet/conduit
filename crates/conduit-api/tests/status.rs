@@ -203,10 +203,7 @@ fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::new("mic", NodeKind::Source, "websocket"))
         .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "echo-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -217,10 +214,7 @@ fn provider_status_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::new("mic", NodeKind::Source, "websocket"))
         .with_node(Node::new("stt", NodeKind::Stt, "configured-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "configured-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "configured-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "configured-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -407,6 +401,30 @@ async fn status_reports_unavailable_provider_slots_without_a_runtime_registry() 
 }
 
 #[tokio::test]
+async fn concrete_missing_provider_references_replace_generic_unavailable_slots() {
+    let graph = PipelineGraph::new("kitchen")
+        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
+        .with_node(Node::new("llm", NodeKind::Llm, "qwen3:8b"))
+        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+    let state = guarded();
+    let (status, body) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    assert!(providers.iter().any(|provider| provider["id"] == "whisper"));
+    assert!(providers.iter().any(|provider| provider["id"] == "qwen3:8b"));
+    assert!(providers.iter().any(|provider| provider["id"] == "piper"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "stt"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "llm"));
+    assert!(!providers.iter().any(|provider| provider["id"] == "tts"));
+}
+
+#[tokio::test]
 async fn configured_provider_does_not_become_reachable_from_saved_settings() {
     let state = with_status_providers(
         guarded(),
@@ -446,45 +464,6 @@ async fn reachable_provider_is_not_proven_until_a_real_turn_uses_it() {
     assert_eq!(tts["reachable"], true);
     assert_eq!(tts["proven_by_turn"], serde_json::Value::Null);
     assert_eq!(tts["affects_pipelines"], serde_json::json!(["kitchen"]));
-}
-
-#[tokio::test]
-async fn inline_wyoming_tts_provider_is_status_configured_not_missing() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let address = listener.local_addr().expect("address");
-    tokio::spawn(async move {
-        while let Ok((socket, _)) = listener.accept().await {
-            drop(socket);
-        }
-    });
-    let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::new("stt", NodeKind::Stt, "missing-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "missing-llm")
-                .with_config(serde_json::json!({ "model": "echo" })),
-        )
-        .with_node(Node::new("tts", NodeKind::Tts, "piper").with_config(serde_json::json!({
-            "component": "wyoming.tts",
-            "url": format!("tcp://{address}"),
-            "voice": "en_US-ryan-high"
-        })))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
-    let state = guarded();
-    let (status, body) = call(&state, put(&graph)).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
-
-    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
-
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let providers = body["providers"].as_array().expect("providers");
-    let piper = providers.iter().find(|provider| provider["id"] == "piper").unwrap();
-    assert_eq!(piper["kind"], "tts");
-    assert_eq!(piper["state"], "reachable");
-    assert_eq!(piper["configured"], true);
-    assert_eq!(piper["reachable"], true);
-    assert_eq!(piper["message"], serde_json::Value::Null);
-    assert_eq!(piper["affects_pipelines"], serde_json::json!(["kitchen"]));
 }
 
 #[tokio::test]

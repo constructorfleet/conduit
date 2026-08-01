@@ -23,10 +23,7 @@ fn linear_graph() -> PipelineGraph {
     PipelineGraph::new("test")
         .with_node(Node::new("mic", NodeKind::Source, "test"))
         .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(
-            Node::new("llm", NodeKind::Llm, "fake-llm")
-                .with_config(serde_json::json!({ "model": "fake-1" })),
-        )
+        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
         .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -150,7 +147,7 @@ async fn passes_the_transcript_to_the_model() {
 
     let requests = llm.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model, "fake-1");
+    assert_eq!(requests[0].model, "fake-llm");
     assert_eq!(requests[0].messages.last().expect("message").content, "what time is it");
 }
 
@@ -422,25 +419,6 @@ async fn rejects_stages_it_cannot_execute() {
 }
 
 #[tokio::test]
-async fn requires_a_model_on_the_language_model_node() {
-    let graph = PipelineGraph::new("test")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
-
-    let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![]))
-        .with_llm(FakeLlm::new(vec![]))
-        .with_tts(FakeTts::new());
-
-    let error = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect_err("a model must be configured");
-    assert!(matches!(error, Error::Config(message) if message.contains("model")));
-}
-
-#[tokio::test]
 async fn rejects_a_model_the_provider_does_not_serve() {
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -452,7 +430,7 @@ async fn rejects_a_model_the_provider_does_not_serve() {
     assert!(matches!(
         error,
         Error::Config(message)
-            if message.contains("fake-1")
+            if message.contains("fake-llm")
                 && message.contains("fake-llm")
                 && message.contains("real-model")
     ));

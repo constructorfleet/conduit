@@ -61,7 +61,7 @@ runnable runtime stages yet.
 
 Providers implement traits from `conduit-provider` and are registered by stable
 provider name. A graph node selects a provider by that name; provider-specific
-configuration lives in the node's `config` JSON value.
+configuration lives in provider registration, not in the pipeline graph.
 
 The runtime stores providers behind trait objects in registries. Dropping a
 returned stream is the cancellation mechanism for provider work that is no

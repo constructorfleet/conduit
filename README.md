@@ -496,10 +496,9 @@ many of them:
 | `OpenAiStt` | `/audio/transcriptions` | Speaches, `whisper.cpp`, `faster-whisper` |
 | `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper |
 
-The Operator Console can also embed a supported provider definition directly in
-a saved graph node. Today that path supports Wyoming TTS: a UI provider named
-`piper` with component `wyoming.tts`, `url=tcp://host:port`, and a voice becomes
-runnable when assigned to the pipeline's `tts` node.
+Pipeline graphs do not carry provider configuration. A graph node stores the
+stable provider id it selects; provider-specific settings belong to provider
+registration and the Providers page.
 
 Only the base URL changes:
 

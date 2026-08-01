@@ -16,8 +16,7 @@ rest of the workspace agrees on:
 ## Pipeline Graphs
 
 `PipelineGraph` is a data model, not executable code. It contains author-chosen
-node ids, node kinds, provider names, provider-specific JSON config, and
-directed edges.
+node ids, node kinds, provider names, and directed edges.
 
 Validation rejects:
 

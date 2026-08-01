@@ -82,22 +82,18 @@ The `conduit-api` crate enables PostgreSQL support by default. A
 | `CONDUIT_OPENAI_TTS_MODEL` | unset | Registers `OpenAiTts` using this speech model. |
 
 Setting `CONDUIT_OPENAI_BASE_URL` or `CONDUIT_OPENAI_API_KEY` registers an
-OpenAI-compatible language model provider. The language model node in the
-pipeline supplies the model name in node config.
+OpenAI-compatible language model provider. Pipeline graph nodes select
+registered providers by id; provider-specific settings are not stored in the
+graph.
 
 The service exposes `GET /v1/pipeline-components` so the Operator Console can
 render provider-specific configuration forms from component schemas. Operators
 configure provider instances with stable IDs on the Providers page, then select
 those IDs from pipeline nodes.
 
-Provider instance definitions are still stored by the Operator Console. When a
-supported inline provider is assigned to a pipeline node, the console embeds the
-runtime component and settings into that saved graph node so the server can
-construct the provider while preparing the pipeline. Wyoming TTS is currently
-supported this way: a node with provider id `piper` and config
-`component=wyoming.tts`, `url=tcp://host:port`, and optional `voice` resolves as
-a runnable TTS provider even when no process environment provider named `piper`
-was registered at startup. Unsupported provider components remain UI
+Provider instance definitions are still stored by the Operator Console.
+Pipeline graphs store only the selected provider id on each node; runtime
+component settings do not belong to graph nodes. Provider definitions remain UI
 definitions until Conduit grows a server-side provider store and runtime plugin
 loader.
 

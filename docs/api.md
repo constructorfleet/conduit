@@ -299,10 +299,9 @@ Errors:
 
 ### `PUT /v1/pipelines/{name}`
 
-Validates and stores a pipeline graph. Graph topology is always validated. When
-a node directly references a known component id from `/v1/pipeline-components`,
-its embedded `config` is also checked against that component schema before the
-existing stored graph is replaced.
+Validates and stores a pipeline graph. Graph topology is always validated before
+the existing stored graph is replaced. Graph nodes select providers by id; they
+do not embed provider configuration.
 
 Status:
 

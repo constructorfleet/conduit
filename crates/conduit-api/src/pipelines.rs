@@ -271,7 +271,6 @@ fn default_test_utterance() -> String {
 
 /// Validates `graph` and pairs it with its execution order.
 fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
-    validate_component_configs(&graph)?;
     let order = graph
         .topological_order()
         .map_err(|error| ApiError::unprocessable(error.to_string()))?
@@ -279,80 +278,6 @@ fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
         .map(|node| node.id.clone())
         .collect();
     Ok(PipelineView { graph, order })
-}
-
-fn validate_component_configs(graph: &PipelineGraph) -> Result<(), ApiError> {
-    let catalog = component_catalog();
-    for node in &graph.nodes {
-        let config_component = node.config.as_object().and_then(|config| {
-            config
-                .get("component")
-                .and_then(serde_json::Value::as_str)
-                .filter(|component| !component.is_empty())
-        });
-        let Some(component) = config_component
-            .and_then(|component_id| component_for_node_kind(&catalog, component_id, node.kind))
-            .or_else(|| component_for_node_kind(&catalog, &node.provider, node.kind))
-        else {
-            continue;
-        };
-        let config = match &node.config {
-            serde_json::Value::Null => serde_json::Map::new(),
-            serde_json::Value::Object(object) => object.clone(),
-            _ => {
-                return Err(ApiError::unprocessable(format!(
-                    "node `{}` configuration must be an object",
-                    node.id
-                )));
-            }
-        };
-        let missing = component
-            .schema
-            .required
-            .iter()
-            .copied()
-            .filter(|field| {
-                !config
-                    .get(*field)
-                    .is_some_and(|value| !value.as_str().is_some_and(str::is_empty))
-            })
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(ApiError::unprocessable(format!(
-                "node `{}` using component `{}` is missing required fields: {}",
-                node.id,
-                component.id,
-                missing.join(", ")
-            )));
-        }
-        for (field, property) in &component.schema.properties {
-            let Some(value) = config.get(*field) else {
-                continue;
-            };
-            let valid = match property.value_type {
-                ComponentConfigValueType::String => value.is_string(),
-                ComponentConfigValueType::Boolean => value.is_boolean(),
-            };
-            if !valid {
-                return Err(ApiError::unprocessable(format!(
-                    "node `{}` field `{field}` for component `{}` must be {}",
-                    node.id,
-                    component.id,
-                    property.value_type.name()
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-impl ComponentConfigValueType {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::String => "a string",
-            Self::Boolean => "a boolean",
-        }
-    }
 }
 
 /// Built-in component descriptors.
@@ -470,19 +395,6 @@ fn openai_llm_schema() -> ComponentConfigSchema {
         ]),
         required: vec!["base_url", "model"],
     }
-}
-
-fn component_for_node_kind<'a>(
-    catalog: &'a [PipelineComponentDescriptor],
-    component_id: &str,
-    kind: NodeKind,
-) -> Option<&'a PipelineComponentDescriptor> {
-    let normalized_id = if kind == NodeKind::Tts && component_id == "wyoming" {
-        "wyoming.tts"
-    } else {
-        component_id
-    };
-    catalog.iter().find(|component| component.id == normalized_id && component.kind == kind)
 }
 
 fn string_property(

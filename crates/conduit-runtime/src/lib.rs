@@ -32,7 +32,6 @@ pub mod sentences;
 pub mod stop;
 pub mod tools;
 mod turn;
-pub mod wyoming;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -230,8 +229,8 @@ impl Runner {
     /// # Errors
     ///
     /// Returns an error if the graph is invalid, names an unregistered
-    /// provider, is missing required node configuration, or has a topology
-    /// this runtime cannot execute. See [`Plan::resolve`].
+    /// provider, or has a topology this runtime cannot execute. See
+    /// [`Plan::resolve`].
     pub fn prepare(
         graph: &PipelineGraph,
         providers: &Providers,

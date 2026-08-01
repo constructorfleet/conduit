@@ -9,36 +9,14 @@ use conduit_provider::llm::{LanguageModel, ToolSpec};
 use conduit_provider::stt::SpeechToText;
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
-use serde::Deserialize;
 
-use crate::wyoming::wyoming_tts_from_node;
 use crate::Providers;
-
-/// Configuration read from a [`NodeKind::Llm`] node.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LlmConfig {
-    /// Model identifier passed through to the provider.
-    model: Option<String>,
-    /// System prompt prepended to every turn.
-    system: Option<String>,
-    /// Cap on model calls in one turn. See [`Plan::max_tool_rounds`].
-    max_tool_rounds: Option<usize>,
-}
 
 /// How many times a model may be called in one turn before the runtime stops.
 ///
 /// A model that keeps requesting tools would otherwise loop forever while the
 /// person who asked the question waits.
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
-
-/// Configuration read from a [`NodeKind::Tts`] node.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct TtsConfig {
-    /// Voice identifier, or the provider's default when absent.
-    voice: Option<String>,
-}
 
 /// The resolved providers and settings for one pipeline.
 ///
@@ -57,13 +35,13 @@ pub struct Plan {
     pub llm_node: String,
     /// Model identifier to request.
     pub model: String,
-    /// System prompt, when the node configured one.
+    /// System prompt attached by provider registry configuration, when present.
     pub system: Option<String>,
     /// Synthesizer.
     pub tts: Arc<dyn TextToSpeech>,
     /// Node id of the synthesizer.
     pub tts_node: String,
-    /// Voice to request, when the node configured one.
+    /// Voice to request from provider registry configuration, when present.
     pub voice: Option<String>,
     /// Tools offered to the model, keyed by the name it calls them by.
     ///
@@ -88,7 +66,7 @@ impl Plan {
     /// Returns [`Error::InvalidGraph`] if the graph is not executable at all,
     /// [`Error::UnknownProvider`] if a node names a provider that is not
     /// registered, and [`Error::Config`] if the topology is one the runtime
-    /// cannot execute yet or a node is missing required configuration.
+    /// cannot execute yet.
     pub fn resolve(graph: &PipelineGraph, providers: &Providers) -> Result<Self> {
         let mut stt = None;
         let mut llm = None;
@@ -107,19 +85,12 @@ impl Plan {
                 }
                 NodeKind::Llm => {
                     reject_duplicate(&llm, node)?;
-                    let config: LlmConfig = parse_config(node)?;
-                    let model = config.model.ok_or_else(|| {
-                        Error::Config(format!(
-                            "node `{}` needs a `model` in its configuration",
-                            node.id
-                        ))
-                    })?;
                     llm = Some((
                         providers.llm().require(&node.provider)?,
                         node.id.clone(),
-                        model,
-                        config.system,
-                        config.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS),
+                        node.provider.clone(),
+                        None,
+                        DEFAULT_MAX_TOOL_ROUNDS,
                     ));
                 }
                 NodeKind::Tool => {
@@ -136,12 +107,8 @@ impl Plan {
                 }
                 NodeKind::Tts => {
                     reject_duplicate(&tts, node)?;
-                    let config: TtsConfig = parse_config(node)?;
-                    let provider = providers
-                        .tts()
-                        .require(&node.provider)
-                        .or_else(|_| inline_wyoming_tts(node))?;
-                    tts = Some((provider, node.id.clone(), config.voice));
+                    let provider = providers.tts().require(&node.provider)?;
+                    tts = Some((provider, node.id.clone(), None));
                 }
                 // Explicitly refused rather than skipped. A router that is
                 // accepted and then ignored turns "send hard questions to the
@@ -214,12 +181,6 @@ impl Plan {
     }
 }
 
-fn inline_wyoming_tts(node: &Node) -> Result<Arc<dyn TextToSpeech>> {
-    wyoming_tts_from_node(node)?
-        .map(|provider| Arc::new(provider) as Arc<dyn TextToSpeech>)
-        .ok_or_else(|| Error::UnknownProvider(node.provider.clone()))
-}
-
 /// Rejects a second node of a kind the runtime can only run once.
 ///
 /// Tool branches can fan out, but capture, reasoning, and synthesis are still
@@ -250,16 +211,6 @@ fn require_downstream(graph: &PipelineGraph, upstream: &str, downstream: &str) -
         "node `{downstream}` is not downstream of `{upstream}`, but this runtime would \
          run it as though it were; add the edges the pipeline needs"
     )))
-}
-
-/// Reads a node's configuration into `T`.
-fn parse_config<T: Default + serde::de::DeserializeOwned>(node: &Node) -> Result<T> {
-    if node.config.is_null() {
-        return Ok(T::default());
-    }
-    serde_json::from_value(node.config.clone()).map_err(|error| {
-        Error::Config(format!("node `{}` has invalid configuration: {error}", node.id))
-    })
 }
 
 /// The name a node kind is written as in a graph.

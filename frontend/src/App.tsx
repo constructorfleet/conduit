@@ -458,12 +458,7 @@ function OperatorWorkspace({
         if (!initialPipelineViews) {
           const repairedPipelineViews = basePipelineViews.map((view) => ({
             ...view,
-            graph: normalizePipelineGraph(
-              hydrateGraphProviderDefinitions(
-                view.graph,
-                loadedProviderDefinitions,
-              ),
-            ),
+            graph: normalizePipelineGraph(view.graph),
           }));
           const changedViews = repairedPipelineViews.filter(
             (view, index) =>
@@ -2255,36 +2250,8 @@ function PipelinesPanel({
       setDraggingAugment(null);
       setDragPreviewPositions((current) => {
         const next = { ...current };
-        delete next[activeDrag.nodeId];
+        next[activeDrag.nodeId] = nextPosition;
         return next;
-      });
-      setDraftsByPipeline((current) => {
-        const currentState = current[selectedName];
-        if (!currentState) {
-          return current;
-        }
-
-        const previousDraft = cloneGraph(currentState.draft);
-        const nextDraft = {
-          ...previousDraft,
-          nodes: previousDraft.nodes.map((node) =>
-            node.id === activeDrag.nodeId
-              ? {
-                  ...node,
-                  config: withOrbitPosition(node.config, nextPosition),
-                }
-              : node,
-          ),
-        };
-        return {
-          ...current,
-          [nextDraft.name]: {
-            draft: nextDraft,
-            history: [...currentState.history, previousDraft],
-            validation: null,
-            notice: null,
-          },
-        };
       });
       activeDragPositionRef.current = null;
     }
@@ -2319,10 +2286,6 @@ function PipelinesPanel({
             id,
             kind,
             provider,
-            config: withOrbitPosition(
-              undefined,
-              nextAugmentOrbitPosition(graph, "llm"),
-            ),
           },
         ],
         edges: [...graph.edges, { from: id, to: "llm" }],
@@ -2350,19 +2313,9 @@ function PipelinesPanel({
         if (node.id !== nodeId) {
           return node;
         }
-        const definition = providerDefinitions.find(
-          (provider) => provider.id === providerId,
-        );
-
         return {
           ...node,
           provider: providerId,
-          config: definition
-            ? {
-                component: definition.component,
-                ...pruneEmptyConfig(definition.config),
-              }
-            : undefined,
         };
       }),
     }));
@@ -2476,20 +2429,11 @@ function PipelinesPanel({
 
     const id = uniqueNodeId(draft, kind);
     const provider = providerForCoreStage(kind);
-    const definition = providerDefinitions.find(
-      (candidate) => candidate.id === provider && candidate.kind === kind,
-    );
     applyDraftEdit((graph) =>
       insertLinearStageNode(graph, {
         id,
         kind,
         provider,
-        config: definition
-          ? {
-              component: definition.component,
-              ...pruneEmptyConfig(definition.config),
-            }
-          : undefined,
       }),
     );
   }
@@ -2522,9 +2466,7 @@ function PipelinesPanel({
     }
 
     try {
-      const hydratedDraft = normalizePipelineGraph(
-        hydrateGraphProviderDefinitions(draft, providerDefinitions),
-      );
+      const hydratedDraft = normalizePipelineGraph(draft);
       const result = await onPipelineValidate(hydratedDraft);
       updateCurrentDraftState((current) => ({
         ...current,
@@ -2545,9 +2487,7 @@ function PipelinesPanel({
     if (!draft || validation?.ok !== true) {
       return false;
     }
-    const hydratedDraft = normalizePipelineGraph(
-      hydrateGraphProviderDefinitions(draft, providerDefinitions),
-    );
+    const hydratedDraft = normalizePipelineGraph(draft);
 
     try {
       await onPipelineStored(hydratedDraft, validation.order);
@@ -2576,9 +2516,7 @@ function PipelinesPanel({
     }
 
     try {
-      const hydratedDraft = normalizePipelineGraph(
-        hydrateGraphProviderDefinitions(draft, providerDefinitions),
-      );
+      const hydratedDraft = normalizePipelineGraph(draft);
       const result = await onPipelineValidate(hydratedDraft);
       updateCurrentDraftState((current) => ({
         ...current,
@@ -3284,40 +3222,10 @@ function providerDefinitionsForNode(
       label: node.provider,
       kind: node.kind,
       component: node.provider,
-      config: nodeConfigObject(node.config),
+      config: {},
       source: "inferred",
     },
   ];
-}
-
-function hydrateGraphProviderDefinitions(
-  graph: PipelineGraph,
-  definitions: readonly ProviderDefinition[],
-): PipelineGraph {
-  const byId = new Map(
-    definitions.map((definition) => [definition.id, definition]),
-  );
-  return {
-    ...graph,
-    nodes: graph.nodes.map((node) => {
-      const definition = byId.get(node.provider);
-      if (!definition || definition.kind !== node.kind) {
-        return node;
-      }
-
-      return {
-        ...node,
-        config: {
-          ...nodeConfigObject(node.config),
-          component:
-            node.kind === "tts" && definition.component === "wyoming"
-              ? "wyoming.tts"
-              : definition.component,
-          ...pruneEmptyConfig(definition.config),
-        },
-      };
-    }),
-  };
 }
 
 function providerCardViews(
@@ -3437,7 +3345,7 @@ function defaultProviderDefinitions(
           label: node.provider,
           kind: node.kind,
           component: component?.id ?? node.provider,
-          config: nodeConfigObject(node.config),
+          config: {},
           source: "inferred",
         },
       ];
@@ -3550,12 +3458,6 @@ function pruneEmptyConfig(
   return Object.fromEntries(
     Object.entries(config).filter(([, value]) => value !== "" && value != null),
   );
-}
-
-function nodeConfigObject(config: unknown): Record<string, unknown> {
-  return config && typeof config === "object" && !Array.isArray(config)
-    ? { ...(config as Record<string, unknown>) }
-    : {};
 }
 
 function nodeKindForProviderKind(kind: ProviderKind): NodeKind {
@@ -4282,37 +4184,10 @@ function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
 }
 
 function orbitPositionForNode(
-  node: PipelineNode,
+  _node: PipelineNode,
   fallbackIndex: number,
 ): OrbitPosition {
-  const config = objectConfig(node.config);
-  const ui = objectConfig(config.ui);
-  const orbit = objectConfig(ui.orbit);
-  const x = typeof orbit.x === "number" ? orbit.x : undefined;
-  const y = typeof orbit.y === "number" ? orbit.y : undefined;
-  if (x !== undefined && y !== undefined) {
-    return { x, y };
-  }
-
   return defaultAugmentOrbitPosition(fallbackIndex);
-}
-
-function nextAugmentOrbitPosition(
-  graph: PipelineGraph,
-  targetId: string,
-): OrbitPosition {
-  const existingAugmentCount = graph.nodes.filter((node) => {
-    if (node.kind !== "tool" && node.kind !== "memory") {
-      return false;
-    }
-
-    return (
-      (graph.edges.find((edge) => edge.from === node.id)?.to ?? "llm") ===
-      targetId
-    );
-  }).length;
-
-  return defaultAugmentOrbitPosition(existingAugmentCount);
 }
 
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
@@ -4321,32 +4196,6 @@ function defaultAugmentOrbitPosition(index: number): OrbitPosition {
     x: Math.round(Math.cos(angle) * 175),
     y: Math.round(Math.sin(angle) * 175),
   };
-}
-
-function withOrbitPosition(
-  config: unknown,
-  position: OrbitPosition,
-): Record<string, unknown> {
-  const configObject = objectConfig(config);
-  const ui = objectConfig(configObject.ui);
-  return {
-    ...configObject,
-    ui: {
-      ...ui,
-      orbit: {
-        x: position.x,
-        y: position.y,
-      },
-    },
-  };
-}
-
-function objectConfig(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-
-  return {};
 }
 
 function clampOrbitCoordinate(value: number): number {

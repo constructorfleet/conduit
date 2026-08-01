@@ -1,10 +1,4 @@
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -840,16 +834,10 @@ describe("Pipelines graph editor", () => {
       id: "llm",
       kind: "llm",
       provider: "openai-fast",
-      config: {
-        component: "openai.completions",
-        base_url: "https://api.openai.com/v1",
-        model: "gpt.5",
-        streaming: true,
-      },
     });
   });
 
-  it("hydrates already-selected provider definitions before saving a graph", async () => {
+  it("does not copy already-selected provider definitions into saved graphs", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
     localStorage.setItem(
@@ -894,25 +882,17 @@ describe("Pipelines graph editor", () => {
       id: "llm",
       kind: "llm",
       provider: "openai-fast",
-      config: {
-        component: "openai.responses",
-        base_url: "https://api.openai.com/v1",
-        model: "gpt-5",
-        streaming: true,
-      },
     });
   });
 
-  it("repairs loaded graphs from browser provider definitions before status use", async () => {
+  it("does not repair loaded graphs by embedding browser provider definitions", async () => {
     const user = userEvent.setup();
     const staleView = {
       ...pipelineView(),
       graph: {
         ...pipelineView().graph,
         nodes: pipelineView().graph.nodes.map((node) =>
-          node.id === "tts"
-            ? { ...node, provider: "piper", config: undefined }
-            : node,
+          node.id === "tts" ? { ...node, provider: "piper" } : node,
         ),
       },
     };
@@ -932,36 +912,18 @@ describe("Pipelines graph editor", () => {
         },
       ]),
     );
-    const fetchMock = mockOperatorApi({ pipelineViews: [staleView] });
+    mockOperatorApi({ pipelineViews: [staleView] });
 
     render(<App />);
     await user.click(
       screen.getByRole("button", { name: "Use anonymous mode" }),
     );
 
-    await waitFor(() => {
-      const saveCall = fetchMock.mock.calls.find(([input, init]) => {
-        const url = input instanceof URL ? input : new URL(input.toString());
-        return (
-          url.pathname === "/v1/pipelines/kitchen" && init?.method === "PUT"
-        );
-      });
-      expect(saveCall).toBeDefined();
-      const graph = JSON.parse(
-        saveCall?.[1]?.body?.toString() ?? "{}",
-      ) as PipelineGraph;
-      expect(graph.nodes.find((node) => node.id === "tts")).toEqual({
-        id: "tts",
-        kind: "tts",
-        provider: "piper",
-        config: {
-          component: "wyoming.tts",
-          url: "tcp://10.0.10.100:10200",
-          model: "en_US-ryan-high",
-          streaming: true,
-        },
-      });
-    });
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(
+      screen.getByRole("group", { name: "tts synthesis" }),
+    ).toHaveTextContent("piper");
   });
 
   it("keeps saved OpenAI and Wyoming provider configuration over inferred defaults", async () => {
@@ -1645,11 +1607,10 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    const memoryConfig = savedGraphs[0]?.nodes.find(
-      (node) => node.id === "memory",
-    )?.config;
-    expect(memoryConfig).toMatchObject({
-      ui: { orbit: { x: 60, y: -125 } },
+    expect(savedGraphs[0]?.nodes.find((node) => node.id === "memory")).toEqual({
+      id: "memory",
+      kind: "memory",
+      provider: "builtin.memory",
     });
   });
 

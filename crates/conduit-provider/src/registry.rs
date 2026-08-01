@@ -58,8 +58,8 @@ impl<T: ?Sized> Registry<T> {
     /// Resolves an optional name against the registry, falling back to the
     /// default when `name` is `None`.
     ///
-    /// This is what node configuration uses: a graph may pin a provider or
-    /// leave the choice to the deployment.
+    /// This is what optional provider selection uses: callers may pin a
+    /// provider or leave the choice to the deployment.
     ///
     /// # Errors
     ///
