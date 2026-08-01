@@ -2360,8 +2360,12 @@ function PipelinesPanel({
   }
 
   function addMemoryNode() {
+    if (!draft) {
+      return;
+    }
+
     addReasoningAugment({
-      id: "memory",
+      id: uniqueNodeId(draft, "memory"),
       kind: "memory",
       provider: "builtin.memory",
     });

@@ -1169,6 +1169,42 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
   });
 
+  it("adds separate memory augments with unique graph node ids", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const memoryNodes =
+      savedGraphs[0]?.nodes.filter((node) => node.kind === "memory") ?? [];
+    expect(memoryNodes).toEqual([
+      expect.objectContaining({
+        id: "memory",
+        provider: "builtin.memory",
+      }),
+      expect.objectContaining({
+        id: "memory_2",
+        provider: "builtin.memory",
+      }),
+    ]);
+    expect(savedGraphs[0]?.edges).toEqual(
+      expect.arrayContaining([
+        { from: "memory", to: "llm" },
+        { from: "memory_2", to: "llm" },
+      ]),
+    );
+  });
+
   it("persists saved graph edits across reloads", async () => {
     const user = userEvent.setup();
     mockOperatorApi({
