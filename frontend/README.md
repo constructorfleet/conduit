@@ -28,6 +28,10 @@ rendered UI proves it is using the data client path.
 Set `VITE_CONDUIT_DATA_SOURCE=mock` to run the console against generated
 contract fixtures instead of live HTTP while developing the UI without a
 backend.
+In live mode, Vite proxies `/v1/*` requests to
+`VITE_CONDUIT_API_TARGET` or `http://127.0.0.1:8080` by default, so
+`npm run dev` can talk to a local `conduit-api` service without hardcoding an
+API origin into the browser bundle.
 
 The Overview section is the Operations Workspace landing surface when a usable
 pipeline exists. It renders current exceptions before baseline status, keeps

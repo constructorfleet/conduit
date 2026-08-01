@@ -1,9 +1,22 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+export const conduitApiTarget =
+  process.env.VITE_CONDUIT_API_TARGET ?? "http://127.0.0.1:8080";
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      "/v1": {
+        target: conduitApiTarget,
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/setupTests.ts",
