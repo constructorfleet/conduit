@@ -14,7 +14,10 @@ use conduit_core::graph::PipelineGraph;
 use conduit_provider::storage::PipelineStore;
 use conduit_store::{FileStore, MemoryStore};
 
-use conformance::{behaves_like_a_store, graph, UNUSABLE_NAMES};
+use conformance::{
+    behaves_like_a_store, graph, provider_definition, provider_definitions_behave_like_a_store,
+    UNUSABLE_NAMES,
+};
 
 /// A directory that cleans itself up.
 struct TempDir(PathBuf);
@@ -55,6 +58,18 @@ async fn the_file_store_behaves_like_a_store() {
 }
 
 #[tokio::test]
+async fn the_memory_store_behaves_like_a_provider_definition_store() {
+    provider_definitions_behave_like_a_store(Arc::new(MemoryStore::new())).await;
+}
+
+#[tokio::test]
+async fn the_file_store_behaves_like_a_provider_definition_store() {
+    let directory = TempDir::new("provider-contract");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    provider_definitions_behave_like_a_store(Arc::new(store)).await;
+}
+
+#[tokio::test]
 async fn pipelines_survive_a_restart() {
     // The whole point: a new process reading the same directory.
     let directory = TempDir::new("restart");
@@ -65,6 +80,29 @@ async fn pipelines_survive_a_restart() {
 
     let after = FileStore::open(directory.path()).await.expect("reopens");
     assert_eq!(after.get("kitchen").await.expect("gets"), Some(graph("kitchen")));
+}
+
+#[tokio::test]
+async fn provider_definitions_survive_a_restart() {
+    let directory = TempDir::new("provider-restart");
+
+    let before = FileStore::open(directory.path()).await.expect("opens");
+    conduit_provider::storage::ProviderDefinitionStore::put(
+        &before,
+        "openai",
+        provider_definition("openai"),
+    )
+    .await
+    .expect("stores");
+    drop(before);
+
+    let after = FileStore::open(directory.path()).await.expect("reopens");
+    assert_eq!(
+        conduit_provider::storage::ProviderDefinitionStore::get(&after, "openai")
+            .await
+            .expect("gets"),
+        Some(provider_definition("openai"))
+    );
 }
 
 #[tokio::test]
@@ -91,6 +129,26 @@ async fn stored_files_are_readable_json() {
 }
 
 #[tokio::test]
+async fn stored_provider_definition_files_are_readable_json() {
+    let directory = TempDir::new("provider-readable");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    conduit_provider::storage::ProviderDefinitionStore::put(
+        &store,
+        "openai",
+        provider_definition("openai"),
+    )
+    .await
+    .expect("stores");
+
+    let text =
+        tokio::fs::read_to_string(directory.path().join("openai.json")).await.expect("reads");
+    assert!(text.contains("\n  \"variant\""), "expected pretty JSON: {text}");
+    let parsed: conduit_provider::storage::ProviderDefinition =
+        serde_json::from_str(&text).expect("valid JSON");
+    assert_eq!(parsed, provider_definition("openai"));
+}
+
+#[tokio::test]
 async fn unrelated_files_are_ignored() {
     let directory = TempDir::new("unrelated");
     let store = FileStore::open(directory.path()).await.expect("opens");
@@ -112,6 +170,23 @@ async fn a_corrupt_file_is_reported_rather_than_treated_as_missing() {
     let error = store.get("broken").await.expect_err("unreadable");
     assert!(error.to_string().contains("broken.json"), "{error}");
     assert_eq!(store.list().await.expect("lists"), ["broken"], "it is still listed");
+}
+
+#[tokio::test]
+async fn a_corrupt_provider_definition_file_is_reported_rather_than_treated_as_missing() {
+    let directory = TempDir::new("provider-corrupt");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    tokio::fs::write(directory.path().join("broken.json"), "{not json").await.expect("writes");
+
+    let error = conduit_provider::storage::ProviderDefinitionStore::get(&store, "broken")
+        .await
+        .expect_err("unreadable");
+    assert!(error.to_string().contains("broken.json"), "{error}");
+    assert_eq!(
+        conduit_provider::storage::ProviderDefinitionStore::list(&store).await.expect("lists"),
+        ["broken"],
+        "it is still listed"
+    );
 }
 
 #[tokio::test]

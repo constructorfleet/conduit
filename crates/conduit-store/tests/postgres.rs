@@ -20,7 +20,10 @@ use conduit_provider::storage::PipelineStore;
 use conduit_store::PostgresStore;
 use sqlx::AssertSqlSafe;
 
-use conformance::{behaves_like_a_store, graph, UNUSABLE_NAMES};
+use conformance::{
+    behaves_like_a_store, graph, provider_definition, provider_definitions_behave_like_a_store,
+    UNUSABLE_NAMES,
+};
 
 /// The database to test against, if one was named.
 fn base_url() -> Option<String> {
@@ -84,6 +87,13 @@ async fn it_behaves_like_a_store() {
     // one rule fewer than the others without any test noticing.
     let store: Arc<dyn PipelineStore> = Arc::new(store_or_skip!("contract"));
     behaves_like_a_store(store).await;
+}
+
+#[tokio::test]
+async fn it_behaves_like_a_provider_definition_store() {
+    let store: Arc<dyn conduit_provider::storage::ProviderDefinitionStore> =
+        Arc::new(store_or_skip!("provider_contract"));
+    provider_definitions_behave_like_a_store(store).await;
 }
 
 #[tokio::test]
@@ -178,6 +188,34 @@ async fn a_row_that_will_not_decode_is_reported_rather_than_hidden() {
 }
 
 #[tokio::test]
+async fn a_provider_definition_row_that_will_not_decode_is_reported_rather_than_hidden() {
+    let store = store_or_skip!("provider_undecodable");
+    sqlx::query("INSERT INTO provider_definitions (id, definition) VALUES ($1, $2)")
+        .bind("broken")
+        .bind(serde_json::json!({
+            "id": "broken",
+            "label": 4,
+            "variant": {
+                "type": "openai_llm",
+                "base_url": 1
+            }
+        }))
+        .execute(store.pool())
+        .await
+        .expect("inserts");
+
+    let error = conduit_provider::storage::ProviderDefinitionStore::get(&store, "broken")
+        .await
+        .expect_err("undecodable");
+    assert!(error.to_string().contains("broken"), "{error}");
+    assert_eq!(
+        conduit_provider::storage::ProviderDefinitionStore::list(&store).await.expect("lists"),
+        ["broken"],
+        "it is still listed"
+    );
+}
+
+#[tokio::test]
 async fn the_graph_is_stored_as_queryable_json() {
     // jsonb rather than a blob, so operators can answer questions about
     // pipelines without deserializing them in application code.
@@ -190,6 +228,28 @@ async fn the_graph_is_stored_as_queryable_json() {
             .await
             .expect("queries inside the document");
     assert_eq!(row.0, "kitchen");
+}
+
+#[tokio::test]
+async fn the_provider_definition_is_stored_as_queryable_json() {
+    let store = store_or_skip!("provider_queryable");
+    conduit_provider::storage::ProviderDefinitionStore::put(
+        &store,
+        "openai",
+        provider_definition("openai"),
+    )
+    .await
+    .expect("stores");
+
+    let row: (String,) = sqlx::query_as(
+        "SELECT definition->'variant'->>'type'
+         FROM provider_definitions
+         WHERE id = 'openai'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("queries inside the document");
+    assert_eq!(row.0, "openai_llm");
 }
 
 #[tokio::test]
