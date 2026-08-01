@@ -2157,6 +2157,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "openai.responses",
         label: "OpenAI Responses",
         kind: "llm",
+        definition_variant: "openai_llm",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2171,6 +2172,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "openai.completions",
         label: "OpenAI Completions",
         kind: "llm",
+        definition_variant: "openai_llm",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2185,6 +2187,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "wyoming",
         label: "Wyoming",
         kind: "stt",
+        definition_variant: "wyoming_stt",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2198,6 +2201,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "openai.transcription",
         label: "OpenAI Transcription",
         kind: "stt",
+        definition_variant: "openai_stt",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2211,6 +2215,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "openai.speech",
         label: "OpenAI Speech",
         kind: "tts",
+        definition_variant: "openai_tts",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2223,6 +2228,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "wyoming.tts",
         label: "Wyoming TTS",
         kind: "tts",
+        definition_variant: "wyoming_tts",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2238,6 +2244,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "mcp.sse",
         label: "MCP SSE",
         kind: "tool",
+        definition_variant: "mcp_tool",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2249,6 +2256,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "mcp.streamable_http",
         label: "MCP Streamable HTTP",
         kind: "tool",
+        definition_variant: "mcp_tool",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2260,6 +2268,7 @@ function componentCatalog(): PipelineComponentCatalog {
         id: "mcp.stdio",
         label: "MCP STDIO",
         kind: "tool",
+        definition_variant: "mcp_tool",
         schema: {
           properties: {
             command: { type: "string" },
@@ -2376,7 +2385,7 @@ function mockOperatorApi({
         return jsonResponse([...pipelines.keys()]);
       }
 
-      if (route === "/v1/pipeline-components" && method === "GET") {
+      if (route === "/v1/catalog/providers" && method === "GET") {
         return jsonResponse(catalog);
       }
 

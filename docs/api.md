@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipeline-components`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -228,14 +228,14 @@ from `/v1/events` according to `event_stream.bindings`. If the event stream
 disconnects, the UI must keep the last known view but mark it with Stale State.
 After reconnect, the UI refreshes `/v1/status` before applying new events.
 
-## Pipeline Routes
+## Provider Routes
 
-### `GET /v1/pipeline-components`
+### `GET /v1/catalog/providers`
 
-Lists known pipeline component descriptors and the configuration schema each
-component accepts. The Operator Console uses this catalog to render provider
-instance configuration forms on the Providers page. Pipeline graphs then refer
-to configured provider IDs from `graph.nodes[].provider`.
+Lists known Provider Component Catalog entries and the configuration schema each
+component accepts. The Operator Console uses this catalog to render Provider
+Definition creation forms on the Providers page. Pipeline graphs then refer to
+saved Provider Definition ids from `graph.nodes[].provider`.
 
 Success body:
 
@@ -246,6 +246,7 @@ Success body:
       "id": "openai.responses",
       "label": "OpenAI Responses",
       "kind": "llm",
+      "definition_variant": "openai_llm",
       "schema": {
         "properties": {
           "base_url": { "type": "string", "format": "url" },
@@ -259,6 +260,66 @@ Success body:
   ]
 }
 ```
+
+### `GET /v1/providers`
+
+Lists saved Provider Definition ids.
+
+Success body:
+
+```json
+["openai-primary", "piper-local"]
+```
+
+### `GET /v1/providers/{id}`
+
+Returns one saved Provider Definition with inline secrets redacted.
+
+Success body:
+
+```json
+{
+  "id": "openai-primary",
+  "label": "OpenAI Primary",
+  "kind": "llm",
+  "variant": {
+    "type": "openai_llm",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": { "type": "redacted" },
+    "models": ["gpt-4.1"],
+    "streaming": true
+  }
+}
+```
+
+### `PUT /v1/providers/{id}`
+
+Creates or replaces a typed Provider Definition. The request body id must match
+the route id. Saving a Provider Definition rebuilds the active Runtime Provider
+Registry Snapshot for new validations and turns. Save validates the typed shape
+but does not perform a reachability check.
+
+Inline secrets are accepted on writes but are redacted from read responses.
+Sending `{ "type": "redacted" }` for an existing secret keeps the stored secret;
+omitting or nulling the secret field clears it.
+
+### `DELETE /v1/providers/{id}`
+
+Deletes an unreferenced Provider Definition and rebuilds the active Runtime
+Provider Registry Snapshot. Deletion is refused with `409 conflict` when stored
+pipelines still reference the provider id.
+
+Conflict body:
+
+```json
+{
+  "error": "conflict",
+  "detail": "provider definition is still referenced by pipelines",
+  "affected_pipelines": ["kitchen"]
+}
+```
+
+## Pipeline Routes
 
 ### `GET /v1/pipelines`
 

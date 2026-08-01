@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
-use conduit_provider::storage::{validate_name, PipelineStore};
+use conduit_provider::storage::{
+    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+};
 
 use crate::is_listable;
 
@@ -128,6 +130,82 @@ impl PipelineStore for FileStore {
 
     async fn remove(&self, name: &str) -> Result<bool> {
         let path = self.path(name)?;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Self::failure(&path, &error)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderDefinitionStore for FileStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        let mut entries = tokio::fs::read_dir(&self.directory)
+            .await
+            .map_err(|error| Self::failure(&self.directory, &error))?;
+
+        let mut ids = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| Self::failure(&self.directory, &error))?
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|extension| extension == EXTENSION) {
+                if let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    if is_listable(id) {
+                        ids.push(id.to_owned());
+                    }
+                }
+            }
+        }
+
+        ids.sort();
+        Ok(ids)
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<ProviderDefinition>> {
+        let path = self.path(id)?;
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Self::failure(&path, &error)),
+        };
+
+        serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+            Error::Config(format!(
+                "`{}` is not a valid provider definition: {error}",
+                path.display()
+            ))
+        })
+    }
+
+    async fn put(&self, id: &str, definition: ProviderDefinition) -> Result<bool> {
+        validate_name(id)?;
+        if definition.id != id {
+            return Err(Error::Config(format!(
+                "provider definition id `{}` does not match route id `{id}`",
+                definition.id
+            )));
+        }
+        let path = self.path(id)?;
+        let existed = tokio::fs::try_exists(&path).await.unwrap_or(false);
+        let json = serde_json::to_vec_pretty(&definition).map_err(|error| {
+            Error::Config(format!("cannot encode the provider definition: {error}"))
+        })?;
+        let temporary = path.with_extension("json.tmp");
+        tokio::fs::write(&temporary, &json)
+            .await
+            .map_err(|error| Self::failure(&temporary, &error))?;
+        tokio::fs::rename(&temporary, &path)
+            .await
+            .map_err(|error| Self::failure(&path, &error))?;
+        Ok(existed)
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        let path = self.path(id)?;
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

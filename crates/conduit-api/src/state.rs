@@ -1,13 +1,17 @@
 //! Shared application state.
 
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_metrics::Metrics;
-use conduit_provider::storage::PipelineStore;
+use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
+use conduit_provider::storage::{
+    PipelineStore, ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant,
+    ProviderSecret,
+};
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
 
@@ -21,9 +25,10 @@ pub struct AppState {
     /// The process-wide event bus.
     pub bus: EventBus,
     pipelines: Arc<dyn PipelineStore>,
+    provider_definitions: Arc<dyn ProviderDefinitionStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
-    providers: Option<Arc<Providers>>,
+    providers: Arc<RwLock<Option<Arc<Providers>>>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
     metrics: Arc<Metrics>,
     /// Runtime status projection used by the Operator Console.
@@ -46,11 +51,23 @@ impl AppState {
     /// Creates state backed by `bus` and `pipelines`.
     #[must_use]
     pub fn with_store(bus: EventBus, pipelines: Arc<dyn PipelineStore>) -> Self {
+        let provider_definitions = Arc::new(MemoryStore::new());
+        Self::with_stores(bus, pipelines, provider_definitions)
+    }
+
+    /// Creates state backed by explicit pipeline and provider definition stores.
+    #[must_use]
+    pub fn with_stores(
+        bus: EventBus,
+        pipelines: Arc<dyn PipelineStore>,
+        provider_definitions: Arc<dyn ProviderDefinitionStore>,
+    ) -> Self {
         let turns = TurnHistory::spawn(&bus, TurnHistoryRetention::default());
         Self {
             bus,
             pipelines,
-            providers: None,
+            provider_definitions,
+            providers: Arc::new(RwLock::new(None)),
             metrics: Arc::new(Metrics::new()),
             status: RuntimeStatus::new(),
             turns,
@@ -123,15 +140,19 @@ impl AppState {
 
     /// Makes `providers` available to conversations.
     #[must_use]
-    pub fn with_providers(mut self, providers: Providers) -> Self {
-        self.providers = Some(Arc::new(providers));
+    pub fn with_providers(self, providers: Providers) -> Self {
+        *self.provider_lock() = Some(Arc::new(providers));
         self
     }
 
     /// The configured providers, if any.
     #[must_use]
     pub fn providers(&self) -> Option<Arc<Providers>> {
-        self.providers.clone()
+        self.providers.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn provider_lock(&self) -> std::sync::RwLockWriteGuard<'_, Option<Arc<Providers>>> {
+        self.providers.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Names of every stored pipeline, in order.
@@ -169,6 +190,126 @@ impl AppState {
     /// Returns an error if the store is unavailable.
     pub async fn remove_pipeline(&self, name: &str) -> Result<bool> {
         self.pipelines.remove(name).await
+    }
+
+    /// Provider definition ids, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn provider_definition_ids(&self) -> Result<Vec<String>> {
+        self.provider_definitions.list().await
+    }
+
+    /// Fetches one provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable or the definition cannot be read.
+    pub async fn provider_definition(&self, id: &str) -> Result<Option<ProviderDefinition>> {
+        self.provider_definitions.get(id).await
+    }
+
+    /// Stores a provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id is unusable or the write fails.
+    pub async fn put_provider_definition(
+        &self,
+        id: &str,
+        definition: ProviderDefinition,
+    ) -> Result<bool> {
+        let replaced = self.provider_definitions.put(id, definition).await?;
+        self.rebuild_provider_snapshot().await?;
+        Ok(replaced)
+    }
+
+    /// Removes a provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn remove_provider_definition(&self, id: &str) -> Result<bool> {
+        let removed = self.provider_definitions.remove(id).await?;
+        if removed {
+            self.rebuild_provider_snapshot().await?;
+        }
+        Ok(removed)
+    }
+
+    async fn rebuild_provider_snapshot(&self) -> Result<()> {
+        let mut snapshot = Providers::new();
+        for id in self.provider_definition_ids().await? {
+            let Some(definition) = self.provider_definition(&id).await? else {
+                continue;
+            };
+            snapshot = register_definition(snapshot, &definition)?;
+        }
+        *self.provider_lock() = Some(Arc::new(snapshot));
+        Ok(())
+    }
+
+    /// Rebuilds runtime providers from stored provider definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if definitions cannot be read or converted.
+    pub async fn reload_provider_definitions(&self) -> Result<()> {
+        self.rebuild_provider_snapshot().await
+    }
+}
+
+fn register_definition(
+    providers: Providers,
+    definition: &ProviderDefinition,
+) -> Result<Providers> {
+    let config = |base_url: &str, api_key: &Option<ProviderSecret>| OpenAiConfig {
+        base_url: base_url.to_owned(),
+        api_key: secret_value(api_key),
+        name: definition.id.clone(),
+        ..OpenAiConfig::default()
+    };
+
+    match &definition.variant {
+        ProviderDefinitionVariant::OpenAiLlm { base_url, api_key, models, .. } => {
+            let mut config = config(base_url, api_key);
+            config.models = models.clone();
+            Ok(providers.with_llm(OpenAi::new(config)?))
+        }
+        ProviderDefinitionVariant::OpenAiStt { base_url, model, api_key, .. } => {
+            let config = config(base_url, api_key);
+            Ok(providers.with_stt(OpenAiStt::new(&config, model)?))
+        }
+        ProviderDefinitionVariant::OpenAiTts { base_url, model, api_key, voices } => {
+            let config = config(base_url, api_key);
+            let provider = OpenAiTts::new(&config, model)?;
+            let provider = if voices.is_empty() {
+                provider
+            } else {
+                provider.with_voices(
+                    voices
+                        .iter()
+                        .map(|voice| conduit_provider::tts::Voice {
+                            id: voice.clone(),
+                            name: voice.clone(),
+                            language: "en-US".to_owned(),
+                        })
+                        .collect(),
+                )
+            };
+            Ok(providers.with_tts(provider))
+        }
+        ProviderDefinitionVariant::WyomingStt { .. }
+        | ProviderDefinitionVariant::WyomingTts { .. }
+        | ProviderDefinitionVariant::McpTool { .. } => Ok(providers),
+    }
+}
+
+fn secret_value(secret: &Option<ProviderSecret>) -> Option<String> {
+    match secret {
+        Some(ProviderSecret::Inline { value }) => Some(value.clone()),
+        Some(ProviderSecret::External { .. } | ProviderSecret::Redacted) | None => None,
     }
 }
 

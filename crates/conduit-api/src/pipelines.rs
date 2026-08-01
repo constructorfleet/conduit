@@ -37,6 +37,8 @@ pub struct PipelineComponentDescriptor {
     pub label: &'static str,
     /// What node kind this component can serve.
     pub kind: NodeKind,
+    /// Provider definition variant created from this catalog entry.
+    pub definition_variant: &'static str,
     /// Configuration fields accepted by this component.
     pub schema: ComponentConfigSchema,
 }
@@ -288,18 +290,21 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "openai.responses",
             label: "OpenAI Responses",
             kind: NodeKind::Llm,
+            definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
         PipelineComponentDescriptor {
             id: "openai.completions",
             label: "OpenAI Completions",
             kind: NodeKind::Llm,
+            definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
         PipelineComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: NodeKind::Stt,
+            definition_variant: "wyoming_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -313,6 +318,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "openai.transcription",
             label: "OpenAI Transcription",
             kind: NodeKind::Stt,
+            definition_variant: "openai_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -326,6 +332,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "openai.speech",
             label: "OpenAI Speech",
             kind: NodeKind::Tts,
+            definition_variant: "openai_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -338,6 +345,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "wyoming.tts",
             label: "Wyoming TTS",
             kind: NodeKind::Tts,
+            definition_variant: "wyoming_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -353,6 +361,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "mcp.sse",
             label: "MCP SSE",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -365,6 +374,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "mcp.streamable_http",
             label: "MCP Streamable HTTP",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -377,6 +387,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([("command", string_property(None, None))]),
                 required: vec!["command"],

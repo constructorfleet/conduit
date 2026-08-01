@@ -79,11 +79,84 @@ export interface PipelineComponentDescriptor {
   id: string;
   label: string;
   kind: NodeKind;
+  definition_variant: ProviderDefinitionVariantType;
   schema: ComponentConfigSchema;
 }
 
 export interface PipelineComponentCatalog {
   components: PipelineComponentDescriptor[];
+}
+
+export type ProviderCapability = "stt" | "llm" | "tts" | "tool";
+export type ProviderDefinitionVariantType =
+  | "openai_llm"
+  | "openai_stt"
+  | "openai_tts"
+  | "wyoming_stt"
+  | "wyoming_tts"
+  | "mcp_tool";
+
+export type ProviderSecret =
+  | { type: "inline"; value: string }
+  | { type: "external"; reference: string }
+  | { type: "redacted" };
+
+export type ProviderDefinitionVariant =
+  | {
+      type: "openai_llm";
+      base_url: string;
+      api_key?: ProviderSecret;
+      models: string[];
+      streaming: boolean;
+      system_prompt?: string;
+    }
+  | {
+      type: "openai_stt";
+      base_url: string;
+      model: string;
+      api_key?: ProviderSecret;
+      stream: boolean;
+    }
+  | {
+      type: "openai_tts";
+      base_url: string;
+      model: string;
+      api_key?: ProviderSecret;
+      voices: string[];
+    }
+  | {
+      type: "wyoming_stt";
+      url: string;
+      model?: string;
+      streaming: boolean;
+    }
+  | {
+      type: "wyoming_tts";
+      url: string;
+      voice?: string;
+      streaming: boolean;
+    }
+  | {
+      type: "mcp_tool";
+      transport: McpTransport;
+    };
+
+export type McpTransport =
+  | { type: "sse"; url: string }
+  | { type: "streamable_http"; url: string }
+  | { type: "stdio"; command: string; args: string[] };
+
+export interface ProviderDefinition {
+  id: string;
+  label: string;
+  variant: ProviderDefinitionVariant;
+}
+
+export interface ProviderDefinitionView {
+  id: string;
+  label: string;
+  kind: ProviderCapability;
+  variant: ProviderDefinitionVariant;
 }
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
@@ -177,7 +250,14 @@ export interface ConduitApiClient {
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
   listPipelines: () => Promise<string[]>;
-  listPipelineComponents: () => Promise<PipelineComponentCatalog>;
+  listProviderComponents: () => Promise<PipelineComponentCatalog>;
+  listProviderDefinitions: () => Promise<string[]>;
+  getProviderDefinition: (id: string) => Promise<ProviderDefinitionView>;
+  putProviderDefinition: (
+    id: string,
+    definition: ProviderDefinition,
+  ) => Promise<ProviderDefinitionView>;
+  deleteProviderDefinition: (id: string) => Promise<void>;
   getPipeline: (name: string) => Promise<PipelineView>;
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
@@ -198,8 +278,10 @@ export const conduitApiRoutes = {
   liveTurns: "/v1/turns/live",
   turn: "/v1/turns/{turn_id}",
   turnEvents: "/v1/turns/{turn_id}/events",
+  providerCatalog: "/v1/catalog/providers",
+  providers: "/v1/providers",
+  provider: "/v1/providers/{id}",
   pipelines: "/v1/pipelines",
-  pipelineComponents: "/v1/pipeline-components",
   pipeline: "/v1/pipelines/{name}",
   pipelineTest: "/v1/pipelines/{name}/test-turn",
   validatePipeline: "/v1/pipelines/validate",
@@ -216,12 +298,26 @@ export function createConduitApiClient(
       requestJson<OperatorStatusSnapshot>(request, config, conduitApiRoutes.status),
     listPipelines: () =>
       requestJson<string[]>(request, config, conduitApiRoutes.pipelines),
-    listPipelineComponents: () =>
+    listProviderComponents: () =>
       requestJson<PipelineComponentCatalog>(
         request,
         config,
-        conduitApiRoutes.pipelineComponents,
+        conduitApiRoutes.providerCatalog,
       ),
+    listProviderDefinitions: () =>
+      requestJson<string[]>(request, config, conduitApiRoutes.providers),
+    getProviderDefinition: (id) =>
+      requestJson<ProviderDefinitionView>(request, config, providerRoute(id)),
+    putProviderDefinition: (id, definition) =>
+      requestJson<ProviderDefinitionView>(request, config, providerRoute(id), {
+        method: "PUT",
+        body: JSON.stringify(definition),
+      }),
+    deleteProviderDefinition: async (id) => {
+      await requestJson<void>(request, config, providerRoute(id), {
+        method: "DELETE",
+      });
+    },
     getPipeline: (name) =>
       requestJson<PipelineView>(request, config, pipelineRoute(name)),
     putPipeline: (name, graph) =>
@@ -254,6 +350,10 @@ export function createConduitApiClient(
 
 function pipelineRoute(name: string): string {
   return conduitApiRoutes.pipeline.replace("{name}", encodeURIComponent(name));
+}
+
+function providerRoute(id: string): string {
+  return conduitApiRoutes.provider.replace("{id}", encodeURIComponent(id));
 }
 
 function pipelineTestRoute(name: string): string {

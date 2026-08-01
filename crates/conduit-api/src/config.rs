@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use conduit_core::{Error, Result};
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
-use conduit_provider::storage::PipelineStore;
+use conduit_provider::storage::{PipelineStore, ProviderDefinitionStore};
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
@@ -45,6 +45,8 @@ const TURN_HISTORY_RETENTION: &str = "CONDUIT_TURN_HISTORY_RETENTION_SECS";
 const DATA_DIR: &str = "CONDUIT_DATA_DIR";
 /// Directory to keep pipeline definitions in. Unset means the default data directory.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
+/// Directory to keep provider definitions in. Unset means the default data directory.
+const PROVIDER_DIR: &str = "CONDUIT_PROVIDER_DIR";
 /// Explicit value for a disposable in-memory pipeline store.
 const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
@@ -110,6 +112,15 @@ pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
     store_from_vars(&std::env::vars().collect()).await
 }
 
+/// Opens the provider definition store the environment asks for.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn provider_definition_store_from_env() -> Result<Arc<dyn ProviderDefinitionStore>> {
+    provider_definition_store_from_vars(&std::env::vars().collect()).await
+}
+
 /// Opens the pipeline store described by `vars`.
 ///
 /// # Errors
@@ -159,27 +170,70 @@ pub async fn store_from_vars(vars: &HashMap<String, String>) -> Result<Arc<dyn P
     }
 }
 
+/// Opens the provider definition store described by `vars`.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn provider_definition_store_from_vars(
+    vars: &HashMap<String, String>,
+) -> Result<Arc<dyn ProviderDefinitionStore>> {
+    match vars.get(PROVIDER_DIR).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        Some(MEMORY_PIPELINE_DIR) => {
+            tracing::warn!(
+                "{PROVIDER_DIR} is {MEMORY_PIPELINE_DIR}: provider definitions are kept in memory \
+                 and will be lost on restart"
+            );
+            Ok(Arc::new(MemoryStore::new()))
+        }
+        Some(directory) => {
+            tracing::info!(%directory, "storing provider definitions on disk");
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+        None => {
+            let directory = default_provider_dir(vars)?;
+            tracing::info!(
+                directory = %directory.display(),
+                "storing provider definitions in the default local data directory"
+            );
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+    }
+}
+
 fn default_pipeline_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    default_data_subdir(vars, PIPELINE_DIR, "pipelines")
+}
+
+fn default_provider_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    default_data_subdir(vars, PROVIDER_DIR, "providers")
+}
+
+fn default_data_subdir(
+    vars: &HashMap<String, String>,
+    env_name: &str,
+    child: &str,
+) -> Result<PathBuf> {
     if let Some(directory) =
         vars.get(DATA_DIR).map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(directory).join("pipelines"));
+        return Ok(PathBuf::from(directory).join(child));
     }
 
     if let Some(directory) =
         vars.get("XDG_DATA_HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(directory).join("conduit").join("pipelines"));
+        return Ok(PathBuf::from(directory).join("conduit").join(child));
     }
 
     if let Some(home) =
         vars.get("HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(home).join(".local/share/conduit/pipelines"));
+        return Ok(PathBuf::from(home).join(format!(".local/share/conduit/{child}")));
     }
 
     Err(Error::Config(format!(
-        "cannot choose a default pipeline directory; set {PIPELINE_DIR}, {DATA_DIR}, \
+        "cannot choose a default storage directory; set {env_name}, {DATA_DIR}, \
          XDG_DATA_HOME, or HOME"
     )))
 }

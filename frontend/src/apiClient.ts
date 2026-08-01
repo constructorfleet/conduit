@@ -72,7 +72,7 @@ export function createSnapshotClient(
       const names = await client.listPipelines();
       return Promise.all(names.map((name) => client.getPipeline(name)));
     },
-    loadComponentCatalog: () => client.listPipelineComponents(),
+    loadComponentCatalog: () => client.listProviderComponents(),
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),

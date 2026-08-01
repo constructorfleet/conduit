@@ -74,6 +74,19 @@ fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).expect("request")
 }
 
+fn put_json(uri: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).expect("serialize")))
+        .expect("request")
+}
+
+fn delete(uri: &str) -> Request<Body> {
+    Request::builder().method("DELETE").uri(uri).body(Body::empty()).expect("request")
+}
+
 #[tokio::test]
 async fn health_reports_ok() {
     // On the ops router, not this one: a liveness probe cannot present a
@@ -270,11 +283,12 @@ async fn test_turn_refuses_to_pretend_when_no_runtime_providers_are_configured()
 async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     let state = AppState::new(EventBus::default());
 
-    let (status, body) = call(&state, get("/v1/pipeline-components")).await;
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["components"][0]["id"], "openai.responses");
     assert_eq!(body["components"][0]["kind"], "llm");
+    assert_eq!(body["components"][0]["definition_variant"], "openai_llm");
     assert_eq!(
         body["components"][0]["schema"]["properties"]["base_url"],
         serde_json::json!({ "type": "string", "format": "url" })
@@ -311,6 +325,128 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     assert_component(components, "mcp.sse", "tool", &["url"], &["url"]);
     assert_component(components, "mcp.streamable_http", "tool", &["url"], &["url"]);
     assert_component(components, "mcp.stdio", "tool", &["command"], &["command"]);
+}
+
+#[tokio::test]
+async fn old_pipeline_component_catalog_route_is_gone() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(&state, get("/v1/pipeline-components")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn provider_definition_crud_round_trips_typed_variants_and_redacts_secrets() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": { "type": "inline", "value": "sk-test" },
+            "models": ["gpt-4.1"],
+            "streaming": true,
+            "system_prompt": "Be useful."
+        }
+    });
+
+    let (status, body) =
+        call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["id"], "openai-primary");
+    assert_eq!(body["kind"], "llm");
+    assert_eq!(body["variant"]["type"], "openai_llm");
+    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+
+    let (status, body) = call(&state, get("/v1/providers/openai-primary")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+
+    let (status, body) = call(&state, get("/v1/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!(["openai-primary"]));
+}
+
+#[tokio::test]
+async fn saving_openai_provider_definition_rebuilds_the_runtime_registry_snapshot() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "http://localhost:11434/v1",
+            "models": ["llama3.1"]
+        }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let providers = state.providers().expect("snapshot");
+    assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["openai-primary"]);
+}
+
+#[tokio::test]
+async fn redacted_provider_secret_update_keeps_the_existing_secret() {
+    let state = AppState::new(EventBus::default());
+    let original = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": { "type": "inline", "value": "sk-test" },
+            "models": ["gpt-4.1"]
+        }
+    });
+    let updated = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://proxy.local/v1",
+            "api_key": { "type": "redacted" },
+            "models": ["gpt-4.1-mini"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", original)).await;
+
+    let (status, body) = call(&state, put_json("/v1/providers/openai-primary", updated)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["variant"]["base_url"], "https://proxy.local/v1");
+    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+}
+
+#[tokio::test]
+async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "models": ["gpt-4.1"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
+        "llm",
+        NodeKind::Llm,
+        "openai-primary",
+    ));
+    call(&state, put(&graph)).await;
+
+    let (status, body) = call(&state, delete("/v1/providers/openai-primary")).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+    assert_eq!(body["affected_pipelines"], serde_json::json!(["kitchen"]));
 }
 
 fn assert_component(
@@ -430,6 +566,43 @@ async fn a_stored_pipeline_survives_a_restart() {
     let (status, body) = call(&after, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["graph"]["name"], "kitchen");
+}
+
+#[tokio::test]
+async fn a_provider_definition_survives_a_restart() {
+    let directory = TempDir::new();
+    let provider_store =
+        std::sync::Arc::new(conduit_store::FileStore::open(&directory.0).await.expect("opens"));
+    let pipeline_store = std::sync::Arc::new(conduit_store::MemoryStore::new());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "http://localhost:11434/v1",
+            "models": ["llama3.1"]
+        }
+    });
+
+    let before = AppState::with_stores(
+        EventBus::default(),
+        pipeline_store.clone(),
+        provider_store.clone(),
+    );
+    let (status, _) = call(&before, put_json("/v1/providers/openai-primary", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let after = AppState::with_stores(EventBus::default(), pipeline_store, provider_store);
+    after.reload_provider_definitions().await.expect("reloads runtime providers");
+    let (status, body) = call(&after, get("/v1/providers/openai-primary")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], "openai-primary");
+    assert_eq!(body["kind"], "llm");
+    assert_eq!(
+        after.providers().expect("snapshot").llm().names().collect::<Vec<_>>(),
+        ["openai-primary"]
+    );
 }
 
 #[tokio::test]

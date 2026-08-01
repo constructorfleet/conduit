@@ -1,8 +1,8 @@
 # Configuration Reference
 
-Conduit is configured with environment variables. Unset provider variables mean
-the provider is not registered; partial provider configuration is treated as an
-error when it would otherwise fail mid-turn.
+Conduit is configured with environment variables for server, authentication, and
+storage concerns. Product provider configuration is saved as server-owned
+Provider Definitions through the management API.
 
 ## Server
 
@@ -61,16 +61,23 @@ empty list to allow none.
 | `CONDUIT_DATABASE_URL` | unset | PostgreSQL URL for pipeline storage. Takes precedence over `CONDUIT_PIPELINE_DIR` when the `postgres` feature is enabled. |
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data. |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage. |
+| `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers` | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage. |
 
 If neither database nor pipeline directory is set, pipelines are stored as JSON
 files in the default local data directory and survive API restarts. The server
 uses memory only when `CONDUIT_PIPELINE_DIR=:memory:` is set, and logs a warning
 for that disposable mode.
 
+Provider Definitions use their own store. If `CONDUIT_PROVIDER_DIR` is unset,
+definitions are stored as JSON files under the default local data directory and
+survive API restarts. A server rebuilds the Runtime Provider Registry Snapshot
+from those definitions during startup and after successful provider writes or
+deletes.
+
 The `conduit-api` crate enables PostgreSQL support by default. A
 `--no-default-features` build refuses to start if `CONDUIT_DATABASE_URL` is set.
 
-## OpenAI-Compatible Providers
+## Legacy OpenAI-Compatible Environment Providers
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -81,21 +88,16 @@ The `conduit-api` crate enables PostgreSQL support by default. A
 | `CONDUIT_OPENAI_STT_MODEL` | unset | Registers `OpenAiStt` using this transcription model. |
 | `CONDUIT_OPENAI_TTS_MODEL` | unset | Registers `OpenAiTts` using this speech model. |
 
-Setting `CONDUIT_OPENAI_BASE_URL` or `CONDUIT_OPENAI_API_KEY` registers an
-OpenAI-compatible language model provider. Pipeline graph nodes select
-registered providers by id; provider-specific settings are not stored in the
-graph.
+The preferred product path is to create Provider Definitions through
+`/v1/providers`. These environment variables remain a direct runtime provider
+injection seam for development and existing deployments while Provider
+Definitions become the durable source of operator-managed runtime providers.
 
-The service exposes `GET /v1/pipeline-components` so the Operator Console can
-render provider-specific configuration forms from component schemas. Operators
-configure provider instances with stable IDs on the Providers page, then select
-those IDs from pipeline nodes.
-
-Provider instance definitions are still stored by the Operator Console.
-Pipeline graphs store only the selected provider id on each node; runtime
-component settings do not belong to graph nodes. Provider definitions remain UI
-definitions until Conduit grows a server-side provider store and runtime plugin
-loader.
+The service exposes `GET /v1/catalog/providers` so the Operator Console can
+render provider-specific creation forms from backend-owned component metadata.
+Operators save Provider Definitions with stable ids, then select those ids from
+pipeline graph nodes. Pipeline graphs store only the selected provider id on
+each node; runtime component settings do not belong to graph nodes.
 
 Setting an STT or TTS model without a base URL or API key is an error. The
 server refuses to start rather than registering a speech stage with no server.

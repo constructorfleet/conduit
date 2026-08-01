@@ -8,7 +8,9 @@ use std::sync::{Mutex, PoisonError};
 
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
-use conduit_provider::storage::{validate_name, PipelineStore};
+use conduit_provider::storage::{
+    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+};
 
 use crate::is_listable;
 
@@ -16,6 +18,7 @@ use crate::is_listable;
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     pipelines: Mutex<BTreeMap<String, PipelineGraph>>,
+    providers: Mutex<BTreeMap<String, ProviderDefinition>>,
 }
 
 impl MemoryStore {
@@ -32,6 +35,12 @@ impl MemoryStore {
     /// be worse than continuing.
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, PipelineGraph>> {
         self.pipelines.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_providers(
+        &self,
+    ) -> std::sync::MutexGuard<'_, BTreeMap<String, ProviderDefinition>> {
+        self.providers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -60,5 +69,33 @@ impl PipelineStore for MemoryStore {
     async fn remove(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
         Ok(self.lock().remove(name).is_some())
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderDefinitionStore for MemoryStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        Ok(self.lock_providers().keys().filter(|id| is_listable(id)).cloned().collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<ProviderDefinition>> {
+        validate_name(id)?;
+        Ok(self.lock_providers().get(id).cloned())
+    }
+
+    async fn put(&self, id: &str, definition: ProviderDefinition) -> Result<bool> {
+        validate_name(id)?;
+        if definition.id != id {
+            return Err(conduit_core::Error::Config(format!(
+                "provider definition id `{}` does not match route id `{id}`",
+                definition.id
+            )));
+        }
+        Ok(self.lock_providers().insert(id.to_owned(), definition).is_some())
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        validate_name(id)?;
+        Ok(self.lock_providers().remove(id).is_some())
     }
 }
