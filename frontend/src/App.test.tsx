@@ -816,7 +816,7 @@ describe("Pipelines graph editor", () => {
     });
   });
 
-  it("keeps graph flow arrows inline with component cards and exposes top toolbar actions", async () => {
+  it("renders an atom-style graph canvas and exposes editor actions", async () => {
     const user = userEvent.setup();
     render(
       <App
@@ -829,12 +829,18 @@ describe("Pipelines graph editor", () => {
 
     const graph = screen.getByLabelText("Pipeline graph");
     expect(within(graph).getByLabelText("Pipeline start")).toHaveTextContent(
-      "Start -> mic",
+      /Start.*mic/,
     );
-    expect(within(graph).getByLabelText("mic to stt")).toHaveTextContent("->");
+    expect(within(graph).getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(within(graph).getAllByText("Reasoning core").length).toBeGreaterThan(
+      0,
+    );
     expect(
       within(graph).queryByRole("list", { name: "Pipeline edges" }),
     ).not.toBeInTheDocument();
+    expect(
+      within(graph).getByRole("toolbar", { name: "Graph canvas controls" }),
+    ).toBeInTheDocument();
 
     const toolbar = screen.getByRole("toolbar", {
       name: "Graph editor actions",

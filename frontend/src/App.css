@@ -740,52 +740,197 @@ button {
 }
 
 .graph-surface {
+  min-height: 460px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.pipeline-atom-canvas {
+  position: relative;
   display: grid;
-  gap: 16px;
-  min-height: 320px;
-  padding: 16px;
-  overflow-x: auto;
+  place-items: center;
+  min-height: 460px;
+  overflow: auto;
+  background:
+    radial-gradient(
+        circle at center,
+        rgb(255 255 255 / 4%) 1px,
+        transparent 1px
+      )
+      0 0 / 24px 24px,
+    var(--surface);
 }
 
-.graph-flow {
-  display: flex;
-  align-items: stretch;
-  gap: 12px;
-  min-width: min-content;
+.atom-stage-labels {
+  position: absolute;
+  top: 18px;
+  left: 56px;
+  right: 56px;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
-.graph-flow-item {
+.atom-stage-labels span:nth-child(2) {
+  color: var(--accent-hover);
+  text-align: center;
+}
+
+.atom-stage-labels span:nth-child(3) {
+  color: var(--danger);
+  text-align: right;
+}
+
+.pipeline-atom-map {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  min-width: max-content;
+  padding: 112px 56px 96px;
+  transform-origin: center;
+  transition: transform 160ms ease;
+}
+
+.atom-entry-link,
+.atom-flow-link,
+.atom-spoke-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.atom-entry-link {
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-sunken));
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.atom-flow-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.atom-stage,
+.atom-core-wrap {
+  position: relative;
+}
+
+.atom-flow-link {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.motion-enabled .atom-flow-link svg,
+.motion-enabled .atom-entry-link svg {
+  animation: atom-flow-pulse 1.4s ease-in-out infinite;
 }
 
 .reasoning-atom {
   position: relative;
-  display: grid;
-  gap: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
-  border-radius: 8px;
-  padding: 12px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  z-index: 3;
 }
 
 .atom-label {
+  position: absolute;
+  left: 50%;
+  top: -52px;
+  z-index: 4;
+  transform: translateX(-50%);
   color: var(--accent-hover);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 850;
+  letter-spacing: 0;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.graph-spokes {
-  display: grid;
-  gap: 8px;
+.atom-orbit-ring {
+  position: absolute;
+  inset: -74px -86px;
+  z-index: 1;
+  border: 1px dashed rgb(255 255 255 / 12%);
+  border-radius: 50%;
+  transform: scaleY(0.62);
+  pointer-events: none;
 }
 
-.graph-spoke {
+.motion-enabled .atom-orbit-ring {
+  animation: orbit 18s linear infinite;
+}
+
+.atom-orbitals {
+  position: absolute;
+  inset: -104px -118px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.atom-orbital {
+  position: absolute;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  pointer-events: auto;
+}
+
+.atom-orbital.slot-1 {
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.atom-orbital.slot-2 {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.atom-orbital.slot-3 {
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+}
+
+.atom-orbital.slot-4 {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.atom-spoke-link {
+  width: 26px;
+  height: 26px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-hover);
+}
+
+.atom-orbital.slot-1,
+.atom-orbital.slot-3 {
+  flex-direction: column;
+}
+
+.atom-orbital.slot-4 {
+  flex-direction: row-reverse;
 }
 
 .graph-node {
@@ -800,8 +945,43 @@ button {
 }
 
 .graph-node.compact {
-  width: 156px;
-  min-height: 88px;
+  width: 132px;
+  min-height: 74px;
+  padding: 10px;
+}
+
+.graph-node.kind-llm {
+  width: 142px;
+  min-height: 142px;
+  place-content: center;
+  justify-items: center;
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  border-radius: 999px;
+  background: radial-gradient(circle at 40% 35%, #1b3030, #0d1117);
+  box-shadow:
+    0 0 40px rgb(18 163 148 / 16%),
+    0 0 80px rgb(18 163 148 / 8%);
+  text-align: center;
+}
+
+.motion-enabled .graph-node.kind-llm {
+  animation: nucleus-pulse 3s ease-in-out infinite;
+}
+
+.graph-node.kind-memory {
+  border-color: color-mix(in srgb, var(--selected) 55%, var(--border));
+}
+
+.graph-node.kind-tool {
+  border-color: color-mix(in srgb, var(--warning-text) 45%, var(--border));
+}
+
+.graph-node.kind-stt {
+  border-color: color-mix(in srgb, var(--focus) 38%, var(--border));
+}
+
+.graph-node.kind-tts {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
 }
 
 .graph-node.selected {
@@ -850,29 +1030,74 @@ button {
   font-size: 13px;
 }
 
-.graph-arrow {
+.graph-canvas-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
   display: inline-flex;
   align-items: center;
-  align-self: center;
-  min-height: 30px;
+  gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 5px 9px;
+  border-radius: 8px;
+  padding: 6px 10px;
   background: var(--surface);
-  color: var(--text);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.graph-canvas-controls > span:not(.toolbar-divider) {
+  min-width: 42px;
+  color: var(--muted);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
   font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
+  text-align: center;
 }
 
-.graph-arrow.start {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  color: var(--strong);
-}
-
-.graph-arrow.spoke {
-  border-style: dashed;
+.graph-canvas-controls .icon-action.selected {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   color: var(--accent-hover);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+@keyframes atom-flow-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translateX(-1px);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateX(2px);
+  }
+}
+
+@keyframes orbit {
+  to {
+    transform: scaleY(0.62) rotate(360deg);
+  }
+}
+
+@keyframes nucleus-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 40px rgb(18 163 148 / 16%),
+      0 0 80px rgb(18 163 148 / 8%);
+  }
+
+  50% {
+    box-shadow:
+      0 0 60px rgb(18 163 148 / 26%),
+      0 0 120px rgb(18 163 148 / 12%);
+  }
 }
 
 .panel-heading-row {

@@ -1,11 +1,14 @@
 import {
   Activity,
+  ArrowRight,
   Bell,
   Boxes,
   CircleAlert,
   CircleCheck,
   KeyRound,
   ListFilter,
+  Maximize2,
+  Minus,
   Network,
   Play,
   Plus,
@@ -1813,6 +1816,8 @@ function PipelinesPanel({
   const [pendingPipelineName, setPendingPipelineName] = useState<string | null>(
     null,
   );
+  const [graphZoom, setGraphZoom] = useState(100);
+  const [graphMotionEnabled, setGraphMotionEnabled] = useState(true);
   const selectedNodeId =
     (selectedName ? selectedNodeByPipeline[selectedName] : "") ??
     draft?.nodes[0]?.id ??
@@ -2226,7 +2231,7 @@ function PipelinesPanel({
     return (
       <article
         aria-label={`${node.id} ${componentKind}`}
-        className={`graph-node ${compact ? "compact" : ""} ${
+        className={`graph-node kind-${node.kind} ${compact ? "compact" : ""} ${
           selectedNode?.id === node.id ? "selected" : ""
         }`}
         role="group"
@@ -2290,6 +2295,9 @@ function PipelinesPanel({
       </article>
     );
   }
+
+  const atomFlowNodes = graphFlow?.mainNodes ?? [];
+  const atomEdges = graphFlow?.mainEdges ?? [];
 
   return (
     <div className="pipelines-stack">
@@ -2479,57 +2487,131 @@ function PipelinesPanel({
 
       <div className="pipeline-editor-grid">
         <section className="graph-surface" aria-label="Pipeline graph">
-          <div className="graph-flow">
-            <span className="graph-arrow start" aria-label="Pipeline start">
-              Start -&gt; {graphFlow?.mainNodes[0]?.id}
-            </span>
-            {graphFlow?.mainNodes.map((node, index) => {
-              const outgoingEdges = graphFlow.mainEdges.filter(
-                (edge) => edge.from === node.id,
-              );
-              const spokes = graphFlow.spokesByTarget.get(node.id) ?? [];
-              return (
-                <div className="graph-flow-item" key={node.id}>
-                  {spokes.length > 0 ? (
+          <div
+            className={`pipeline-atom-canvas ${
+              graphMotionEnabled ? "motion-enabled" : ""
+            }`}
+          >
+            <div className="atom-stage-labels" aria-hidden="true">
+              <span>Input</span>
+              <span>Reasoning core</span>
+              <span>Output</span>
+            </div>
+            <div
+              className="pipeline-atom-map"
+              style={{ transform: `scale(${graphZoom / 100})` }}
+            >
+              <span className="atom-entry-link" aria-label="Pipeline start">
+                Start
+                <ArrowRight size={16} aria-hidden="true" />
+                {atomFlowNodes[0]?.id}
+              </span>
+              {atomFlowNodes.map((node, index) => {
+                const outgoingEdges = atomEdges.filter(
+                  (edge) => edge.from === node.id,
+                );
+                const spokes = graphFlow?.spokesByTarget.get(node.id) ?? [];
+                return (
+                  <div className="atom-flow-item" key={node.id}>
                     <div
-                      className="graph-spokes"
-                      aria-label={`${node.id} augments`}
+                      className={
+                        node.kind === "llm" ? "atom-core-wrap" : "atom-stage"
+                      }
                     >
-                      {spokes.map((spoke) => (
-                        <div className="graph-spoke" key={spoke.node.id}>
-                          {renderNodeCard({
-                            node: spoke.node,
-                            index: spoke.index,
-                            compact: true,
-                          })}
-                          <span
-                            className="graph-arrow spoke"
-                            aria-label={`${spoke.node.id} to ${node.id}`}
+                      {node.kind === "llm" ? (
+                        <>
+                          <div className="atom-orbit-ring" aria-hidden="true" />
+                          <div
+                            className="atom-orbitals"
+                            aria-label={`${node.id} augments`}
                           >
-                            -&gt;
-                          </span>
-                        </div>
-                      ))}
+                            {spokes.map((spoke, spokeIndex) => (
+                              <div
+                                className={`atom-orbital slot-${
+                                  (spokeIndex % 4) + 1
+                                }`}
+                                key={spoke.node.id}
+                              >
+                                <span
+                                  className="atom-spoke-link"
+                                  aria-label={`${spoke.node.id} to ${node.id}`}
+                                >
+                                  <ArrowRight size={14} aria-hidden="true" />
+                                </span>
+                                {renderNodeCard({
+                                  node: spoke.node,
+                                  index: spoke.index,
+                                  compact: true,
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                          <span className="atom-label">Reasoning core</span>
+                        </>
+                      ) : null}
+                      <div
+                        className={node.kind === "llm" ? "reasoning-atom" : ""}
+                      >
+                        {renderNodeCard({ node, index })}
+                      </div>
                     </div>
-                  ) : null}
-                  <div className={node.kind === "llm" ? "reasoning-atom" : ""}>
-                    {node.kind === "llm" ? (
-                      <span className="atom-label">Reasoning core</span>
-                    ) : null}
-                    {renderNodeCard({ node, index })}
+                    {outgoingEdges.map((edge) => (
+                      <span
+                        className="atom-flow-link"
+                        aria-label={`${edge.from} to ${edge.to}`}
+                        key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
+                      >
+                        <ArrowRight size={18} aria-hidden="true" />
+                      </span>
+                    ))}
                   </div>
-                  {outgoingEdges.map((edge) => (
-                    <span
-                      className="graph-arrow"
-                      aria-label={`${edge.from} to ${edge.to}`}
-                      key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
-                    >
-                      -&gt;
-                    </span>
-                  ))}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+            <div
+              className="graph-canvas-controls"
+              role="toolbar"
+              aria-label="Graph canvas controls"
+            >
+              <button
+                className="icon-action"
+                type="button"
+                aria-label="Zoom in graph"
+                onClick={() =>
+                  setGraphZoom((current) => Math.min(current + 10, 140))
+                }
+              >
+                <Plus size={16} aria-hidden="true" />
+              </button>
+              <span aria-label="Graph zoom level">{graphZoom}%</span>
+              <button
+                className="icon-action"
+                type="button"
+                aria-label="Zoom out graph"
+                onClick={() =>
+                  setGraphZoom((current) => Math.max(current - 10, 70))
+                }
+              >
+                <Minus size={16} aria-hidden="true" />
+              </button>
+              <span className="toolbar-divider" aria-hidden="true" />
+              <button
+                className="icon-action"
+                type="button"
+                aria-label="Reset graph view"
+                onClick={() => setGraphZoom(100)}
+              >
+                <Maximize2 size={15} aria-hidden="true" />
+              </button>
+              <button
+                className={`icon-action ${graphMotionEnabled ? "selected" : ""}`}
+                type="button"
+                aria-label="Toggle graph motion"
+                onClick={() => setGraphMotionEnabled((current) => !current)}
+              >
+                <Play size={15} aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </section>
 
