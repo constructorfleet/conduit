@@ -14,7 +14,7 @@ use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Envelope, Event};
 use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
-use conduit_provider::Health;
+use conduit_provider::{Health, Provider};
 use conduit_runtime::Runner;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -570,6 +570,8 @@ async fn project_provider_statuses(
         collect_tts_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
         collect_tool_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
     }
+    collect_inline_provider_statuses(graphs, &references, &proven, &mut statuses, &mut seen)
+        .await;
 
     for kind in [ProviderKind::Llm, ProviderKind::Stt, ProviderKind::Tts] {
         if provider_kind_missing(kind, &seen) {
@@ -594,6 +596,29 @@ async fn project_provider_statuses(
 
     statuses.sort_by(|left, right| left.id.cmp(&right.id).then(left.kind.cmp(&right.kind)));
     statuses
+}
+
+async fn collect_inline_provider_statuses(
+    graphs: &[(String, PipelineGraph)],
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    for (_, graph) in graphs {
+        for node in graph.topological_order().unwrap_or_default() {
+            let Ok(Some(provider)) = conduit_runtime::wyoming::wyoming_tts_from_node(node)
+            else {
+                continue;
+            };
+            let key = ProviderKey { kind: ProviderKind::Tts, id: provider.name().to_owned() };
+            if seen.contains(&key) {
+                continue;
+            }
+            let health = provider.health().await;
+            push_registered_status(key, health, references, proven, statuses, seen);
+        }
+    }
 }
 
 async fn collect_stt_statuses(

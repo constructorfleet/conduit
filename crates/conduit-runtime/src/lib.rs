@@ -32,6 +32,7 @@ pub mod sentences;
 pub mod stop;
 pub mod tools;
 mod turn;
+pub mod wyoming;
 
 use std::sync::Arc;
 use std::time::Duration;

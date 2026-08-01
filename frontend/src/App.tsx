@@ -79,6 +79,17 @@ const sections = [
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 
+const LINEAR_STAGE_ORDER: NodeKind[] = [
+  "source",
+  "wake_word",
+  "stt",
+  "speaker_id",
+  "router",
+  "llm",
+  "tts",
+  "sink",
+];
+
 type SectionId = (typeof sections)[number]["id"];
 
 export type PipelineValidationResult =
@@ -433,18 +444,59 @@ function OperatorWorkspace({
           return;
         }
 
-        setSnapshot(loadedSnapshot);
-        setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
-        setComponentCatalog(initialComponentCatalog ?? loadedComponentCatalog);
-        setProviderDefinitions((current) =>
-          mergeProviderDefinitions(
-            defaultProviderDefinitions(
-              initialComponentCatalog ?? loadedComponentCatalog,
-              initialPipelineViews ?? loadedPipelineViews,
-              loadedSnapshot,
+        const basePipelineViews = initialPipelineViews ?? loadedPipelineViews;
+        const baseComponentCatalog =
+          initialComponentCatalog ?? loadedComponentCatalog;
+        const loadedProviderDefinitions = loadProviderDefinitions(
+          baseComponentCatalog,
+          basePipelineViews,
+          loadedSnapshot,
+        );
+        let nextSnapshot = loadedSnapshot;
+        let nextPipelineViews = basePipelineViews;
+
+        if (!initialPipelineViews) {
+          const repairedPipelineViews = basePipelineViews.map((view) => ({
+            ...view,
+            graph: normalizePipelineGraph(
+              hydrateGraphProviderDefinitions(
+                view.graph,
+                loadedProviderDefinitions,
+              ),
             ),
-            current,
-          ),
+          }));
+          const changedViews = repairedPipelineViews.filter(
+            (view, index) =>
+              !pipelineGraphsEqual(view.graph, basePipelineViews[index].graph),
+          );
+
+          if (changedViews.length > 0) {
+            const savedViews = await Promise.all(
+              changedViews.map((view) =>
+                snapshotClient.savePipeline(view.graph),
+              ),
+            );
+            const savedByName = new Map(
+              savedViews.map((view) => [view.graph.name, view]),
+            );
+            nextPipelineViews = repairedPipelineViews.map(
+              (view) => savedByName.get(view.graph.name) ?? view,
+            );
+            nextSnapshot = await snapshotClient
+              .loadSnapshot()
+              .catch(() => loadedSnapshot);
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(nextSnapshot);
+        setPipelineViews(nextPipelineViews);
+        setComponentCatalog(baseComponentCatalog);
+        setProviderDefinitions((current) =>
+          mergeProviderDefinitions(loadedProviderDefinitions, current),
         );
         setTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
@@ -781,9 +833,7 @@ function ProvidersPanel({
     ),
   ).size;
   const selectedDraftComponent = draftProvider
-    ? (componentCatalog.components.find(
-        (component) => component.id === draftProvider.component,
-      ) ?? null)
+    ? componentForProviderDefinition(componentCatalog, draftProvider)
     : null;
   const draftProviderValidation =
     draftProvider && selectedDraftComponent
@@ -945,8 +995,9 @@ function ProvidersPanel({
       if (provider.status) {
         notice = await onProviderTest(provider.id);
       } else if (provider.definition) {
-        const component = componentCatalog.components.find(
-          (candidate) => candidate.id === provider.definition?.component,
+        const component = componentForProviderDefinition(
+          componentCatalog,
+          provider.definition,
         );
         const validation = component
           ? validateProviderDefinitionConfig(provider.definition, component)
@@ -1323,7 +1374,7 @@ function ProviderEditorFields({
       <label className="field">
         <span>Provider component</span>
         <select
-          value={draftProvider.component}
+          value={selectedComponent?.id ?? draftProvider.component}
           onChange={(event) => {
             const component = componentCatalog.components.find(
               (candidate) => candidate.id === event.target.value,
@@ -1340,11 +1391,13 @@ function ProviderEditorFields({
             );
           }}
         >
-          {componentCatalog.components.map((component) => (
-            <option value={component.id} key={component.id}>
-              {component.label}
-            </option>
-          ))}
+          {componentCatalog.components
+            .filter((component) => component.kind === draftProvider.kind)
+            .map((component) => (
+              <option value={component.id} key={component.id}>
+                {component.label}
+              </option>
+            ))}
         </select>
       </label>
       {selectedComponent ? (
@@ -2292,11 +2345,19 @@ function PipelinesPanel({
         if (node.id !== nodeId) {
           return node;
         }
+        const definition = providerDefinitions.find(
+          (provider) => provider.id === providerId,
+        );
 
         return {
           ...node,
           provider: providerId,
-          config: undefined,
+          config: definition
+            ? {
+                component: definition.component,
+                ...pruneEmptyConfig(definition.config),
+              }
+            : undefined,
         };
       }),
     }));
@@ -2305,7 +2366,7 @@ function PipelinesPanel({
   function deleteNode(nodeId: string) {
     applyDraftEdit((graph) => {
       const target = graph.nodes.find((node) => node.id === nodeId);
-      if (!target || graph.nodes.length <= 1) {
+      if (!target || graph.nodes.length <= 1 || isEndpointNode(target)) {
         return graph;
       }
 
@@ -2387,6 +2448,47 @@ function PipelinesPanel({
     });
   }
 
+  function providerForCoreStage(kind: "stt" | "llm" | "tts"): string {
+    const configured = providerDefinitions.find(
+      (provider) => provider.kind === kind,
+    );
+    if (configured) {
+      return configured.id;
+    }
+    if (kind === "stt") {
+      return "whisper";
+    }
+    if (kind === "tts") {
+      return "piper";
+    }
+    return "openai";
+  }
+
+  function addCoreStageNode(kind: "stt" | "llm" | "tts") {
+    if (!draft) {
+      return;
+    }
+
+    const id = uniqueNodeId(draft, kind);
+    const provider = providerForCoreStage(kind);
+    const definition = providerDefinitions.find(
+      (candidate) => candidate.id === provider && candidate.kind === kind,
+    );
+    applyDraftEdit((graph) =>
+      insertLinearStageNode(graph, {
+        id,
+        kind,
+        provider,
+        config: definition
+          ? {
+              component: definition.component,
+              ...pruneEmptyConfig(definition.config),
+            }
+          : undefined,
+      }),
+    );
+  }
+
   function addConfiguredToolProvider(providerId: string) {
     const provider = unusedToolProviders.find(
       (candidate) => candidate.id === providerId,
@@ -2415,9 +2517,13 @@ function PipelinesPanel({
     }
 
     try {
-      const result = await onPipelineValidate(draft);
+      const hydratedDraft = normalizePipelineGraph(
+        hydrateGraphProviderDefinitions(draft, providerDefinitions),
+      );
+      const result = await onPipelineValidate(hydratedDraft);
       updateCurrentDraftState((current) => ({
         ...current,
+        draft: hydratedDraft,
         validation: result,
         notice: null,
       }));
@@ -2434,10 +2540,18 @@ function PipelinesPanel({
     if (!draft || validation?.ok !== true) {
       return false;
     }
+    const hydratedDraft = normalizePipelineGraph(
+      hydrateGraphProviderDefinitions(draft, providerDefinitions),
+    );
 
     try {
-      await onPipelineStored(draft, validation.order);
-      updateCurrentDraftAfterSave(`Saved graph for ${draft.name}`);
+      await onPipelineStored(hydratedDraft, validation.order);
+      updateCurrentDraftState((current) => ({
+        ...current,
+        draft: hydratedDraft,
+        history: [],
+        notice: `Saved graph for ${hydratedDraft.name}`,
+      }));
       return true;
     } catch (caught) {
       markCurrentDraftNotice(
@@ -2457,9 +2571,13 @@ function PipelinesPanel({
     }
 
     try {
-      const result = await onPipelineValidate(draft);
+      const hydratedDraft = normalizePipelineGraph(
+        hydrateGraphProviderDefinitions(draft, providerDefinitions),
+      );
+      const result = await onPipelineValidate(hydratedDraft);
       updateCurrentDraftState((current) => ({
         ...current,
+        draft: hydratedDraft,
         validation: result,
         notice: null,
       }));
@@ -2467,10 +2585,10 @@ function PipelinesPanel({
         return;
       }
       if (hasUnsavedEdits) {
-        await onPipelineStored(draft, result.order);
-        updateCurrentDraftAfterSave(`Saved graph for ${draft.name}`);
+        await onPipelineStored(hydratedDraft, result.order);
+        updateCurrentDraftAfterSave(`Saved graph for ${hydratedDraft.name}`);
       }
-      const message = await onPipelineTest(draft.name);
+      const message = await onPipelineTest(hydratedDraft.name);
       markCurrentDraftNotice(message);
     } catch (caught) {
       markCurrentDraftNotice(
@@ -2532,7 +2650,7 @@ function PipelinesPanel({
                 className="icon-action danger"
                 type="button"
                 aria-label={`Delete ${node.id}`}
-                disabled={draftNodeCount <= 1}
+                disabled={draftNodeCount <= 1 || isEndpointNode(node)}
                 onClick={(event) => {
                   event.stopPropagation();
                   deleteNode(node.id);
@@ -2574,6 +2692,13 @@ function PipelinesPanel({
   const atomFlowNodes = graphFlow?.mainNodes ?? [];
   const atomEdges = graphFlow?.mainEdges ?? [];
   const atomNodeById = new Map(atomFlowNodes.map((node) => [node.id, node]));
+  const missingCoreStages = (
+    [
+      { kind: "stt", label: "STT" },
+      { kind: "llm", label: "LLM" },
+      { kind: "tts", label: "TTS" },
+    ] as const
+  ).filter((stage) => !draft.nodes.some((node) => node.kind === stage.kind));
 
   function attachesFlowLinkToTarget(edge: PipelineEdge) {
     return atomNodeById.get(edge.from)?.kind === "llm";
@@ -2696,6 +2821,18 @@ function PipelinesPanel({
                 <Plus size={16} aria-hidden="true" />
                 Memory into LLM
               </button>
+              {missingCoreStages.map((stage) => (
+                <button
+                  className="secondary-action compact-action"
+                  type="button"
+                  aria-label={`Add ${stage.label} node`}
+                  key={stage.kind}
+                  onClick={() => addCoreStageNode(stage.kind)}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  {stage.label}
+                </button>
+              ))}
             </div>
             <div className="graph-action-group">
               <button
@@ -2732,7 +2869,7 @@ function PipelinesPanel({
               type="button"
               aria-label="Delete selected node"
               title="Delete selected node"
-              disabled={!selectedNode}
+              disabled={!selectedNode || isEndpointNode(selectedNode)}
               onClick={deleteSelectedNode}
             >
               <Trash2 size={17} aria-hidden="true" />
@@ -3099,6 +3236,22 @@ function componentForProviderStatus(
   });
 }
 
+function componentForProviderDefinition(
+  catalog: PipelineComponentCatalog,
+  provider: ProviderDefinition,
+): PipelineComponentDescriptor | null {
+  const componentId =
+    provider.kind === "tts" && provider.component === "wyoming"
+      ? "wyoming.tts"
+      : provider.component;
+  return (
+    catalog.components.find(
+      (component) =>
+        component.id === componentId && component.kind === provider.kind,
+    ) ?? null
+  );
+}
+
 function isWyomingProviderName(provider: string): boolean {
   const normalized = provider.toLowerCase();
   return (
@@ -3129,6 +3282,36 @@ function providerDefinitionsForNode(
       config: nodeConfigObject(node.config),
     },
   ];
+}
+
+function hydrateGraphProviderDefinitions(
+  graph: PipelineGraph,
+  definitions: readonly ProviderDefinition[],
+): PipelineGraph {
+  const byId = new Map(
+    definitions.map((definition) => [definition.id, definition]),
+  );
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const definition = byId.get(node.provider);
+      if (!definition || definition.kind !== node.kind) {
+        return node;
+      }
+
+      return {
+        ...node,
+        config: {
+          ...nodeConfigObject(node.config),
+          component:
+            node.kind === "tts" && definition.component === "wyoming"
+              ? "wyoming.tts"
+              : definition.component,
+          ...pruneEmptyConfig(definition.config),
+        },
+      };
+    }),
+  };
 }
 
 function providerCardViews(
@@ -4030,7 +4213,9 @@ function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
       .filter((node) => node.kind === "tool" || node.kind === "memory")
       .map((node) => node.id),
   );
-  const mainNodes = graph.nodes.filter((node) => !augmentNodeIds.has(node.id));
+  const mainNodes = sortLinearNodes(
+    graph.nodes.filter((node) => !augmentNodeIds.has(node.id)),
+  );
   const mainNodeIds = new Set(mainNodes.map((node) => node.id));
   const mainEdges = graph.edges.filter(
     (edge) => mainNodeIds.has(edge.from) && mainNodeIds.has(edge.to),
@@ -4148,6 +4333,13 @@ function cloneGraph(graph: PipelineGraph): PipelineGraph {
   return JSON.parse(JSON.stringify(graph)) as PipelineGraph;
 }
 
+function pipelineGraphsEqual(
+  left: PipelineGraph,
+  right: PipelineGraph,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function upsertPipelineView(
   views: readonly PipelineView[],
   graph: PipelineGraph,
@@ -4182,6 +4374,88 @@ function uniqueNodeId(graph: PipelineGraph, base: string): string {
     suffix += 1;
   }
   return `${base}_${suffix}`;
+}
+
+function isEndpointNode(node: PipelineNode): boolean {
+  return node.kind === "source" || node.kind === "sink";
+}
+
+function linearStageRank(node: PipelineNode): number {
+  const rank = LINEAR_STAGE_ORDER.indexOf(node.kind);
+  return rank === -1 ? LINEAR_STAGE_ORDER.length : rank;
+}
+
+function sortLinearNodes(nodes: readonly PipelineNode[]): PipelineNode[] {
+  return [...nodes].sort((left, right) => {
+    const rankDelta = linearStageRank(left) - linearStageRank(right);
+    return rankDelta === 0 ? left.id.localeCompare(right.id) : rankDelta;
+  });
+}
+
+function normalizePipelineGraph(graph: PipelineGraph): PipelineGraph {
+  const augmentKinds = new Set<NodeKind>(["tool", "memory"]);
+  const linearNodes = sortLinearNodes(
+    graph.nodes.filter((node) => !augmentKinds.has(node.kind)),
+  );
+  const linearNodeIds = new Set(linearNodes.map((node) => node.id));
+  const augmentNodes = graph.nodes.filter((node) =>
+    augmentKinds.has(node.kind),
+  );
+  const linearEdges = linearNodes.slice(0, -1).map((node, index) => ({
+    from: node.id,
+    to: linearNodes[index + 1].id,
+  }));
+  const nonLinearEdges = graph.edges.filter(
+    (edge) => !(linearNodeIds.has(edge.from) && linearNodeIds.has(edge.to)),
+  );
+
+  return {
+    ...graph,
+    nodes: [...linearNodes, ...augmentNodes],
+    edges: [...linearEdges, ...dedupeEdges(nonLinearEdges)],
+  };
+}
+
+function dedupeEdges(edges: readonly PipelineEdge[]): PipelineEdge[] {
+  const seen = new Set<string>();
+  return edges.filter((edge) => {
+    const key = `${edge.from}->${edge.to}:${edge.port ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function insertLinearStageNode(
+  graph: PipelineGraph,
+  node: PipelineNode,
+): PipelineGraph {
+  const nodeRank = linearStageRank(node);
+  const existingMainNodes = graph.nodes
+    .filter((candidate) => !["tool", "memory"].includes(candidate.kind))
+    .sort((left, right) => linearStageRank(left) - linearStageRank(right));
+  const previous = [...existingMainNodes]
+    .reverse()
+    .find((candidate) => linearStageRank(candidate) < nodeRank);
+  const next = existingMainNodes.find(
+    (candidate) => linearStageRank(candidate) > nodeRank,
+  );
+  const edges = graph.edges.filter(
+    (edge) =>
+      !(previous && next && edge.from === previous.id && edge.to === next.id),
+  );
+
+  return normalizePipelineGraph({
+    ...graph,
+    nodes: [...graph.nodes, node],
+    edges: [
+      ...edges,
+      ...(previous ? [{ from: previous.id, to: node.id }] : []),
+      ...(next ? [{ from: node.id, to: next.id }] : []),
+    ],
+  });
 }
 
 function useSmallScreenMode(forcedSmallScreen: boolean) {

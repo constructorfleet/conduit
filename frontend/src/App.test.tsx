@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -834,6 +840,127 @@ describe("Pipelines graph editor", () => {
       id: "llm",
       kind: "llm",
       provider: "openai-fast",
+      config: {
+        component: "openai.completions",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt.5",
+        streaming: true,
+      },
+    });
+  });
+
+  it("hydrates already-selected provider definitions before saving a graph", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "openai-fast",
+          label: "OpenAI Fast",
+          kind: "llm",
+          component: "openai.responses",
+          config: {
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-5",
+            streaming: true,
+          },
+        },
+      ]),
+    );
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[
+          {
+            ...pipelineView(),
+            graph: {
+              ...pipelineView().graph,
+              nodes: pipelineView().graph.nodes.map((node) =>
+                node.id === "llm" ? { ...node, provider: "openai-fast" } : node,
+              ),
+            },
+          },
+        ]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(savedGraphs[0]?.nodes.find((node) => node.id === "llm")).toEqual({
+      id: "llm",
+      kind: "llm",
+      provider: "openai-fast",
+      config: {
+        component: "openai.responses",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-5",
+        streaming: true,
+      },
+    });
+  });
+
+  it("repairs loaded graphs from browser provider definitions before status use", async () => {
+    const user = userEvent.setup();
+    const staleView = {
+      ...pipelineView(),
+      graph: {
+        ...pipelineView().graph,
+        nodes: pipelineView().graph.nodes.map((node) =>
+          node.id === "tts"
+            ? { ...node, provider: "piper", config: undefined }
+            : node,
+        ),
+      },
+    };
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "piper",
+          label: "piper",
+          kind: "tts",
+          component: "wyoming",
+          config: {
+            url: "tcp://10.0.10.100:10200",
+            model: "en_US-ryan-high",
+            streaming: true,
+          },
+        },
+      ]),
+    );
+    const fetchMock = mockOperatorApi({ pipelineViews: [staleView] });
+
+    render(<App />);
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([input, init]) => {
+        const url = input instanceof URL ? input : new URL(input.toString());
+        return (
+          url.pathname === "/v1/pipelines/kitchen" && init?.method === "PUT"
+        );
+      });
+      expect(saveCall).toBeDefined();
+      const graph = JSON.parse(
+        saveCall?.[1]?.body?.toString() ?? "{}",
+      ) as PipelineGraph;
+      expect(graph.nodes.find((node) => node.id === "tts")).toEqual({
+        id: "tts",
+        kind: "tts",
+        provider: "piper",
+        config: {
+          component: "wyoming.tts",
+          url: "tcp://10.0.10.100:10200",
+          model: "en_US-ryan-high",
+          streaming: true,
+        },
+      });
     });
   });
 
@@ -951,6 +1078,50 @@ describe("Pipelines graph editor", () => {
     );
   });
 
+  it("normalizes saved TTS Wyoming provider definitions to the TTS schema", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "piper",
+          label: "piper",
+          kind: "tts",
+          component: "wyoming",
+          config: {
+            url: "tcp://10.0.10.100:10200",
+            model: "en_US-ryan-high",
+            streaming: true,
+          },
+        },
+      ]),
+    );
+
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    const piperCard = screen
+      .getByRole("heading", { name: "piper" })
+      .closest("article");
+    expect(piperCard).not.toBeNull();
+    await user.click(
+      within(piperCard as HTMLElement).getByRole("button", {
+        name: "Edit piper",
+      }),
+    );
+
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "Wyoming TTS",
+    );
+    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+      "tcp://10.0.10.100:10200",
+    );
+    expect(screen.getByLabelText("model")).toHaveDisplayValue(
+      "en_US-ryan-high",
+    );
+    expect(screen.getByLabelText("streaming")).toBeChecked();
+  });
+
   it("does not overwrite an existing provider with an invalid configuration", async () => {
     const user = userEvent.setup();
     render(<App initialComponentCatalog={componentCatalog()} />);
@@ -1043,10 +1214,109 @@ describe("Pipelines graph editor", () => {
     expect(
       within(toolbar).queryByRole("button", { name: "Add fallback TTS" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete mic" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete speaker" }),
+    ).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Delete tts" }));
     expect(screen.queryByText("tts")).not.toBeInTheDocument();
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add TTS node" })).toBeEnabled();
+  });
+
+  it("keeps mic and speaker as functional graph endpoints when saving", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    const scrambled = pipelineView();
+    const nodeById = Object.fromEntries(
+      scrambled.graph.nodes.map((node) => [node.id, node]),
+    ) as Record<string, PipelineGraph["nodes"][number]>;
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[
+          {
+            graph: {
+              ...scrambled.graph,
+              nodes: [
+                nodeById.speaker,
+                nodeById.llm,
+                nodeById.tts,
+                nodeById.stt,
+                nodeById.mic,
+              ],
+              edges: [
+                { from: "speaker", to: "tts" },
+                { from: "tts", to: "llm" },
+                { from: "llm", to: "stt" },
+                { from: "stt", to: "mic" },
+              ],
+            },
+            order: ["speaker", "tts", "llm", "stt", "mic"],
+          },
+        ]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    const graph = screen.getByLabelText("Pipeline graph");
+    const mic = within(graph).getByRole("group", { name: "mic capture" });
+    const speaker = within(graph).getByRole("group", {
+      name: "speaker capture",
+    });
+    expect(
+      mic.compareDocumentPosition(speaker) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toEqual([
+      "mic",
+      "stt",
+      "llm",
+      "tts",
+      "speaker",
+    ]);
+    expect(savedGraphs[0]?.edges).toEqual([
+      { from: "mic", to: "stt" },
+      { from: "stt", to: "llm" },
+      { from: "llm", to: "tts" },
+      { from: "tts", to: "speaker" },
+    ]);
+  });
+
+  it("restores deleted TTS between the LLM and speaker endpoints", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Delete tts" }));
+    await user.click(screen.getByRole("button", { name: "Add TTS node" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toEqual([
+      "mic",
+      "stt",
+      "llm",
+      "tts",
+      "speaker",
+    ]);
+    expect(savedGraphs[0]?.edges).toContainEqual({ from: "llm", to: "tts" });
+    expect(savedGraphs[0]?.edges).toContainEqual({
+      from: "tts",
+      to: "speaker",
+    });
   });
 
   it("keeps long pipeline node labels inside the rendered node card", async () => {
@@ -1895,6 +2165,9 @@ function componentCatalog(): PipelineComponentCatalog {
           properties: {
             url: { type: "string", format: "url" },
             voice: { type: "string" },
+            model: { type: "string" },
+            mode: { type: "string" },
+            streaming: { type: "boolean" },
           },
           required: ["url"],
         },

@@ -284,9 +284,15 @@ fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
 fn validate_component_configs(graph: &PipelineGraph) -> Result<(), ApiError> {
     let catalog = component_catalog();
     for node in &graph.nodes {
-        let Some(component) = catalog
-            .iter()
-            .find(|component| component.id == node.provider && component.kind == node.kind)
+        let config_component = node.config.as_object().and_then(|config| {
+            config
+                .get("component")
+                .and_then(serde_json::Value::as_str)
+                .filter(|component| !component.is_empty())
+        });
+        let Some(component) = config_component
+            .and_then(|component_id| component_for_node_kind(&catalog, component_id, node.kind))
+            .or_else(|| component_for_node_kind(&catalog, &node.provider, node.kind))
         else {
             continue;
         };
@@ -411,6 +417,9 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
                     ("voice", string_property(None, None)),
+                    ("model", string_property(None, None)),
+                    ("mode", string_property(None, None)),
+                    ("streaming", boolean_property()),
                 ]),
                 required: vec!["url"],
             },
@@ -461,6 +470,19 @@ fn openai_llm_schema() -> ComponentConfigSchema {
         ]),
         required: vec!["base_url", "model"],
     }
+}
+
+fn component_for_node_kind<'a>(
+    catalog: &'a [PipelineComponentDescriptor],
+    component_id: &str,
+    kind: NodeKind,
+) -> Option<&'a PipelineComponentDescriptor> {
+    let normalized_id = if kind == NodeKind::Tts && component_id == "wyoming" {
+        "wyoming.tts"
+    } else {
+        component_id
+    };
+    catalog.iter().find(|component| component.id == normalized_id && component.kind == kind)
 }
 
 fn string_property(

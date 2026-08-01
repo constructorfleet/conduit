@@ -11,6 +11,7 @@ use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
 use serde::Deserialize;
 
+use crate::wyoming::wyoming_tts_from_node;
 use crate::Providers;
 
 /// Configuration read from a [`NodeKind::Llm`] node.
@@ -136,11 +137,11 @@ impl Plan {
                 NodeKind::Tts => {
                     reject_duplicate(&tts, node)?;
                     let config: TtsConfig = parse_config(node)?;
-                    tts = Some((
-                        providers.tts().require(&node.provider)?,
-                        node.id.clone(),
-                        config.voice,
-                    ));
+                    let provider = providers
+                        .tts()
+                        .require(&node.provider)
+                        .or_else(|_| inline_wyoming_tts(node))?;
+                    tts = Some((provider, node.id.clone(), config.voice));
                 }
                 // Explicitly refused rather than skipped. A router that is
                 // accepted and then ignored turns "send hard questions to the
@@ -211,6 +212,12 @@ impl Plan {
             max_tool_rounds,
         })
     }
+}
+
+fn inline_wyoming_tts(node: &Node) -> Result<Arc<dyn TextToSpeech>> {
+    wyoming_tts_from_node(node)?
+        .map(|provider| Arc::new(provider) as Arc<dyn TextToSpeech>)
+        .ok_or_else(|| Error::UnknownProvider(node.provider.clone()))
 }
 
 /// Rejects a second node of a kind the runtime can only run once.

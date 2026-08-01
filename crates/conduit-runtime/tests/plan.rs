@@ -14,6 +14,7 @@ use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::{Error, GraphError};
 use conduit_runtime::{Providers, Runner};
 use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
+use futures_util::StreamExt;
 
 /// A model node with the configuration every pipeline needs.
 fn llm_node(id: &str, provider: &str) -> Node {
@@ -35,6 +36,10 @@ fn providers() -> Providers {
         .with_stt(FakeStt::new(vec![]))
         .with_llm(FakeLlm::new(vec![]))
         .with_tts(FakeTts::new())
+}
+
+fn providers_without_tts() -> Providers {
+    Providers::new().with_stt(FakeStt::new(vec![])).with_llm(FakeLlm::new(vec![]))
 }
 
 /// Resolves `graph` and returns the error, failing if it resolves.
@@ -232,4 +237,68 @@ fn a_missing_stage_is_reported_before_a_wiring_complaint() {
 
     let message = config_message(&refusal(&no_synthesis, &providers())).to_owned();
     assert!(!message.contains("downstream"), "{message}");
+}
+
+#[test]
+fn an_inline_wyoming_tts_provider_resolves_from_node_configuration() {
+    let graph = PipelineGraph::new("inline wyoming")
+        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::new("tts", NodeKind::Tts, "piper").with_config(serde_json::json!({
+            "component": "wyoming.tts",
+            "url": "tcp://127.0.0.1:10200",
+            "voice": "en_US-ryan-high"
+        })))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    Runner::prepare(&graph, &providers_without_tts(), EventBus::default())
+        .expect("inline provider config is executable");
+}
+
+#[tokio::test]
+async fn wyoming_tts_sends_voice_and_streams_audio_chunks() {
+    use conduit_provider::tts::{SynthesisRequest, TextToSpeech};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("accept");
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read request");
+        let request: serde_json::Value = serde_json::from_str(line.trim()).expect("json");
+        assert_eq!(request["type"], "synthesize");
+        assert_eq!(request["data"]["text"], "hello");
+        assert_eq!(request["data"]["voice"]["name"], "en_US-ryan-high");
+        let mut socket = reader.into_inner();
+        socket
+            .write_all(
+                br#"{"type":"audio-chunk","data":{"rate":16000,"width":2,"channels":1},"payload_length":4}
+abcd"#,
+            )
+            .await
+            .expect("audio chunk");
+        socket.write_all(br#"{"type":"audio-stop"}"#).await.expect("audio stop");
+        socket.write_all(b"\n").await.expect("newline");
+    });
+    let provider = conduit_runtime::wyoming::WyomingTts::from_inline(
+        "piper",
+        conduit_runtime::wyoming::InlineProviderConfig {
+            component: Some("wyoming.tts".to_owned()),
+            url: Some(format!("tcp://{address}")),
+            voice: Some("en_US-ryan-high".to_owned()),
+            ..Default::default()
+        },
+    )
+    .expect("provider");
+
+    let mut audio =
+        provider.synthesize(SynthesisRequest::new("hello")).await.expect("synthesizes");
+    let chunk = audio.next().await.expect("chunk").expect("ok");
+
+    assert_eq!(chunk.data.as_ref(), b"abcd");
+    assert_eq!(chunk.format.sample_rate, 16_000);
+    server.await.expect("server finishes");
 }

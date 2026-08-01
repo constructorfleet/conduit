@@ -130,6 +130,38 @@ async fn storing_then_reading_a_pipeline_round_trips() {
 }
 
 #[tokio::test]
+async fn inline_wyoming_tts_provider_config_with_model_alias_is_valid() {
+    let state = AppState::new(EventBus::default());
+    let graph = PipelineGraph::new("kitchen")
+        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
+        .with_node(Node::new("stt", NodeKind::Stt, "wyoming").with_config(serde_json::json!({
+            "url": "tcp://whisper.local:10300"
+        })))
+        .with_node(Node::new("llm", NodeKind::Llm, "openai.responses").with_config(
+            serde_json::json!({
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-5"
+            }),
+        ))
+        .with_node(Node::new("tts", NodeKind::Tts, "piper").with_config(serde_json::json!({
+            "component": "wyoming",
+            "url": "tcp://10.0.10.100:10200",
+            "model": "en_US-ryan-high",
+            "streaming": true
+        })))
+        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("tts", "speaker"));
+
+    let (status, body) = call(&state, put(&graph)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["graph"]["nodes"][3]["provider"], "piper");
+}
+
+#[tokio::test]
 async fn replacing_a_pipeline_returns_ok_not_created() {
     let state = AppState::new(EventBus::default());
     call(&state, put(&valid_graph())).await;
@@ -305,7 +337,13 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     );
     let components = body["components"].as_array().expect("component list");
     assert_component(components, "openai.speech", "tts", &["base_url", "model"], &["model"]);
-    assert_component(components, "wyoming.tts", "tts", &["url", "voice"], &["url"]);
+    assert_component(
+        components,
+        "wyoming.tts",
+        "tts",
+        &["url", "voice", "model", "mode", "streaming"],
+        &["url"],
+    );
     assert_component(
         components,
         "openai.transcription",

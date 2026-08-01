@@ -88,9 +88,17 @@ pipeline supplies the model name in node config.
 The service exposes `GET /v1/pipeline-components` so the Operator Console can
 render provider-specific configuration forms from component schemas. Operators
 configure provider instances with stable IDs on the Providers page, then select
-those IDs from pipeline nodes. Provider instance definitions are currently
-operator-console state; provider registration is still controlled by the server
-environment until Conduit grows a server-side provider store and runtime plugin
+those IDs from pipeline nodes.
+
+Provider instance definitions are still stored by the Operator Console. When a
+supported inline provider is assigned to a pipeline node, the console embeds the
+runtime component and settings into that saved graph node so the server can
+construct the provider while preparing the pipeline. Wyoming TTS is currently
+supported this way: a node with provider id `piper` and config
+`component=wyoming.tts`, `url=tcp://host:port`, and optional `voice` resolves as
+a runnable TTS provider even when no process environment provider named `piper`
+was registered at startup. Unsupported provider components remain UI
+definitions until Conduit grows a server-side provider store and runtime plugin
 loader.
 
 Setting an STT or TTS model without a base URL or API key is an error. The
