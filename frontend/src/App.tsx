@@ -3977,8 +3977,8 @@ function nextAugmentOrbitPosition(
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
   return {
-    x: Math.round(Math.cos(angle) * 148),
-    y: Math.round(Math.sin(angle) * 150),
+    x: Math.round(Math.cos(angle) * 300),
+    y: Math.round(Math.sin(angle) * 300),
   };
 }
 
@@ -4009,7 +4009,7 @@ function objectConfig(value: unknown): Record<string, unknown> {
 }
 
 function clampOrbitCoordinate(value: number): number {
-  return Math.max(-180, Math.min(180, Math.round(value)));
+  return Math.max(-360, Math.min(360, Math.round(value)));
 }
 
 function initializePipelineDrafts(

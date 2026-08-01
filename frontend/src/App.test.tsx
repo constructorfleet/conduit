@@ -1174,9 +1174,9 @@ describe("Pipelines graph editor", () => {
     const toolOrbital = within(graph).getByLabelText("Move confirm augment");
     expect(memoryOrbital).toHaveStyle({
       "--orbit-x": "0px",
-      "--orbit-y": "-150px",
+      "--orbit-y": "-300px",
       "--orbit-start-x": "0px",
-      "--orbit-start-y": "-150px",
+      "--orbit-start-y": "-300px",
     });
     expect(memoryOrbital).not.toHaveAttribute(
       "data-orbit-slot",
@@ -1212,7 +1212,7 @@ describe("Pipelines graph editor", () => {
       (node) => node.id === "memory",
     )?.config;
     expect(memoryConfig).toMatchObject({
-      ui: { orbit: { x: 60, y: -100 } },
+      ui: { orbit: { x: 60, y: -250 } },
     });
   });
 
