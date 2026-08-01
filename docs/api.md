@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/events`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -33,9 +33,9 @@ Authorization: Bearer <token>
 ```
 
 Device tokens may open conversation sockets. Management tokens may manage
-pipelines and read events. Management tokens may also open a conversation for
-manual testing. Device tokens cannot call management routes. The planned
-operator status snapshot route uses the same management-route access model.
+pipelines, read events, and read operator status snapshots. Management tokens
+may also open a conversation for manual testing. Device tokens cannot call
+management routes.
 
 | Situation | Status |
 | --- | --- |
@@ -43,17 +43,14 @@ operator status snapshot route uses the same management-route access model.
 | Device token on a management route | `403 Forbidden` |
 | Device restricted away from the requested pipeline | `403 Forbidden` |
 
-## Planned Operator Status Contract
+## Operator Status
 
 ### `GET /v1/status`
 
-The status route is implemented in the runtime status API slice. Its contract is
-defined here so backend status projection and the separate Operator Console can
-target one shape. It returns the coherent operator status snapshot used by the
-Operator Console before it subscribes to `/v1/events`. This route is a
-management route: a management bearer token may read it, device tokens may not,
-and anonymous mode only applies when the server has explicitly been configured
-as open.
+Returns the coherent operator status snapshot used by the Operator Console
+before it subscribes to `/v1/events`. This route is a management route: a
+management bearer token may read it, device tokens may not, and anonymous mode
+only applies when the server has explicitly been configured as open.
 
 The snapshot contract is defined by `conduit_api::status::OperatorStatusSnapshot`.
 The response shape is:
@@ -145,11 +142,33 @@ The response shape is:
     "bindings": [
       {
         "resource": "pipeline_health",
-        "events": ["TurnStarted", "StageFailed", "ConversationCompleted"]
+        "events": [
+          "TurnStarted",
+          "StageFailed",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
+      },
+      {
+        "resource": "active_turns",
+        "events": [
+          "TurnStarted",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
+      },
+      {
+        "resource": "recent_failures",
+        "events": ["StageFailed", "ConversationCompleted"]
       },
       {
         "resource": "satellite_status",
-        "events": ["ConversationStarted", "AudioStarted", "ConversationCompleted"]
+        "events": [
+          "ConversationStarted",
+          "AudioStarted",
+          "ConversationCompleted",
+          "ConversationCancelled"
+        ]
       }
     ]
   }
@@ -261,7 +280,9 @@ Validates a graph without storing it. The success body has the same shape as
 ### `GET /v1/events`
 
 Returns server-sent events published after subscription. It is a live stream,
-not an event history.
+not an event history. Runtime turn events include pipeline attribution when
+they were emitted by a prepared pipeline, so status projections and operator
+views do not have to infer pipeline identity from node names.
 
 Query filters:
 

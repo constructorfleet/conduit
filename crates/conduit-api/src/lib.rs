@@ -57,6 +57,7 @@ pub const CONVERSE_ROUTE: &str = "/v1/pipelines/{name}/converse";
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/events", get(events::stream))
+        .route("/v1/status", get(status::get))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route(CONVERSE_ROUTE, get(converse::converse))
