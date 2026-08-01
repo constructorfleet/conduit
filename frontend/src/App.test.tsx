@@ -920,6 +920,19 @@ describe("Providers workspace", () => {
     expect(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue(
+      "openai-primary",
+    );
+    expect(screen.getByLabelText("Provider label")).toHaveDisplayValue(
+      "OpenAI Primary",
+    );
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "OpenAI Completions",
+    );
+    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+      "https://api.openai.com/v1",
+    );
+    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt.5");
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -956,6 +969,10 @@ describe("Providers workspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Add provider" }));
     await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    expect(screen.queryByRole("menuitem", { name: "All kinds" })).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Provider types" }),
+    ).toBeInTheDocument();
     await user.click(
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
     );

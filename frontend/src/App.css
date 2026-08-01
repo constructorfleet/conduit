@@ -166,7 +166,15 @@ button {
 }
 
 .icon-action.danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
+}
+
+.icon-action.success {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
 }
 
 .link-action {
@@ -858,7 +866,13 @@ button {
 
 .provider-definition-form {
   grid-template-columns: repeat(3, minmax(150px, 1fr));
-  align-items: end;
+  align-items: start;
+  gap: 14px 16px;
+}
+
+.provider-add-dialog .provider-definition-form {
+  grid-template-columns: 1fr;
+  gap: 14px;
 }
 
 .provider-definition-form .component-config-fields,

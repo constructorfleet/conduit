@@ -1076,7 +1076,7 @@ function ProviderAddDialog({
           <div className="provider-card-controls">
             {draftProvider ? (
               <button
-                className="icon-action"
+                className="icon-action success"
                 type="button"
                 aria-label="Save provider"
                 onClick={onSave}
@@ -1085,7 +1085,7 @@ function ProviderAddDialog({
               </button>
             ) : null}
             <button
-              className="icon-action"
+              className="icon-action danger"
               type="button"
               aria-label="Cancel provider edit"
               onClick={onCancel}
@@ -1113,7 +1113,7 @@ function ProviderAddDialog({
                   role="menuitem"
                   onClick={() => onKindChange(null)}
                 >
-                  All kinds
+                  Provider types
                 </button>
                 {selectedKindComponents.map((component) => (
                   <button
