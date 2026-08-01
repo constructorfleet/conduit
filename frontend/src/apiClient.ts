@@ -1,4 +1,7 @@
-import type { OperatorStatusSnapshot } from "./contracts/status";
+import {
+  operatorStatusSnapshotFixture,
+  type OperatorStatusSnapshot,
+} from "./contracts/status";
 import type { OperatorAccess } from "./operatorAccess";
 
 export type SnapshotState = "idle" | "loading" | "live" | "stale" | "error";
@@ -21,8 +24,9 @@ export function createSnapshotClient(
   return {
     statusRoute: "/v1/status",
     eventRoute: "/v1/events",
-    state: config.access.mode === "none" ? "idle" : "loading",
-    snapshot: null,
+    state: config.access.mode === "none" ? "idle" : "live",
+    snapshot:
+      config.access.mode === "none" ? null : operatorStatusSnapshotFixture,
   };
 }
 
