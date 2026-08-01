@@ -5,6 +5,8 @@ import type {
   PipelineTestRequest,
   PipelineTestResult,
   PipelineView,
+  ProviderDefinition,
+  ProviderDefinitionView,
   RawTurnEvents,
   TurnList,
   TurnSnapshot,
@@ -34,6 +36,7 @@ export interface SnapshotClient {
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
   loadPipelineViews: () => Promise<PipelineView[]>;
   loadComponentCatalog: () => Promise<PipelineComponentCatalog>;
+  loadProviderDefinitions: () => Promise<ProviderDefinitionView[]>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -43,6 +46,10 @@ export interface SnapshotClient {
     name: string,
     request?: PipelineTestRequest,
   ) => Promise<PipelineTestResult>;
+  saveProviderDefinition: (
+    definition: ProviderDefinition,
+  ) => Promise<ProviderDefinitionView>;
+  deleteProviderDefinition: (id: string) => Promise<void>;
 }
 
 export function createSnapshotClient(
@@ -73,12 +80,19 @@ export function createSnapshotClient(
       return Promise.all(names.map((name) => client.getPipeline(name)));
     },
     loadComponentCatalog: () => client.listProviderComponents(),
+    loadProviderDefinitions: async () => {
+      const ids = await client.listProviderDefinitions();
+      return Promise.all(ids.map((id) => client.getProviderDefinition(id)));
+    },
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
     savePipeline: (graph) => client.putPipeline(graph.name, graph),
     validatePipeline: (graph) => client.validatePipeline(graph),
     runPipelineTest: (name, request) => client.testPipeline(name, request),
+    saveProviderDefinition: (definition) =>
+      client.putProviderDefinition(definition.id, definition),
+    deleteProviderDefinition: (id) => client.deleteProviderDefinition(id),
   };
 }
 
@@ -98,6 +112,7 @@ function createMockSnapshotClient(
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
     loadPipelineViews: async () => [pipelineViewFixture],
     loadComponentCatalog: async () => ({ components: [] }),
+    loadProviderDefinitions: async () => [],
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
     loadTurn: async () => turnSnapshotFixture,
     loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),
@@ -116,7 +131,27 @@ function createMockSnapshotClient(
       audio_bytes: 24,
       reply_text: `You said: ${request?.utterance ?? "conduit test"}.`,
     }),
+    saveProviderDefinition: async (definition) => ({
+      ...definition,
+      kind: providerKindFromVariant(definition.variant.type),
+    }),
+    deleteProviderDefinition: async () => {},
   };
+}
+
+function providerKindFromVariant(
+  variant: ProviderDefinition["variant"]["type"],
+): ProviderDefinitionView["kind"] {
+  if (variant === "openai_llm") {
+    return "llm";
+  }
+  if (variant === "openai_stt" || variant === "wyoming_stt") {
+    return "stt";
+  }
+  if (variant === "openai_tts" || variant === "wyoming_tts") {
+    return "tts";
+  }
+  return "tool";
 }
 
 export function authorizationHeaders(access: OperatorAccess): HeadersInit {

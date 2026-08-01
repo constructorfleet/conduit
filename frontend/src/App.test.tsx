@@ -7,6 +7,8 @@ import type {
   PipelineComponentCatalog,
   PipelineGraph,
   PipelineView,
+  ProviderDefinition,
+  ProviderDefinitionView,
 } from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
@@ -928,49 +930,44 @@ describe("Pipelines graph editor", () => {
 
   it("keeps saved OpenAI and Wyoming provider configuration over inferred defaults", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "openai",
-          label: "OpenAI Primary",
-          kind: "llm",
-          component: "openai.responses",
-          config: {
-            base_url: "https://api.openai.com/v1",
-            api_key: "sk-test",
-            model: "gpt-5",
-            streaming: true,
-          },
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          api_key: "sk-test",
+          model: "gpt-5",
+          streaming: true,
         },
-        {
-          id: "whisper",
-          label: "Whisper Local",
-          kind: "stt",
-          component: "wyoming",
-          config: {
-            url: "tcp://whisper.local:10300",
-            model: "tiny-int8",
-            streaming: true,
-          },
+      }),
+      providerDefinitionFixture({
+        id: "whisper",
+        label: "Whisper Local",
+        component: "wyoming",
+        config: {
+          url: "tcp://whisper.local:10300",
+          model: "tiny-int8",
+          streaming: true,
         },
-        {
-          id: "piper-local",
-          label: "Piper Local",
-          kind: "tts",
-          component: "wyoming.tts",
-          config: {
-            url: "tcp://piper.local:10200",
-            voice: "en_US-lessac-medium",
-          },
+      }),
+      providerDefinitionFixture({
+        id: "piper-local",
+        label: "Piper Local",
+        component: "wyoming.tts",
+        config: {
+          url: "tcp://piper.local:10200",
+          voice: "en_US-lessac-medium",
         },
-      ]),
-    );
+      }),
+    ];
 
     render(
       <App
         initialComponentCatalog={componentCatalog()}
         initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={providerDefinitions}
       />,
     );
 
@@ -1042,24 +1039,26 @@ describe("Pipelines graph editor", () => {
 
   it("normalizes saved TTS Wyoming provider definitions to the TTS schema", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "piper",
-          label: "piper",
-          kind: "tts",
-          component: "wyoming",
-          config: {
-            url: "tcp://10.0.10.100:10200",
-            model: "en_US-ryan-high",
-            streaming: true,
-          },
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "piper",
+        label: "piper",
+        kind: "tts",
+        component: "wyoming",
+        config: {
+          url: "tcp://10.0.10.100:10200",
+          model: "en_US-ryan-high",
+          streaming: true,
         },
-      ]),
-    );
+      }),
+    ];
 
-    render(<App initialComponentCatalog={componentCatalog()} />);
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
 
     await enterProvidersSection(user);
     const piperCard = screen
@@ -1078,7 +1077,7 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("url required")).toHaveDisplayValue(
       "tcp://10.0.10.100:10200",
     );
-    expect(screen.getByLabelText("model")).toHaveDisplayValue(
+    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
       "en_US-ryan-high",
     );
     expect(screen.getByLabelText("streaming")).toBeChecked();
@@ -1381,29 +1380,25 @@ describe("Pipelines graph editor", () => {
   it("adds separate tool augments for distinct configured tool provider ids", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "calendar-tool",
-          label: "Calendar Tool",
-          kind: "tool",
-          component: "mcp.sse",
-          config: { url: "https://calendar.example.test/sse" },
-        },
-        {
-          id: "lights-tool",
-          label: "Lights Tool",
-          kind: "tool",
-          component: "mcp.streamable_http",
-          config: { url: "https://lights.example.test/mcp" },
-        },
-      ]),
-    );
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "calendar-tool",
+        label: "Calendar Tool",
+        component: "mcp.sse",
+        config: { url: "https://calendar.example.test/sse" },
+      }),
+      providerDefinitionFixture({
+        id: "lights-tool",
+        label: "Lights Tool",
+        component: "mcp.streamable_http",
+        config: { url: "https://lights.example.test/mcp" },
+      }),
+    ];
     render(
       <App
         initialComponentCatalog={componentCatalog()}
         initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={providerDefinitions}
         onPipelineSaved={(graph) => savedGraphs.push(graph)}
       />,
     );
@@ -1658,10 +1653,6 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "openai-primary");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "OpenAI Primary");
-    await user.selectOptions(
-      screen.getByLabelText("Provider component"),
-      "openai.completions",
-    );
     await user.type(
       screen.getByLabelText("base_url required"),
       "https://api.openai.com/v1",
@@ -1677,7 +1668,7 @@ describe("Providers workspace", () => {
       .closest("article");
     expect(providerCard).not.toBeNull();
     expect(providerCard).toHaveTextContent("openai-primary");
-    expect(providerCard).toHaveTextContent("openai.completions");
+    expect(providerCard).toHaveTextContent("openai.responses");
 
     await user.click(
       within(providerCard as HTMLElement).getByRole("button", {
@@ -1694,7 +1685,7 @@ describe("Providers workspace", () => {
       "OpenAI Primary",
     );
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
-      "OpenAI Completions",
+      "OpenAI Responses",
     );
     expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
       "https://api.openai.com/v1",
@@ -1765,29 +1756,36 @@ describe("Providers workspace", () => {
 
   it("deletes configured provider cards", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "openai",
-          label: "openai",
-          kind: "llm",
-          component: "openai.responses",
-          config: {
-            base_url: "https://api.openai.com/v1",
-            model: "gpt-5",
-          },
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "openai",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
         },
-      ]),
+      }),
+    ];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
     );
-    render(<App initialComponentCatalog={componentCatalog()} />);
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Delete openai" }));
 
     expect(screen.getByText("Provider openai deleted")).toBeInTheDocument();
+    const openAiCard = screen
+      .getByRole("heading", { name: "openai" })
+      .closest("article");
+    expect(openAiCard).not.toBeNull();
     expect(
-      screen.queryByRole("heading", { name: "openai" }),
+      within(openAiCard as HTMLElement).queryByRole("button", {
+        name: "Delete openai",
+      }),
     ).not.toBeInTheDocument();
   });
 
@@ -1868,21 +1866,19 @@ describe("Providers workspace", () => {
 
   it("blocks deleting provider definitions that are still referenced by pipelines", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
+    mockOperatorApi({
+      providerDefinitions: [
+        providerDefinitionFixture({
           id: "piper-local",
           label: "piper-local",
-          kind: "tts",
           component: "wyoming.tts",
           config: {
             url: "tcp://piper.local:10200",
             voice: "en_US-lessac-medium",
           },
-        },
-      ]),
-    );
+        }),
+      ],
+    });
     render(<App />);
 
     await enterProvidersSection(user);
@@ -1943,22 +1939,18 @@ describe("Providers workspace", () => {
         affects_pipelines: [],
       },
     ];
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "llm",
-          label: "llm",
-          kind: "llm",
-          component: "openai.responses",
-          config: {
-            base_url: "https://api.openai.com/v1",
-            model: "gpt-5",
-          },
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "llm",
+        label: "llm",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
         },
-      ]),
-    );
-    mockOperatorApi({ snapshot });
+      }),
+    ];
+    mockOperatorApi({ snapshot, providerDefinitions });
     render(<App />);
 
     await enterProvidersSection(user);
@@ -1984,23 +1976,24 @@ describe("Providers workspace", () => {
 
   it("tests locally configured providers through schema validation", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(
-      "conduit.provider.definitions",
-      JSON.stringify([
-        {
-          id: "openai-fast",
-          label: "OpenAI Fast",
-          kind: "llm",
-          component: "openai.responses",
-          config: {
-            base_url: "https://api.openai.com/v1",
-            model: "gpt-5",
-            streaming: true,
-          },
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai-fast",
+        label: "OpenAI Fast",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
+          streaming: true,
         },
-      ]),
+      }),
+    ];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
     );
-    render(<App initialComponentCatalog={componentCatalog()} />);
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Test openai-fast" }));
@@ -2357,18 +2350,25 @@ function mockOperatorApi({
   statusSnapshots,
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
+  providerDefinitions = [],
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
   statusSnapshots?: OperatorStatusSnapshot[];
   pipelineViews?: PipelineView[];
   componentCatalog?: PipelineComponentCatalog;
+  providerDefinitions?: ProviderDefinitionView[];
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
   const pendingStatusSnapshots = [...(statusSnapshots ?? [])];
   const pipelines = new Map(
     pipelineViews.map((view) => [view.graph.name, view] as const),
+  );
+  const savedProviderDefinitions = new Map(
+    providerDefinitions.map(
+      (definition) => [definition.id, definition] as const,
+    ),
   );
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2387,6 +2387,35 @@ function mockOperatorApi({
 
       if (route === "/v1/catalog/providers" && method === "GET") {
         return jsonResponse(catalog);
+      }
+
+      if (route === "/v1/providers" && method === "GET") {
+        return jsonResponse([...savedProviderDefinitions.keys()]);
+      }
+
+      if (route.startsWith("/v1/providers/")) {
+        const id = route.slice("/v1/providers/".length);
+        if (method === "PUT") {
+          const definition = JSON.parse(
+            init?.body?.toString() ?? "{}",
+          ) as ProviderDefinition;
+          const view: ProviderDefinitionView = {
+            ...definition,
+            kind: providerKindForVariant(definition.variant.type),
+          };
+          savedProviderDefinitions.set(id, view);
+          return jsonResponse(view, { status: 201 });
+        }
+        if (method === "DELETE") {
+          savedProviderDefinitions.delete(id);
+          return new Response(null, { status: 204 });
+        }
+
+        const definition = savedProviderDefinitions.get(id);
+        if (!definition) {
+          return jsonResponse({ error: "not_found" }, { status: 404 });
+        }
+        return jsonResponse(definition);
       }
 
       if (route === "/v1/pipelines/validate" && method === "POST") {
@@ -2448,6 +2477,100 @@ function mockOperatorApi({
 
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function providerKindForVariant(
+  variant: ProviderDefinition["variant"]["type"],
+): ProviderDefinitionView["kind"] {
+  if (variant === "openai_llm") {
+    return "llm";
+  }
+  if (variant === "openai_stt" || variant === "wyoming_stt") {
+    return "stt";
+  }
+  if (variant === "openai_tts" || variant === "wyoming_tts") {
+    return "tts";
+  }
+  return "tool";
+}
+
+function providerDefinitionFixture({
+  id,
+  label,
+  kind,
+  component,
+  config,
+}: {
+  id: string;
+  label: string;
+  kind?: ProviderDefinitionView["kind"];
+  component: string;
+  config: Record<string, unknown>;
+}): ProviderDefinitionView {
+  const text = (field: string) =>
+    typeof config[field] === "string" ? config[field] : "";
+  const flag = (field: string) => config[field] === true;
+  const apiKey = text("api_key")
+    ? ({ type: "inline", value: text("api_key") } as const)
+    : undefined;
+
+  if (component === "openai.responses" || component === "openai.completions") {
+    return {
+      id,
+      label,
+      kind: "llm",
+      variant: {
+        type: "openai_llm",
+        base_url: text("base_url"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+      },
+    };
+  }
+  if (
+    component === "wyoming.tts" ||
+    (component === "wyoming" && kind === "tts")
+  ) {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "wyoming_tts",
+        url: text("url"),
+        ...(text("voice") || text("model")
+          ? { voice: text("voice") || text("model") }
+          : {}),
+        streaming: flag("streaming"),
+      },
+    };
+  }
+  if (component === "mcp.sse" || component === "mcp.streamable_http") {
+    return {
+      id,
+      label,
+      kind: "tool",
+      variant: {
+        type: "mcp_tool",
+        transport: {
+          type: component === "mcp.sse" ? "sse" : "streamable_http",
+          url: text("url"),
+        },
+      },
+    };
+  }
+  return {
+    id,
+    label,
+    kind: "stt",
+    variant: {
+      type: "wyoming_stt",
+      url: text("url"),
+      ...(text("model") ? { model: text("model") } : {}),
+      streaming: flag("streaming"),
+    },
+  };
 }
 
 function snapshotWithStoredPipeline(
