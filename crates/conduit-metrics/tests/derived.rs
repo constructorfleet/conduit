@@ -171,8 +171,8 @@ async fn nothing_is_forgotten_while_tracking_has_room() {
 
 #[tokio::test]
 async fn every_cancel_reason_has_its_own_outcome_label() {
-    // `BargeIn`, `IdleTimeout`, and `Shutdown` are not published by the runtime,
-    // so the mapping is exercised where it lives rather than through a turn.
+    // `BargeIn` and `Shutdown` are not published by the runtime, so the mapping
+    // is exercised where it lives rather than through a turn.
     for (reason, outcome) in [
         (CancelReason::BargeIn, "barge_in"),
         (CancelReason::IdleTimeout, "idle_timeout"),

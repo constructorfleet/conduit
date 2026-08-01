@@ -143,6 +143,58 @@ impl SpeechToText for FailingStt {
     }
 }
 
+/// A recognizer that accepts the audio and never answers.
+///
+/// The failure the idle deadline exists for, and the one nothing else catches: a
+/// provider that errors ends the turn through `StageFailed`, while this one
+/// leaves it waiting with no error to report and no stage having failed.
+#[derive(Clone, Default)]
+pub struct SilentStt;
+
+impl Provider for SilentStt {
+    fn name(&self) -> &str {
+        "fake-stt"
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeechToText for SilentStt {
+    async fn transcribe(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        _options: TranscribeOptions,
+    ) -> Result<ChunkStream<Transcript>> {
+        // Drained first so the capture events are published: the turn must have
+        // made progress and *then* stopped, rather than never having started.
+        let _ = audio.count().await;
+        std::future::pending().await
+    }
+}
+
+/// A model that accepts the request and never answers.
+///
+/// Stalls a turn that got as far as a transcript, which is the case where the
+/// stage a timeout names is the only way to tell which provider is at fault.
+#[derive(Clone, Default)]
+pub struct SilentLlm;
+
+impl Provider for SilentLlm {
+    fn name(&self) -> &str {
+        "fake-llm"
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for SilentLlm {
+    async fn complete(&self, _request: CompletionRequest) -> Result<ChunkStream<Completion>> {
+        std::future::pending().await
+    }
+
+    fn supports_tools(&self) -> bool {
+        true
+    }
+}
+
 /// A text delta.
 pub fn token(delta: &str) -> Completion {
     Completion::Token { delta: delta.to_owned() }

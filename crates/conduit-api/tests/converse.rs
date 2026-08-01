@@ -33,6 +33,34 @@ impl Provider for SlowTts {
     }
 }
 
+/// A synthesizer that accepts the request and never answers.
+///
+/// Registered under the echo synthesizer's name, like [`SlowTts`], so a
+/// pipeline can swap it in. This is the failure a deadline exists for: nothing
+/// errors, no stage fails, and the turn simply waits.
+#[derive(Debug, Clone, Default)]
+struct SilentTts;
+
+impl Provider for SilentTts {
+    fn name(&self) -> &str {
+        "echo-tts"
+    }
+}
+
+#[async_trait::async_trait]
+impl TextToSpeech for SilentTts {
+    async fn synthesize(
+        &self,
+        _request: SynthesisRequest,
+    ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
+        std::future::pending().await
+    }
+
+    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
+        Ok(Vec::new())
+    }
+}
+
 /// Records the format the API said the device was streaming.
 #[derive(Debug, Clone, Default)]
 struct RecordingStt {
@@ -162,6 +190,11 @@ fn providers() -> Providers {
 /// The same pipeline, but slow enough to interrupt.
 fn slow_providers() -> Providers {
     Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(SlowTts)
+}
+
+/// The same pipeline, but with a synthesizer that never answers.
+fn silent_providers() -> Providers {
+    Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(SilentTts)
 }
 
 fn recording_graph() -> PipelineGraph {
@@ -453,6 +486,63 @@ async fn a_stopped_turn_is_recorded_as_asked_for() {
         body.contains("conduit_conversations_total{outcome=\"user_requested\"} 1"),
         "{body}"
     );
+}
+
+#[tokio::test]
+async fn a_device_is_told_when_a_turn_is_given_up_on() {
+    // The socket half of the deadline. A turn that ends without saying why looks
+    // exactly like a finished one from the device's side, and a satellite that
+    // cannot tell those apart has no idea whether to prompt the person again.
+    let state = AppState::new(EventBus::default())
+        .with_providers(silent_providers())
+        .with_turn_idle_timeout(Some(Duration::from_millis(100)));
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
+    let server = Server::start(state).await;
+
+    let frames = tokio::time::timeout(
+        Duration::from_secs(10),
+        converse(&server, "/v1/pipelines/echo/converse", "hello"),
+    )
+    .await
+    .expect("the socket closes rather than hanging on a wedged provider");
+
+    let last = control(&frames).last().cloned().expect("a control frame");
+    assert_eq!(last["type"], "failed", "{last}");
+    assert!(
+        last["error"].as_str().is_some_and(|error| error.contains("synthesis")),
+        "the device is told which stage went quiet: {last}"
+    );
+    assert_eq!(spoken(&frames), "", "a wedged synthesizer speaks nothing");
+}
+
+#[tokio::test]
+async fn an_abandoned_turn_is_recorded_as_a_timeout() {
+    // The operator's half. `idle_timeout` was a label the collector could
+    // produce and nothing ever set, so a scrape could not distinguish a stalled
+    // provider from a device that hung up.
+    let state = AppState::new(EventBus::default())
+        .with_providers(silent_providers())
+        .with_turn_idle_timeout(Some(Duration::from_millis(100)));
+    state.put_pipeline("echo", echo_graph()).await.expect("stores");
+    conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
+    let server = Server::start(state).await;
+
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        converse(&server, "/v1/pipelines/echo/converse", "hello"),
+    )
+    .await
+    .expect("the socket closes");
+    // The collector reads the bus on its own task, so give it the turn's end.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let body = reqwest::get(server.ops_url("/metrics"))
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains("conduit_conversations_total{outcome=\"idle_timeout\"} 1"), "{body}");
 }
 
 #[tokio::test]

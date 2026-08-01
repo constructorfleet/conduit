@@ -8,6 +8,8 @@ use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
 
+use crate::deadline::Progress;
+
 /// Publishes events stamped with one turn's correlation ids.
 ///
 /// Cloning yields a handle to the same turn, so work that runs concurrently —
@@ -21,17 +23,27 @@ pub struct Emitter {
     device: Option<DeviceId>,
     /// The format captured audio arrives in, reported by the capture events.
     format: AudioFormat,
+    /// Notified by every publication, so a turn that goes quiet can be noticed.
+    progress: Progress,
 }
 
 impl Emitter {
     /// Creates an emitter for a fresh turn capturing audio in `format`.
-    pub fn new(bus: EventBus, format: AudioFormat) -> Self {
+    ///
+    /// `progress` is told about every event this publishes, which is what lets a
+    /// turn that has stopped getting anywhere be abandoned rather than left
+    /// wedged. Publishing *is* the progress signal: an emitter that had to be
+    /// asked separately to report would eventually be asked in one place and
+    /// forgotten in another, and the stage that forgot would be exactly the one
+    /// nothing could time out.
+    pub fn new(bus: EventBus, format: AudioFormat, progress: Progress) -> Self {
         Self {
             bus,
             trace: TraceId::new(),
             conversation: ConversationId::new(),
             device: None,
             format,
+            progress,
         }
     }
 
@@ -49,6 +61,7 @@ impl Emitter {
 
     /// Publishes `event` for this turn.
     pub fn emit(&self, event: Event) {
+        self.progress.reached(event.stage());
         let mut envelope =
             Envelope::new(self.trace, event).with_conversation(self.conversation);
         if let Some(device) = self.device {
