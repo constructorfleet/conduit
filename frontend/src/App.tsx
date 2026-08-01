@@ -13,7 +13,13 @@ import {
   SlidersHorizontal,
   Workflow,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
@@ -51,33 +57,63 @@ type SectionId = (typeof sections)[number]["id"];
 
 export interface PipelineGraphDraft {
   name: string;
-  nodes: PipelineNodeDraft[];
-  edges: PipelineEdgeDraft[];
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
 }
 
-interface PipelineNodeDraft {
+export type PipelineGraph = PipelineGraphDraft;
+
+type PipelineNodeKind =
+  | "source"
+  | "wake_word"
+  | "stt"
+  | "speaker_id"
+  | "router"
+  | "llm"
+  | "tool"
+  | "memory"
+  | "tts"
+  | "sink";
+
+interface PipelineNode {
   id: string;
-  kind: "source" | "stt" | "llm" | "tts" | "sink";
+  kind: PipelineNodeKind;
   provider: string;
+  config?: unknown;
 }
 
-interface PipelineEdgeDraft {
+interface PipelineEdge {
   from: string;
   to: string;
+  port?: string;
 }
+
+export interface PipelineView {
+  graph: PipelineGraph;
+  order: string[];
+}
+
+export type PipelineValidationResult =
+  { ok: true; order: string[] } | { ok: false; message: string };
 
 interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
-  onPipelineSaved?: (graph: PipelineGraphDraft) => void;
+  initialPipelineViews?: readonly PipelineView[];
+  initialSmallScreen?: boolean;
+  onPipelineSaved?: (graph: PipelineGraph) => void;
+  onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
 }
 
 function App({
   initialSnapshot,
   initialEvents,
   initialEventPosture,
+  initialPipelineViews,
+  initialSmallScreen = false,
   onPipelineSaved,
+  onPipelineValidate,
 }: AppProps = {}) {
   const [access, setAccess] = useState<OperatorAccess>(() =>
     loadOperatorAccess(),
@@ -94,8 +130,11 @@ function App({
       activeSection={activeSection}
       initialEvents={initialEvents}
       initialEventPosture={initialEventPosture}
+      initialPipelineViews={initialPipelineViews}
+      initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
       onPipelineSaved={onPipelineSaved}
+      onPipelineValidate={onPipelineValidate}
       onSectionChange={setActiveSection}
       onClearAccess={() => {
         clearOperatorAccess();
@@ -184,8 +223,11 @@ function OperatorWorkspace({
   activeSection,
   initialEvents,
   initialEventPosture,
+  initialPipelineViews,
+  initialSmallScreen,
   initialSnapshot,
   onPipelineSaved,
+  onPipelineValidate,
   onSectionChange,
   onClearAccess,
 }: {
@@ -193,8 +235,11 @@ function OperatorWorkspace({
   activeSection: SectionId;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
+  initialPipelineViews?: readonly PipelineView[];
+  initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
-  onPipelineSaved?: (graph: PipelineGraphDraft) => void;
+  onPipelineSaved?: (graph: PipelineGraph) => void;
+  onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
   onSectionChange: (section: SectionId) => void;
   onClearAccess: () => void;
 }) {
@@ -208,6 +253,10 @@ function OperatorWorkspace({
     [access, initialSnapshot],
   );
   const [snapshot, setSnapshot] = useState(snapshotClient.snapshot);
+  const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
+    () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
+  );
+  const smallScreen = useSmallScreenMode(initialSmallScreen);
   const eventPlan = useMemo(() => {
     const plan = initialEventStreamPlan();
     return initialEventPosture
@@ -291,13 +340,23 @@ function OperatorWorkspace({
         <SectionPanel
           section={activeSection}
           events={initialEvents ?? eventEnvelopeFixtures}
+          pipelineViews={pipelineViews}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
+          initialSmallScreen={smallScreen}
           onSectionChange={onSectionChange}
+          onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
           onPipelineSaved={(graph) => {
             onPipelineSaved?.(graph);
+            setPipelineViews((current) => upsertPipelineView(current, graph));
             setSnapshot((current) => promoteSavedPipeline(current, graph));
             onSectionChange("overview");
+          }}
+          onPipelineStored={(graph, order) => {
+            onPipelineSaved?.(graph);
+            setPipelineViews((current) =>
+              upsertPipelineView(current, graph, order),
+            );
           }}
         />
       </section>
@@ -308,17 +367,25 @@ function OperatorWorkspace({
 function SectionPanel({
   section,
   events,
+  pipelineViews,
   snapshot,
   eventPosture,
+  initialSmallScreen,
   onSectionChange,
   onPipelineSaved,
+  onPipelineStored,
+  onPipelineValidate,
 }: {
   section: SectionId;
   events: readonly EventEnvelope[];
+  pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
+  initialSmallScreen: boolean;
   onSectionChange: (section: SectionId) => void;
-  onPipelineSaved: (graph: PipelineGraphDraft) => void;
+  onPipelineSaved: (graph: PipelineGraph) => void;
+  onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
+  onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
   if (snapshot?.runtime.launch_state === "first_run_setup") {
     return <GuidedSetupPanel onPipelineSaved={onPipelineSaved} />;
@@ -338,8 +405,22 @@ function SectionPanel({
     return <EventsPanel events={events} eventPosture={eventPosture} />;
   }
 
-  const content: Record<Exclude<SectionId, "overview" | "events">, string[]> = {
-    pipelines: ["Guided Setup", "Graph Editor", "Validation"],
+  if (section === "pipelines") {
+    return (
+      <PipelinesPanel
+        pipelineViews={pipelineViews}
+        readOnly={initialSmallScreen}
+        snapshot={snapshot}
+        onPipelineStored={onPipelineStored}
+        onPipelineValidate={onPipelineValidate}
+      />
+    );
+  }
+
+  const content: Record<
+    Exclude<SectionId, "overview" | "events" | "pipelines">,
+    string[]
+  > = {
     providers: ["Provider Settings", "Reachability", "Real turn proof"],
     settings: ["Operator Access", "Deployment", "Snapshot plus events"],
   };
@@ -461,6 +542,203 @@ function EventsPanel({
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function PipelinesPanel({
+  pipelineViews,
+  readOnly,
+  snapshot,
+  onPipelineStored,
+  onPipelineValidate,
+}: {
+  pipelineViews: readonly PipelineView[];
+  readOnly: boolean;
+  snapshot: OperatorStatusSnapshot | null;
+  onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
+  onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
+}) {
+  const [selectedName, setSelectedName] = useState(
+    pipelineViews[0]?.graph.name ?? "",
+  );
+  const selectedView =
+    pipelineViews.find((view) => view.graph.name === selectedName) ??
+    pipelineViews[0] ??
+    null;
+  const [draft, setDraft] = useState<PipelineGraph | null>(
+    selectedView ? cloneGraph(selectedView.graph) : null,
+  );
+  const [validation, setValidation] = useState<PipelineValidationResult | null>(
+    null,
+  );
+  const selectedHealth = snapshot?.pipelines.find(
+    (pipeline) => pipeline.name === selectedView?.graph.name,
+  );
+
+  function selectPipeline(view: PipelineView) {
+    setSelectedName(view.graph.name);
+    setDraft(cloneGraph(view.graph));
+    setValidation(null);
+  }
+
+  function addToolNode() {
+    if (!draft || draft.nodes.some((node) => node.id === "confirm")) {
+      return;
+    }
+
+    setDraft({
+      ...draft,
+      nodes: [
+        ...draft.nodes,
+        { id: "confirm", kind: "tool", provider: "builtin.confirm" },
+      ],
+      edges: [...draft.edges, { from: "llm", to: "confirm" }],
+    });
+    setValidation(null);
+  }
+
+  function validateDraft() {
+    if (!draft) {
+      return;
+    }
+
+    setValidation(onPipelineValidate(draft));
+  }
+
+  function saveDraft() {
+    if (!draft || validation?.ok !== true) {
+      return;
+    }
+
+    onPipelineStored(draft, validation.order);
+  }
+
+  if (!draft || !selectedView) {
+    return (
+      <div className="overview-empty" role="status">
+        <Workflow size={18} aria-hidden="true" />
+        <span>No stored pipeline graphs</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pipelines-stack">
+      <section className="pipeline-toolbar" aria-label="Stored pipelines">
+        <div>
+          <p className="eyebrow">Advanced configuration</p>
+          <h2>Graph Editor</h2>
+        </div>
+        <div className="pipeline-selector">
+          {pipelineViews.map((view) => (
+            <button
+              key={view.graph.name}
+              type="button"
+              className={view.graph.name === draft.name ? "selected" : ""}
+              onClick={() => selectPipeline(view)}
+            >
+              {view.graph.name}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {readOnly ? (
+        <section className="stale-banner" aria-label="Small screen graph mode">
+          <CircleAlert size={18} aria-hidden="true" />
+          <div>
+            <strong>Read-only on small screens</strong>
+            <span>Use a desktop viewport for graph editing controls</span>
+          </div>
+        </section>
+      ) : null}
+
+      <div className="pipeline-editor-grid">
+        <section className="graph-surface" aria-label="Pipeline graph">
+          <div className="graph-nodes">
+            {draft.nodes.map((node, index) => (
+              <article className="graph-node" key={node.id}>
+                <span>{index + 1}</span>
+                <strong>{node.id}</strong>
+                <p>
+                  {node.kind} / {node.provider}
+                </p>
+              </article>
+            ))}
+          </div>
+          <div className="graph-edges" aria-label="Pipeline edges">
+            {draft.edges.map((edge) => (
+              <span key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}>
+                {edge.from} -&gt; {edge.to}
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <aside className="pipeline-side-panel">
+          <StatusPill
+            label="Health"
+            value={selectedHealth?.health.state ?? "unknown"}
+            tone={
+              selectedHealth?.health.state === "healthy" ? "neutral" : "caution"
+            }
+          />
+          <p>
+            {selectedHealth?.health.summary ?? "No snapshot health available"}
+          </p>
+
+          <div className="compact-list">
+            {selectedHealth?.components.map((component) => (
+              <div className="metric-row" key={component.kind}>
+                <span>
+                  {component.kind}
+                  {component.provider ? ` / ${component.provider}` : ""}
+                </span>
+                <strong className={`state-text ${component.state}`}>
+                  {component.state}
+                </strong>
+              </div>
+            ))}
+          </div>
+
+          {!readOnly ? (
+            <div className="graph-actions">
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={addToolNode}
+              >
+                <Plus size={17} aria-hidden="true" />
+                Add tool node
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={validateDraft}
+              >
+                <CircleCheck size={17} aria-hidden="true" />
+                Validate Graph
+              </button>
+              <button
+                className="primary-action"
+                type="button"
+                disabled={validation?.ok !== true}
+                onClick={saveDraft}
+              >
+                <Workflow size={17} aria-hidden="true" />
+                Save Graph
+              </button>
+            </div>
+          ) : null}
+
+          {validation ? (
+            <p className={validation.ok ? "validation-ok" : "form-error"}>
+              {validation.ok ? "Validation passed" : validation.message}
+            </p>
+          ) : null}
+        </aside>
+      </div>
     </div>
   );
 }
@@ -637,7 +915,7 @@ function filterRawEvents(
 function GuidedSetupPanel({
   onPipelineSaved,
 }: {
-  onPipelineSaved: (graph: PipelineGraphDraft) => void;
+  onPipelineSaved: (graph: PipelineGraph) => void;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
   const [sttProvider, setSttProvider] = useState("whisper");
@@ -875,9 +1153,113 @@ function buildMinimalVoiceLoopGraph({
   };
 }
 
+function defaultPipelineViews(
+  snapshot: OperatorStatusSnapshot | null,
+): readonly PipelineView[] {
+  const pipeline = snapshot?.pipelines[0];
+  if (!pipeline) {
+    return [];
+  }
+
+  const graph: PipelineGraph = {
+    name: pipeline.name,
+    nodes: [
+      { id: "mic", kind: "source", provider: "websocket" },
+      { id: "stt", kind: "stt", provider: "whisper" },
+      { id: "llm", kind: "llm", provider: "openai" },
+      {
+        id: "tts",
+        kind: "tts",
+        provider:
+          pipeline.components.find(
+            (component) => component.kind === "synthesis",
+          )?.provider ?? "piper",
+      },
+      { id: "speaker", kind: "sink", provider: "websocket" },
+    ],
+    edges: [
+      { from: "mic", to: "stt" },
+      { from: "stt", to: "llm" },
+      { from: "llm", to: "tts" },
+      { from: "tts", to: "speaker" },
+    ],
+  };
+
+  return [{ graph, order: graph.nodes.map((node) => node.id) }];
+}
+
+function validatePipelineGraph(graph: PipelineGraph): PipelineValidationResult {
+  if (graph.nodes.length === 0) {
+    return { ok: false, message: "graph has no nodes" };
+  }
+
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const dangling = graph.edges.find(
+    (edge) => !ids.has(edge.from) || !ids.has(edge.to),
+  );
+  if (dangling) {
+    return {
+      ok: false,
+      message: `unknown node in edge ${dangling.from} -> ${dangling.to}`,
+    };
+  }
+
+  return { ok: true, order: graph.nodes.map((node) => node.id) };
+}
+
+function cloneGraph(graph: PipelineGraph): PipelineGraph {
+  return JSON.parse(JSON.stringify(graph)) as PipelineGraph;
+}
+
+function upsertPipelineView(
+  views: readonly PipelineView[],
+  graph: PipelineGraph,
+  order = graph.nodes.map((node) => node.id),
+): readonly PipelineView[] {
+  const next = { graph: cloneGraph(graph), order };
+  const existing = views.findIndex((view) => view.graph.name === graph.name);
+  if (existing === -1) {
+    return [...views, next];
+  }
+
+  return views.map((view, index) => (index === existing ? next : view));
+}
+
+function useSmallScreenMode(forcedSmallScreen: boolean) {
+  const [smallScreen, setSmallScreen] = useState(readsSmallScreenQuery);
+
+  useEffect(() => {
+    if (forcedSmallScreen) {
+      return;
+    }
+
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return;
+    }
+
+    const query = window.matchMedia("(max-width: 700px)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      setSmallScreen(event.matches);
+    };
+
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
+  }, [forcedSmallScreen]);
+
+  return forcedSmallScreen || smallScreen;
+}
+
+function readsSmallScreenQuery() {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return false;
+  }
+
+  return window.matchMedia("(max-width: 700px)").matches;
+}
+
 function promoteSavedPipeline(
   snapshot: OperatorStatusSnapshot | null,
-  graph: PipelineGraphDraft,
+  graph: PipelineGraph,
 ): OperatorStatusSnapshot | null {
   if (!snapshot) {
     return snapshot;

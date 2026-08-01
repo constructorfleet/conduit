@@ -282,7 +282,8 @@ button {
   display: block;
 }
 
-.events-stack {
+.events-stack,
+.pipelines-stack {
   display: grid;
   gap: 14px;
 }
@@ -306,9 +307,46 @@ button {
   color: var(--text);
 }
 
-.events-tabs button.selected {
+.events-tabs button.selected,
+.pipeline-selector button.selected {
   background: var(--selected);
   color: var(--strong);
+}
+
+.pipeline-toolbar,
+.graph-surface,
+.pipeline-side-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.pipeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+}
+
+.pipeline-toolbar h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 18px;
+}
+
+.pipeline-selector,
+.graph-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pipeline-selector button {
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--button-muted);
+  color: var(--text);
 }
 
 .event-reconstruction,
@@ -399,6 +437,91 @@ button {
     "Liberation Mono",
     monospace;
   overflow-wrap: anywhere;
+}
+
+.pipeline-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 12px;
+  align-items: start;
+}
+
+.graph-surface {
+  display: grid;
+  gap: 16px;
+  min-height: 320px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.graph-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.graph-node {
+  display: grid;
+  gap: 6px;
+  min-height: 104px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--app-bg);
+}
+
+.graph-node span {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--selected);
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.graph-node strong {
+  color: var(--strong);
+}
+
+.graph-node p,
+.pipeline-side-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.graph-edges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-content: start;
+}
+
+.graph-edges span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pipeline-side-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.validation-ok {
+  margin: 0;
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.primary-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .setup-band {
@@ -688,6 +811,7 @@ button {
   .exception-list,
   .event-step,
   .raw-event,
+  .pipeline-editor-grid,
   .setup-grid,
   .provider-settings,
   .section-band {
@@ -695,6 +819,7 @@ button {
   }
 
   .stale-banner,
+  .pipeline-toolbar,
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
