@@ -77,21 +77,7 @@ deletes.
 The `conduit-api` crate enables PostgreSQL support by default. A
 `--no-default-features` build refuses to start if `CONDUIT_DATABASE_URL` is set.
 
-## Legacy OpenAI-Compatible Environment Providers
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONDUIT_OPENAI_BASE_URL` | `https://api.openai.com/v1` when a provider is configured by key | Base URL for an OpenAI-compatible server. |
-| `CONDUIT_OPENAI_API_KEY` | unset | Bearer token for the OpenAI-compatible server. Local servers often do not need one. |
-| `CONDUIT_OPENAI_NAME` | `openai` | Provider registry name used by pipeline nodes. |
-| `CONDUIT_OPENAI_READ_TIMEOUT_SECS` | `60` | How long the server may go silent while a response body is in progress. `0` disables this provider-level read timeout. |
-| `CONDUIT_OPENAI_STT_MODEL` | unset | Registers `OpenAiStt` using this transcription model. |
-| `CONDUIT_OPENAI_TTS_MODEL` | unset | Registers `OpenAiTts` using this speech model. |
-
-The preferred product path is to create Provider Definitions through
-`/v1/providers`. These environment variables remain a direct runtime provider
-injection seam for development and existing deployments while Provider
-Definitions become the durable source of operator-managed runtime providers.
+## Provider Definitions
 
 The service exposes `GET /v1/catalog/providers` so the Operator Console can
 render provider-specific creation forms from backend-owned component metadata.
@@ -99,18 +85,10 @@ Operators save Provider Definitions with stable ids, then select those ids from
 pipeline graph nodes. Pipeline graphs store only the selected provider id on
 each node; runtime component settings do not belong to graph nodes.
 
-Setting an STT or TTS model without a base URL or API key is an error. The
-server refuses to start rather than registering a speech stage with no server.
-
-Example local configuration:
-
-```sh
-CONDUIT_OPENAI_BASE_URL=http://localhost:8000/v1 \
-CONDUIT_OPENAI_NAME=local \
-CONDUIT_OPENAI_STT_MODEL=Systran/faster-whisper-small \
-CONDUIT_OPENAI_TTS_MODEL=piper \
-cargo run -p conduit-api
-```
+Product runtime providers are not configured from `CONDUIT_OPENAI_*`
+environment variables. Use saved Provider Definitions for operator-managed
+providers, or compile with `dev-providers` for the direct in-memory
+development seam.
 
 ## OpenTelemetry
 

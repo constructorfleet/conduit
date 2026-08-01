@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state.providers().is_none() {
         tracing::warn!(
             "no providers are configured; conversations will be refused until \
-             CONDUIT_OPENAI_BASE_URL or CONDUIT_OPENAI_API_KEY is set"
+             Provider Definitions are saved through the management API"
         );
     }
     let listener = tokio::net::TcpListener::bind(addr).await?;
