@@ -1,3 +1,4 @@
+import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
@@ -22,9 +23,14 @@ export interface SnapshotClient {
 export function createSnapshotClient(
   config: SnapshotClientConfig,
 ): SnapshotClient {
+  const client = createConduitApiClient({
+    baseUrl: config.baseUrl,
+    headers: () => authorizationHeaders(config.access),
+  });
+
   return {
-    statusRoute: "/v1/status",
-    eventRoute: "/v1/events",
+    statusRoute: client.routes.status,
+    eventRoute: conduitApiRoutes.events,
     state: config.access.mode === "none" ? "idle" : "live",
     snapshot:
       config.access.mode === "none"

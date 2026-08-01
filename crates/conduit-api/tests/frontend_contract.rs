@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
+use conduit_api::pipelines::PipelineView;
 use conduit_api::status::{
     ActiveTurnStatus, ComponentHealth, ComponentHealthState, ComponentKind, ConnectedSatellite,
     EventStreamContract, LaunchState, OperatorStatusSnapshot, PipelineHealth,
@@ -18,6 +19,7 @@ use conduit_api::status::{
     SnapshotEventBinding, SnapshotResource, StaleState,
 };
 use conduit_core::event::{Envelope, Event};
+use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
 use uuid::Uuid;
 
@@ -79,10 +81,19 @@ fn frontend_event_bindings_name_generated_event_variants() {
 fn contract_artifacts() -> Vec<Artifact> {
     let status = status_fixture();
     let events = event_fixtures();
+    let pipeline = pipeline_fixture();
 
     vec![
+        Artifact {
+            path: "frontend/src/contracts/client.ts",
+            contents: client_types(&pipeline),
+        },
         Artifact { path: "frontend/src/contracts/status.ts", contents: status_types(&status) },
         Artifact { path: "frontend/src/contracts/events.ts", contents: event_types(&events) },
+        Artifact {
+            path: "frontend/src/contracts/fixtures/pipeline.view.json",
+            contents: pretty_json(&pipeline),
+        },
         Artifact {
             path: "frontend/src/contracts/fixtures/status.snapshot.json",
             contents: pretty_json(&status),
@@ -242,6 +253,163 @@ fn event_fixtures() -> Vec<Envelope> {
             event,
         })
         .collect()
+}
+
+fn pipeline_fixture() -> PipelineView {
+    let graph = PipelineGraph::new("kitchen")
+        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
+        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
+        .with_node(Node::new("llm", NodeKind::Llm, "openai"))
+        .with_node(Node::new("tts", NodeKind::Tts, "piper-local"))
+        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("tts", "speaker"));
+
+    let order = graph
+        .topological_order()
+        .expect("fixture graph is valid")
+        .iter()
+        .map(|node| node.id.clone())
+        .collect();
+
+    PipelineView { graph, order }
+}
+
+fn client_types(fixture: &PipelineView) -> String {
+    let mut text = generated_header().to_owned();
+    text.push_str(&format!(
+        r#"import type {{ OperatorStatusSnapshot }} from "./status";
+
+export type IdString = string;
+export type NodeKind =
+  | "source"
+  | "wake_word"
+  | "stt"
+  | "speaker_id"
+  | "router"
+  | "llm"
+  | "tool"
+  | "memory"
+  | "tts"
+  | "sink";
+
+export interface PipelineNode {{
+  id: IdString;
+  kind: NodeKind;
+  provider: string;
+  config?: unknown;
+}}
+
+export interface PipelineEdge {{
+  from: IdString;
+  to: IdString;
+  port?: string;
+}}
+
+export interface PipelineGraph {{
+  name: string;
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+}}
+
+export interface PipelineView {{
+  graph: PipelineGraph;
+  order: IdString[];
+}}
+
+export interface ConduitApiClientConfig {{
+  baseUrl: string;
+  headers?: () => HeadersInit;
+  fetch?: typeof fetch;
+}}
+
+export interface ConduitApiClient {{
+  readonly routes: typeof conduitApiRoutes;
+  status: () => Promise<OperatorStatusSnapshot>;
+  listPipelines: () => Promise<string[]>;
+  getPipeline: (name: string) => Promise<PipelineView>;
+  putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
+  deletePipeline: (name: string) => Promise<void>;
+  validatePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
+}}
+
+export const conduitApiRoutes = {{
+  status: "/v1/status",
+  events: "/v1/events",
+  pipelines: "/v1/pipelines",
+  pipeline: "/v1/pipelines/{{name}}",
+  validatePipeline: "/v1/pipelines/validate",
+}} as const;
+
+export function createConduitApiClient(
+  config: ConduitApiClientConfig,
+): ConduitApiClient {{
+  const request = config.fetch ?? fetch;
+
+  return {{
+    routes: conduitApiRoutes,
+    status: () =>
+      requestJson<OperatorStatusSnapshot>(request, config, conduitApiRoutes.status),
+    listPipelines: () =>
+      requestJson<string[]>(request, config, conduitApiRoutes.pipelines),
+    getPipeline: (name) =>
+      requestJson<PipelineView>(request, config, pipelineRoute(name)),
+    putPipeline: (name, graph) =>
+      requestJson<PipelineView>(request, config, pipelineRoute(name), {{
+        method: "PUT",
+        body: JSON.stringify(graph),
+      }}),
+    deletePipeline: async (name) => {{
+      await requestJson<void>(request, config, pipelineRoute(name), {{
+        method: "DELETE",
+      }});
+    }},
+    validatePipeline: (graph) =>
+      requestJson<PipelineView>(request, config, conduitApiRoutes.validatePipeline, {{
+        method: "POST",
+        body: JSON.stringify(graph),
+      }}),
+  }};
+}}
+
+function pipelineRoute(name: string): string {{
+  return conduitApiRoutes.pipeline.replace("{{name}}", encodeURIComponent(name));
+}}
+
+async function requestJson<T>(
+  request: typeof fetch,
+  config: ConduitApiClientConfig,
+  route: string,
+  init: RequestInit = {{}},
+): Promise<T> {{
+  const response = await request(new URL(route, config.baseUrl), {{
+    ...init,
+    headers: {{
+      accept: "application/json",
+      ...(init.body ? {{ "content-type": "application/json" }} : {{}}),
+      ...config.headers?.(),
+      ...init.headers,
+    }},
+  }});
+
+  if (!response.ok) {{
+    throw new Error(`Conduit API request failed: ${{response.status}} ${{response.statusText}}`);
+  }}
+
+  if (response.status === 204) {{
+    return undefined as T;
+  }}
+
+  return (await response.json()) as T;
+}}
+
+export const pipelineViewFixture = {} as const satisfies PipelineView;
+"#,
+        pretty_json_inline(fixture)
+    ));
+    text
 }
 
 fn status_types(fixture: &OperatorStatusSnapshot) -> String {

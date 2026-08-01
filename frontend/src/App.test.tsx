@@ -2,11 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import App, {
-  OverviewPanel,
-  type PipelineGraph,
-  type PipelineView,
-} from "./App";
+import App, { OverviewPanel } from "./App";
+import type { PipelineGraph, PipelineView } from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,

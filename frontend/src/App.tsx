@@ -28,6 +28,7 @@ import {
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
+import type { NodeKind, PipelineGraph, PipelineView } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
   type EventEnvelope,
@@ -60,44 +61,6 @@ const sections = [
 ] as const;
 
 type SectionId = (typeof sections)[number]["id"];
-
-export interface PipelineGraphDraft {
-  name: string;
-  nodes: PipelineNode[];
-  edges: PipelineEdge[];
-}
-
-export type PipelineGraph = PipelineGraphDraft;
-
-type PipelineNodeKind =
-  | "source"
-  | "wake_word"
-  | "stt"
-  | "speaker_id"
-  | "router"
-  | "llm"
-  | "tool"
-  | "memory"
-  | "tts"
-  | "sink";
-
-interface PipelineNode {
-  id: string;
-  kind: PipelineNodeKind;
-  provider: string;
-  config?: unknown;
-}
-
-interface PipelineEdge {
-  from: string;
-  to: string;
-  port?: string;
-}
-
-export interface PipelineView {
-  graph: PipelineGraph;
-  order: string[];
-}
 
 export type PipelineValidationResult =
   { ok: true; order: string[] } | { ok: false; message: string };
@@ -1013,7 +976,7 @@ function PipelinesPanel({
     to,
   }: {
     id: string;
-    kind: PipelineNodeKind;
+    kind: NodeKind;
     provider: string;
     from: string;
     to?: string;
@@ -1716,7 +1679,7 @@ function buildMinimalVoiceLoopGraph({
   sttProvider: string;
   llmProvider: string;
   ttsProvider: string;
-}): PipelineGraphDraft {
+}): PipelineGraph {
   return {
     name,
     nodes: [

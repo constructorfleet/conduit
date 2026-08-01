@@ -1,0 +1,57 @@
+{
+  "graph": {
+    "name": "kitchen",
+    "nodes": [
+      {
+        "id": "mic",
+        "kind": "source",
+        "provider": "websocket"
+      },
+      {
+        "id": "stt",
+        "kind": "stt",
+        "provider": "whisper"
+      },
+      {
+        "id": "llm",
+        "kind": "llm",
+        "provider": "openai"
+      },
+      {
+        "id": "tts",
+        "kind": "tts",
+        "provider": "piper-local"
+      },
+      {
+        "id": "speaker",
+        "kind": "sink",
+        "provider": "websocket"
+      }
+    ],
+    "edges": [
+      {
+        "from": "mic",
+        "to": "stt"
+      },
+      {
+        "from": "stt",
+        "to": "llm"
+      },
+      {
+        "from": "llm",
+        "to": "tts"
+      },
+      {
+        "from": "tts",
+        "to": "speaker"
+      }
+    ]
+  },
+  "order": [
+    "mic",
+    "stt",
+    "llm",
+    "tts",
+    "speaker"
+  ]
+}
