@@ -41,6 +41,7 @@ import type {
   NodeKind,
   PipelineComponentCatalog,
   PipelineComponentDescriptor,
+  PipelineEdge,
   PipelineGraph,
   PipelineNode,
   PipelineView,
@@ -2421,6 +2422,25 @@ function PipelinesPanel({
 
   const atomFlowNodes = graphFlow?.mainNodes ?? [];
   const atomEdges = graphFlow?.mainEdges ?? [];
+  const atomNodeById = new Map(atomFlowNodes.map((node) => [node.id, node]));
+
+  function attachesFlowLinkToTarget(edge: PipelineEdge) {
+    return atomNodeById.get(edge.from)?.kind === "llm";
+  }
+
+  function renderAtomFlowLink(edge: PipelineEdge, attachedToTarget = false) {
+    return (
+      <span
+        className={`atom-flow-link ${
+          attachedToTarget ? "attached-to-target" : ""
+        }`}
+        aria-label={`${edge.from} to ${edge.to}`}
+        key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
+      >
+        <ArrowRight size={18} aria-hidden="true" />
+      </span>
+    );
+  }
 
   return (
     <div className="pipelines-stack">
@@ -2631,7 +2651,12 @@ function PipelinesPanel({
               </span>
               {atomFlowNodes.map((node) => {
                 const outgoingEdges = atomEdges.filter(
-                  (edge) => edge.from === node.id,
+                  (edge) =>
+                    edge.from === node.id && !attachesFlowLinkToTarget(edge),
+                );
+                const incomingAttachedEdges = atomEdges.filter(
+                  (edge) =>
+                    edge.to === node.id && attachesFlowLinkToTarget(edge),
                 );
                 const spokes = graphFlow?.spokesByTarget.get(node.id) ?? [];
                 return (
@@ -2641,6 +2666,9 @@ function PipelinesPanel({
                     }`}
                     key={node.id}
                   >
+                    {incomingAttachedEdges.map((edge) =>
+                      renderAtomFlowLink(edge, true),
+                    )}
                     <div
                       className={
                         node.kind === "llm" ? "atom-core-wrap" : "atom-stage"
@@ -2707,15 +2735,7 @@ function PipelinesPanel({
                         {renderNodeCard({ node })}
                       </div>
                     </div>
-                    {outgoingEdges.map((edge) => (
-                      <span
-                        className="atom-flow-link"
-                        aria-label={`${edge.from} to ${edge.to}`}
-                        key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
-                      >
-                        <ArrowRight size={18} aria-hidden="true" />
-                      </span>
-                    ))}
+                    {outgoingEdges.map((edge) => renderAtomFlowLink(edge))}
                   </div>
                 );
               })}

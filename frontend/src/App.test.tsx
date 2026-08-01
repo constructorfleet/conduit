@@ -832,6 +832,13 @@ describe("Pipelines graph editor", () => {
       /Start.*mic/,
     );
     expect(within(graph).getByLabelText("mic to stt")).toBeInTheDocument();
+    const llmToTtsLink = within(graph).getByLabelText("llm to tts");
+    expect(llmToTtsLink.closest(".atom-flow-item")).toContainElement(
+      within(graph).getByRole("group", { name: "tts synthesis" }),
+    );
+    expect(llmToTtsLink.closest(".atom-flow-item")).not.toContainElement(
+      within(graph).getByRole("group", { name: "llm reasoning" }),
+    );
     expect(
       within(graph).getByRole("group", { name: "mic capture" }),
     ).toHaveClass("linear");
