@@ -23,3 +23,11 @@ identity. `Envelope.pipeline` is optional for compatibility with non-runtime
 publishers, but turns emitted by prepared pipelines set it from the graph name.
 The status projection ignores unattributed events rather than guessing which
 pipeline they belong to from node names.
+
+Satellite status is also projected in memory. Connected Satellite means an
+authenticated device currently holds a conversation WebSocket. Recently Active
+Satellite means an attributed event from that device landed inside the
+operator-facing recent activity window. These states are deliberately separate:
+a connected socket can exist before meaningful activity, and recent activity
+can remain after the socket closes. A process restart clears both projections
+until new sockets or events appear.

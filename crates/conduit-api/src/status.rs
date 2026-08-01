@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::State;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Envelope, Event};
 use conduit_core::graph::{NodeKind, PipelineGraph};
@@ -20,6 +20,9 @@ use tokio::sync::RwLock;
 
 use crate::auth::ManagementCaller;
 use crate::{ApiError, AppState};
+
+/// Operator-facing recent satellite activity window.
+pub const RECENT_SATELLITE_WINDOW_SECONDS: u64 = 300;
 
 /// Coherent source-of-truth snapshot for the Operator Console.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -379,6 +382,27 @@ impl RuntimeStatus {
         self.inner.write().await.record(envelope);
     }
 
+    /// Marks a satellite as connected to a conversation socket.
+    pub async fn connect_satellite(
+        &self,
+        device: DeviceId,
+        name: impl Into<String>,
+        pipeline: impl Into<String>,
+        conversation: ConversationId,
+    ) {
+        self.inner.write().await.connect_satellite(
+            device,
+            name.into(),
+            pipeline.into(),
+            conversation,
+        );
+    }
+
+    /// Marks a satellite conversation socket as closed.
+    pub async fn disconnect_satellite(&self, device: DeviceId) {
+        self.inner.write().await.disconnect_satellite(device);
+    }
+
     async fn project(&self) -> Projection {
         self.inner.read().await.clone()
     }
@@ -436,15 +460,23 @@ async fn snapshot(state: &AppState) -> Result<OperatorStatusSnapshot, ApiError> 
         LaunchState::FirstRunSetup
     };
 
+    let recent_after =
+        generated_at - TimeDelta::seconds(RECENT_SATELLITE_WINDOW_SECONDS as i64);
+
     Ok(OperatorStatusSnapshot {
         generated_at,
         runtime: RuntimeState { launch_state, stale_state: StaleState::Fresh },
         pipelines,
         providers: Vec::new(),
         satellites: SatelliteStatus {
-            connected: Vec::new(),
-            recently_active: Vec::new(),
-            recent_window_seconds: 300,
+            connected: projection.connected_satellites.values().cloned().collect(),
+            recently_active: projection
+                .recent_satellites
+                .values()
+                .filter(|satellite| satellite.last_seen_at >= recent_after)
+                .cloned()
+                .collect(),
+            recent_window_seconds: RECENT_SATELLITE_WINDOW_SECONDS,
         },
         active_turns: projection
             .active_turns
@@ -601,10 +633,46 @@ struct Projection {
     pipelines: HashMap<String, PipelineRuntime>,
     active_turns: HashMap<TurnId, ActiveTurnRecord>,
     turns_by_conversation: HashMap<ConversationId, TurnId>,
+    connected_satellites: HashMap<DeviceId, ConnectedSatellite>,
+    recent_satellites: HashMap<DeviceId, RecentlyActiveSatellite>,
 }
 
 impl Projection {
+    fn connect_satellite(
+        &mut self,
+        device: DeviceId,
+        name: String,
+        pipeline: String,
+        conversation: ConversationId,
+    ) {
+        self.connected_satellites.insert(
+            device,
+            ConnectedSatellite {
+                device,
+                name: name.clone(),
+                connected_since: Utc::now(),
+                conversation: Some(conversation),
+                pipeline,
+            },
+        );
+        self.recent_satellites.insert(
+            device,
+            RecentlyActiveSatellite {
+                device,
+                name,
+                last_seen_at: Utc::now(),
+                last_event: "ConversationStarted".to_owned(),
+            },
+        );
+    }
+
+    fn disconnect_satellite(&mut self, device: DeviceId) {
+        self.connected_satellites.remove(&device);
+    }
+
     fn record(&mut self, envelope: &Envelope) {
+        self.record_satellite_activity(envelope);
+
         let Some(pipeline) = envelope.pipeline.as_ref() else {
             return;
         };
@@ -665,6 +733,25 @@ impl Projection {
             }
             _ => {}
         }
+    }
+
+    fn record_satellite_activity(&mut self, envelope: &Envelope) {
+        let Some(device) = envelope.device else {
+            return;
+        };
+        let name = self
+            .connected_satellites
+            .get(&device)
+            .map_or_else(|| device.to_string(), |satellite| satellite.name.clone());
+        self.recent_satellites.insert(
+            device,
+            RecentlyActiveSatellite {
+                device,
+                name,
+                last_seen_at: envelope.at,
+                last_event: event_variant_name(&envelope.event),
+            },
+        );
     }
 
     fn active_turn_mut(&mut self, envelope: &Envelope) -> Option<&mut ActiveTurnRecord> {
@@ -793,6 +880,13 @@ fn component_for_node_name(node: &str) -> ComponentKind {
     } else {
         ComponentKind::Reasoning
     }
+}
+
+fn event_variant_name(event: &Event) -> String {
+    serde_json::to_value(event)
+        .ok()
+        .and_then(|value| value.get("type").and_then(|value| value.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| "Unknown".to_owned())
 }
 
 #[derive(Debug, Clone, Default)]

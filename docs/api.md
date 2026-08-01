@@ -188,6 +188,15 @@ State vocabulary:
 Connected satellites are devices with an open conversation connection right
 now. Recently active satellites are devices that emitted events inside the
 operator-facing recent activity window, whether or not they remain connected.
+Connected satellite names come from the authenticated device identity. Recent
+activity that has no known device name uses the device id as its display name.
+Satellite identity is device identity only; it is not speaker identity.
+
+Satellite status is an in-memory runtime projection. After a process restart,
+Connected Satellites starts empty because no WebSocket from the old process can
+still be open, and Recently Active Satellites starts empty until new attributed
+events arrive. The event stream then keeps the snapshot current for this
+process lifetime.
 
 A Successful Turn means every component actually invoked by that turn completed
 without unrecovered error. Optional components that were not invoked, such as

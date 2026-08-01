@@ -15,7 +15,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::device::{Command, Notice};
-use conduit_core::id::DeviceId;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
@@ -24,7 +23,8 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::auth::DeviceCaller;
+use crate::auth::{Device, DeviceCaller};
+use crate::status::RuntimeStatus;
 use crate::{ApiError, AppState};
 
 /// How many captured chunks may queue before the socket reader waits.
@@ -89,8 +89,8 @@ pub(crate) async fn converse(
         .with_idle_timeout(state.turn_idle_timeout());
 
     tracing::info!(pipeline = %name, device = %device.name, "conversation socket opened");
-    let id = device.id;
-    Ok(upgrade.on_upgrade(move |socket| run(socket, runner, id)))
+    let status = state.status();
+    Ok(upgrade.on_upgrade(move |socket| run(socket, runner, device, name, status)))
 }
 
 /// Device-negotiated audio format for one conversation.
@@ -120,13 +120,20 @@ impl AudioFormatQuery {
 }
 
 /// Drives one turn over `socket` on behalf of `device`.
-async fn run(socket: WebSocket, runner: Runner, device: DeviceId) {
+async fn run(
+    socket: WebSocket,
+    runner: Runner,
+    device: Device,
+    pipeline: String,
+    status: RuntimeStatus,
+) {
     let (mut outgoing, incoming) = socket.split();
     let (audio, captured, stopped) = capture(incoming);
 
     // Every event this turn publishes carries the device, which is what lets an
     // operator filter the event stream by satellite.
-    let conversation = runner.run_for_device(device, audio);
+    let conversation = runner.run_for_device(device.id, audio);
+    status.connect_satellite(device.id, device.name.clone(), pipeline, conversation.id).await;
 
     // The reader cannot hold the turn's stop handle, because the turn needs the
     // audio the reader produces to exist first. So it signals, and this relays.
@@ -141,6 +148,7 @@ async fn run(socket: WebSocket, runner: Runner, device: DeviceId) {
 
     if send(&mut outgoing, Notice::Started { conversation: conversation.id }).await.is_err() {
         relay.abort();
+        status.disconnect_satellite(device.id).await;
         return;
     }
 
@@ -155,6 +163,7 @@ async fn run(socket: WebSocket, runner: Runner, device: DeviceId) {
                     // reported as a disconnection rather than an interruption.
                     tracing::debug!("device disconnected mid-reply");
                     relay.abort();
+                    status.disconnect_satellite(device.id).await;
                     return;
                 }
             }
@@ -181,6 +190,7 @@ async fn run(socket: WebSocket, runner: Runner, device: DeviceId) {
     captured.abort();
     // Nothing left to stop.
     relay.abort();
+    status.disconnect_satellite(device.id).await;
 }
 
 /// Turns incoming frames into an audio stream, watching for a stop.
