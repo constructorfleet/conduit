@@ -885,34 +885,20 @@ button {
 
 .atom-orbital {
   position: absolute;
+  left: calc(50% + var(--orbit-x));
+  top: calc(50% + var(--orbit-y));
   display: flex;
   align-items: center;
   gap: 7px;
+  transform: translate(-50%, -50%);
   pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.atom-orbital.slot-1 {
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-}
-
-.atom-orbital.slot-2 {
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.atom-orbital.slot-3 {
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%);
-}
-
-.atom-orbital.slot-4 {
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+.atom-orbital:active {
+  cursor: grabbing;
 }
 
 .atom-spoke-link {
@@ -924,18 +910,36 @@ button {
   color: var(--accent-hover);
 }
 
-.atom-orbital.slot-1,
-.atom-orbital.slot-3 {
-  flex-direction: column;
+.atom-motion-particle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 70%, transparent);
+  opacity: 0;
+  pointer-events: none;
 }
 
-.atom-orbital.slot-4 {
-  flex-direction: row-reverse;
+.atom-orbitals.motion-enabled .atom-motion-particle {
+  animation: orbital-particle 2.4s linear infinite;
+}
+
+.atom-motion-particle.particle-2 {
+  animation-delay: -0.8s;
+}
+
+.atom-motion-particle.particle-3 {
+  animation-delay: -1.6s;
 }
 
 .graph-node {
+  position: relative;
   display: grid;
   gap: 6px;
+  align-content: center;
   width: 180px;
   min-height: 104px;
   border: 1px solid var(--border);
@@ -996,27 +1000,34 @@ button {
 }
 
 .graph-node-header {
-  justify-content: space-between;
-  gap: 8px;
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  justify-content: center;
+  pointer-events: none;
 }
 
 .node-card-actions {
   gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 140ms ease;
+}
+
+.graph-node:hover .node-card-actions,
+.graph-node:focus-within .node-card-actions,
+.node-card-actions:focus-within {
+  opacity: 1;
 }
 
 .node-card-actions .icon-action {
   width: 30px;
   height: 30px;
-}
-
-.node-index {
-  width: fit-content;
-  border-radius: 999px;
-  padding: 2px 7px;
-  background: var(--selected);
-  color: var(--strong);
-  font-size: 12px;
-  font-weight: 800;
 }
 
 .graph-node strong {
@@ -1097,6 +1108,28 @@ button {
     box-shadow:
       0 0 60px rgb(18 163 148 / 26%),
       0 0 120px rgb(18 163 148 / 12%);
+  }
+}
+
+@keyframes orbital-particle {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(0deg) translateX(118px) scale(0.75);
+  }
+
+  12%,
+  88% {
+    opacity: 0.9;
+  }
+
+  50% {
+    transform: translate(-50%, -50%) rotate(180deg) translateX(118px) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(360deg) translateX(118px)
+      scale(0.75);
   }
 }
 

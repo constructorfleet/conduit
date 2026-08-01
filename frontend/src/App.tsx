@@ -22,10 +22,13 @@ import {
   X,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -84,6 +87,18 @@ interface PipelineEditorDraftState {
   history: PipelineGraph[];
   validation: PipelineValidationResult | null;
   notice: string | null;
+}
+
+interface OrbitPosition {
+  x: number;
+  y: number;
+}
+
+interface AugmentDragState {
+  nodeId: string;
+  startClientX: number;
+  startClientY: number;
+  startPosition: OrbitPosition;
 }
 
 interface AppProps {
@@ -1818,6 +1833,12 @@ function PipelinesPanel({
   );
   const [graphZoom, setGraphZoom] = useState(100);
   const [graphMotionEnabled, setGraphMotionEnabled] = useState(true);
+  const [draggingAugment, setDraggingAugment] =
+    useState<AugmentDragState | null>(null);
+  const [dragPreviewPositions, setDragPreviewPositions] = useState<
+    Record<string, OrbitPosition>
+  >({});
+  const activeDragPositionRef = useRef<OrbitPosition | null>(null);
   const selectedNodeId =
     (selectedName ? selectedNodeByPipeline[selectedName] : "") ??
     draft?.nodes[0]?.id ??
@@ -2011,6 +2032,102 @@ function PipelinesPanel({
     ]);
   }
 
+  function startAugmentDrag(
+    nodeId: string,
+    position: OrbitPosition,
+    event: ReactPointerEvent<HTMLElement>,
+  ) {
+    if (readOnly) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedNodeId(nodeId);
+    activeDragPositionRef.current = position;
+    setDraggingAugment({
+      nodeId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition: position,
+    });
+  }
+
+  useEffect(() => {
+    if (!draggingAugment) {
+      return;
+    }
+
+    const activeDrag = draggingAugment;
+
+    function pointerPosition(event: PointerEvent): OrbitPosition {
+      return {
+        x: clampOrbitCoordinate(
+          activeDrag.startPosition.x + event.clientX - activeDrag.startClientX,
+        ),
+        y: clampOrbitCoordinate(
+          activeDrag.startPosition.y + event.clientY - activeDrag.startClientY,
+        ),
+      };
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const nextPosition = pointerPosition(event);
+      activeDragPositionRef.current = nextPosition;
+      setDragPreviewPositions((current) => ({
+        ...current,
+        [activeDrag.nodeId]: nextPosition,
+      }));
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      const nextPosition =
+        activeDragPositionRef.current ?? pointerPosition(event);
+      setDraggingAugment(null);
+      setDragPreviewPositions((current) => {
+        const next = { ...current };
+        delete next[activeDrag.nodeId];
+        return next;
+      });
+      setDraftsByPipeline((current) => {
+        const currentState = current[selectedName];
+        if (!currentState) {
+          return current;
+        }
+
+        const previousDraft = cloneGraph(currentState.draft);
+        const nextDraft = {
+          ...previousDraft,
+          nodes: previousDraft.nodes.map((node) =>
+            node.id === activeDrag.nodeId
+              ? {
+                  ...node,
+                  config: withOrbitPosition(node.config, nextPosition),
+                }
+              : node,
+          ),
+        };
+        return {
+          ...current,
+          [nextDraft.name]: {
+            draft: nextDraft,
+            history: [...currentState.history, previousDraft],
+            validation: null,
+            notice: null,
+          },
+        };
+      });
+      activeDragPositionRef.current = null;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggingAugment, selectedName]);
+
   function addNodeAfter({
     id,
     kind,
@@ -2056,7 +2173,18 @@ function PipelinesPanel({
 
       return {
         ...graph,
-        nodes: [...graph.nodes, { id, kind, provider }],
+        nodes: [
+          ...graph.nodes,
+          {
+            id,
+            kind,
+            provider,
+            config: withOrbitPosition(
+              undefined,
+              nextAugmentOrbitPosition(graph, "llm"),
+            ),
+          },
+        ],
         edges: [...graph.edges, { from: id, to: "llm" }],
       };
     });
@@ -2215,11 +2343,9 @@ function PipelinesPanel({
 
   function renderNodeCard({
     node,
-    index,
     compact = false,
   }: {
     node: PipelineNode;
-    index: number;
     compact?: boolean;
   }) {
     const componentKind = componentKindForNode(node);
@@ -2238,7 +2364,6 @@ function PipelinesPanel({
         onClick={() => setSelectedNodeId(node.id)}
       >
         <div className="graph-node-header">
-          <span className="node-index">{index + 1}</span>
           {!readOnly ? (
             <div className="node-card-actions">
               <button
@@ -2271,9 +2396,7 @@ function PipelinesPanel({
           ) : null}
         </div>
         <strong>{node.id}</strong>
-        <p>
-          {node.kind} / {node.provider}
-        </p>
+        <p>{node.provider}</p>
         {editingNodeId === node.id ? (
           <label className="field node-provider-select">
             <span>Provider</span>
@@ -2506,7 +2629,7 @@ function PipelinesPanel({
                 <ArrowRight size={16} aria-hidden="true" />
                 {atomFlowNodes[0]?.id}
               </span>
-              {atomFlowNodes.map((node, index) => {
+              {atomFlowNodes.map((node) => {
                 const outgoingEdges = atomEdges.filter(
                   (edge) => edge.from === node.id,
                 );
@@ -2522,29 +2645,57 @@ function PipelinesPanel({
                         <>
                           <div className="atom-orbit-ring" aria-hidden="true" />
                           <div
-                            className="atom-orbitals"
+                            className={`atom-orbitals ${
+                              graphMotionEnabled ? "motion-enabled" : ""
+                            }`}
                             aria-label={`${node.id} augments`}
                           >
-                            {spokes.map((spoke, spokeIndex) => (
-                              <div
-                                className={`atom-orbital slot-${
-                                  (spokeIndex % 4) + 1
-                                }`}
-                                key={spoke.node.id}
-                              >
-                                <span
-                                  className="atom-spoke-link"
-                                  aria-label={`${spoke.node.id} to ${node.id}`}
+                            {spokes.map((spoke, spokeIndex) => {
+                              const position =
+                                dragPreviewPositions[spoke.node.id] ??
+                                orbitPositionForNode(spoke.node, spokeIndex);
+                              const slot = spokeIndex + 1;
+                              return (
+                                <div
+                                  aria-label={`Move ${spoke.node.id} augment`}
+                                  className="atom-orbital"
+                                  data-orbit-slot={slot.toString()}
+                                  draggable={false}
+                                  key={spoke.node.id}
+                                  onPointerDown={(event) =>
+                                    startAugmentDrag(
+                                      spoke.node.id,
+                                      position,
+                                      event,
+                                    )
+                                  }
+                                  style={
+                                    {
+                                      "--orbit-x": `${position.x}px`,
+                                      "--orbit-y": `${position.y}px`,
+                                    } as CSSProperties
+                                  }
                                 >
-                                  <ArrowRight size={14} aria-hidden="true" />
-                                </span>
-                                {renderNodeCard({
-                                  node: spoke.node,
-                                  index: spoke.index,
-                                  compact: true,
-                                })}
-                              </div>
-                            ))}
+                                  <span
+                                    className="atom-spoke-link"
+                                    aria-label={`${spoke.node.id} to ${node.id}`}
+                                  >
+                                    <ArrowRight size={14} aria-hidden="true" />
+                                  </span>
+                                  {renderNodeCard({
+                                    node: spoke.node,
+                                    compact: true,
+                                  })}
+                                </div>
+                              );
+                            })}
+                            {graphMotionEnabled ? (
+                              <>
+                                <span className="atom-motion-particle particle-1" />
+                                <span className="atom-motion-particle particle-2" />
+                                <span className="atom-motion-particle particle-3" />
+                              </>
+                            ) : null}
                           </div>
                           <span className="atom-label">Reasoning core</span>
                         </>
@@ -2552,7 +2703,7 @@ function PipelinesPanel({
                       <div
                         className={node.kind === "llm" ? "reasoning-atom" : ""}
                       >
-                        {renderNodeCard({ node, index })}
+                        {renderNodeCard({ node })}
                       </div>
                     </div>
                     {outgoingEdges.map((edge) => (
@@ -3648,6 +3799,78 @@ function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
   });
 
   return { mainNodes, mainEdges, spokesByTarget };
+}
+
+function orbitPositionForNode(
+  node: PipelineNode,
+  fallbackIndex: number,
+): OrbitPosition {
+  const config = objectConfig(node.config);
+  const ui = objectConfig(config.ui);
+  const orbit = objectConfig(ui.orbit);
+  const x = typeof orbit.x === "number" ? orbit.x : undefined;
+  const y = typeof orbit.y === "number" ? orbit.y : undefined;
+  if (x !== undefined && y !== undefined) {
+    return { x, y };
+  }
+
+  return defaultAugmentOrbitPosition(fallbackIndex);
+}
+
+function nextAugmentOrbitPosition(
+  graph: PipelineGraph,
+  targetId: string,
+): OrbitPosition {
+  const existingAugmentCount = graph.nodes.filter((node) => {
+    if (node.kind !== "tool" && node.kind !== "memory") {
+      return false;
+    }
+
+    return (
+      (graph.edges.find((edge) => edge.from === node.id)?.to ?? "llm") ===
+      targetId
+    );
+  }).length;
+
+  return defaultAugmentOrbitPosition(existingAugmentCount);
+}
+
+function defaultAugmentOrbitPosition(index: number): OrbitPosition {
+  const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
+  return {
+    x: Math.round(Math.cos(angle) * 118),
+    y: Math.round(Math.sin(angle) * 78),
+  };
+}
+
+function withOrbitPosition(
+  config: unknown,
+  position: OrbitPosition,
+): Record<string, unknown> {
+  const configObject = objectConfig(config);
+  const ui = objectConfig(configObject.ui);
+  return {
+    ...configObject,
+    ui: {
+      ...ui,
+      orbit: {
+        x: position.x,
+        y: position.y,
+      },
+    },
+  };
+}
+
+function objectConfig(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return {};
+}
+
+function clampOrbitCoordinate(value: number): number {
+  return Math.max(-180, Math.min(180, Math.round(value)));
 }
 
 function initializePipelineDrafts(

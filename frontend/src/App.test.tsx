@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -969,6 +969,60 @@ describe("Pipelines graph editor", () => {
     expect(
       screen.getByText("Test turn queued for kitchen"),
     ).toBeInTheDocument();
+  });
+
+  it("places and drags LLM augments without stacking new components", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+
+    const graph = screen.getByLabelText("Pipeline graph");
+    const memoryOrbital = within(graph).getByLabelText("Move memory augment");
+    const toolOrbital = within(graph).getByLabelText("Move confirm augment");
+    expect(memoryOrbital).not.toHaveAttribute(
+      "data-orbit-slot",
+      toolOrbital.getAttribute("data-orbit-slot") ?? "",
+    );
+    expect(memoryOrbital).toHaveAttribute("draggable", "false");
+    expect(graph.querySelector(".atom-motion-particle")).toBeInTheDocument();
+    expect(
+      graph.querySelector(".atom-orbitals.motion-enabled"),
+    ).toBeInTheDocument();
+
+    fireEvent.pointerDown(memoryOrbital, {
+      clientX: 120,
+      clientY: 80,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(window, {
+      clientX: 180,
+      clientY: 130,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(window, {
+      clientX: 180,
+      clientY: 130,
+      pointerId: 1,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const memoryConfig = savedGraphs[0]?.nodes.find(
+      (node) => node.id === "memory",
+    )?.config;
+    expect(memoryConfig).toMatchObject({
+      ui: { orbit: { x: 60, y: -28 } },
+    });
   });
 
   it("keeps graph editing read-only on small screens", async () => {
