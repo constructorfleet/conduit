@@ -34,6 +34,11 @@ loop graph, invokes reusable Provider Settings inline, lets optional tool setup
 be skipped, validates required fields, and transitions back to Overview after
 the pipeline graph is saved.
 
+The Events section defaults to Turn Reconstruction, which renders the ordered
+component story for a conversation turn from generated event envelopes. Raw
+event inspection is secondary and filterable, while stale or disconnected event
+streams keep the last reconstructed turn visible with Stale State marked.
+
 Generated TypeScript contracts and reviewable JSON fixtures live under
 `src/contracts`. Rust owns those artifacts. After an intentional API or event
 contract change, update them from the repository root with:

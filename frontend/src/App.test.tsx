@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import App, { OverviewPanel } from "./App";
+import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
@@ -223,6 +224,23 @@ describe("Overview operations workspace", () => {
     expect(screen.getByText("Snapshot")).toBeInTheDocument();
     expect(screen.getByText("live")).toBeInTheDocument();
   });
+
+  it("links current failures to reconstructed turn events when possible", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={eventFixture()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.click(
+      screen.getAllByRole("button", { name: "Open turn events" })[0],
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Turn Reconstruction" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("StageFailed")).toBeInTheDocument();
+  });
 });
 
 describe("First-Run Guided Setup", () => {
@@ -324,10 +342,107 @@ describe("First-Run Guided Setup", () => {
   });
 });
 
+describe("Events turn reconstruction", () => {
+  it("renders a successful turn as an ordered component story", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={successfulTurnEvents()} />);
+
+    await enterEventsSection(user);
+
+    const speech = screen.getByText("turn on the kitchen lights");
+    const reasoning = screen.getByText("The lights are on.");
+    const synthesis = screen.getByText("TtsFinished");
+
+    expect(
+      screen.getByRole("heading", { name: "Turn Reconstruction" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("completed")).toBeInTheDocument();
+    expect(
+      speech.compareDocumentPosition(reasoning) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      reasoning.compareDocumentPosition(synthesis) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("preserves tool activity and confirmation boundaries", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={successfulTurnEvents()} />);
+
+    await enterEventsSection(user);
+
+    expect(screen.getByText("lights.turn_on")).toBeInTheDocument();
+    expect(screen.getByText("Turn on the kitchen lights?")).toBeInTheDocument();
+    expect(screen.getByText("ToolCompleted")).toBeInTheDocument();
+  });
+
+  it("surfaces synthesis failures as component-attributed turn failures", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={eventFixture()} />);
+
+    await enterEventsSection(user);
+
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("StageFailed")).toBeInTheDocument();
+    expect(screen.getByText("connection refused")).toBeInTheDocument();
+    expect(screen.getByText("tts")).toBeInTheDocument();
+  });
+
+  it("marks reconstructed turns stale when the event stream is stale", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        initialEventPosture="stale"
+        initialEvents={successfulTurnEvents()}
+      />,
+    );
+
+    await enterEventsSection(user);
+
+    expect(screen.getByLabelText("Stale state")).toHaveTextContent(
+      "Stale state",
+    );
+    expect(screen.getByText("completed")).toBeInTheDocument();
+  });
+
+  it("keeps raw event filtering secondary to reconstruction", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={successfulTurnEvents()} />);
+
+    await enterEventsSection(user);
+    await user.click(screen.getByRole("tab", { name: "Raw stream" }));
+    await user.type(screen.getByLabelText("Filter events"), "Tool");
+
+    expect(screen.getByText("ToolRequested")).toBeInTheDocument();
+    expect(screen.getByText("ToolCompleted")).toBeInTheDocument();
+    expect(screen.queryByText("SpeechFinal")).not.toBeInTheDocument();
+  });
+});
+
 function snapshotFixture(): OperatorStatusSnapshot {
   return JSON.parse(
     JSON.stringify(operatorStatusSnapshotFixture),
   ) as OperatorStatusSnapshot;
+}
+
+async function enterEventsSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Events" }));
+}
+
+function eventFixture(): EventEnvelope[] {
+  return JSON.parse(JSON.stringify(eventEnvelopeFixtures)) as EventEnvelope[];
+}
+
+function successfulTurnEvents(): EventEnvelope[] {
+  return eventFixture().filter(
+    (envelope) =>
+      envelope.event.type !== "ConversationCancelled" &&
+      envelope.event.type !== "ToolFailed" &&
+      envelope.event.type !== "StageFailed",
+  );
 }
 
 function firstRunSnapshot(): OperatorStatusSnapshot {
