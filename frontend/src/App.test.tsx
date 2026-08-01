@@ -832,6 +832,12 @@ describe("Pipelines graph editor", () => {
       /Start.*mic/,
     );
     expect(within(graph).getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(
+      within(graph).getByRole("group", { name: "mic capture" }),
+    ).toHaveClass("linear");
+    expect(
+      within(graph).getByRole("group", { name: "llm reasoning" }),
+    ).not.toHaveClass("linear");
     expect(within(graph).getAllByText("Reasoning core").length).toBeGreaterThan(
       0,
     );

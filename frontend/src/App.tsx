@@ -2358,8 +2358,8 @@ function PipelinesPanel({
       <article
         aria-label={`${node.id} ${componentKind}`}
         className={`graph-node kind-${node.kind} ${compact ? "compact" : ""} ${
-          selectedNode?.id === node.id ? "selected" : ""
-        }`}
+          !compact && node.kind !== "llm" ? "linear" : ""
+        } ${selectedNode?.id === node.id ? "selected" : ""}`}
         role="group"
         onClick={() => setSelectedNodeId(node.id)}
       >

@@ -822,12 +822,16 @@ button {
 .atom-flow-item {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 18px;
 }
 
 .atom-stage,
 .atom-core-wrap {
   position: relative;
+}
+
+.atom-core-wrap {
+  margin-inline: 22px;
 }
 
 .atom-flow-link {
@@ -951,6 +955,12 @@ button {
 .graph-node.compact {
   width: 132px;
   min-height: 74px;
+  padding: 10px;
+}
+
+.graph-node.linear {
+  width: 118px;
+  min-height: 76px;
   padding: 10px;
 }
 
