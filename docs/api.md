@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipeline-components`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipeline-components`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -299,7 +299,10 @@ Errors:
 
 ### `PUT /v1/pipelines/{name}`
 
-Validates and stores a pipeline graph.
+Validates and stores a pipeline graph. Graph topology is always validated. When
+a node directly references a known component id from `/v1/pipeline-components`,
+its embedded `config` is also checked against that component schema before the
+existing stored graph is replaced.
 
 Status:
 
@@ -332,6 +335,38 @@ Errors:
 
 Validates a graph without storing it. The success body has the same shape as
 `GET /v1/pipelines/{name}`.
+
+### `POST /v1/pipelines/{name}/test-turn`
+
+Runs one stored pipeline turn through the configured runtime providers. This is
+the Operator Console test path; it does not fake success when providers are not
+registered or the graph cannot be prepared.
+
+Request body:
+
+```json
+{
+  "utterance": "conduit test"
+}
+```
+
+Success body:
+
+```json
+{
+  "pipeline": "kitchen",
+  "conversation": "00000000-0000-0000-0000-000000000000",
+  "status": "completed",
+  "audio_bytes": 1024,
+  "reply_text": "You said: conduit test."
+}
+```
+
+Errors:
+
+- `404` if no pipeline is stored under `name`
+- `422` if no runtime providers are configured or the graph cannot be prepared
+- `503` if the test turn fails while running
 
 ## Event Stream
 

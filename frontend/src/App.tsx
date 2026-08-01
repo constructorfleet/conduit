@@ -86,6 +86,7 @@ export type PipelineValidationResult =
 type PipelineValidator = (
   graph: PipelineGraph,
 ) => PipelineValidationResult | Promise<PipelineValidationResult>;
+type PipelineTester = (name: string) => Promise<string>;
 
 interface PipelineEditorDraftState {
   draft: PipelineGraph;
@@ -116,6 +117,7 @@ interface AppProps {
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: PipelineValidator;
+  onPipelineTest?: PipelineTester;
 }
 
 function App({
@@ -128,6 +130,7 @@ function App({
   dataMode = defaultDataMode(),
   onPipelineSaved,
   onPipelineValidate,
+  onPipelineTest,
 }: AppProps = {}) {
   const [access, setAccess] = useState<OperatorAccess>(() =>
     loadOperatorAccess(),
@@ -151,6 +154,7 @@ function App({
       dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
       onPipelineValidate={onPipelineValidate}
+      onPipelineTest={onPipelineTest}
       onSectionChange={setActiveSection}
       onClearAccess={() => {
         clearOperatorAccess();
@@ -246,6 +250,7 @@ function OperatorWorkspace({
   dataMode,
   onPipelineSaved,
   onPipelineValidate,
+  onPipelineTest,
   onSectionChange,
   onClearAccess,
 }: {
@@ -260,6 +265,7 @@ function OperatorWorkspace({
   dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: PipelineValidator;
+  onPipelineTest?: PipelineTester;
   onSectionChange: (section: SectionId) => void;
   onClearAccess: () => void;
 }) {
@@ -321,7 +327,7 @@ function OperatorWorkspace({
     setPipelineViews((current) =>
       upsertPipelineView(current, view.graph, view.order),
     );
-    setSnapshot((current) => promoteSavedPipeline(current, view.graph));
+    await refreshSnapshotFromApi();
     onSectionChange("overview");
   }
 
@@ -331,6 +337,34 @@ function OperatorWorkspace({
     setPipelineViews((current) =>
       upsertPipelineView(current, view.graph, view.order),
     );
+    await refreshSnapshotFromApi();
+  }
+
+  async function runPipelineTest(name: string): Promise<string> {
+    const result = await snapshotClient.runPipelineTest(name, {
+      utterance: "conduit test",
+    });
+    await refreshSnapshotFromApi();
+    return `Test turn completed for ${result.pipeline}: ${
+      result.reply_text || `${result.audio_bytes} audio bytes`
+    }`;
+  }
+
+  async function refreshSnapshotFromApi() {
+    const loadedSnapshot = await snapshotClient.loadSnapshot();
+    setSnapshot(loadedSnapshot);
+    setProviderDefinitions((current) =>
+      mergeProviderDefinitions(
+        defaultProviderDefinitions(
+          componentCatalog,
+          pipelineViews,
+          loadedSnapshot,
+        ),
+        current,
+      ),
+    );
+    setSnapshotState("live");
+    setLoadError(null);
   }
 
   useEffect(() => {
@@ -386,12 +420,12 @@ function OperatorWorkspace({
         setComponentCatalog(initialComponentCatalog ?? loadedComponentCatalog);
         setProviderDefinitions((current) =>
           mergeProviderDefinitions(
-            current,
             defaultProviderDefinitions(
               initialComponentCatalog ?? loadedComponentCatalog,
               initialPipelineViews ?? loadedPipelineViews,
               loadedSnapshot,
             ),
+            current,
           ),
         );
         setTurnSnapshot(loadedTurnSnapshot);
@@ -542,6 +576,7 @@ function OperatorWorkspace({
                 await snapshotClient.validatePipeline(graph),
               ))
           }
+          onPipelineTest={onPipelineTest ?? runPipelineTest}
           onProviderDefinitionsChange={setProviderDefinitions}
           onPipelineStored={storePipelineGraph}
         />
@@ -568,6 +603,7 @@ function SectionPanel({
   onSectionChange,
   onPipelineStored,
   onPipelineValidate,
+  onPipelineTest,
   onProviderDefinitionsChange,
 }: {
   section: SectionId;
@@ -583,6 +619,7 @@ function SectionPanel({
   onSectionChange: (section: SectionId) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: PipelineValidator;
+  onPipelineTest: PipelineTester;
   onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   if (loadError) {
@@ -622,6 +659,7 @@ function SectionPanel({
         readOnly={initialSmallScreen}
         onPipelineStored={onPipelineStored}
         onPipelineValidate={onPipelineValidate}
+        onPipelineTest={onPipelineTest}
       />
     );
   }
@@ -723,6 +761,13 @@ function ProvidersPanel({
         (component) => component.id === draftProvider.component,
       ) ?? null)
     : null;
+  const draftProviderValidation =
+    draftProvider && selectedDraftComponent
+      ? validateProviderDefinitionConfig(draftProvider, selectedDraftComponent)
+      : ({
+          ok: false,
+          message: "Choose a provider component",
+        } satisfies PipelineValidationResult);
   const selectedKindComponents = selectedProviderKind
     ? componentCatalog.components.filter(
         (component) =>
@@ -801,6 +846,13 @@ function ProvidersPanel({
       (candidate) => candidate.id === draftProvider.component,
     );
     if (!id || !component) {
+      return;
+    }
+    const validation = validateProviderDefinitionConfig(
+      draftProvider,
+      component,
+    );
+    if (!validation.ok) {
       return;
     }
 
@@ -1017,6 +1069,7 @@ function ProvidersPanel({
           draftProvider={draftProvider}
           providerKinds={providerKinds}
           selectedComponent={selectedDraftComponent}
+          validation={draftProviderValidation}
           selectedKind={selectedProviderKind}
           selectedKindComponents={selectedKindComponents}
           onCancel={cancelDraftProvider}
@@ -1036,6 +1089,7 @@ function ProviderAddDialog({
   draftProvider,
   providerKinds,
   selectedComponent,
+  validation,
   selectedKind,
   selectedKindComponents,
   onCancel,
@@ -1049,6 +1103,7 @@ function ProviderAddDialog({
   draftProvider: ProviderDefinition | null;
   providerKinds: readonly ProviderFilter[];
   selectedComponent: PipelineComponentDescriptor | null;
+  validation: PipelineValidationResult;
   selectedKind: ProviderKind | null;
   selectedKindComponents: readonly PipelineComponentDescriptor[];
   onCancel: () => void;
@@ -1083,6 +1138,7 @@ function ProviderAddDialog({
                 className="icon-action success"
                 type="button"
                 aria-label="Save provider"
+                disabled={!validation.ok}
                 onClick={onSave}
               >
                 <Save size={17} aria-hidden="true" />
@@ -1104,6 +1160,7 @@ function ProviderAddDialog({
             componentCatalog={componentCatalog}
             draftProvider={draftProvider}
             selectedComponent={selectedComponent}
+            validation={validation}
             onConfigChange={onConfigChange}
             onDraftChange={onDraftChange}
           />
@@ -1160,12 +1217,14 @@ function ProviderEditorFields({
   componentCatalog,
   draftProvider,
   selectedComponent,
+  validation,
   onConfigChange,
   onDraftChange,
 }: {
   componentCatalog: PipelineComponentCatalog;
   draftProvider: ProviderDefinition;
   selectedComponent: PipelineComponentDescriptor | null;
+  validation: PipelineValidationResult;
   onConfigChange: (
     field: string,
     property: ComponentConfigProperty,
@@ -1235,6 +1294,9 @@ function ProviderEditorFields({
           readOnly={false}
           onChange={onConfigChange}
         />
+      ) : null}
+      {!validation.ok ? (
+        <p className="form-error">{validation.message}</p>
       ) : null}
     </div>
   );
@@ -1760,12 +1822,14 @@ function PipelinesPanel({
   readOnly,
   onPipelineStored,
   onPipelineValidate,
+  onPipelineTest,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
+  onPipelineTest: PipelineTester;
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
@@ -2274,10 +2338,19 @@ function PipelinesPanel({
     await saveCurrentDraft();
   }
 
-  function runTestTurn() {
-    markCurrentDraftNotice(
-      `Test turn queued for ${draft?.name ?? selectedName}`,
-    );
+  async function runTestTurn() {
+    if (!draft) {
+      return;
+    }
+
+    try {
+      const message = await onPipelineTest(draft.name);
+      markCurrentDraftNotice(message);
+    } catch (caught) {
+      markCurrentDraftNotice(
+        caught instanceof Error ? caught.message : "Unable to run test turn",
+      );
+    }
   }
 
   if (!draft || !selectedView) {
@@ -2819,18 +2892,59 @@ function componentForNode(
   }
 
   if (node.provider === "openai") {
-    const openAiCompletions = catalog.components.find(
+    const openAiResponses = catalog.components.find(
       (component) =>
-        component.id === "openai.completions" && component.kind === node.kind,
+        component.id === "openai.responses" && component.kind === node.kind,
     );
-    if (openAiCompletions) {
-      return openAiCompletions;
+    if (openAiResponses) {
+      return openAiResponses;
+    }
+  }
+
+  if (node.kind === "stt" && isWyomingProviderName(node.provider)) {
+    const wyomingStt = catalog.components.find(
+      (component) => component.id === "wyoming" && component.kind === "stt",
+    );
+    if (wyomingStt) {
+      return wyomingStt;
+    }
+  }
+
+  if (node.kind === "tts" && isWyomingProviderName(node.provider)) {
+    const wyomingTts = catalog.components.find(
+      (component) => component.id === "wyoming.tts" && component.kind === "tts",
+    );
+    if (wyomingTts) {
+      return wyomingTts;
     }
   }
 
   return (
-    catalog.components.find((component) => component.id === node.provider) ??
-    null
+    catalog.components.find(
+      (component) =>
+        component.id === node.provider && component.kind === node.kind,
+    ) ?? null
+  );
+}
+
+function componentForProviderStatus(
+  catalog: PipelineComponentCatalog,
+  provider: ProviderStatus,
+): PipelineComponentDescriptor | null {
+  const nodeKind = nodeKindForProviderKind(provider.kind);
+  return componentForNode(catalog, {
+    id: provider.id,
+    kind: nodeKind,
+    provider: provider.id,
+  });
+}
+
+function isWyomingProviderName(provider: string): boolean {
+  const normalized = provider.toLowerCase();
+  return (
+    normalized.includes("wyoming") ||
+    normalized.includes("piper") ||
+    normalized.includes("whisper")
   );
 }
 
@@ -2906,8 +3020,8 @@ function loadProviderDefinitions(
     if (saved) {
       const parsed = JSON.parse(saved) as ProviderDefinition[];
       return mergeProviderDefinitions(
-        parsed.filter(isProviderDefinition),
         defaultProviderDefinitions(catalog, pipelineViews, snapshot),
+        parsed.filter(isProviderDefinition),
       );
     }
   } catch {
@@ -2952,7 +3066,8 @@ function defaultProviderDefinitions(
       id: provider.id,
       label: provider.id,
       kind: nodeKindForProviderKind(provider.kind),
-      component: provider.id,
+      component:
+        componentForProviderStatus(catalog, provider)?.id ?? provider.id,
       config: {},
     })) ?? [];
 
@@ -2995,6 +3110,38 @@ function isProviderDefinition(value: unknown): value is ProviderDefinition {
     typeof provider.config === "object" &&
     !Array.isArray(provider.config)
   );
+}
+
+function validateProviderDefinitionConfig(
+  provider: ProviderDefinition,
+  component: PipelineComponentDescriptor,
+): PipelineValidationResult {
+  const config = pruneEmptyConfig(provider.config);
+  const missing = component.schema.required.filter((field) => {
+    const value = config[field];
+    return typeof value !== "string" || value.trim().length === 0;
+  });
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message: `Missing required fields: ${missing.join(", ")}`,
+    };
+  }
+
+  for (const [field, property] of Object.entries(component.schema.properties)) {
+    if (!(field in config)) {
+      continue;
+    }
+    const value = config[field];
+    if (property.type === "string" && typeof value !== "string") {
+      return { ok: false, message: `${field} must be a string` };
+    }
+    if (property.type === "boolean" && typeof value !== "boolean") {
+      return { ok: false, message: `${field} must be a boolean` };
+    }
+  }
+
+  return { ok: true, order: [] };
 }
 
 function updateConfigValue(
@@ -3787,7 +3934,7 @@ function defaultAugmentOrbitPosition(index: number): OrbitPosition {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
   return {
     x: Math.round(Math.cos(angle) * 148),
-    y: Math.round(Math.sin(angle) * 110),
+    y: Math.round(Math.sin(angle) * 150),
   };
 }
 
@@ -3885,69 +4032,6 @@ function readsSmallScreenQuery() {
   }
 
   return window.matchMedia("(max-width: 700px)").matches;
-}
-
-function promoteSavedPipeline(
-  snapshot: OperatorStatusSnapshot | null,
-  graph: PipelineGraph,
-): OperatorStatusSnapshot | null {
-  if (!snapshot) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    runtime: {
-      ...snapshot.runtime,
-      launch_state: "operations_workspace",
-    },
-    pipelines: [
-      {
-        name: graph.name,
-        usable: true,
-        health: {
-          state: "unproven",
-          summary: "awaiting first successful turn",
-          last_successful_turn: null,
-          last_failed_turn: null,
-        },
-        components: [
-          {
-            kind: "capture",
-            provider: "websocket",
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "transcription",
-            provider:
-              graph.nodes.find((node) => node.id === "stt")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "reasoning",
-            provider:
-              graph.nodes.find((node) => node.id === "llm")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-          {
-            kind: "synthesis",
-            provider:
-              graph.nodes.find((node) => node.id === "tts")?.provider ?? null,
-            state: "unproven",
-            detail: "pipeline saved",
-            last_turn: null,
-          },
-        ],
-        affected_providers: [],
-      },
-    ],
-  };
 }
 
 function StaleBanner({ snapshot }: { snapshot: OperatorStatusSnapshot }) {

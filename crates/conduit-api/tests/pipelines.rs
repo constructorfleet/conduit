@@ -7,6 +7,8 @@ use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
+use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
+use conduit_runtime::Providers;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -19,6 +21,22 @@ fn valid_graph() -> PipelineGraph {
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
+}
+
+fn echo_graph() -> PipelineGraph {
+    PipelineGraph::new("echo")
+        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
+        .with_node(
+            Node::new("llm", NodeKind::Llm, "echo-llm")
+                .with_config(serde_json::json!({ "model": "echo" })),
+        )
+        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+}
+
+fn providers() -> Providers {
+    Providers::new().with_stt(EchoStt).with_llm(EchoLlm).with_tts(EchoTts)
 }
 
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -49,7 +67,7 @@ async fn ops_call(state: &AppState, request: Request<Body>) -> (StatusCode, serd
 fn put(graph: &PipelineGraph) -> Request<Body> {
     Request::builder()
         .method("PUT")
-        .uri("/v1/pipelines/kitchen")
+        .uri(format!("/v1/pipelines/{}", graph.name))
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(graph).expect("serialize")))
         .expect("request")
@@ -121,6 +139,39 @@ async fn replacing_a_pipeline_returns_ok_not_created() {
 }
 
 #[tokio::test]
+async fn replacing_a_pipeline_refuses_invalid_component_configuration() {
+    let state = AppState::new(EventBus::default());
+    let original = valid_graph();
+    let (status, _) = call(&state, put(&original)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let invalid = PipelineGraph::new("kitchen")
+        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
+        .with_node(Node::new("stt", NodeKind::Stt, "wyoming").with_config(serde_json::json!({
+            "url": "tcp://whisper.local:10300"
+        })))
+        .with_node(Node::new("llm", NodeKind::Llm, "openai.responses"))
+        .with_node(Node::new("tts", NodeKind::Tts, "wyoming.tts").with_config(
+            serde_json::json!({
+                "url": "tcp://piper.local:10200"
+            }),
+        ))
+        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("tts", "speaker"));
+
+    let (status, body) = call(&state, put(&invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().expect("detail").contains("base_url"));
+    let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider);
+}
+
+#[tokio::test]
 async fn invalid_graphs_are_rejected_and_not_stored() {
     let state = AppState::new(EventBus::default());
     let broken = valid_graph().with_edge(Edge::new("tts", "nowhere"));
@@ -186,6 +237,47 @@ async fn validate_checks_without_storing() {
 }
 
 #[tokio::test]
+async fn test_turn_runs_the_stored_pipeline_through_real_providers() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    let (status, _) = call(&state, put(&echo_graph())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/echo/test-turn")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"utterance":"hello conduit"}"#))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["pipeline"], "echo");
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["reply_text"], "You said: hello conduit.");
+    assert!(body["conversation"].as_str().is_some());
+    assert!(body["audio_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+}
+
+#[tokio::test]
+async fn test_turn_refuses_to_pretend_when_no_runtime_providers_are_configured() {
+    let state = AppState::new(EventBus::default());
+    let (status, _) = call(&state, put(&echo_graph())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/echo/test-turn")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().expect("detail").contains("no providers"));
+}
+
+#[tokio::test]
 async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     let state = AppState::new(EventBus::default());
 
@@ -213,6 +305,7 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     );
     let components = body["components"].as_array().expect("component list");
     assert_component(components, "openai.speech", "tts", &["base_url", "model"], &["model"]);
+    assert_component(components, "wyoming.tts", "tts", &["url", "voice"], &["url"]);
     assert_component(
         components,
         "openai.transcription",

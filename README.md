@@ -230,6 +230,7 @@ the household's transcripts.
 | `GET /v1/pipelines/{name}/converse` | Device, or management |
 | `GET`, `PUT`, `DELETE /v1/pipelines…` | Management only |
 | `POST /v1/pipelines/validate` | Management only |
+| `POST /v1/pipelines/{name}/test-turn` | Management only |
 | `GET /v1/events` | Management only |
 | `GET /v1/turns`, `/v1/turns/{turn_id}`, `/v1/turns/{turn_id}/events`, `/v1/turns/live` | Management only |
 

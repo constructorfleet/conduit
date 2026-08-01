@@ -837,6 +837,160 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("keeps saved OpenAI and Wyoming provider configuration over inferred defaults", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "openai",
+          label: "OpenAI Primary",
+          kind: "llm",
+          component: "openai.responses",
+          config: {
+            base_url: "https://api.openai.com/v1",
+            api_key: "sk-test",
+            model: "gpt-5",
+            streaming: true,
+          },
+        },
+        {
+          id: "whisper",
+          label: "Whisper Local",
+          kind: "stt",
+          component: "wyoming",
+          config: {
+            url: "tcp://whisper.local:10300",
+            model: "tiny-int8",
+            streaming: true,
+          },
+        },
+        {
+          id: "piper-local",
+          label: "Piper Local",
+          kind: "tts",
+          component: "wyoming.tts",
+          config: {
+            url: "tcp://piper.local:10200",
+            voice: "en_US-lessac-medium",
+          },
+        },
+      ]),
+    );
+
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    const openAiCard = screen
+      .getByRole("heading", { name: "OpenAI Primary" })
+      .closest("article");
+    expect(openAiCard).not.toBeNull();
+    await user.click(
+      within(openAiCard as HTMLElement).getByRole("button", {
+        name: "Edit openai",
+      }),
+    );
+
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "OpenAI Responses",
+    );
+    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+      "https://api.openai.com/v1",
+    );
+    expect(screen.getByLabelText("api_key")).toHaveDisplayValue("sk-test");
+    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt-5");
+    await user.click(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    );
+
+    const whisperCard = screen
+      .getByRole("heading", { name: "Whisper Local" })
+      .closest("article");
+    expect(whisperCard).not.toBeNull();
+    await user.click(
+      within(whisperCard as HTMLElement).getByRole("button", {
+        name: "Edit whisper",
+      }),
+    );
+
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "Wyoming",
+    );
+    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+      "tcp://whisper.local:10300",
+    );
+    expect(screen.getByLabelText("model")).toHaveDisplayValue("tiny-int8");
+    expect(screen.getByLabelText("streaming")).toBeChecked();
+    await user.click(
+      screen.getByRole("button", { name: "Cancel provider edit" }),
+    );
+
+    const piperCard = screen
+      .getByRole("heading", { name: "Piper Local" })
+      .closest("article");
+    expect(piperCard).not.toBeNull();
+    await user.click(
+      within(piperCard as HTMLElement).getByRole("button", {
+        name: "Edit piper-local",
+      }),
+    );
+
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "Wyoming TTS",
+    );
+    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+      "tcp://piper.local:10200",
+    );
+    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
+      "en_US-lessac-medium",
+    );
+  });
+
+  it("does not overwrite an existing provider with an invalid configuration", async () => {
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "Broken OpenAI");
+
+    expect(
+      screen.getByText("Missing required fields: base_url, model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save provider" }),
+    ).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("base_url required"),
+      "https://api.openai.com/v1",
+    );
+    expect(
+      screen.getByText("Missing required fields: model"),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText("model required"), "gpt-5");
+    expect(
+      screen.queryByText(/Missing required fields/),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Broken OpenAI" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders an atom-style graph canvas and exposes editor actions", async () => {
     const user = userEvent.setup();
     render(
@@ -995,7 +1149,9 @@ describe("Pipelines graph editor", () => {
 
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
     expect(
-      screen.getByText("Test turn queued for kitchen"),
+      await screen.findByText(
+        "Test turn completed for kitchen: You said: conduit test.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1018,9 +1174,9 @@ describe("Pipelines graph editor", () => {
     const toolOrbital = within(graph).getByLabelText("Move confirm augment");
     expect(memoryOrbital).toHaveStyle({
       "--orbit-x": "0px",
-      "--orbit-y": "-110px",
+      "--orbit-y": "-150px",
       "--orbit-start-x": "0px",
-      "--orbit-start-y": "-110px",
+      "--orbit-start-y": "-150px",
     });
     expect(memoryOrbital).not.toHaveAttribute(
       "data-orbit-slot",
@@ -1056,7 +1212,7 @@ describe("Pipelines graph editor", () => {
       (node) => node.id === "memory",
     )?.config;
     expect(memoryConfig).toMatchObject({
-      ui: { orbit: { x: 60, y: -60 } },
+      ui: { orbit: { x: 60, y: -100 } },
     });
   });
 
@@ -1452,6 +1608,19 @@ function componentCatalog(): PipelineComponentCatalog {
         },
       },
       {
+        id: "wyoming",
+        label: "Wyoming",
+        kind: "stt",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+            model: { type: "string" },
+            streaming: { type: "boolean" },
+          },
+          required: ["url"],
+        },
+      },
+      {
         id: "openai.transcription",
         label: "OpenAI Transcription",
         kind: "stt",
@@ -1474,6 +1643,18 @@ function componentCatalog(): PipelineComponentCatalog {
             model: { type: "string" },
           },
           required: ["model"],
+        },
+      },
+      {
+        id: "wyoming.tts",
+        label: "Wyoming TTS",
+        kind: "tts",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+            voice: { type: "string" },
+          },
+          required: ["url"],
         },
       },
       {
@@ -1629,6 +1810,22 @@ function mockOperatorApi({
       }
 
       if (route.startsWith("/v1/pipelines/")) {
+        if (route.endsWith("/test-turn") && method === "POST") {
+          const name = route
+            .slice("/v1/pipelines/".length)
+            .replace(/\/test-turn$/, "");
+          const request = JSON.parse(init?.body?.toString() ?? "{}") as {
+            utterance?: string;
+          };
+          return jsonResponse({
+            pipeline: name,
+            conversation: "00000000-0000-0000-0000-000000000999",
+            status: "completed",
+            audio_bytes: 24,
+            reply_text: `You said: ${request.utterance ?? "conduit test"}.`,
+          });
+        }
+
         const name = route.slice("/v1/pipelines/".length);
         if (method === "PUT") {
           const graph = JSON.parse(

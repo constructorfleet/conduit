@@ -19,6 +19,7 @@ and runtime execution into the server binary.
 - `GET /v1/pipelines/{name}`
 - `PUT /v1/pipelines/{name}`
 - `DELETE /v1/pipelines/{name}`
+- `POST /v1/pipelines/{name}/test-turn`
 - `GET /v1/pipelines/{name}/converse`
 
 `ops_router(state)` builds the unauthenticated ops router:
