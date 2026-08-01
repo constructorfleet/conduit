@@ -733,6 +733,27 @@ describe("Pipelines graph editor", () => {
     });
   });
 
+  it("validates pipeline edits through the API by default", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockOperatorApi({
+      pipelineViews: [pipelineView()],
+    });
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+
+    expect(await screen.findByText("Validation passed")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: "/v1/pipelines/validate",
+      }),
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
   it("selects a configured provider for a pipeline node", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
@@ -856,7 +877,6 @@ describe("Pipelines graph editor", () => {
     for (const action of [
       "Add tool node",
       "Add memory node",
-      "Add fallback TTS",
       "Validate Graph",
       "Run test turn",
       "Save Graph",
@@ -866,6 +886,9 @@ describe("Pipelines graph editor", () => {
         within(toolbar).getByRole("button", { name: action }),
       ).toBeInTheDocument();
     }
+    expect(
+      within(toolbar).queryByRole("button", { name: "Add fallback TTS" }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Delete tts" }));
     expect(screen.queryByText("tts")).not.toBeInTheDocument();
@@ -956,22 +979,19 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Move confirm augment")).toBeInTheDocument();
   });
 
-  it("supports undo, test run, and multiple frontend-only node actions", async () => {
+  it("supports undo, test run, and frontend-only augment actions", async () => {
     const user = userEvent.setup();
     render(<App initialPipelineViews={[pipelineView()]} />);
 
     await enterPipelinesSection(user);
     await user.click(screen.getByRole("button", { name: "Add memory node" }));
-    await user.click(screen.getByRole("button", { name: "Add fallback TTS" }));
 
     expect(screen.getByText("memory")).toBeInTheDocument();
-    expect(screen.getByText("tts_fallback")).toBeInTheDocument();
     expect(screen.getByLabelText("Move memory augment")).toBeInTheDocument();
-    expect(screen.getByText("2 unsaved edits")).toBeInTheDocument();
+    expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo last edit" }));
-    expect(screen.queryByText("tts_fallback")).not.toBeInTheDocument();
-    expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
+    expect(screen.queryByText("memory")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
     expect(
@@ -998,9 +1018,9 @@ describe("Pipelines graph editor", () => {
     const toolOrbital = within(graph).getByLabelText("Move confirm augment");
     expect(memoryOrbital).toHaveStyle({
       "--orbit-x": "0px",
-      "--orbit-y": "-78px",
+      "--orbit-y": "-110px",
       "--orbit-start-x": "0px",
-      "--orbit-start-y": "-78px",
+      "--orbit-start-y": "-110px",
     });
     expect(memoryOrbital).not.toHaveAttribute(
       "data-orbit-slot",
@@ -1036,7 +1056,7 @@ describe("Pipelines graph editor", () => {
       (node) => node.id === "memory",
     )?.config;
     expect(memoryConfig).toMatchObject({
-      ui: { orbit: { x: 60, y: -28 } },
+      ui: { orbit: { x: 60, y: -60 } },
     });
   });
 
@@ -1247,10 +1267,19 @@ describe("Providers workspace", () => {
       within(piperCard as HTMLElement).getByText("configured"),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Use fallback" }));
     expect(
-      screen.getByText("Fallback selected for piper-local"),
-    ).toBeInTheDocument();
+      within(piperCard as HTMLElement).queryByRole("button", {
+        name: "Use fallback",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Fallback selected for piper-local"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(piperCard as HTMLElement).getByRole("button", {
+        name: "Test piper-local",
+      }),
+    ).toHaveTextContent("Test");
   });
 });
 
@@ -1587,6 +1616,16 @@ function mockOperatorApi({
 
       if (route === "/v1/pipeline-components" && method === "GET") {
         return jsonResponse(catalog);
+      }
+
+      if (route === "/v1/pipelines/validate" && method === "POST") {
+        const graph = JSON.parse(
+          init?.body?.toString() ?? "{}",
+        ) as PipelineGraph;
+        return jsonResponse({
+          graph,
+          order: graph.nodes.map((node) => node.id),
+        });
       }
 
       if (route.startsWith("/v1/pipelines/")) {
