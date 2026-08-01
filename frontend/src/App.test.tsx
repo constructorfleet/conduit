@@ -1865,9 +1865,10 @@ describe("Providers workspace", () => {
       .getByRole("heading", { name: "piper-local" })
       .closest("article");
     expect(piperCard).not.toBeNull();
+    expect(piperCard).toHaveClass("healthy");
     expect(
-      within(piperCard as HTMLElement).getByText("reachable"),
-    ).toBeInTheDocument();
+      within(piperCard as HTMLElement).queryByText("reachable"),
+    ).not.toBeInTheDocument();
     expect(
       within(piperCard as HTMLElement).getByText(
         "provider health check passed",

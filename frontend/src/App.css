@@ -1434,6 +1434,10 @@ button {
   border-color: var(--warning-border);
 }
 
+.provider-card.healthy {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+}
+
 .provider-card h2,
 .provider-card p {
   margin: 0;
@@ -1840,13 +1844,13 @@ button {
 
 .state-text.degraded,
 .state-text.configured,
-.state-text.reachable,
 .state-text.unproven {
   color: var(--warning-text);
 }
 
 .state-text.healthy,
-.state-text.proven {
+.state-text.proven,
+.state-text.reachable {
   color: var(--success);
 }
 

@@ -1085,7 +1085,7 @@ function ProvidersPanel({
       <section className="provider-card-grid" aria-label="Provider cards">
         {visibleProviderCards.map((provider) => (
           <article
-            className={`provider-card ${provider.status?.state ?? "configured"}`}
+            className={`provider-card ${providerCardStateClass(provider)}`}
             key={provider.id}
           >
             <div className="provider-card-header">
@@ -1093,13 +1093,13 @@ function ProvidersPanel({
                 {provider.kind.toUpperCase()}
               </span>
               <div className="provider-card-controls">
-                <StatusPill
-                  label="Status"
-                  value={provider.status?.state ?? "configured"}
-                  tone={
-                    provider.status?.state === "proven" ? "neutral" : "caution"
-                  }
-                />
+                {showsProviderStatusPill(provider) ? (
+                  <StatusPill
+                    label="Status"
+                    value={provider.status?.state ?? "configured"}
+                    tone="caution"
+                  />
+                ) : null}
                 <button
                   className="icon-action"
                   type="button"
@@ -3351,6 +3351,26 @@ function providerCardViews(
   return [...cards.values()].sort((left, right) =>
     left.id.localeCompare(right.id),
   );
+}
+
+function providerStatusIsGood(status: ProviderStatus | null): boolean {
+  return (
+    !!status &&
+    (status.reachable ||
+      status.state === "reachable" ||
+      status.state === "proven")
+  );
+}
+
+function providerCardStateClass(provider: ProviderCardView): string {
+  if (providerStatusIsGood(provider.status)) {
+    return "healthy";
+  }
+  return provider.status?.state ?? "configured";
+}
+
+function showsProviderStatusPill(provider: ProviderCardView): boolean {
+  return !providerStatusIsGood(provider.status);
 }
 
 function loadProviderDefinitions(
