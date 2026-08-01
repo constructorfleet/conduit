@@ -155,6 +155,20 @@ button {
   color: var(--strong);
 }
 
+.icon-action {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--button-muted);
+  color: var(--strong);
+}
+
+.icon-action.danger {
+  color: var(--danger);
+}
+
 .link-action {
   display: inline-flex;
   align-items: center;
@@ -753,8 +767,7 @@ button {
 }
 
 .provider-config-editor,
-.provider-definition-form,
-.provider-definition-list {
+.provider-definition-form {
   display: grid;
   gap: 10px;
 }
@@ -765,6 +778,84 @@ button {
   padding: 14px;
 }
 
+.providers-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.provider-kind-menu {
+  position: absolute;
+  z-index: 10;
+  right: 0;
+  top: calc(100% + 6px);
+  display: grid;
+  min-width: 210px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 16%);
+}
+
+.provider-kind-menu.inline {
+  position: static;
+  min-width: 0;
+  box-shadow: none;
+}
+
+.provider-kind-menu button {
+  min-height: 34px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--strong);
+  text-align: left;
+}
+
+.provider-kind-menu button:hover {
+  background: var(--selected);
+}
+
+.provider-kind-back,
+.provider-kind-empty {
+  color: var(--muted);
+}
+
+.provider-kind-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 42%);
+}
+
+.provider-add-dialog {
+  display: grid;
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+  overflow: auto;
+}
+
+.provider-add-dialog h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 18px;
+}
+
 .provider-definition-form {
   grid-template-columns: repeat(3, minmax(150px, 1fr));
   align-items: end;
@@ -773,25 +864,6 @@ button {
 .provider-definition-form .component-config-fields,
 .provider-definition-form .provider-actions {
   grid-column: 1 / -1;
-}
-
-.provider-definition {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(160px, auto) auto;
-  align-items: center;
-  gap: 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-}
-
-.provider-definition div {
-  display: grid;
-  gap: 2px;
-}
-
-.provider-definition span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .validation-ok {
@@ -870,6 +942,7 @@ button {
 .provider-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: start;
   gap: 12px;
 }
 
@@ -913,6 +986,12 @@ button {
   gap: 10px;
 }
 
+.provider-card-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .provider-kind {
   border-radius: 8px;
   padding: 7px 9px;
@@ -930,7 +1009,7 @@ button {
 
 .provider-facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 

@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Trash2,
   Workflow,
+  X,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -630,6 +631,15 @@ interface ProviderOverride {
   fallbackSelected?: boolean;
 }
 
+interface ProviderCardView {
+  id: string;
+  label: string;
+  kind: ProviderKind;
+  component: string | null;
+  definition: ProviderDefinition | null;
+  status: ProviderStatus | null;
+}
+
 function ProvidersPanel({
   componentCatalog,
   pipelineViews,
@@ -647,15 +657,25 @@ function ProvidersPanel({
   const [draftProvider, setDraftProvider] = useState<ProviderDefinition | null>(
     null,
   );
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(
+    null,
+  );
+  const [addProviderDialogOpen, setAddProviderDialogOpen] = useState(false);
+  const [selectedProviderKind, setSelectedProviderKind] =
+    useState<ProviderKind | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
     {},
   );
   const [providerNotices, setProviderNotices] = useState<
     Record<string, string>
   >({});
-  const visibleProviders = providers
-    .map((provider) => ({ ...provider, ...overrides[provider.id] }))
-    .filter((provider) => filter === "all" || provider.kind === filter);
+  const providerCards = providerCardViews(
+    providerDefinitions,
+    providers.map((provider) => ({ ...provider, ...overrides[provider.id] })),
+  );
+  const visibleProviderCards = providerCards.filter(
+    (provider) => filter === "all" || provider.kind === filter,
+  );
   const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
   const providerIds = new Set([
     ...providers.map((provider) => provider.id),
@@ -668,29 +688,54 @@ function ProvidersPanel({
         .filter((provider) => providerIds.has(provider)),
     ),
   ).size;
-  const editableProviders = providerDefinitions.filter(
-    (provider) =>
-      filter === "all" || providerKindForNodeKind(provider.kind) === filter,
-  );
   const selectedDraftComponent = draftProvider
     ? (componentCatalog.components.find(
         (component) => component.id === draftProvider.component,
       ) ?? null)
     : null;
+  const selectedKindComponents = selectedProviderKind
+    ? componentCatalog.components.filter(
+        (component) =>
+          component.kind === nodeKindForProviderKind(selectedProviderKind),
+      )
+    : [];
 
-  function startNewProvider() {
-    const component = componentCatalog.components[0];
+  function startNewProvider(component: PipelineComponentDescriptor) {
+    const kind = providerKindForNodeKind(component.kind);
+    if (!kind) {
+      return;
+    }
+
     setDraftProvider({
-      id: component?.id ?? "provider",
-      label: component?.label ?? "Provider",
-      kind: component?.kind ?? "llm",
-      component: component?.id ?? "",
+      id: `${kind}-${providerDefinitions.length + 1}`,
+      label: component.label,
+      kind: component.kind,
+      component: component.id,
       config: {},
     });
+    setEditingProviderId("new");
+    setSelectedProviderKind(null);
   }
 
-  function editProvider(provider: ProviderDefinition) {
-    setDraftProvider(cloneProviderDefinition(provider));
+  function editProviderCard(card: ProviderCardView) {
+    if (card.definition) {
+      setDraftProvider(cloneProviderDefinition(card.definition));
+      setEditingProviderId(card.id);
+      setAddProviderDialogOpen(true);
+      setSelectedProviderKind(null);
+      return;
+    }
+
+    setDraftProvider({
+      id: card.id,
+      label: card.label,
+      kind: nodeKindForProviderKind(card.kind),
+      component: card.component ?? card.id,
+      config: {},
+    });
+    setEditingProviderId(card.id);
+    setAddProviderDialogOpen(true);
+    setSelectedProviderKind(null);
   }
 
   function updateDraftConfig(
@@ -708,6 +753,12 @@ function ProvidersPanel({
         config: updateConfigValue(current.config, field, property, value),
       };
     });
+  }
+
+  function updateDraftProvider(
+    updater: (current: ProviderDefinition) => ProviderDefinition,
+  ) {
+    setDraftProvider((current) => (current ? updater(current) : current));
   }
 
   function saveDraftProvider() {
@@ -741,6 +792,36 @@ function ProvidersPanel({
       [next.id]: `Provider ${next.id} saved`,
     }));
     setDraftProvider(null);
+    setEditingProviderId(null);
+    setAddProviderDialogOpen(false);
+    setSelectedProviderKind(null);
+  }
+
+  function cancelDraftProvider() {
+    setDraftProvider(null);
+    setEditingProviderId(null);
+    setAddProviderDialogOpen(false);
+    setSelectedProviderKind(null);
+  }
+
+  function openAddProviderDialog() {
+    setDraftProvider(null);
+    setEditingProviderId("new");
+    setSelectedProviderKind(null);
+    setAddProviderDialogOpen(true);
+  }
+
+  function deleteProviderDefinition(providerId: string) {
+    onProviderDefinitionsChange(
+      providerDefinitions.filter((provider) => provider.id !== providerId),
+    );
+    if (editingProviderId === providerId) {
+      cancelDraftProvider();
+    }
+    setProviderNotices((current) => ({
+      ...current,
+      [providerId]: `Provider ${providerId} deleted`,
+    }));
   }
 
   function testProvider(provider: ProviderStatus) {
@@ -766,7 +847,7 @@ function ProvidersPanel({
       <section className="summary-grid" aria-label="Provider summary">
         <MetricTile
           label="Visible providers"
-          value={`${visibleProviders.length} visible`}
+          value={`${visibleProviderCards.length} visible`}
         />
         <MetricTile
           label="Provider configs"
@@ -784,136 +865,32 @@ function ProvidersPanel({
         />
       </section>
 
-      <div
-        className="segmented-control"
-        role="toolbar"
-        aria-label="Provider stage filter"
-      >
-        {providerKinds.map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            className={filter === kind ? "selected" : ""}
-            onClick={() => setFilter(kind)}
-          >
-            {kind === "all" ? "All" : kind.toUpperCase()}
-          </button>
-        ))}
-      </div>
-
-      <section
-        className="provider-config-editor"
-        aria-label="Provider configuration"
-      >
-        <div className="panel-heading-row">
-          <div>
-            <p className="eyebrow">Configuration</p>
-            <h2>Provider Instances</h2>
-          </div>
-          <button
-            className="secondary-action"
-            type="button"
-            onClick={startNewProvider}
-          >
-            <Plus size={17} aria-hidden="true" />
-            Add provider
-          </button>
-        </div>
-
-        {draftProvider ? (
-          <div className="provider-definition-form">
-            <label className="field">
-              <span>Provider id</span>
-              <input
-                value={draftProvider.id}
-                onChange={(event) =>
-                  setDraftProvider((current) =>
-                    current ? { ...current, id: event.target.value } : current,
-                  )
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Provider label</span>
-              <input
-                value={draftProvider.label}
-                onChange={(event) =>
-                  setDraftProvider((current) =>
-                    current
-                      ? { ...current, label: event.target.value }
-                      : current,
-                  )
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Provider component</span>
-              <select
-                value={draftProvider.component}
-                onChange={(event) => {
-                  const component = componentCatalog.components.find(
-                    (candidate) => candidate.id === event.target.value,
-                  );
-                  setDraftProvider((current) =>
-                    current && component
-                      ? {
-                          ...current,
-                          component: component.id,
-                          kind: component.kind,
-                          config: {},
-                        }
-                      : current,
-                  );
-                }}
-              >
-                {componentCatalog.components.map((component) => (
-                  <option value={component.id} key={component.id}>
-                    {component.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedDraftComponent ? (
-              <ComponentConfigFields
-                component={selectedDraftComponent}
-                config={draftProvider.config}
-                readOnly={false}
-                onChange={updateDraftConfig}
-              />
-            ) : null}
-            <div className="provider-actions">
-              <button
-                className="primary-action"
-                type="button"
-                onClick={saveDraftProvider}
-              >
-                <Save size={17} aria-hidden="true" />
-                Save provider
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="provider-definition-list">
-          {editableProviders.map((provider) => (
-            <article className="provider-definition" key={provider.id}>
-              <div>
-                <strong>{provider.label}</strong>
-                <span>{provider.id}</span>
-              </div>
-              <code>{provider.component}</code>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => editProvider(provider)}
-              >
-                <Settings size={17} aria-hidden="true" />
-                Edit
-              </button>
-            </article>
+      <div className="providers-controls">
+        <div
+          className="segmented-control"
+          role="toolbar"
+          aria-label="Provider stage filter"
+        >
+          {providerKinds.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={filter === kind ? "selected" : ""}
+              onClick={() => setFilter(kind)}
+            >
+              {kind === "all" ? "All" : kind.toUpperCase()}
+            </button>
           ))}
         </div>
-      </section>
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={openAddProviderDialog}
+        >
+          <Plus size={17} aria-hidden="true" />
+          Add provider
+        </button>
+      </div>
 
       {Object.values(providerNotices).map((notice) => (
         <p className="panel-notice" key={notice}>
@@ -922,59 +899,99 @@ function ProvidersPanel({
       ))}
 
       <section className="provider-card-grid" aria-label="Provider cards">
-        {visibleProviders.map((provider) => (
+        {visibleProviderCards.map((provider) => (
           <article
-            className={`provider-card ${provider.state}`}
+            className={`provider-card ${provider.status?.state ?? "configured"}`}
             key={provider.id}
           >
             <div className="provider-card-header">
               <span className="provider-kind">
                 {provider.kind.toUpperCase()}
               </span>
-              <StatusPill
-                label="Status"
-                value={provider.state}
-                tone={provider.state === "proven" ? "neutral" : "caution"}
-              />
+              <div className="provider-card-controls">
+                <StatusPill
+                  label="Status"
+                  value={provider.status?.state ?? "configured"}
+                  tone={
+                    provider.status?.state === "proven" ? "neutral" : "caution"
+                  }
+                />
+                <button
+                  className="icon-action"
+                  type="button"
+                  aria-label={`Edit ${provider.id}`}
+                  onClick={() => editProviderCard(provider)}
+                >
+                  <Settings size={17} aria-hidden="true" />
+                </button>
+                {provider.definition ? (
+                  <button
+                    className="icon-action danger"
+                    type="button"
+                    aria-label={`Delete ${provider.id}`}
+                    onClick={() => deleteProviderDefinition(provider.id)}
+                  >
+                    <Trash2 size={17} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <h2>{provider.id}</h2>
-            <p>{provider.message ?? "Provider has real turn proof"}</p>
+            <h2>{provider.label}</h2>
+            <p>
+              {provider.status?.message ??
+                provider.definition?.id ??
+                "Provider has no runtime status yet"}
+            </p>
 
             <div className="provider-facts">
               <div>
+                <span>Component</span>
+                <strong>{provider.component ?? "unknown"}</strong>
+              </div>
+              <div>
                 <span>Configured</span>
-                <strong>{provider.configured ? "yes" : "no"}</strong>
+                <strong>
+                  {provider.status?.configured || provider.definition
+                    ? "yes"
+                    : "no"}
+                </strong>
               </div>
               <div>
                 <span>Reachable</span>
-                <strong>{provider.reachable ? "yes" : "no"}</strong>
+                <strong>{provider.status?.reachable ? "yes" : "no"}</strong>
               </div>
               <div>
                 <span>Pipelines</span>
                 <strong>
-                  {provider.affects_pipelines.join(", ") || "none"}
+                  {provider.status?.affects_pipelines.join(", ") || "none"}
                 </strong>
               </div>
             </div>
 
-            <div className="provider-actions">
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => testProvider(provider)}
-              >
-                <Play size={17} aria-hidden="true" />
-                Test {provider.id}
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => selectFallback(provider)}
-              >
-                <RotateCcw size={17} aria-hidden="true" />
-                Use fallback
-              </button>
-            </div>
+            {provider.status ? (
+              <div className="provider-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  onClick={() =>
+                    provider.status ? testProvider(provider.status) : null
+                  }
+                >
+                  <Play size={17} aria-hidden="true" />
+                  Test {provider.id}
+                </button>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  onClick={() =>
+                    provider.status ? selectFallback(provider.status) : null
+                  }
+                >
+                  <RotateCcw size={17} aria-hidden="true" />
+                  Use fallback
+                </button>
+              </div>
+            ) : null}
 
             {overrides[provider.id]?.fallbackSelected ? (
               <p className="panel-notice">
@@ -983,13 +1000,238 @@ function ProvidersPanel({
             ) : null}
           </article>
         ))}
-        {visibleProviders.length === 0 ? (
+        {visibleProviderCards.length === 0 ? (
           <div className="overview-empty" role="status">
             <Boxes size={18} aria-hidden="true" />
             <span>No providers match this stage filter</span>
           </div>
         ) : null}
       </section>
+      {addProviderDialogOpen ? (
+        <ProviderAddDialog
+          componentCatalog={componentCatalog}
+          draftProvider={draftProvider}
+          providerKinds={providerKinds}
+          selectedComponent={selectedDraftComponent}
+          selectedKind={selectedProviderKind}
+          selectedKindComponents={selectedKindComponents}
+          onCancel={cancelDraftProvider}
+          onConfigChange={updateDraftConfig}
+          onDraftChange={updateDraftProvider}
+          onKindChange={setSelectedProviderKind}
+          onSave={saveDraftProvider}
+          onSelectComponent={startNewProvider}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderAddDialog({
+  componentCatalog,
+  draftProvider,
+  providerKinds,
+  selectedComponent,
+  selectedKind,
+  selectedKindComponents,
+  onCancel,
+  onConfigChange,
+  onDraftChange,
+  onKindChange,
+  onSave,
+  onSelectComponent,
+}: {
+  componentCatalog: PipelineComponentCatalog;
+  draftProvider: ProviderDefinition | null;
+  providerKinds: readonly ProviderFilter[];
+  selectedComponent: PipelineComponentDescriptor | null;
+  selectedKind: ProviderKind | null;
+  selectedKindComponents: readonly PipelineComponentDescriptor[];
+  onCancel: () => void;
+  onConfigChange: (
+    field: string,
+    property: ComponentConfigProperty,
+    value: string | boolean,
+  ) => void;
+  onDraftChange: (
+    updater: (current: ProviderDefinition) => ProviderDefinition,
+  ) => void;
+  onKindChange: (kind: ProviderKind | null) => void;
+  onSave: () => void;
+  onSelectComponent: (component: PipelineComponentDescriptor) => void;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <section
+        className="provider-add-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add provider"
+      >
+        <div className="provider-card-header">
+          <div>
+            <p className="eyebrow">Add Provider</p>
+            <h2>{draftProvider ? draftProvider.label : "Choose type"}</h2>
+          </div>
+          <div className="provider-card-controls">
+            {draftProvider ? (
+              <button
+                className="icon-action"
+                type="button"
+                aria-label="Save provider"
+                onClick={onSave}
+              >
+                <Save size={17} aria-hidden="true" />
+              </button>
+            ) : null}
+            <button
+              className="icon-action"
+              type="button"
+              aria-label="Cancel provider edit"
+              onClick={onCancel}
+            >
+              <X size={17} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        {draftProvider ? (
+          <ProviderEditorFields
+            componentCatalog={componentCatalog}
+            draftProvider={draftProvider}
+            selectedComponent={selectedComponent}
+            onConfigChange={onConfigChange}
+            onDraftChange={onDraftChange}
+          />
+        ) : (
+          <div className="provider-kind-menu inline" role="menu">
+            {selectedKind ? (
+              <>
+                <button
+                  className="provider-kind-back"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => onKindChange(null)}
+                >
+                  All kinds
+                </button>
+                {selectedKindComponents.map((component) => (
+                  <button
+                    key={component.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => onSelectComponent(component)}
+                  >
+                    {component.label}
+                  </button>
+                ))}
+                {selectedKindComponents.length === 0 ? (
+                  <span className="provider-kind-empty">
+                    No components for {selectedKind.toUpperCase()}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              providerKinds
+                .filter((kind): kind is ProviderKind => kind !== "all")
+                .map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => onKindChange(kind)}
+                  >
+                    {kind.toUpperCase()}
+                  </button>
+                ))
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ProviderEditorFields({
+  componentCatalog,
+  draftProvider,
+  selectedComponent,
+  onConfigChange,
+  onDraftChange,
+}: {
+  componentCatalog: PipelineComponentCatalog;
+  draftProvider: ProviderDefinition;
+  selectedComponent: PipelineComponentDescriptor | null;
+  onConfigChange: (
+    field: string,
+    property: ComponentConfigProperty,
+    value: string | boolean,
+  ) => void;
+  onDraftChange: (
+    updater: (current: ProviderDefinition) => ProviderDefinition,
+  ) => void;
+}) {
+  return (
+    <div className="provider-definition-form">
+      <label className="field">
+        <span>Provider id</span>
+        <input
+          value={draftProvider.id}
+          onChange={(event) =>
+            onDraftChange((current) => ({
+              ...current,
+              id: event.target.value,
+            }))
+          }
+        />
+      </label>
+      <label className="field">
+        <span>Provider label</span>
+        <input
+          value={draftProvider.label}
+          onChange={(event) =>
+            onDraftChange((current) => ({
+              ...current,
+              label: event.target.value,
+            }))
+          }
+        />
+      </label>
+      <label className="field">
+        <span>Provider component</span>
+        <select
+          value={draftProvider.component}
+          onChange={(event) => {
+            const component = componentCatalog.components.find(
+              (candidate) => candidate.id === event.target.value,
+            );
+            onDraftChange((current) =>
+              component
+                ? {
+                    ...current,
+                    component: component.id,
+                    kind: component.kind,
+                    config: {},
+                  }
+                : current,
+            );
+          }}
+        >
+          {componentCatalog.components.map((component) => (
+            <option value={component.id} key={component.id}>
+              {component.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {selectedComponent ? (
+        <ComponentConfigFields
+          component={selectedComponent}
+          config={draftProvider.config}
+          readOnly={false}
+          onChange={onConfigChange}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2017,6 +2259,45 @@ function providerDefinitionsForNode(
   ];
 }
 
+function providerCardViews(
+  definitions: readonly ProviderDefinition[],
+  statuses: readonly ProviderStatus[],
+): ProviderCardView[] {
+  const cards = new Map<string, ProviderCardView>();
+
+  for (const definition of definitions) {
+    const kind = providerKindForNodeKind(definition.kind);
+    if (!kind) {
+      continue;
+    }
+
+    cards.set(definition.id, {
+      id: definition.id,
+      label: definition.label,
+      kind,
+      component: definition.component,
+      definition,
+      status: null,
+    });
+  }
+
+  for (const status of statuses) {
+    const existing = cards.get(status.id);
+    cards.set(status.id, {
+      id: status.id,
+      label: existing?.label ?? status.id,
+      kind: status.kind,
+      component: existing?.component ?? null,
+      definition: existing?.definition ?? null,
+      status,
+    });
+  }
+
+  return [...cards.values()].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+}
+
 function loadProviderDefinitions(
   catalog: PipelineComponentCatalog,
   pipelineViews: readonly PipelineView[],
@@ -2051,15 +2332,21 @@ function defaultProviderDefinitions(
   snapshot: OperatorStatusSnapshot | null,
 ): ProviderDefinition[] {
   const fromGraphs = pipelineViews.flatMap((view) =>
-    view.graph.nodes.map((node) => {
+    view.graph.nodes.flatMap((node) => {
+      if (!providerKindForNodeKind(node.kind)) {
+        return [];
+      }
+
       const component = componentForNode(catalog, node);
-      return {
-        id: node.provider,
-        label: node.provider,
-        kind: node.kind,
-        component: component?.id ?? node.provider,
-        config: nodeConfigObject(node.config),
-      };
+      return [
+        {
+          id: node.provider,
+          label: node.provider,
+          kind: node.kind,
+          component: component?.id ?? node.provider,
+          config: nodeConfigObject(node.config),
+        },
+      ];
     }),
   );
   const fromStatus =
@@ -2156,7 +2443,7 @@ function nodeKindForProviderKind(kind: ProviderKind): NodeKind {
   return "llm";
 }
 
-function providerKindForNodeKind(kind: NodeKind): ProviderKind {
+function providerKindForNodeKind(kind: NodeKind): ProviderKind | null {
   if (kind === "stt") {
     return "stt";
   }
@@ -2166,7 +2453,10 @@ function providerKindForNodeKind(kind: NodeKind): ProviderKind {
   if (kind === "tool") {
     return "tool";
   }
-  return "llm";
+  if (kind === "llm") {
+    return "llm";
+  }
+  return null;
 }
 
 function EventStaleBanner() {
