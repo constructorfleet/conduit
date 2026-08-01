@@ -273,6 +273,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "conduit-core",
+ "conduit-provider",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "conduit-metrics"
 version = "0.1.0"
 dependencies = [

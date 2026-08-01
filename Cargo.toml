@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-core", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-openai", "crates/conduit-wyoming", "crates/conduit-api"]
+members = ["crates/conduit-core", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-openai", "crates/conduit-wyoming", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ repository = "https://github.com/Teagan42/conduit"
 
 [workspace.dependencies]
 conduit-core = { path = "crates/conduit-core", version = "0.1.0" }
+conduit-mcp = { path = "crates/conduit-mcp", version = "0.1.0" }
 conduit-provider = { path = "crates/conduit-provider", version = "0.1.0" }
 conduit-metrics = { path = "crates/conduit-metrics", version = "0.1.0" }
 conduit-openai = { path = "crates/conduit-openai", version = "0.1.0" }
