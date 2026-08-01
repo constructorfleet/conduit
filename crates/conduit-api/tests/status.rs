@@ -4,15 +4,18 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::Utc;
 use conduit_api::auth::{Access, Tokens};
 use conduit_api::status::StatusCollector;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Envelope, Event, FinishReason};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
-use conduit_core::id::{ConversationId, TraceId, TurnId};
+use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
 use conduit_runtime::Providers;
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
+use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
 
 const DEVICE_TOKEN: &str = "device-token-000000000000000000000000";
@@ -52,6 +55,31 @@ fn with_providers(state: AppState) -> AppState {
             .with_llm(conduit_provider::testing::EchoLlm)
             .with_tts(conduit_provider::testing::EchoTts),
     )
+}
+
+async fn server(state: AppState) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let app = router(state);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    address
+}
+
+fn ws_request(
+    address: std::net::SocketAddr,
+    path: &str,
+    token: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request =
+        format!("ws://{address}{path}").into_client_request().expect("a websocket request");
+    request
+        .headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().expect("a header value"));
+    request
 }
 
 fn valid_graph() -> PipelineGraph {
@@ -110,6 +138,33 @@ async fn wait_for_status(
     loop {
         let (status, body) = call(state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+        if predicate(&body) {
+            return body;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "status never reached expected state: {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_http_status(
+    address: std::net::SocketAddr,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let client = reqwest::Client::new();
+    let started = tokio::time::Instant::now();
+    loop {
+        let body: serde_json::Value = client
+            .get(format!("http://{address}/v1/status"))
+            .bearer_auth(MANAGEMENT_TOKEN)
+            .send()
+            .await
+            .expect("status request")
+            .json()
+            .await
+            .expect("json status");
         if predicate(&body) {
             return body;
         }
@@ -267,4 +322,112 @@ async fn failed_synthesis_keeps_pipeline_unhealthy_until_later_success() {
     assert_eq!(body["pipelines"][0]["health"]["last_successful_turn"], recovered.to_string());
     assert_eq!(body["pipelines"][0]["health"]["last_failed_turn"], serde_json::Value::Null);
     assert_eq!(body["recent_failures"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn conversation_socket_tracks_connected_and_recent_satellite_separately() {
+    let state = with_providers(guarded());
+    let (status, body) = call(&state, put(&valid_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let address = server(state).await;
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(ws_request(
+        address,
+        "/v1/pipelines/kitchen/converse",
+        DEVICE_TOKEN,
+    ))
+    .await
+    .expect("device connects");
+
+    let connected = wait_for_http_status(address, |body| {
+        body["satellites"]["connected"].as_array().is_some_and(|satellites| {
+            satellites.iter().any(|satellite| satellite["name"] == "kitchen")
+        })
+    })
+    .await;
+    assert_eq!(connected["satellites"]["connected"][0]["name"], "kitchen");
+    assert_eq!(connected["satellites"]["connected"][0]["pipeline"], "kitchen");
+    assert!(
+        connected["satellites"]["connected"][0]["conversation"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "{connected}"
+    );
+
+    socket.send(Message::Binary(b"hello".to_vec().into())).await.expect("sends audio");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+    let drain = async {
+        while let Some(frame) = socket.next().await {
+            if matches!(frame.expect("frame"), Message::Close(_)) {
+                break;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), drain).await.expect("conversation ends");
+
+    let inactive_but_recent = wait_for_http_status(address, |body| {
+        body["satellites"]["connected"].as_array().is_some_and(Vec::is_empty)
+            && body["satellites"]["recently_active"].as_array().is_some_and(|satellites| {
+                satellites.iter().any(|satellite| satellite["name"] == "kitchen")
+            })
+    })
+    .await;
+    assert_eq!(
+        inactive_but_recent["satellites"]["recently_active"][0]["last_event"],
+        "ConversationCompleted"
+    );
+}
+
+#[tokio::test]
+async fn recent_satellite_activity_survives_without_a_connected_socket() {
+    let state = with_providers(guarded());
+    let (status, body) = call(&state, put(&valid_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation = ConversationId::new();
+    let device = DeviceId::new();
+
+    state.bus.publish(
+        Envelope::new(
+            TraceId::new(),
+            Event::AudioStarted { format: conduit_core::audio::AudioFormat::DEFAULT },
+        )
+        .with_conversation(conversation)
+        .with_device(device)
+        .with_pipeline("kitchen"),
+    );
+
+    let body = wait_for_status(&state, |body| {
+        body["satellites"]["connected"].as_array().is_some_and(Vec::is_empty)
+            && body["satellites"]["recently_active"]
+                .as_array()
+                .is_some_and(|satellites| !satellites.is_empty())
+    })
+    .await;
+    assert_eq!(body["satellites"]["recently_active"][0]["name"], device.to_string());
+    assert_eq!(body["satellites"]["recently_active"][0]["last_event"], "AudioStarted");
+}
+
+#[tokio::test]
+async fn stale_satellite_activity_ages_out_of_recent_status() {
+    let state = with_providers(guarded());
+    let (status, body) = call(&state, put(&valid_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let old = chrono::Duration::seconds(
+        conduit_api::status::RECENT_SATELLITE_WINDOW_SECONDS as i64 + 1,
+    );
+    let envelope = Envelope {
+        id: conduit_core::id::EventId::new(),
+        trace: TraceId::new(),
+        at: Utc::now() - old,
+        device: Some(DeviceId::new()),
+        conversation: Some(ConversationId::new()),
+        pipeline: Some("kitchen".to_owned()),
+        event: Event::AudioStarted { format: conduit_core::audio::AudioFormat::DEFAULT },
+    };
+
+    state.status().record(&envelope).await;
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["satellites"]["recently_active"], serde_json::json!([]));
 }
