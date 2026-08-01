@@ -34,13 +34,152 @@ Authorization: Bearer <token>
 
 Device tokens may open conversation sockets. Management tokens may manage
 pipelines and read events. Management tokens may also open a conversation for
-manual testing. Device tokens cannot call management routes.
+manual testing. Device tokens cannot call management routes. The planned
+operator status snapshot route uses the same management-route access model.
 
 | Situation | Status |
 | --- | --- |
 | Missing, malformed, or unknown bearer token | `401 Unauthorized` with `WWW-Authenticate: Bearer` |
 | Device token on a management route | `403 Forbidden` |
 | Device restricted away from the requested pipeline | `403 Forbidden` |
+
+## Planned Operator Status Contract
+
+### `GET /v1/status`
+
+The status route is implemented in the runtime status API slice. Its contract is
+defined here so backend status projection and the separate Operator Console can
+target one shape. It returns the coherent operator status snapshot used by the
+Operator Console before it subscribes to `/v1/events`. This route is a
+management route: a management bearer token may read it, device tokens may not,
+and anonymous mode only applies when the server has explicitly been configured
+as open.
+
+The snapshot contract is defined by `conduit_api::status::OperatorStatusSnapshot`.
+The response shape is:
+
+```json
+{
+  "generated_at": "2026-08-01T01:02:03Z",
+  "runtime": {
+    "launch_state": "operations_workspace",
+    "stale_state": "fresh"
+  },
+  "pipelines": [
+    {
+      "name": "kitchen",
+      "usable": true,
+      "health": {
+        "state": "unhealthy",
+        "summary": "speech synthesis failed after the model completed",
+        "last_successful_turn": null,
+        "last_failed_turn": "00000000-0000-0000-0000-000000000003"
+      },
+      "components": [
+        {
+          "kind": "reasoning",
+          "provider": "openai-primary",
+          "state": "healthy",
+          "detail": "last invoked turn completed",
+          "last_turn": "00000000-0000-0000-0000-000000000003"
+        },
+        {
+          "kind": "synthesis",
+          "provider": "piper-local",
+          "state": "unhealthy",
+          "detail": "connection refused",
+          "last_turn": "00000000-0000-0000-0000-000000000003"
+        }
+      ],
+      "affected_providers": ["piper-local"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "piper-local",
+      "kind": "tts",
+      "state": "configured",
+      "configured": true,
+      "reachable": false,
+      "proven_by_turn": null,
+      "message": "no successful reachability check yet",
+      "affects_pipelines": ["kitchen"]
+    }
+  ],
+  "satellites": {
+    "connected": [],
+    "recently_active": [
+      {
+        "device": "00000000-0000-0000-0000-000000000001",
+        "name": "Kitchen Satellite",
+        "last_seen_at": "2026-08-01T01:01:58Z",
+        "last_event": "TtsStarted"
+      }
+    ],
+    "recent_window_seconds": 300
+  },
+  "active_turns": [
+    {
+      "pipeline": "kitchen",
+      "conversation": "00000000-0000-0000-0000-000000000002",
+      "turn": "00000000-0000-0000-0000-000000000003",
+      "trace": "00000000-0000-0000-0000-000000000004",
+      "started_at": "2026-08-01T01:01:59Z",
+      "invoked_components": ["reasoning", "synthesis"]
+    }
+  ],
+  "recent_failures": [
+    {
+      "pipeline": "kitchen",
+      "turn": "00000000-0000-0000-0000-000000000003",
+      "component": "synthesis",
+      "provider": "piper-local",
+      "message": "connection refused",
+      "at": "2026-08-01T01:02:01Z"
+    }
+  ],
+  "event_stream": {
+    "route": "/v1/events",
+    "stale_state_on_disconnect": "stale",
+    "refresh_snapshot_after_reconnect": true,
+    "bindings": [
+      {
+        "resource": "pipeline_health",
+        "events": ["TurnStarted", "StageFailed", "ConversationCompleted"]
+      },
+      {
+        "resource": "satellite_status",
+        "events": ["ConversationStarted", "AudioStarted", "ConversationCompleted"]
+      }
+    ]
+  }
+}
+```
+
+State vocabulary:
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `runtime.launch_state` | `first_run_setup`, `operations_workspace` | Whether the UI should open Guided Setup or the Operations Workspace |
+| `runtime.stale_state` | `fresh`, `stale` | Whether the browser view is live or preserving last known state after stream loss |
+| `pipelines[].health.state` | `not_runnable`, `unproven`, `healthy`, `degraded`, `unhealthy` | Pipeline Health from runnable configuration and real turn outcomes |
+| `pipelines[].components[].state` | `not_configured`, `unused`, `unproven`, `healthy`, `degraded`, `unhealthy` | Component Health explaining the pipeline state |
+| `providers[].state` | `unavailable`, `configured`, `reachable`, `proven` | Provider Status; configured settings, reachability checks, and real turn proof are separate |
+
+Connected satellites are devices with an open conversation connection right
+now. Recently active satellites are devices that emitted events inside the
+operator-facing recent activity window, whether or not they remain connected.
+
+A Successful Turn means every component actually invoked by that turn completed
+without unrecovered error. Optional components that were not invoked, such as
+tools during a no-tool turn, are ignored for that turn's success calculation.
+A failed turn keeps the affected pipeline unhealthy until a later Successful
+Turn proves recovery for the invoked failing path.
+
+Snapshot-plus-events rule: the UI loads `/v1/status` first, then applies events
+from `/v1/events` according to `event_stream.bindings`. If the event stream
+disconnects, the UI must keep the last known view but mark it with Stale State.
+After reconnect, the UI refreshes `/v1/status` before applying new events.
 
 ## Pipeline Routes
 

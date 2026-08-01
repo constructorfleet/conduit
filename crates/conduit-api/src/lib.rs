@@ -19,6 +19,7 @@ pub mod error;
 pub mod events;
 pub mod pipelines;
 pub mod state;
+pub mod status;
 
 use std::time::Duration;
 
