@@ -238,8 +238,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
             label: "OpenAI Speech",
             kind: NodeKind::Tts,
             schema: ComponentConfigSchema {
-                properties: properties([
-                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
                     ("model", string_property(None, None)),
                 ]),
                 required: vec!["model"],

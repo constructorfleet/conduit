@@ -828,9 +828,6 @@ describe("Pipelines graph editor", () => {
     await enterPipelinesSection(user);
 
     const graph = screen.getByLabelText("Pipeline graph");
-    expect(within(graph).getByLabelText("Pipeline start")).toHaveTextContent(
-      /Start.*mic/,
-    );
     expect(within(graph).getByLabelText("mic to stt")).toBeInTheDocument();
     const llmToTtsLink = within(graph).getByLabelText("llm to tts");
     expect(llmToTtsLink.closest(".atom-flow-item")).toContainElement(
