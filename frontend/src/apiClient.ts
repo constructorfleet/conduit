@@ -1,10 +1,10 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
-  PipelineComponentCatalog,
   PipelineGraph,
   PipelineTestRequest,
   PipelineTestResult,
   PipelineView,
+  ProviderComponentCatalog,
   ProviderDefinition,
   ProviderDefinitionView,
   RawTurnEvents,
@@ -36,7 +36,7 @@ export interface SnapshotClient {
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
   loadPipelineViews: () => Promise<PipelineView[]>;
-  loadComponentCatalog: () => Promise<PipelineComponentCatalog>;
+  loadComponentCatalog: () => Promise<ProviderComponentCatalog>;
   loadProviderDefinitions: () => Promise<ProviderDefinitionView[]>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;

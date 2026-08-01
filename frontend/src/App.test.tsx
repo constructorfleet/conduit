@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { OverviewPanel } from "./App";
 import type {
-  PipelineComponentCatalog,
+  ProviderComponentCatalog,
   PipelineGraph,
   PipelineView,
   ProviderDefinition,
@@ -2181,7 +2181,7 @@ function pipelineView(): PipelineView {
   };
 }
 
-function componentCatalog(): PipelineComponentCatalog {
+function componentCatalog(): ProviderComponentCatalog {
   return {
     components: [
       {
@@ -2394,7 +2394,7 @@ function mockOperatorApi({
   snapshot?: OperatorStatusSnapshot;
   statusSnapshots?: OperatorStatusSnapshot[];
   pipelineViews?: PipelineView[];
-  componentCatalog?: PipelineComponentCatalog;
+  componentCatalog?: ProviderComponentCatalog;
   providerDefinitions?: ProviderDefinitionView[];
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {

@@ -29,18 +29,18 @@ pub struct PipelineView {
     pub order: Vec<String>,
 }
 
-/// A pipeline component that can be selected for a graph node.
+/// A provider component that can be selected for a provider definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PipelineComponentDescriptor {
-    /// Stable component id used by pipeline nodes as their provider name.
+pub struct ProviderComponentDescriptor {
+    /// Stable component id used by the provider definition form.
     pub id: &'static str,
     /// Human-readable label for operator screens.
     pub label: &'static str,
-    /// What node kind this component can serve.
+    /// What node kind this provider can serve.
     pub kind: NodeKind,
     /// Provider definition variant created from this catalog entry.
     pub definition_variant: &'static str,
-    /// Configuration fields accepted by this component.
+    /// Configuration fields accepted by this provider component.
     pub schema: ComponentConfigSchema,
 }
 
@@ -85,11 +85,11 @@ pub enum ComponentConfigFormat {
     Url,
 }
 
-/// Component catalog response.
+/// Provider component catalog response.
 #[derive(Debug, Serialize)]
-pub struct PipelineComponentCatalog {
+pub struct ProviderComponentCatalog {
     /// Known components, in stable display order.
-    pub components: Vec<PipelineComponentDescriptor>,
+    pub components: Vec<ProviderComponentDescriptor>,
 }
 
 /// Input for an operator-triggered pipeline test turn.
@@ -128,11 +128,6 @@ pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     state.pipeline_names().await.map(Json).map_err(store_failure)
-}
-
-/// `GET /v1/pipeline-components` — component configuration schema catalog.
-pub async fn components(_caller: ManagementCaller) -> Json<PipelineComponentCatalog> {
-    Json(PipelineComponentCatalog { components: component_catalog() })
 }
 
 /// Turns a store failure into a response.
@@ -361,23 +356,23 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
 
 /// Built-in component descriptors.
 #[must_use]
-pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
+pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
     vec![
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.responses",
             label: "OpenAI Responses",
             kind: NodeKind::Llm,
             definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.completions",
             label: "OpenAI Completions",
             kind: NodeKind::Llm,
             definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: NodeKind::Stt,
@@ -391,7 +386,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.transcription",
             label: "OpenAI Transcription",
             kind: NodeKind::Stt,
@@ -405,7 +400,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["model"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.speech",
             label: "OpenAI Speech",
             kind: NodeKind::Tts,
@@ -418,7 +413,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["model"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "wyoming.tts",
             label: "Wyoming TTS",
             kind: NodeKind::Tts,
@@ -434,7 +429,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.sse",
             label: "MCP SSE",
             kind: NodeKind::Tool,
@@ -447,7 +442,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.streamable_http",
             label: "MCP Streamable HTTP",
             kind: NodeKind::Tool,
@@ -460,7 +455,7 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: NodeKind::Tool,

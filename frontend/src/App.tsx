@@ -40,8 +40,8 @@ import type { OperatorDataMode, SnapshotState } from "./apiClient";
 import type {
   ComponentConfigProperty,
   NodeKind,
-  PipelineComponentCatalog,
-  PipelineComponentDescriptor,
+  ProviderComponentCatalog,
+  ProviderComponentDescriptor,
   PipelineEdge,
   PipelineGraph,
   PipelineNode,
@@ -127,7 +127,7 @@ interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
-  initialComponentCatalog?: PipelineComponentCatalog;
+  initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
   initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen?: boolean;
@@ -278,7 +278,7 @@ function OperatorWorkspace({
   activeSection: SectionId;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
-  initialComponentCatalog?: PipelineComponentCatalog;
+  initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
   initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen: boolean;
@@ -311,7 +311,7 @@ function OperatorWorkspace({
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
   const [componentCatalog, setComponentCatalog] =
-    useState<PipelineComponentCatalog>(
+    useState<ProviderComponentCatalog>(
       () => initialComponentCatalog ?? { components: [] },
     );
   const [providerDefinitions, setProviderDefinitions] = useState<
@@ -723,7 +723,7 @@ function SectionPanel({
   section: SectionId;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
@@ -843,7 +843,7 @@ function ProvidersPanel({
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
@@ -899,7 +899,7 @@ function ProvidersPanel({
       )
     : [];
 
-  function startNewProvider(component: PipelineComponentDescriptor) {
+  function startNewProvider(component: ProviderComponentDescriptor) {
     const kind = providerKindForNodeKind(component.kind);
     if (!kind) {
       return;
@@ -1263,13 +1263,13 @@ function ProviderAddDialog({
   onSave,
   onSelectComponent,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   draftProvider: ProviderDefinition | null;
   providerKinds: readonly ProviderFilter[];
-  selectedComponent: PipelineComponentDescriptor | null;
+  selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
   selectedKind: ProviderKind | null;
-  selectedKindComponents: readonly PipelineComponentDescriptor[];
+  selectedKindComponents: readonly ProviderComponentDescriptor[];
   onCancel: () => void;
   onConfigChange: (
     field: string,
@@ -1281,7 +1281,7 @@ function ProviderAddDialog({
   ) => void;
   onKindChange: (kind: ProviderKind | null) => void;
   onSave: () => void;
-  onSelectComponent: (component: PipelineComponentDescriptor) => void;
+  onSelectComponent: (component: ProviderComponentDescriptor) => void;
 }) {
   return (
     <div className="modal-backdrop">
@@ -1385,9 +1385,9 @@ function ProviderEditorFields({
   onConfigChange,
   onDraftChange,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   draftProvider: ProviderDefinition;
-  selectedComponent: PipelineComponentDescriptor | null;
+  selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
   onConfigChange: (
     field: string,
@@ -3118,7 +3118,7 @@ function ComponentConfigFields({
   readOnly,
   onChange,
 }: {
-  component: PipelineComponentDescriptor;
+  component: ProviderComponentDescriptor;
   config: Record<string, unknown>;
   readOnly: boolean;
   onChange: (
@@ -3173,9 +3173,9 @@ function ComponentConfigFields({
 }
 
 function componentForNode(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   node: PipelineNode,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const exact = catalog.components.find(
     (component) =>
       component.id === node.provider && component.kind === node.kind,
@@ -3221,9 +3221,9 @@ function componentForNode(
 }
 
 function componentForProviderStatus(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const nodeKind = nodeKindForProviderKind(provider.kind);
   return componentForNode(catalog, {
     id: provider.id,
@@ -3233,9 +3233,9 @@ function componentForProviderStatus(
 }
 
 function componentForProviderDefinition(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   provider: ProviderDefinition,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const componentId =
     provider.kind === "tts" && provider.component === "wyoming"
       ? "wyoming.tts"
@@ -3341,7 +3341,7 @@ function showsProviderStatusPill(provider: ProviderCardView): boolean {
 }
 
 function loadProviderDefinitions(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
   savedDefinitions: readonly ProviderDefinitionView[],
@@ -3355,7 +3355,7 @@ function loadProviderDefinitions(
 }
 
 function fromApiProviderDefinition(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   definition: ProviderDefinitionView,
 ): ProviderDefinition {
   const component = componentForApiProviderDefinition(catalog, definition);
@@ -3370,9 +3370,9 @@ function fromApiProviderDefinition(
 }
 
 function componentForApiProviderDefinition(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   definition: Pick<ProviderDefinitionView, "kind" | "variant">,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const kind = nodeKindForProviderKind(definition.kind);
   if (definition.variant.type === "mcp_tool") {
     const transport = definition.variant.transport.type;
@@ -3557,7 +3557,7 @@ function secretFromConfig(value: string): ProviderSecret | undefined {
 }
 
 function defaultProviderDefinitions(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
 ): ProviderDefinition[] {
@@ -3618,7 +3618,7 @@ function cloneProviderDefinition(
 
 function validateProviderDefinitionConfig(
   provider: ProviderDefinition,
-  component: PipelineComponentDescriptor,
+  component: ProviderComponentDescriptor,
 ): PipelineValidationResult {
   const config = pruneEmptyConfig(provider.config);
   const missing = component.schema.required.filter((field) => {

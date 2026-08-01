@@ -410,7 +410,7 @@ export interface ComponentConfigSchema {{
   required: string[];
 }}
 
-export interface PipelineComponentDescriptor {{
+export interface ProviderComponentDescriptor {{
   id: string;
   label: string;
   kind: NodeKind;
@@ -418,8 +418,8 @@ export interface PipelineComponentDescriptor {{
   schema: ComponentConfigSchema;
 }}
 
-export interface PipelineComponentCatalog {{
-  components: PipelineComponentDescriptor[];
+export interface ProviderComponentCatalog {{
+  components: ProviderComponentDescriptor[];
 }}
 
 export type ProviderCapability = "stt" | "llm" | "tts" | "tool";
@@ -585,7 +585,7 @@ export interface ConduitApiClient {{
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
   listPipelines: () => Promise<string[]>;
-  listProviderComponents: () => Promise<PipelineComponentCatalog>;
+  listProviderComponents: () => Promise<ProviderComponentCatalog>;
   listProviderDefinitions: () => Promise<string[]>;
   getProviderDefinition: (id: string) => Promise<ProviderDefinitionView>;
   putProviderDefinition: (
@@ -636,7 +636,7 @@ export function createConduitApiClient(
     listPipelines: () =>
       requestJson<string[]>(request, config, conduitApiRoutes.pipelines),
     listProviderComponents: () =>
-      requestJson<PipelineComponentCatalog>(
+      requestJson<ProviderComponentCatalog>(
         request,
         config,
         conduitApiRoutes.providerCatalog,

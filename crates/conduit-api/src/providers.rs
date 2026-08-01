@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::auth::ManagementCaller;
 use crate::error::JsonBody;
-use crate::pipelines::{component_catalog, PipelineComponentCatalog};
+use crate::pipelines::{component_catalog, ProviderComponentCatalog};
 use crate::status::{ProviderKind, ProviderStatus, ProviderStatusState};
 use crate::{ApiError, AppState};
 
@@ -42,8 +42,8 @@ impl From<ProviderDefinition> for ProviderDefinitionView {
 }
 
 /// `GET /v1/catalog/providers` — provider component catalog.
-pub async fn catalog(_caller: ManagementCaller) -> Json<PipelineComponentCatalog> {
-    Json(PipelineComponentCatalog { components: component_catalog() })
+pub async fn catalog(_caller: ManagementCaller) -> Json<ProviderComponentCatalog> {
+    Json(ProviderComponentCatalog { components: component_catalog() })
 }
 
 /// `GET /v1/providers` — ids of every provider definition.
