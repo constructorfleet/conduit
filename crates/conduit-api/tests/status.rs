@@ -716,3 +716,92 @@ async fn stale_satellite_activity_ages_out_of_recent_status() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["satellites"]["recently_active"], serde_json::json!([]));
 }
+
+/// A directory that cleans itself up.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "conduit-status-{}-{}-{}",
+            std::process::id(),
+            sequence,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).expect("create");
+        Self(path)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A graph saved before per-node `config` was removed from the model.
+const LEGACY_GRAPH: &str = r#"{
+  "name": "legacy",
+  "nodes": [
+    { "id": "mic", "kind": "source", "provider": "websocket" },
+    { "id": "tts", "kind": "tts", "provider": "piper", "config": { "voice": "amy" } }
+  ],
+  "edges": [{ "from": "mic", "to": "tts" }]
+}"#;
+
+async fn file_backed(directory: &TempDir) -> AppState {
+    let store =
+        std::sync::Arc::new(conduit_store::FileStore::open(&directory.0).await.expect("opens"));
+    with_status(
+        AppState::with_store(EventBus::default(), store).with_access(Access::anonymous()),
+    )
+}
+
+#[tokio::test]
+async fn a_pipeline_that_cannot_be_read_is_reported_instead_of_failing_the_snapshot() {
+    // A graph stored before the model changed no longer decodes. Failing the
+    // whole snapshot would leave the operator with no console to fix it from.
+    let directory = TempDir::new();
+    std::fs::write(directory.0.join("legacy.json"), LEGACY_GRAPH).expect("write");
+    let state = file_backed(&directory).await;
+
+    let (status, body) = call(&state, get("/v1/status")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pipeline = &body["pipelines"][0];
+    assert_eq!(pipeline["name"], "legacy");
+    assert_eq!(pipeline["usable"], false);
+    assert_eq!(pipeline["health"]["state"], "not_runnable");
+    let summary = pipeline["health"]["summary"].as_str().expect("summary");
+    assert!(
+        summary.contains("config"),
+        "the summary should name the decode failure: {summary}"
+    );
+    assert_eq!(pipeline["components"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn readable_pipelines_still_project_alongside_an_unreadable_one() {
+    let directory = TempDir::new();
+    std::fs::write(directory.0.join("legacy.json"), LEGACY_GRAPH).expect("write");
+    let state = with_providers(file_backed(&directory).await);
+    let (status, body) = call(&state, put(&valid_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, get("/v1/status")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pipelines = body["pipelines"].as_array().expect("pipelines");
+    assert_eq!(pipelines.len(), 2, "{body}");
+    let kitchen = pipelines
+        .iter()
+        .find(|pipeline| pipeline["name"] == "kitchen")
+        .expect("the readable pipeline");
+    assert_eq!(kitchen["usable"], true);
+    assert_eq!(body["runtime"]["launch_state"], "operations_workspace");
+}
