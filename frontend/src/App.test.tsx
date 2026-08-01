@@ -246,7 +246,7 @@ describe("Overview operations workspace", () => {
       screen.getByRole("heading", { name: "Current Exceptions" }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
-    expect(screen.getByText("Snapshot")).toBeInTheDocument();
+    expect(screen.queryByText("Snapshot")).not.toBeInTheDocument();
     expect(screen.getAllByText("live").length).toBeGreaterThan(0);
   });
 
@@ -272,7 +272,9 @@ describe("Overview operations workspace", () => {
 
     expect(screen.getByText("garage_mic")).toBeInTheDocument();
     expect(screen.getByText("garage_tts")).toBeInTheDocument();
-    expect(screen.getByText("garage_mic -> garage_stt")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("garage_mic to garage_stt"),
+    ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       new URL("/v1/status", window.location.origin),
       expect.objectContaining({
@@ -359,7 +361,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
   });
 
   it("invokes inline Provider Settings and allows optional tool setup to be skipped", async () => {
@@ -472,7 +474,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
   });
 
   it("leaves First-Run Setup after reload when the pipeline API has a saved graph but status is stale", async () => {
@@ -508,7 +510,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
   });
 });
 
@@ -686,12 +688,16 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("mic")).toBeInTheDocument();
     expect(screen.getByText("stt")).toBeInTheDocument();
-    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline selector")).toHaveTextContent(
+      "Pipeline1kitchen",
+    );
     expect(
-      screen.getByRole("group", { name: "tts synthesis unhealthy" }),
+      screen.getByRole("group", { name: "tts synthesis" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("unhealthy").length).toBeGreaterThan(0);
-    expect(screen.getByText("synthesis / piper-local")).toBeInTheDocument();
+    expect(
+      screen.queryByText("synthesis / piper-local"),
+    ).not.toBeInTheDocument();
   });
 
   it("validates edits through the pipeline validation seam before saving", async () => {
@@ -722,8 +728,8 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByText("Validation passed")).toBeInTheDocument();
     expect(savedGraphs[0]?.nodes.map((node) => node.id)).toContain("confirm");
     expect(savedGraphs[0]?.edges).toContainEqual({
-      from: "llm",
-      to: "confirm",
+      from: "confirm",
+      to: "llm",
     });
   });
 
@@ -739,8 +745,13 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.selectOptions(screen.getByLabelText("Node"), "llm");
-    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for llm" }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Provider for llm"),
+      "openai",
+    );
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
@@ -788,8 +799,13 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
-    await user.selectOptions(screen.getByLabelText("Node"), "llm");
-    await user.selectOptions(screen.getByLabelText("Provider"), "openai-fast");
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for llm" }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Provider for llm"),
+      "openai-fast",
+    );
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
@@ -797,6 +813,107 @@ describe("Pipelines graph editor", () => {
       id: "llm",
       kind: "llm",
       provider: "openai-fast",
+    });
+  });
+
+  it("keeps graph flow arrows inline with component cards and exposes top toolbar actions", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+
+    const graph = screen.getByLabelText("Pipeline graph");
+    expect(within(graph).getByLabelText("Pipeline start")).toHaveTextContent(
+      "Start -> mic",
+    );
+    expect(within(graph).getByLabelText("mic to stt")).toHaveTextContent("->");
+    expect(
+      within(graph).queryByRole("list", { name: "Pipeline edges" }),
+    ).not.toBeInTheDocument();
+
+    const toolbar = screen.getByRole("toolbar", {
+      name: "Graph editor actions",
+    });
+    for (const action of [
+      "Add tool node",
+      "Add memory node",
+      "Add fallback TTS",
+      "Validate Graph",
+      "Run test turn",
+      "Save Graph",
+      "Delete selected node",
+    ]) {
+      expect(
+        within(toolbar).getByRole("button", { name: action }),
+      ).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole("button", { name: "Delete tts" }));
+    expect(screen.queryByText("tts")).not.toBeInTheDocument();
+    expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
+  });
+
+  it("keeps unsaved drafts when switching between pipelines", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView(), liveApiPipelineView()]}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    expect(screen.getByText("memory")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "garage" }));
+    expect(
+      screen.getByRole("region", { name: "Unsaved pipeline changes" }),
+    ).toHaveTextContent("kitchen has unsaved edits");
+    expect(
+      screen.getByRole("button", { name: "Save current and switch" }),
+    ).toBeDisabled();
+    await user.click(
+      screen.getByRole("button", { name: "Switch without saving" }),
+    );
+
+    expect(screen.getByText("garage_mic")).toBeInTheDocument();
+    expect(screen.queryByText("memory")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "kitchen" }));
+    expect(screen.getByText("memory")).toBeInTheDocument();
+    expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
+  });
+
+  it("inserts tool nodes as reasoning augments instead of after the selected sink", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("group", { name: "speaker capture" }));
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(savedGraphs[0]?.edges).toContainEqual({
+      from: "confirm",
+      to: "llm",
+    });
+    expect(savedGraphs[0]?.edges).not.toContainEqual({
+      from: "speaker",
+      to: "confirm",
     });
   });
 
@@ -822,7 +939,7 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(await screen.findByText("confirm")).toBeInTheDocument();
-    expect(screen.getByText("llm -> confirm")).toBeInTheDocument();
+    expect(screen.getByLabelText("confirm to llm")).toBeInTheDocument();
   });
 
   it("supports undo, test run, and multiple frontend-only node actions", async () => {
@@ -835,6 +952,7 @@ describe("Pipelines graph editor", () => {
 
     expect(screen.getByText("memory")).toBeInTheDocument();
     expect(screen.getByText("tts_fallback")).toBeInTheDocument();
+    expect(screen.getByLabelText("memory to llm")).toBeInTheDocument();
     expect(screen.getByText("2 unsaved edits")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo last edit" }));
@@ -856,7 +974,7 @@ describe("Pipelines graph editor", () => {
     await enterPipelinesSection(user);
 
     expect(screen.getByText("Read-only on small screens")).toBeInTheDocument();
-    expect(screen.getByText("mic -> stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Add tool node" }),
     ).not.toBeInTheDocument();
@@ -1227,6 +1345,64 @@ function componentCatalog(): PipelineComponentCatalog {
             streaming: { type: "boolean" },
           },
           required: ["base_url", "model"],
+        },
+      },
+      {
+        id: "openai.transcription",
+        label: "OpenAI Transcription",
+        kind: "stt",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            model: { type: "string" },
+            stream: { type: "boolean" },
+          },
+          required: ["model"],
+        },
+      },
+      {
+        id: "openai.speech",
+        label: "OpenAI Speech",
+        kind: "tts",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            model: { type: "string" },
+          },
+          required: ["model"],
+        },
+      },
+      {
+        id: "mcp.sse",
+        label: "MCP SSE",
+        kind: "tool",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+          },
+          required: ["url"],
+        },
+      },
+      {
+        id: "mcp.streamable_http",
+        label: "MCP Streamable HTTP",
+        kind: "tool",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+          },
+          required: ["url"],
+        },
+      },
+      {
+        id: "mcp.stdio",
+        label: "MCP STDIO",
+        kind: "tool",
+        schema: {
+          properties: {
+            command: { type: "string" },
+          },
+          required: ["command"],
         },
       },
     ],

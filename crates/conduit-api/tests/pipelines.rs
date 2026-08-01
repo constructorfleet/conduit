@@ -186,7 +186,7 @@ async fn validate_checks_without_storing() {
 }
 
 #[tokio::test]
-async fn component_catalog_exposes_configuration_schemas() {
+async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     let state = AppState::new(EventBus::default());
 
     let (status, body) = call(&state, get("/v1/pipeline-components")).await;
@@ -211,6 +211,38 @@ async fn component_catalog_exposes_configuration_schemas() {
         body["components"][2]["schema"]["properties"]["url"],
         serde_json::json!({ "type": "string", "format": "url" })
     );
+    let components = body["components"].as_array().expect("component list");
+    assert_component(components, "openai.speech", "tts", &["base_url", "model"], &["model"]);
+    assert_component(
+        components,
+        "openai.transcription",
+        "stt",
+        &["base_url", "model", "stream"],
+        &["model"],
+    );
+    assert_component(components, "mcp.sse", "tool", &["url"], &["url"]);
+    assert_component(components, "mcp.streamable_http", "tool", &["url"], &["url"]);
+    assert_component(components, "mcp.stdio", "tool", &["command"], &["command"]);
+}
+
+fn assert_component(
+    components: &[serde_json::Value],
+    id: &str,
+    kind: &str,
+    properties: &[&str],
+    required: &[&str],
+) {
+    let component = components
+        .iter()
+        .find(|component| component["id"] == id)
+        .unwrap_or_else(|| panic!("missing component {id}"));
+    assert_eq!(component["kind"], kind);
+
+    let actual_properties = component["schema"]["properties"].as_object().expect("properties");
+    for property in properties {
+        assert!(actual_properties.contains_key(*property), "{id} should accept {property}");
+    }
+    assert_eq!(component["schema"]["required"], serde_json::json!(required));
 }
 
 #[tokio::test]

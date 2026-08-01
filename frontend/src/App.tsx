@@ -51,7 +51,6 @@ import type {
   ProviderKind,
   ProviderStatus,
   RuntimeFailure,
-  ComponentHealth,
   ComponentKind,
 } from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
@@ -76,6 +75,13 @@ type SectionId = (typeof sections)[number]["id"];
 
 export type PipelineValidationResult =
   { ok: true; order: string[] } | { ok: false; message: string };
+
+interface PipelineEditorDraftState {
+  draft: PipelineGraph;
+  history: PipelineGraph[];
+  validation: PipelineValidationResult | null;
+  notice: string | null;
+}
 
 interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
@@ -479,7 +485,13 @@ function OperatorWorkspace({
             </h1>
           </div>
           <div className="runtime-strip">
-            <StatusPill label="Snapshot" value={snapshotState} tone="caution" />
+            {snapshotState === "live" ? null : (
+              <StatusPill
+                label="Snapshot"
+                value={snapshotState}
+                tone="caution"
+              />
+            )}
             <StatusPill
               label="Events"
               value={eventPlan.posture}
@@ -579,7 +591,6 @@ function SectionPanel({
         providerDefinitions={providerDefinitions}
         pipelineViews={pipelineViews}
         readOnly={initialSmallScreen}
-        snapshot={snapshot}
         onPipelineStored={onPipelineStored}
         onPipelineValidate={onPipelineValidate}
       />
@@ -1754,14 +1765,12 @@ function PipelinesPanel({
   providerDefinitions,
   pipelineViews,
   readOnly,
-  snapshot,
   onPipelineStored,
   onPipelineValidate,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
-  snapshot: OperatorStatusSnapshot | null;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
@@ -1772,35 +1781,218 @@ function PipelinesPanel({
     pipelineViews.find((view) => view.graph.name === selectedName) ??
     pipelineViews[0] ??
     null;
-  const [draft, setDraft] = useState<PipelineGraph | null>(
-    selectedView ? cloneGraph(selectedView.graph) : null,
+  const [draftsByPipeline, setDraftsByPipeline] = useState<
+    Record<string, PipelineEditorDraftState>
+  >(() => initializePipelineDrafts(pipelineViews));
+  const selectedDraftState =
+    selectedView && draftsByPipeline[selectedView.graph.name]
+      ? draftsByPipeline[selectedView.graph.name]
+      : selectedView
+        ? {
+            draft: cloneGraph(selectedView.graph),
+            history: [],
+            validation: null,
+            notice: null,
+          }
+        : null;
+  const draft = selectedDraftState?.draft ?? null;
+  const history = selectedDraftState?.history ?? [];
+  const validation = selectedDraftState?.validation ?? null;
+  const notice = selectedDraftState?.notice ?? null;
+  const [selectedNodeByPipeline, setSelectedNodeByPipeline] = useState<
+    Record<string, string>
+  >(
+    () =>
+      Object.fromEntries(
+        pipelineViews.map((view) => [
+          view.graph.name,
+          view.graph.nodes[0]?.id ?? "",
+        ]),
+      ) as Record<string, string>,
   );
-  const [history, setHistory] = useState<PipelineGraph[]>([]);
-  const [validation, setValidation] = useState<PipelineValidationResult | null>(
+  const [pendingPipelineName, setPendingPipelineName] = useState<string | null>(
     null,
   );
-  const [notice, setNotice] = useState<string | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState(
-    () => selectedView?.graph.nodes[0]?.id ?? "",
-  );
-  const selectedHealth = snapshot?.pipelines.find(
-    (pipeline) => pipeline.name === selectedView?.graph.name,
-  );
+  const selectedNodeId =
+    (selectedName ? selectedNodeByPipeline[selectedName] : "") ??
+    draft?.nodes[0]?.id ??
+    "";
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const selectedNode =
     draft?.nodes.find((node) => node.id === selectedNodeId) ??
     draft?.nodes[0] ??
     null;
-  const providerChoices = selectedNode
-    ? providerDefinitionsForNode(providerDefinitions, selectedNode)
-    : [];
+  const graphFlow = draft ? pipelineGraphFlow(draft) : null;
+  const pendingPipeline = pendingPipelineName
+    ? (pipelineViews.find((view) => view.graph.name === pendingPipelineName) ??
+      null)
+    : null;
+  const hasUnsavedEdits = history.length > 0;
+
+  function ensurePipelineDraft(
+    current: Record<string, PipelineEditorDraftState>,
+    view: PipelineView,
+  ): Record<string, PipelineEditorDraftState> {
+    if (current[view.graph.name]) {
+      return current;
+    }
+
+    return {
+      ...current,
+      [view.graph.name]: {
+        draft: cloneGraph(view.graph),
+        history: [],
+        validation: null,
+        notice: null,
+      },
+    };
+  }
+
+  function switchToPipeline(view: PipelineView) {
+    setSelectedName(view.graph.name);
+    setDraftsByPipeline((current) => ensurePipelineDraft(current, view));
+    setSelectedNodeByPipeline((current) => ({
+      ...current,
+      [view.graph.name]:
+        current[view.graph.name] ?? view.graph.nodes[0]?.id ?? "",
+    }));
+    setEditingNodeId(null);
+    setPendingPipelineName(null);
+  }
 
   function selectPipeline(view: PipelineView) {
-    setSelectedName(view.graph.name);
-    setDraft(cloneGraph(view.graph));
-    setSelectedNodeId(view.graph.nodes[0]?.id ?? "");
-    setHistory([]);
-    setValidation(null);
-    setNotice(null);
+    if (view.graph.name === selectedName) {
+      return;
+    }
+
+    if (hasUnsavedEdits && draft) {
+      setPendingPipelineName(view.graph.name);
+      setDraftsByPipeline((current) => ({
+        ...current,
+        [draft.name]: {
+          draft,
+          history,
+          validation,
+          notice: `Save or discard changes before switching to ${view.graph.name}`,
+        },
+      }));
+      return;
+    }
+
+    switchToPipeline(view);
+  }
+
+  function setSelectedNodeId(nodeId: string) {
+    setSelectedNodeByPipeline((current) => ({
+      ...current,
+      [selectedName]: nodeId,
+    }));
+  }
+
+  function updateCurrentDraftState(
+    update: (current: PipelineEditorDraftState) => PipelineEditorDraftState,
+  ) {
+    if (!selectedDraftState) {
+      return;
+    }
+
+    setDraftsByPipeline((current) => ({
+      ...current,
+      [selectedDraftState.draft.name]: update(selectedDraftState),
+    }));
+  }
+
+  function resetPipelineDraft(view: PipelineView) {
+    setDraftsByPipeline((current) => ({
+      ...current,
+      [view.graph.name]: {
+        draft: cloneGraph(view.graph),
+        history: [],
+        validation: null,
+        notice: null,
+      },
+    }));
+    setSelectedNodeByPipeline((current) => ({
+      ...current,
+      [view.graph.name]: view.graph.nodes[0]?.id ?? "",
+    }));
+  }
+
+  function discardAndSwitch() {
+    if (!selectedView || !pendingPipeline) {
+      return;
+    }
+
+    resetPipelineDraft(selectedView);
+    switchToPipeline(pendingPipeline);
+  }
+
+  function switchKeepingDraft() {
+    if (!pendingPipeline) {
+      return;
+    }
+
+    updateCurrentDraftState((current) => ({
+      ...current,
+      notice: null,
+    }));
+    switchToPipeline(pendingPipeline);
+  }
+
+  async function saveAndSwitch() {
+    if (!pendingPipeline) {
+      return;
+    }
+
+    const saved = await saveCurrentDraft();
+    if (saved) {
+      switchToPipeline(pendingPipeline);
+    }
+  }
+
+  function cancelPipelineSwitch() {
+    setPendingPipelineName(null);
+    updateCurrentDraftState((current) => ({
+      ...current,
+      notice: null,
+    }));
+  }
+
+  function markCurrentDraftNotice(message: string) {
+    updateCurrentDraftState((current) => ({
+      ...current,
+      notice: message,
+    }));
+  }
+
+  function setCurrentValidation(result: PipelineValidationResult | null) {
+    updateCurrentDraftState((current) => ({
+      ...current,
+      validation: result,
+    }));
+  }
+
+  function updateCurrentDraftAfterSave(message: string) {
+    updateCurrentDraftState((current) => ({
+      ...current,
+      history: [],
+      notice: message,
+    }));
+  }
+
+  function replaceCurrentDraft(
+    nextDraft: PipelineGraph,
+    nextHistory: PipelineGraph[],
+  ) {
+    setDraftsByPipeline((current) => ({
+      ...current,
+      [nextDraft.name]: {
+        draft: nextDraft,
+        history: nextHistory,
+        validation: null,
+        notice: null,
+      },
+    }));
   }
 
   function applyDraftEdit(edit: (graph: PipelineGraph) => PipelineGraph) {
@@ -1808,10 +2000,10 @@ function PipelinesPanel({
       return;
     }
 
-    setHistory((current) => [...current, cloneGraph(draft)]);
-    setDraft(edit(cloneGraph(draft)));
-    setValidation(null);
-    setNotice(null);
+    replaceCurrentDraft(edit(cloneGraph(draft)), [
+      ...history,
+      cloneGraph(draft),
+    ]);
   }
 
   function addNodeAfter({
@@ -1843,15 +2035,33 @@ function PipelinesPanel({
     });
   }
 
-  function updateSelectedNodeProvider(providerId: string) {
-    if (!selectedNode) {
-      return;
-    }
+  function addReasoningAugment({
+    id,
+    kind,
+    provider,
+  }: {
+    id: string;
+    kind: NodeKind;
+    provider: string;
+  }) {
+    applyDraftEdit((graph) => {
+      if (graph.nodes.some((node) => node.id === id)) {
+        return graph;
+      }
 
+      return {
+        ...graph,
+        nodes: [...graph.nodes, { id, kind, provider }],
+        edges: [...graph.edges, { from: id, to: "llm" }],
+      };
+    });
+  }
+
+  function updateNodeProvider(nodeId: string, providerId: string) {
     applyDraftEdit((graph) => ({
       ...graph,
       nodes: graph.nodes.map((node) => {
-        if (node.id !== selectedNode.id) {
+        if (node.id !== nodeId) {
           return node;
         }
 
@@ -1864,23 +2074,73 @@ function PipelinesPanel({
     }));
   }
 
+  function deleteNode(nodeId: string) {
+    applyDraftEdit((graph) => {
+      const target = graph.nodes.find((node) => node.id === nodeId);
+      if (!target || graph.nodes.length <= 1) {
+        return graph;
+      }
+
+      const incoming = graph.edges.filter((edge) => edge.to === nodeId);
+      const outgoing = graph.edges.filter((edge) => edge.from === nodeId);
+      const bridgedEdges = incoming.flatMap((fromEdge) =>
+        outgoing
+          .filter((toEdge) => fromEdge.from !== toEdge.to)
+          .map((toEdge) => ({ from: fromEdge.from, to: toEdge.to })),
+      );
+      const remainingEdges = graph.edges.filter(
+        (edge) => edge.from !== nodeId && edge.to !== nodeId,
+      );
+      const edgeKeys = new Set(
+        remainingEdges.map(
+          (edge) => `${edge.from}->${edge.to}:${edge.port ?? ""}`,
+        ),
+      );
+
+      return {
+        ...graph,
+        nodes: graph.nodes.filter((node) => node.id !== nodeId),
+        edges: [
+          ...remainingEdges,
+          ...bridgedEdges.filter((edge) => {
+            const key = `${edge.from}->${edge.to}:`;
+            if (edgeKeys.has(key)) {
+              return false;
+            }
+            edgeKeys.add(key);
+            return true;
+          }),
+        ],
+      };
+    });
+
+    if (selectedNodeId === nodeId && draft) {
+      setSelectedNodeId(
+        draft.nodes.find((node) => node.id !== nodeId)?.id ?? "",
+      );
+    }
+    setEditingNodeId((current) => (current === nodeId ? null : current));
+  }
+
+  function deleteSelectedNode() {
+    if (selectedNode) {
+      deleteNode(selectedNode.id);
+    }
+  }
+
   function addToolNode() {
-    addNodeAfter({
+    addReasoningAugment({
       id: "confirm",
       kind: "tool",
       provider: "builtin.confirm",
-      from: "llm",
-      to: "tts",
     });
   }
 
   function addMemoryNode() {
-    addNodeAfter({
+    addReasoningAugment({
       id: "memory",
       kind: "memory",
       provider: "builtin.memory",
-      from: "stt",
-      to: "llm",
     });
   }
 
@@ -1900,10 +2160,7 @@ function PipelinesPanel({
       return;
     }
 
-    setDraft(previous);
-    setHistory((current) => current.slice(0, -1));
-    setValidation(null);
-    setNotice(null);
+    replaceCurrentDraft(previous, history.slice(0, -1));
   }
 
   function validateDraft() {
@@ -1911,27 +2168,34 @@ function PipelinesPanel({
       return;
     }
 
-    setValidation(onPipelineValidate(draft));
+    setCurrentValidation(onPipelineValidate(draft));
   }
 
-  async function saveDraft() {
+  async function saveCurrentDraft(): Promise<boolean> {
     if (!draft || validation?.ok !== true) {
-      return;
+      return false;
     }
 
     try {
       await onPipelineStored(draft, validation.order);
-      setHistory([]);
-      setNotice(`Saved graph for ${draft.name}`);
+      updateCurrentDraftAfterSave(`Saved graph for ${draft.name}`);
+      return true;
     } catch (caught) {
-      setNotice(
+      markCurrentDraftNotice(
         caught instanceof Error ? caught.message : "Unable to save graph",
       );
+      return false;
     }
   }
 
+  async function saveDraft() {
+    await saveCurrentDraft();
+  }
+
   function runTestTurn() {
-    setNotice(`Test turn queued for ${draft?.name ?? selectedName}`);
+    markCurrentDraftNotice(
+      `Test turn queued for ${draft?.name ?? selectedName}`,
+    );
   }
 
   if (!draft || !selectedView) {
@@ -1942,32 +2206,266 @@ function PipelinesPanel({
       </div>
     );
   }
+  const draftNodeCount = draft.nodes.length;
+
+  function renderNodeCard({
+    node,
+    index,
+    compact = false,
+  }: {
+    node: PipelineNode;
+    index: number;
+    compact?: boolean;
+  }) {
+    const componentKind = componentKindForNode(node);
+    const providerChoices = providerDefinitionsForNode(
+      providerDefinitions,
+      node,
+    );
+
+    return (
+      <article
+        aria-label={`${node.id} ${componentKind}`}
+        className={`graph-node ${compact ? "compact" : ""} ${
+          selectedNode?.id === node.id ? "selected" : ""
+        }`}
+        role="group"
+        onClick={() => setSelectedNodeId(node.id)}
+      >
+        <div className="graph-node-header">
+          <span className="node-index">{index + 1}</span>
+          {!readOnly ? (
+            <div className="node-card-actions">
+              <button
+                className="icon-action"
+                type="button"
+                aria-label={`Edit provider for ${node.id}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSelectedNodeId(node.id);
+                  setEditingNodeId((current) =>
+                    current === node.id ? null : node.id,
+                  );
+                }}
+              >
+                <Settings size={16} aria-hidden="true" />
+              </button>
+              <button
+                className="icon-action danger"
+                type="button"
+                aria-label={`Delete ${node.id}`}
+                disabled={draftNodeCount <= 1}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  deleteNode(node.id);
+                }}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <strong>{node.id}</strong>
+        <p>
+          {node.kind} / {node.provider}
+        </p>
+        {editingNodeId === node.id ? (
+          <label className="field node-provider-select">
+            <span>Provider</span>
+            <select
+              aria-label={`Provider for ${node.id}`}
+              value={node.provider}
+              onChange={(event) =>
+                updateNodeProvider(node.id, event.target.value)
+              }
+            >
+              {providerChoices.map((provider) => (
+                <option value={provider.id} key={provider.id}>
+                  {provider.label} ({provider.id})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </article>
+    );
+  }
 
   return (
     <div className="pipelines-stack">
       <section className="pipeline-toolbar" aria-label="Stored pipelines">
-        <div>
-          <p className="eyebrow">Advanced configuration</p>
-          <h2>Graph Editor</h2>
+        <div className="pipeline-toolbar-main">
+          <div>
+            <p className="eyebrow">Advanced configuration</p>
+            <h2>Graph Editor</h2>
+          </div>
+          <div className="pipeline-picker" aria-label="Pipeline selector">
+            <div className="pipeline-picker-label">
+              <span>Pipeline</span>
+              <strong>{pipelineViews.length}</strong>
+            </div>
+            <div className="pipeline-selector">
+              {pipelineViews.map((view) => (
+                <button
+                  key={view.graph.name}
+                  type="button"
+                  className={view.graph.name === draft.name ? "selected" : ""}
+                  onClick={() => selectPipeline(view)}
+                >
+                  {view.graph.name}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-        <div className="pipeline-selector">
-          {pipelineViews.map((view) => (
-            <button
-              key={view.graph.name}
-              type="button"
-              className={view.graph.name === draft.name ? "selected" : ""}
-              onClick={() => selectPipeline(view)}
+        {!readOnly ? (
+          <div
+            className="graph-actions"
+            role="toolbar"
+            aria-label="Graph editor actions"
+          >
+            <div className="graph-action-group compact">
+              <button
+                className="icon-action"
+                type="button"
+                aria-label="Undo last edit"
+                title="Undo last edit"
+                disabled={history.length === 0}
+                onClick={undoLastEdit}
+              >
+                <RotateCcw size={17} aria-hidden="true" />
+              </button>
+              {history.length > 0 ? (
+                <span className="edit-badge">
+                  {history.length} unsaved{" "}
+                  {history.length === 1 ? "edit" : "edits"}
+                </span>
+              ) : null}
+            </div>
+            <div
+              className="graph-action-group add-group"
+              aria-label="Add nodes"
             >
-              {view.graph.name}
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                aria-label="Add tool node"
+                onClick={addToolNode}
+              >
+                <Plus size={16} aria-hidden="true" />
+                Tool into LLM
+              </button>
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                aria-label="Add memory node"
+                onClick={addMemoryNode}
+              >
+                <Plus size={16} aria-hidden="true" />
+                Memory into LLM
+              </button>
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                aria-label="Add fallback TTS"
+                onClick={addFallbackTts}
+              >
+                <Plus size={16} aria-hidden="true" />
+                Fallback TTS
+              </button>
+            </div>
+            <div className="graph-action-group">
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                aria-label="Validate Graph"
+                onClick={validateDraft}
+              >
+                <CircleCheck size={16} aria-hidden="true" />
+                Validate
+              </button>
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                aria-label="Run test turn"
+                onClick={runTestTurn}
+              >
+                <Play size={16} aria-hidden="true" />
+                Test
+              </button>
+              <button
+                className="primary-action compact-action"
+                type="button"
+                aria-label="Save Graph"
+                disabled={validation?.ok !== true}
+                onClick={saveDraft}
+              >
+                <Save size={16} aria-hidden="true" />
+                Save
+              </button>
+            </div>
+            <button
+              className="icon-action danger subtle-danger"
+              type="button"
+              aria-label="Delete selected node"
+              title="Delete selected node"
+              disabled={!selectedNode}
+              onClick={deleteSelectedNode}
+            >
+              <Trash2 size={17} aria-hidden="true" />
             </button>
-          ))}
-        </div>
-        {history.length > 0 ? (
-          <span className="edit-badge">
-            {history.length} unsaved {history.length === 1 ? "edit" : "edits"}
-          </span>
+          </div>
         ) : null}
       </section>
+
+      {pendingPipeline ? (
+        <section
+          className="dirty-switch-banner"
+          aria-label="Unsaved pipeline changes"
+        >
+          <CircleAlert size={18} aria-hidden="true" />
+          <div>
+            <strong>{draft.name} has unsaved edits</strong>
+            <span>
+              Switching to {pendingPipeline.graph.name} can keep, save, or
+              discard this draft.
+            </span>
+          </div>
+          <div className="dirty-switch-actions">
+            <button
+              className="primary-action compact-action"
+              type="button"
+              disabled={validation?.ok !== true}
+              onClick={saveAndSwitch}
+            >
+              <Save size={16} aria-hidden="true" />
+              Save current and switch
+            </button>
+            <button
+              className="secondary-action compact-action"
+              type="button"
+              onClick={switchKeepingDraft}
+            >
+              Switch without saving
+            </button>
+            <button
+              className="danger-action compact"
+              type="button"
+              onClick={discardAndSwitch}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              Discard changes
+            </button>
+            <button
+              className="secondary-action compact-action"
+              type="button"
+              onClick={cancelPipelineSwitch}
+            >
+              Cancel
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {readOnly ? (
         <section className="stale-banner" aria-label="Small screen graph mode">
@@ -1981,171 +2479,74 @@ function PipelinesPanel({
 
       <div className="pipeline-editor-grid">
         <section className="graph-surface" aria-label="Pipeline graph">
-          <div className="graph-nodes">
-            {draft.nodes.map((node, index) => {
-              const componentHealth = healthForGraphNode(node, selectedHealth);
-              const componentKind = componentKindForNode(node);
+          <div className="graph-flow">
+            <span className="graph-arrow start" aria-label="Pipeline start">
+              Start -&gt; {graphFlow?.mainNodes[0]?.id}
+            </span>
+            {graphFlow?.mainNodes.map((node, index) => {
+              const outgoingEdges = graphFlow.mainEdges.filter(
+                (edge) => edge.from === node.id,
+              );
+              const spokes = graphFlow.spokesByTarget.get(node.id) ?? [];
               return (
-                <article
-                  aria-label={`${node.id} ${componentKind} ${componentHealth?.state ?? "untracked"}`}
-                  className={`graph-node ${componentHealth?.state ?? "untracked"}`}
-                  key={node.id}
-                  role="group"
-                >
-                  <span className="node-index">{index + 1}</span>
-                  <strong>{node.id}</strong>
-                  <p>
-                    {node.kind} / {node.provider}
-                  </p>
-                  {componentHealth ? (
-                    <span className={`node-health ${componentHealth.state}`}>
-                      {componentKind} / {componentHealth.state}
-                    </span>
+                <div className="graph-flow-item" key={node.id}>
+                  {spokes.length > 0 ? (
+                    <div
+                      className="graph-spokes"
+                      aria-label={`${node.id} augments`}
+                    >
+                      {spokes.map((spoke) => (
+                        <div className="graph-spoke" key={spoke.node.id}>
+                          {renderNodeCard({
+                            node: spoke.node,
+                            index: spoke.index,
+                            compact: true,
+                          })}
+                          <span
+                            className="graph-arrow spoke"
+                            aria-label={`${spoke.node.id} to ${node.id}`}
+                          >
+                            -&gt;
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   ) : null}
-                </article>
+                  <div className={node.kind === "llm" ? "reasoning-atom" : ""}>
+                    {node.kind === "llm" ? (
+                      <span className="atom-label">Reasoning core</span>
+                    ) : null}
+                    {renderNodeCard({ node, index })}
+                  </div>
+                  {outgoingEdges.map((edge) => (
+                    <span
+                      className="graph-arrow"
+                      aria-label={`${edge.from} to ${edge.to}`}
+                      key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
+                    >
+                      -&gt;
+                    </span>
+                  ))}
+                </div>
               );
             })}
           </div>
-          <div className="graph-edges" aria-label="Pipeline edges">
-            {draft.edges.map((edge) => (
-              <span key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}>
-                {edge.from} -&gt; {edge.to}
-              </span>
-            ))}
-          </div>
         </section>
 
-        <aside className="pipeline-side-panel">
-          <StatusPill
-            label="Health"
-            value={selectedHealth?.health.state ?? "unknown"}
-            tone={
-              selectedHealth?.health.state === "healthy" ? "neutral" : "caution"
-            }
-          />
-          <p>
-            {selectedHealth?.health.summary ?? "No snapshot health available"}
-          </p>
-
-          <div className="component-config-form">
-            <label className="field">
-              <span>Node</span>
-              <select
-                value={selectedNode?.id ?? ""}
-                onChange={(event) => setSelectedNodeId(event.target.value)}
-              >
-                {draft.nodes.map((node, index) => (
-                  <option value={node.id} key={node.id}>
-                    {index + 1}. {node.id} / {node.kind}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedNode ? (
-              <label className="field">
-                <span>Provider</span>
-                <select
-                  disabled={readOnly}
-                  value={selectedNode.provider}
-                  onChange={(event) =>
-                    updateSelectedNodeProvider(event.target.value)
-                  }
-                >
-                  {providerChoices.map((provider) => (
-                    <option value={provider.id} key={provider.id}>
-                      {provider.label} ({provider.id})
-                    </option>
-                  ))}
-                </select>
-              </label>
+        {validation || notice ? (
+          <section
+            className="pipeline-editor-status"
+            aria-label="Pipeline graph status"
+          >
+            {validation ? (
+              <p className={validation.ok ? "validation-ok" : "form-error"}>
+                {validation.ok ? "Validation passed" : validation.message}
+              </p>
             ) : null}
-          </div>
 
-          <div className="compact-list">
-            {selectedHealth?.components.map((component) => (
-              <div className="metric-row" key={component.kind}>
-                <span>
-                  {component.kind}
-                  {component.provider ? ` / ${component.provider}` : ""}
-                </span>
-                <strong className={`state-text ${component.state}`}>
-                  {component.state}
-                </strong>
-              </div>
-            ))}
-          </div>
-
-          {!readOnly ? (
-            <div className="graph-actions">
-              <button
-                className="secondary-action"
-                type="button"
-                disabled={history.length === 0}
-                onClick={undoLastEdit}
-              >
-                <RotateCcw size={17} aria-hidden="true" />
-                Undo last edit
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={addToolNode}
-              >
-                <Plus size={17} aria-hidden="true" />
-                Add tool node
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={addMemoryNode}
-              >
-                <Plus size={17} aria-hidden="true" />
-                Add memory node
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={addFallbackTts}
-              >
-                <Plus size={17} aria-hidden="true" />
-                Add fallback TTS
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={runTestTurn}
-              >
-                <Play size={17} aria-hidden="true" />
-                Run test turn
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={validateDraft}
-              >
-                <CircleCheck size={17} aria-hidden="true" />
-                Validate Graph
-              </button>
-              <button
-                className="primary-action"
-                type="button"
-                disabled={validation?.ok !== true}
-                onClick={saveDraft}
-              >
-                <Save size={17} aria-hidden="true" />
-                Save Graph
-              </button>
-            </div>
-          ) : null}
-
-          {notice ? <p className="panel-notice">{notice}</p> : null}
-
-          {validation ? (
-            <p className={validation.ok ? "validation-ok" : "form-error"}>
-              {validation.ok ? "Validation passed" : validation.message}
-            </p>
-          ) : null}
-        </aside>
+            {notice ? <p className="panel-notice">{notice}</p> : null}
+          </section>
+        ) : null}
       </div>
     </div>
   );
@@ -3113,24 +3514,6 @@ function validatePipelineGraph(graph: PipelineGraph): PipelineValidationResult {
   return { ok: true, order: graph.nodes.map((node) => node.id) };
 }
 
-function healthForGraphNode(
-  node: PipelineNode,
-  pipeline: PipelineStatus | undefined,
-): ComponentHealth | null {
-  const componentKind = componentKindForNode(node);
-  return (
-    pipeline?.components.find(
-      (component) =>
-        component.kind === componentKind &&
-        (!component.provider || component.provider === node.provider),
-    ) ??
-    pipeline?.components.find(
-      (component) => component.kind === componentKind,
-    ) ??
-    null
-  );
-}
-
 function componentKindForNode(node: PipelineNode): ComponentKind {
   if (node.kind === "stt") {
     return "transcription";
@@ -3145,6 +3528,60 @@ function componentKindForNode(node: PipelineNode): ComponentKind {
     return "synthesis";
   }
   return "capture";
+}
+
+interface PipelineGraphFlow {
+  mainNodes: PipelineNode[];
+  mainEdges: PipelineGraph["edges"];
+  spokesByTarget: Map<string, { node: PipelineNode; index: number }[]>;
+}
+
+function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
+  const augmentNodeIds = new Set(
+    graph.nodes
+      .filter((node) => node.kind === "tool" || node.kind === "memory")
+      .map((node) => node.id),
+  );
+  const mainNodes = graph.nodes.filter((node) => !augmentNodeIds.has(node.id));
+  const mainNodeIds = new Set(mainNodes.map((node) => node.id));
+  const mainEdges = graph.edges.filter(
+    (edge) => mainNodeIds.has(edge.from) && mainNodeIds.has(edge.to),
+  );
+  const spokesByTarget = new Map<
+    string,
+    { node: PipelineNode; index: number }[]
+  >();
+
+  graph.nodes.forEach((node, index) => {
+    if (!augmentNodeIds.has(node.id)) {
+      return;
+    }
+
+    const target =
+      graph.edges.find((edge) => edge.from === node.id)?.to ?? "llm";
+    spokesByTarget.set(target, [
+      ...(spokesByTarget.get(target) ?? []),
+      { node, index },
+    ]);
+  });
+
+  return { mainNodes, mainEdges, spokesByTarget };
+}
+
+function initializePipelineDrafts(
+  pipelineViews: readonly PipelineView[],
+): Record<string, PipelineEditorDraftState> {
+  return Object.fromEntries(
+    pipelineViews.map((view) => [
+      view.graph.name,
+      {
+        draft: cloneGraph(view.graph),
+        history: [],
+        validation: null,
+        notice: null,
+      },
+    ]),
+  ) as Record<string, PipelineEditorDraftState>;
 }
 
 function cloneGraph(graph: PipelineGraph): PipelineGraph {
