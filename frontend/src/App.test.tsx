@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -99,6 +99,23 @@ describe("Overview operations workspace", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText("synthesis / piper-local")).toBeInTheDocument();
+  });
+
+  it("renders current exceptions with exception semantics", () => {
+    render(<OverviewPanel snapshot={snapshotFixture()} eventPosture="live" />);
+
+    expect(
+      screen.getByRole("list", { name: "Current Exceptions" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "Runtime exception: kitchen" }),
+    ).toHaveClass("critical");
+    expect(
+      screen.getByRole("listitem", { name: "Pipeline exception: kitchen" }),
+    ).toHaveClass("warning");
+    expect(
+      screen.getByRole("listitem", { name: "Provider exception: piper-local" }),
+    ).toHaveClass("warning");
   });
 
   it("keeps healthy baseline quiet", () => {
@@ -463,6 +480,10 @@ describe("Events turn reconstruction", () => {
     await enterEventsSection(user);
 
     expect(screen.getByText("Stage Timeline")).toBeInTheDocument();
+    expect(screen.getAllByRole("group", { name: /stage$/ })).toHaveLength(5);
+    expect(
+      screen.queryByRole("group", { name: "conversation stage" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("group", { name: "transcription stage" }),
     ).toHaveTextContent("Speech Final");
@@ -475,6 +496,20 @@ describe("Events turn reconstruction", () => {
     expect(
       screen.getByRole("group", { name: "synthesis stage" }),
     ).toHaveTextContent("Tts Finished");
+  });
+
+  it("attributes node failures to the matching visual component stage", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={eventFixture()} />);
+
+    await enterEventsSection(user);
+
+    expect(
+      screen.queryByRole("group", { name: "node: tts stage" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "synthesis stage" }),
+    ).toHaveTextContent("Stage Failed");
   });
 
   it("renders a successful turn as an ordered component story", async () => {
@@ -499,6 +534,9 @@ describe("Events turn reconstruction", () => {
       reasoning.compareDocumentPosition(synthesis) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(screen.getByLabelText("Turn pipeline")).toHaveTextContent(
+      "Pipeline kitchen",
+    );
   });
 
   it("preserves tool activity and confirmation boundaries", async () => {
@@ -522,6 +560,34 @@ describe("Events turn reconstruction", () => {
     expect(screen.getByText("StageFailed")).toBeInTheDocument();
     expect(screen.getByText("connection refused")).toBeInTheDocument();
     expect(screen.getByText("tts")).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "StageFailed tts error" }),
+    ).toHaveClass("error");
+  });
+
+  it("uses stage event pills as ordered shortcuts into reconstruction rows", async () => {
+    const user = userEvent.setup();
+    render(<App initialEvents={eventFixture()} />);
+
+    await enterEventsSection(user);
+
+    const synthesis = screen.getByRole("group", { name: "synthesis stage" });
+    const pills = within(synthesis).getAllByRole("button");
+
+    expect(pills.map((pill) => pill.textContent)).toEqual([
+      "Tts Started",
+      "Audio Streaming",
+      "Tts Finished",
+      "Stage Failed",
+    ]);
+    expect(pills[3]).toHaveClass("error");
+    expect(pills[3]).toHaveAccessibleDescription("connection refused");
+
+    await user.click(pills[3]);
+
+    expect(
+      screen.getByRole("listitem", { name: "StageFailed tts error" }),
+    ).toHaveClass("selected");
   });
 
   it("marks reconstructed turns stale when the event stream is stale", async () => {
@@ -745,9 +811,9 @@ describe("Providers workspace", () => {
 });
 
 describe("Settings workspace", () => {
-  it("stores operator settings in local UI state", async () => {
+  it("persists saved operator settings across reloads", async () => {
     const user = userEvent.setup();
-    render(<App initialPipelineViews={[pipelineView()]} />);
+    const firstLoad = render(<App initialPipelineViews={[pipelineView()]} />);
 
     await enterSettingsSection(user);
     await user.clear(screen.getByLabelText("Deployment name"));
@@ -766,14 +832,39 @@ describe("Settings workspace", () => {
       "true",
     );
     expect(screen.getByLabelText("Log level")).toHaveValue("debug");
+
+    firstLoad.unmount();
+    render(<App initialPipelineViews={[pipelineView()]} />);
+
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(screen.getByLabelText("Deployment name")).toHaveValue("clinic-prod");
+    expect(screen.getByLabelText("Local-only mode")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "90 d" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Log level")).toHaveValue("debug");
   });
 
   it("requires explicit confirmation before resetting local console state", async () => {
     const user = userEvent.setup();
-    render(<App />);
+    render(<App initialPipelineViews={[pipelineView()]} />);
 
     await enterSettingsSection(user);
+    await user.clear(screen.getByLabelText("Deployment name"));
+    await user.type(screen.getByLabelText("Deployment name"), "clinic-prod");
+    await user.click(screen.getByLabelText("Local-only mode"));
+    await user.click(screen.getByRole("button", { name: "90 d" }));
+    await user.selectOptions(screen.getByLabelText("Log level"), "debug");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
     await user.click(screen.getByRole("button", { name: "Reset local state" }));
+
+    expect(
+      screen.getByText("Type RESET to permanently clear saved UI settings."),
+    ).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Confirm reset" }));
 
     expect(screen.getByText("Type RESET to confirm")).toBeInTheDocument();
@@ -782,6 +873,15 @@ describe("Settings workspace", () => {
     await user.click(screen.getByRole("button", { name: "Confirm reset" }));
 
     expect(screen.getByText("Local console state reset")).toBeInTheDocument();
+    expect(screen.getByLabelText("Deployment name")).toHaveValue(
+      "conduit-local",
+    );
+    expect(screen.getByLabelText("Local-only mode")).toBeChecked();
+    expect(screen.getByRole("button", { name: "30 d" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Log level")).toHaveValue("info");
   });
 });
 

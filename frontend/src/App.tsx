@@ -511,6 +511,21 @@ function SectionPanel({
   return <SettingsPanel pipelineViews={pipelineViews} access={snapshot} />;
 }
 
+const OPERATOR_SETTINGS_STORAGE_KEY = "conduit.operator.settings";
+const retentionOptions = ["7 d", "30 d", "90 d", "forever"] as const;
+const logLevelOptions = ["debug", "info", "warn", "error"] as const;
+
+type RetentionOption = (typeof retentionOptions)[number];
+type LogLevelOption = (typeof logLevelOptions)[number];
+
+interface OperatorConsoleSettings {
+  deploymentName: string;
+  localOnly: boolean;
+  defaultPipeline: string;
+  retention: RetentionOption;
+  logLevel: LogLevelOption;
+}
+
 type ProviderFilter = "all" | ProviderKind;
 
 interface ProviderOverride {
@@ -685,19 +700,29 @@ function SettingsPanel({
   pipelineViews: readonly PipelineView[];
   access: OperatorStatusSnapshot | null;
 }) {
-  const [deploymentName, setDeploymentName] = useState("conduit-local");
-  const [localOnly, setLocalOnly] = useState(true);
-  const [defaultPipeline, setDefaultPipeline] = useState(
-    pipelineViews[0]?.graph.name ?? access?.pipelines[0]?.name ?? "default",
+  const defaultSettings = useMemo(
+    () => defaultOperatorSettings(pipelineViews, access),
+    [access, pipelineViews],
   );
-  const [retention, setRetention] = useState("30 d");
-  const [logLevel, setLogLevel] = useState("info");
+  const [settings, setSettings] = useState<OperatorConsoleSettings>(() =>
+    loadOperatorSettings(defaultSettings, pipelineViews),
+  );
   const [resetOpen, setResetOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-  const retentionOptions = ["7 d", "30 d", "90 d", "forever"];
+  const deploymentName = settings.deploymentName;
+  const localOnly = settings.localOnly;
+  const defaultPipeline = settings.defaultPipeline;
+  const retention = settings.retention;
+  const logLevel = settings.logLevel;
 
   function saveSettings() {
+    const next = {
+      ...settings,
+      deploymentName: deploymentName.trim() || "conduit-local",
+    };
+    setSettings(next);
+    saveOperatorSettings(next);
     setNotice(`Settings saved for ${deploymentName.trim() || "conduit-local"}`);
   }
 
@@ -707,11 +732,8 @@ function SettingsPanel({
       return;
     }
 
-    setDeploymentName("conduit-local");
-    setLocalOnly(true);
-    setDefaultPipeline(pipelineViews[0]?.graph.name ?? "default");
-    setRetention("30 d");
-    setLogLevel("info");
+    clearOperatorSettings();
+    setSettings(defaultSettings);
     setResetOpen(false);
     setResetConfirmation("");
     setNotice("Local console state reset");
@@ -760,14 +782,24 @@ function SettingsPanel({
             <span>Deployment name</span>
             <input
               value={deploymentName}
-              onChange={(event) => setDeploymentName(event.target.value)}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  deploymentName: event.target.value,
+                }))
+              }
             />
           </label>
           <label className="field">
             <span>Default pipeline</span>
             <select
               value={defaultPipeline}
-              onChange={(event) => setDefaultPipeline(event.target.value)}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  defaultPipeline: event.target.value,
+                }))
+              }
             >
               {pipelineViews.length > 0 ? (
                 pipelineViews.map((view) => (
@@ -789,7 +821,12 @@ function SettingsPanel({
               aria-label="Local-only mode"
               type="checkbox"
               checked={localOnly}
-              onChange={(event) => setLocalOnly(event.target.checked)}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  localOnly: event.target.checked,
+                }))
+              }
             />
           </label>
           <label className="field">
@@ -797,9 +834,14 @@ function SettingsPanel({
             <select
               aria-label="Log level"
               value={logLevel}
-              onChange={(event) => setLogLevel(event.target.value)}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  logLevel: event.target.value as LogLevelOption,
+                }))
+              }
             >
-              {["debug", "info", "warn", "error"].map((level) => (
+              {logLevelOptions.map((level) => (
                 <option key={level} value={level}>
                   {level}
                 </option>
@@ -828,7 +870,12 @@ function SettingsPanel({
               type="button"
               aria-pressed={retention === option}
               className={retention === option ? "selected" : ""}
-              onClick={() => setRetention(option)}
+              onClick={() =>
+                setSettings((current) => ({
+                  ...current,
+                  retention: option,
+                }))
+              }
             >
               {option}
             </button>
@@ -856,6 +903,9 @@ function SettingsPanel({
         </div>
         {resetOpen ? (
           <div className="reset-confirmation">
+            <p className="reset-instructions">
+              Type RESET to permanently clear saved UI settings.
+            </p>
             <label className="field">
               <span>Reset confirmation</span>
               <input
@@ -879,6 +929,87 @@ function SettingsPanel({
   );
 }
 
+function defaultOperatorSettings(
+  pipelineViews: readonly PipelineView[],
+  access: OperatorStatusSnapshot | null,
+): OperatorConsoleSettings {
+  return {
+    deploymentName: "conduit-local",
+    localOnly: true,
+    defaultPipeline:
+      pipelineViews[0]?.graph.name ?? access?.pipelines[0]?.name ?? "default",
+    retention: "30 d",
+    logLevel: "info",
+  };
+}
+
+function loadOperatorSettings(
+  defaults: OperatorConsoleSettings,
+  pipelineViews: readonly PipelineView[],
+): OperatorConsoleSettings {
+  try {
+    return normalizeOperatorSettings(
+      JSON.parse(localStorage.getItem(OPERATOR_SETTINGS_STORAGE_KEY) ?? "null"),
+      defaults,
+      pipelineViews,
+    );
+  } catch {
+    return defaults;
+  }
+}
+
+function saveOperatorSettings(settings: OperatorConsoleSettings): void {
+  localStorage.setItem(OPERATOR_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function clearOperatorSettings(): void {
+  localStorage.removeItem(OPERATOR_SETTINGS_STORAGE_KEY);
+}
+
+function normalizeOperatorSettings(
+  value: unknown,
+  defaults: OperatorConsoleSettings,
+  pipelineViews: readonly PipelineView[],
+): OperatorConsoleSettings {
+  if (!value || typeof value !== "object") {
+    return defaults;
+  }
+
+  const saved = value as Partial<OperatorConsoleSettings>;
+  const pipelineNames = new Set(pipelineViews.map((view) => view.graph.name));
+  const defaultPipeline =
+    typeof saved.defaultPipeline === "string" &&
+    (pipelineNames.size === 0 || pipelineNames.has(saved.defaultPipeline))
+      ? saved.defaultPipeline
+      : defaults.defaultPipeline;
+
+  return {
+    deploymentName:
+      typeof saved.deploymentName === "string" && saved.deploymentName.trim()
+        ? saved.deploymentName
+        : defaults.deploymentName,
+    localOnly:
+      typeof saved.localOnly === "boolean"
+        ? saved.localOnly
+        : defaults.localOnly,
+    defaultPipeline,
+    retention: isRetentionOption(saved.retention)
+      ? saved.retention
+      : defaults.retention,
+    logLevel: isLogLevelOption(saved.logLevel)
+      ? saved.logLevel
+      : defaults.logLevel,
+  };
+}
+
+function isRetentionOption(value: unknown): value is RetentionOption {
+  return retentionOptions.includes(value as RetentionOption);
+}
+
+function isLogLevelOption(value: unknown): value is LogLevelOption {
+  return logLevelOptions.includes(value as LogLevelOption);
+}
+
 function MetricTile({ label, value }: { label: string; value: string }) {
   return (
     <article className="metric-tile">
@@ -897,12 +1028,22 @@ function EventsPanel({
 }) {
   const [activeView, setActiveView] = useState<"story" | "raw">("story");
   const [filter, setFilter] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const turn = useMemo(() => reconstructTurn(events), [events]);
   const rawEvents = useMemo(
     () => filterRawEvents(events, filter),
     [events, filter],
   );
   const stale = eventPosture === "stale" || eventPosture === "disconnected";
+
+  function selectStoryEvent(id: string) {
+    setSelectedEventId(id);
+    window.requestAnimationFrame(() => {
+      const row = document.getElementById(eventStepId(id));
+      row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      row?.focus();
+    });
+  }
 
   return (
     <div className="events-stack">
@@ -935,9 +1076,10 @@ function EventsPanel({
         <section className="event-reconstruction" aria-labelledby="turn-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">
-                {turn.pipeline} / {turn.conversation}
-              </p>
+              <div className="turn-context">
+                <span aria-label="Turn pipeline">Pipeline {turn.pipeline}</span>
+                <span>{turn.conversation}</span>
+              </div>
               <h2 id="turn-title">Turn Reconstruction</h2>
             </div>
             <StatusPill
@@ -973,7 +1115,20 @@ function EventsPanel({
                   </div>
                   <div className="stage-event-chips">
                     {group.steps.map((step) => (
-                      <span key={step.id}>{displayEventType(step.type)}</span>
+                      <button
+                        key={step.id}
+                        type="button"
+                        className={storyEventClassName("stage-event-chip", {
+                          selected: selectedEventId === step.id,
+                          error: step.error,
+                        })}
+                        aria-describedby={
+                          step.error ? eventErrorId(step.id) : undefined
+                        }
+                        onClick={() => selectStoryEvent(step.id)}
+                      >
+                        {displayEventType(step.type)}
+                      </button>
                     ))}
                   </div>
                 </article>
@@ -983,13 +1138,26 @@ function EventsPanel({
 
           <ol className="event-story">
             {turn.steps.map((step) => (
-              <li className="event-step" key={step.id}>
+              <li
+                id={eventStepId(step.id)}
+                className={storyEventClassName("event-step", {
+                  selected: selectedEventId === step.id,
+                  error: step.error,
+                })}
+                key={step.id}
+                tabIndex={-1}
+                aria-label={`${step.type} ${step.component}${step.error ? " error" : ""}`}
+              >
                 <div className="event-meta">
                   <strong>{step.type}</strong>
                   <span>{step.component}</span>
                   <time dateTime={step.at}>{formatTime(step.at)}</time>
                 </div>
-                {step.detail ? <p>{step.detail}</p> : null}
+                {step.detail ? (
+                  <p id={step.error ? eventErrorId(step.id) : undefined}>
+                    {step.detail}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ol>
@@ -1400,6 +1568,7 @@ interface ReconstructedStep {
   type: Event["type"];
   component: string;
   detail: string | null;
+  error: boolean;
 }
 
 function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
@@ -1412,6 +1581,7 @@ function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
     type: envelope.event.type,
     component: eventComponent(envelope.event),
     detail: eventDetail(envelope.event),
+    error: isErrorEvent(envelope.event),
   }));
 
   return {
@@ -1432,7 +1602,12 @@ function groupTurnSteps(
 ): ReconstructedGroup[] {
   const groups = new Map<string, ReconstructedStep[]>();
   for (const step of steps) {
-    groups.set(step.component, [...(groups.get(step.component) ?? []), step]);
+    const component = visualStageComponent(step.component);
+    if (!component) {
+      continue;
+    }
+
+    groups.set(component, [...(groups.get(component) ?? []), step]);
   }
 
   return Array.from(groups.entries()).map(([component, groupedSteps]) => {
@@ -1446,6 +1621,28 @@ function groupTurnSteps(
       steps: groupedSteps,
     };
   });
+}
+
+function visualStageComponent(component: string): string | null {
+  if (component === "conversation") {
+    return null;
+  }
+  if (["mic", "source", "capture"].includes(component)) {
+    return "capture";
+  }
+  if (["stt", "transcription"].includes(component)) {
+    return "transcription";
+  }
+  if (["llm", "reasoning"].includes(component)) {
+    return "reasoning";
+  }
+  if (["tool", "tools"].includes(component)) {
+    return "tools";
+  }
+  if (["tts", "speaker", "sink", "synthesis"].includes(component)) {
+    return "synthesis";
+  }
+  return component;
 }
 
 function durationLabel(steps: readonly ReconstructedStep[]): string {
@@ -1477,6 +1674,27 @@ function turnStatus(events: readonly EventEnvelope[]): TurnStatus {
     return "completed";
   }
   return "running";
+}
+
+function isErrorEvent(event: Event): boolean {
+  return event.type === "StageFailed" || event.type === "ToolFailed";
+}
+
+function eventStepId(id: string): string {
+  return `event-step-${id}`;
+}
+
+function eventErrorId(id: string): string {
+  return `event-error-${id}`;
+}
+
+function storyEventClassName(
+  base: string,
+  state: { selected: boolean; error: boolean },
+): string {
+  return [base, state.error ? "error" : "", state.selected ? "selected" : ""]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function eventComponent(event: Event): string {
@@ -1781,7 +1999,11 @@ export function OverviewPanel({
             <span>No current exceptions</span>
           </div>
         ) : (
-          <div className="exception-list">
+          <div
+            className="exception-list"
+            role="list"
+            aria-labelledby="exceptions-title"
+          >
             {snapshot.recent_failures.map((failure) => (
               <FailureItem
                 key={`${failure.pipeline}-${failure.at}`}
@@ -2069,7 +2291,11 @@ function FailureItem({
   onOpenEvents?: () => void;
 }) {
   return (
-    <article className="exception-item critical">
+    <article
+      className="exception-item critical"
+      role="listitem"
+      aria-label={`Runtime exception: ${failure.pipeline}`}
+    >
       <CircleAlert size={17} aria-hidden="true" />
       <div>
         <h3>{failure.pipeline}</h3>
@@ -2101,8 +2327,12 @@ function PipelineException({
   );
 
   return (
-    <article className="exception-item">
-      <Bell size={17} aria-hidden="true" />
+    <article
+      className="exception-item warning"
+      role="listitem"
+      aria-label={`Pipeline exception: ${pipeline.name}`}
+    >
+      <CircleAlert size={17} aria-hidden="true" />
       <div>
         <h3>{pipeline.name}</h3>
         <p>{pipeline.health.summary}</p>
@@ -2124,8 +2354,12 @@ function PipelineException({
 
 function ProviderWarning({ provider }: { provider: ProviderStatus }) {
   return (
-    <article className="exception-item">
-      <Boxes size={17} aria-hidden="true" />
+    <article
+      className="exception-item warning"
+      role="listitem"
+      aria-label={`Provider exception: ${provider.id}`}
+    >
+      <CircleAlert size={17} aria-hidden="true" />
       <div>
         <h3>{provider.id}</h3>
         <p>{provider.message ?? provider.state}</p>
