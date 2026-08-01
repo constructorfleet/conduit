@@ -20,17 +20,69 @@ _Avoid_: Empty state, onboarding
 The first-run path that helps the operator create an initial usable pipeline without manually assembling every graph detail. Guided setup should produce a real pipeline definition, prioritize a minimal working voice loop, and offer optional tool setup without requiring it.
 _Avoid_: Wizard
 
+**Provider-First Setup**:
+A guided setup sequence that creates required provider definitions before saving a pipeline graph that references them. Pipeline creation depends on provider definitions existing rather than embedding or inventing provider configuration.
+_Avoid_: Graph-first setup, inferred provider setup
+
+**Provider Reference Block**:
+The delete refusal for a provider definition still referenced by one or more pipeline graphs. The refusal names the affected pipelines so the operator can navigate to edit those references.
+_Avoid_: Fake deletion, silent unlink
+
 **Graph Editor**:
 The configuration surface for inspecting and editing a pipeline as nodes and edges. The graph editor is the advanced and ongoing configuration view, not the required first step for a new operator.
 _Avoid_: Flowchart
+
+**Pipeline Validation**:
+The backend check that a pipeline graph is structurally valid, references existing compatible provider definitions or injected test providers, and can be prepared by the current runtime provider registry snapshot. Pipeline validation does not perform provider reachability checks or create missing providers.
+_Avoid_: Provider test, turn test, graph repair
+
+**Pipeline Test Turn**:
+A synthetic conversation turn run through a stored pipeline using mock or test audio and the current runtime provider registry snapshot. A successful pipeline test turn proves the providers that were actually invoked during that runtime execution.
+_Avoid_: Provider reachability test, graph validation
 
 **Provider Settings**:
 The reusable configuration surface for provider credentials, endpoints, model choices, and reachability checks. Guided setup may invoke provider settings inline, but provider configuration is not owned by a single pipeline.
 _Avoid_: Pipeline config
 
+**Provider Reachability Test**:
+A narrow active check for one provider definition, such as connecting, listing capabilities, or running a tiny non-destructive request. A provider reachability test can make a provider reachable, but it does not prove the provider inside a real pipeline turn.
+_Avoid_: Pipeline test turn, configured provider
+
+**Provider Definition**:
+A server-owned saved provider configuration with a stable id, capability, component type, and runtime settings. Pipeline graphs reference provider definitions by id; provider definitions are not owned by any single pipeline.
+_Avoid_: Provider Settings, node config, runtime provider
+
+**Provider Definition Store**:
+The backend-owned storage abstraction for provider definitions, independent of the storage backend used to persist them. Deployments may back it with file formats or databases, but operators and pipelines see the same provider definition semantics.
+_Avoid_: PipelineStore, browser storage, status cache
+
+**Runtime Provider**:
+An in-memory executable provider registered with the runtime for one capability, built from deployment configuration or a provider definition. Pipeline execution uses runtime providers, while operators save and edit provider definitions.
+_Avoid_: Provider Definition, Provider Settings
+
+**Runtime Provider Registry Snapshot**:
+An immutable set of runtime providers used by new pipeline validations and turns until replaced by a newer snapshot. Saving or deleting provider definitions rebuilds a fresh snapshot and swaps it in only after validation succeeds.
+_Avoid_: Mutable provider registry, partial registration
+
+**Provider Definition Variant**:
+A component-specific provider definition shape with named fields for exactly one supported provider component. Variants are closed for now, so adding a provider component expands the typed contract instead of storing arbitrary configuration.
+_Avoid_: Config blob, component config map
+
+**Provider Component Catalog**:
+The backend-owned catalog of provider component types an operator can create as provider definitions. The catalog describes supported definition variants and form metadata; it is not the runtime registry of executable providers.
+_Avoid_: Pipeline component catalog, provider registry
+
+**Provider Secret**:
+A secret value used by a provider definition, accepted on writes as an inline value or external reference but never echoed back unredacted by read/status APIs. A redacted provider secret in an update means keeping the existing stored secret.
+_Avoid_: API key field, visible credential
+
 **Configured Provider**:
-A provider whose required local settings are present and valid enough to save. Configuration does not prove that the provider can currently serve requests.
+A provider whose definition satisfies the backend schema and is valid enough to save. Configuration does not prove that the provider can currently serve requests.
 _Avoid_: Healthy provider
+
+**Untested Provider**:
+A configured provider with no current reachability or real-turn proof. Untested providers should be shown as configured rather than unavailable.
+_Avoid_: Unavailable provider, failed provider
 
 **Reachable Provider**:
 A provider whose endpoint, credentials, and selected model respond to an active check. Reachability does not prove that the provider has succeeded inside a real pipeline turn.
