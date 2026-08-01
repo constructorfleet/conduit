@@ -777,7 +777,6 @@ button {
 }
 
 .atom-stage-labels span:nth-child(2) {
-  color: var(--accent-hover);
   text-align: center;
 }
 
@@ -823,6 +822,14 @@ button {
   display: flex;
   align-items: center;
   gap: 18px;
+}
+
+.atom-flow-item:has(+ .core-flow-item) {
+  margin-right: clamp(88px, 9vw, 160px);
+}
+
+.core-flow-item + .atom-flow-item {
+  margin-left: clamp(88px, 9vw, 160px);
 }
 
 .atom-stage,
@@ -884,7 +891,12 @@ button {
   position: absolute;
   inset: -104px -118px;
   z-index: 2;
+  transform-origin: center;
   pointer-events: none;
+}
+
+.atom-orbitals.motion-enabled {
+  animation: augment-orbit 10s linear infinite;
 }
 
 .atom-orbital {
@@ -903,6 +915,10 @@ button {
 
 .atom-orbital:active {
   cursor: grabbing;
+}
+
+.atom-orbitals.motion-enabled .atom-orbital > * {
+  animation: augment-counter-orbit 10s linear infinite;
 }
 
 .atom-spoke-link {
@@ -1103,6 +1119,18 @@ button {
 @keyframes orbit {
   to {
     transform: scaleY(0.62) rotate(360deg);
+  }
+}
+
+@keyframes augment-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes augment-counter-orbit {
+  to {
+    transform: rotate(-360deg);
   }
 }
 

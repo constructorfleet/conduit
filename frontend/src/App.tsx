@@ -2617,7 +2617,7 @@ function PipelinesPanel({
           >
             <div className="atom-stage-labels" aria-hidden="true">
               <span>Input</span>
-              <span>Reasoning core</span>
+              <span />
               <span>Output</span>
             </div>
             <div
@@ -2635,7 +2635,12 @@ function PipelinesPanel({
                 );
                 const spokes = graphFlow?.spokesByTarget.get(node.id) ?? [];
                 return (
-                  <div className="atom-flow-item" key={node.id}>
+                  <div
+                    className={`atom-flow-item ${
+                      node.kind === "llm" ? "core-flow-item" : ""
+                    }`}
+                    key={node.id}
+                  >
                     <div
                       className={
                         node.kind === "llm" ? "atom-core-wrap" : "atom-stage"

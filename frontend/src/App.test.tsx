@@ -838,9 +838,7 @@ describe("Pipelines graph editor", () => {
     expect(
       within(graph).getByRole("group", { name: "llm reasoning" }),
     ).not.toHaveClass("linear");
-    expect(within(graph).getAllByText("Reasoning core").length).toBeGreaterThan(
-      0,
-    );
+    expect(within(graph).getAllByText("Reasoning core")).toHaveLength(1);
     expect(
       within(graph).queryByRole("list", { name: "Pipeline edges" }),
     ).not.toBeInTheDocument();
