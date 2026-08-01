@@ -631,6 +631,41 @@ async fn redacted_provider_secret_update_keeps_the_existing_secret() {
 }
 
 #[tokio::test]
+async fn empty_provider_secret_update_clears_the_existing_secret() {
+    let state = AppState::new(EventBus::default());
+    let original = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": { "type": "inline", "value": "sk-test" },
+            "models": ["gpt-4.1"]
+        }
+    });
+    let updated = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": { "type": "inline", "value": "" },
+            "models": ["gpt-4.1-mini"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", original)).await;
+
+    let (status, body) = call(&state, put_json("/v1/providers/openai-primary", updated)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["variant"]["models"], serde_json::json!(["gpt-4.1-mini"]));
+    assert!(
+        body["variant"].get("api_key").is_none(),
+        "empty secret updates should clear the stored secret: {body}"
+    );
+}
+
+#[tokio::test]
 async fn invalid_provider_definition_updates_do_not_replace_existing_settings() {
     let state = AppState::new(EventBus::default());
     let original = serde_json::json!({

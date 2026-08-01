@@ -362,6 +362,8 @@ fn merge_secret(
 ) -> Option<ProviderSecret> {
     match update {
         Some(ProviderSecret::Redacted) => existing.cloned(),
+        Some(ProviderSecret::Inline { value }) if value.is_empty() => None,
+        Some(ProviderSecret::External { reference }) if reference.is_empty() => None,
         Some(other) => Some(other),
         None => None,
     }
