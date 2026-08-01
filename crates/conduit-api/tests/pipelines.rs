@@ -671,6 +671,29 @@ async fn invalid_provider_definition_updates_do_not_replace_existing_settings() 
 }
 
 #[tokio::test]
+async fn invalid_wyoming_provider_definition_urls_are_rejected_without_storing() {
+    let state = AppState::new(EventBus::default());
+    let invalid = serde_json::json!({
+        "id": "piper-local",
+        "label": "Piper Local",
+        "variant": {
+            "type": "wyoming_tts",
+            "url": "piper.local:10200"
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/piper-local", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("url")));
+
+    let (status, body) = call(&state, get("/v1/providers/piper-local")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
 async fn provider_reachability_test_marks_a_provider_reachable() {
     let server = MockOpenAiServer::healthy().await;
     let state = AppState::new(EventBus::default());

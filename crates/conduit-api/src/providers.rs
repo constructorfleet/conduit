@@ -183,23 +183,18 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         | ProviderDefinitionVariant::OpenAiTts { base_url, .. } => {
             validate_http_url("base_url", base_url)?;
         }
-        ProviderDefinitionVariant::WyomingStt { .. }
-        | ProviderDefinitionVariant::WyomingTts { .. }
-        | ProviderDefinitionVariant::McpTool { .. } => {}
+        ProviderDefinitionVariant::WyomingStt { url, .. }
+        | ProviderDefinitionVariant::WyomingTts { url, .. } => {
+            validate_absolute_url("url", url)?;
+        }
+        ProviderDefinitionVariant::McpTool { .. } => {}
     }
     Ok(())
 }
 
 fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {
-    let uri = value.parse::<Uri>().map_err(|error| {
-        ApiError::unprocessable(format!("{field} is not a valid URL: {error}"))
-    })?;
-    if uri.host().is_none() {
-        return Err(ApiError::unprocessable(format!("{field} must include a host")));
-    }
-    let Some(scheme) = uri.scheme_str() else {
-        return Err(ApiError::unprocessable(format!("{field} must include a URL scheme")));
-    };
+    let uri = validate_absolute_url(field, value)?;
+    let scheme = uri.scheme_str().expect("absolute URL has a scheme");
     if !matches!(scheme, "http" | "https") {
         return Err(ApiError::unprocessable(format!(
             "{field} must use http or https, got `{}`",
@@ -207,6 +202,19 @@ fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {
         )));
     }
     Ok(())
+}
+
+fn validate_absolute_url(field: &str, value: &str) -> Result<Uri, ApiError> {
+    let uri = value.parse::<Uri>().map_err(|error| {
+        ApiError::unprocessable(format!("{field} is not a valid URL: {error}"))
+    })?;
+    if uri.host().is_none() {
+        return Err(ApiError::unprocessable(format!("{field} must include a host")));
+    }
+    if uri.scheme_str().is_none() {
+        return Err(ApiError::unprocessable(format!("{field} must include a URL scheme")));
+    }
+    Ok(uri)
 }
 
 fn status_from_health(
