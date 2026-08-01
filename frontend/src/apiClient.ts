@@ -1,6 +1,12 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
-import type { PipelineGraph, PipelineView } from "./contracts/client";
-import { pipelineViewFixture } from "./contracts/client";
+import type {
+  PipelineGraph,
+  PipelineView,
+  RawTurnEvents,
+  TurnList,
+  TurnSnapshot,
+} from "./contracts/client";
+import { pipelineViewFixture, turnSnapshotFixture } from "./contracts/client";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
@@ -24,6 +30,9 @@ export interface SnapshotClient {
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
   loadPipelineViews: () => Promise<PipelineView[]>;
+  loadTurns: () => Promise<TurnList>;
+  loadTurn: (turnId: string) => Promise<TurnSnapshot>;
+  loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
   savePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
   validatePipeline: (graph: PipelineGraph) => Promise<PipelineView>;
 }
@@ -55,6 +64,9 @@ export function createSnapshotClient(
       const names = await client.listPipelines();
       return Promise.all(names.map((name) => client.getPipeline(name)));
     },
+    loadTurns: () => client.listTurns(),
+    loadTurn: (turnId) => client.getTurn(turnId),
+    loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
     savePipeline: (graph) => client.putPipeline(graph.name, graph),
     validatePipeline: (graph) => client.validatePipeline(graph),
   };
@@ -75,6 +87,9 @@ function createMockSnapshotClient(
     snapshot: config.access.mode === "none" ? null : (config.snapshot ?? null),
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
     loadPipelineViews: async () => [pipelineViewFixture],
+    loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
+    loadTurn: async () => turnSnapshotFixture,
+    loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),
     savePipeline: async (graph) => ({
       graph,
       order: graph.nodes.map((node) => node.id),

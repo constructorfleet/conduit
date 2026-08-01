@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
-use conduit_core::event::{CancelReason, Event, FinishReason, Stage};
+use conduit_core::event::{CancelReason, Event, FinishReason, SpokenSegmentRole, Stage};
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
@@ -74,6 +74,8 @@ pub struct Turn {
     speaking: bool,
     /// Audio emitted so far, reported when the turn ends.
     spoken_ms: u64,
+    /// Stable identity source for spoken-segment reconstruction items.
+    spoken_segments: u64,
 }
 
 impl Turn {
@@ -104,6 +106,7 @@ impl Turn {
             sequence: 0,
             speaking: false,
             spoken_ms: 0,
+            spoken_segments: 0,
         }
     }
 
@@ -260,13 +263,16 @@ impl Turn {
             if round.requests.is_empty() {
                 // Nothing left to do but finish saying it.
                 let remainder = round.pending.trim().to_owned();
-                if !remainder.is_empty() && !self.speak(remainder).await {
+                if !remainder.is_empty()
+                    && !self.speak(remainder, SpokenSegmentRole::AssistantResponse).await
+                {
                     return None;
                 }
                 return Some(());
             }
 
-            let spoke = self.run_tools_while_speaking(&round).await?;
+            let model_round = (round_number + 1).try_into().unwrap_or(u32::MAX);
+            let spoke = self.run_tools_while_speaking(&round, model_round).await?;
             messages.push(assistant_message(&round.text));
             messages.extend(spoke);
 
@@ -290,8 +296,18 @@ impl Turn {
     /// Runs the round's tools and speaks its pending text at the same time.
     ///
     /// Returns the tool results as messages for the next round.
-    async fn run_tools_while_speaking(&mut self, round: &Round) -> Option<Vec<Message>> {
+    async fn run_tools_while_speaking(
+        &mut self,
+        round: &Round,
+        model_round: u32,
+    ) -> Option<Vec<Message>> {
         let preamble = round.pending.trim().to_owned();
+        let batch = format!("{}-tool-batch-{model_round}", self.turn);
+        self.emitter.emit(Event::ToolBatchStarted {
+            batch,
+            calls: round.requests.iter().map(|request| request.id.clone()).collect(),
+            model_round,
+        });
 
         // Built before the borrow below so the tool future owns everything it
         // needs and the two halves can run concurrently.
@@ -307,7 +323,7 @@ impl Turn {
             if preamble.is_empty() {
                 true
             } else {
-                self.speak(preamble).await
+                self.speak(preamble, SpokenSegmentRole::AssistantPreamble).await
             }
         };
 
@@ -317,7 +333,7 @@ impl Turn {
         }
 
         for spoken in outcomes.iter().filter_map(|outcome| outcome.spoken.as_ref()) {
-            if !self.speak(spoken.trim().to_owned()).await {
+            if !self.speak(spoken.trim().to_owned(), SpokenSegmentRole::ToolOutput).await {
                 return None;
             }
         }
@@ -353,7 +369,7 @@ impl Turn {
                     round.text.push_str(&delta);
                     round.pending.push_str(&delta);
                     for sentence in sentences::take_complete(&mut round.pending) {
-                        if !self.speak(sentence).await {
+                        if !self.speak(sentence, SpokenSegmentRole::AssistantResponse).await {
                             return None;
                         }
                     }
@@ -390,12 +406,18 @@ impl Turn {
     ///
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
-    async fn speak(&mut self, sentence: String) -> bool {
+    async fn speak(&mut self, sentence: String, role: SpokenSegmentRole) -> bool {
         if !self.speaking {
             let voice = self.plan.voice.clone().unwrap_or_else(|| "default".to_owned());
             self.emitter.emit(Event::TtsStarted { voice });
             self.speaking = true;
         }
+        self.spoken_segments = self.spoken_segments.saturating_add(1);
+        self.emitter.emit(Event::SpokenSegmentStarted {
+            segment: format!("{}-spoken-{}", self.turn, self.spoken_segments),
+            role,
+            text: sentence.clone(),
+        });
 
         let request = SynthesisRequest {
             voice: self.plan.voice.clone(),

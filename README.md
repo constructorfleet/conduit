@@ -138,8 +138,11 @@ npm run format
 | `CONDUIT_ALLOW_ANONYMOUS` | — | `1` serves the API to anyone who can reach it |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
 | `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60` | How long a turn may publish nothing before it is abandoned; `0` removes the bound |
+| `CONDUIT_TURN_HISTORY_MAX_TURNS` | `500` | Completed reconstructed turns retained in memory; `0` removes the count bound |
+| `CONDUIT_TURN_HISTORY_RETENTION_SECS` | `86400` | Completed reconstructed turn age retained in memory; `0` removes the age bound |
+| `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for local Conduit data |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
-| `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
+| `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory to keep pipelines in; `:memory:` makes them disposable |
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
 | `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
 | `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
@@ -228,6 +231,7 @@ the household's transcripts.
 | `GET`, `PUT`, `DELETE /v1/pipelines…` | Management only |
 | `POST /v1/pipelines/validate` | Management only |
 | `GET /v1/events` | Management only |
+| `GET /v1/turns`, `/v1/turns/{turn_id}`, `/v1/turns/{turn_id}/events`, `/v1/turns/live` | Management only |
 
 The asymmetry is deliberate. A management token may open a conversation socket,
 because an operator holding one is already trusted with more than a conversation
@@ -388,8 +392,8 @@ Three backends, chosen by configuration:
 | Backend | When | Set |
 | --- | --- | --- |
 | PostgreSQL | More than one API replica, or you already run one | `CONDUIT_DATABASE_URL` |
-| Files | A single node; one readable JSON file per pipeline | `CONDUIT_PIPELINE_DIR` |
-| Memory | Development; the server warns a restart will lose them | neither |
+| Files | A single node; one readable JSON file per pipeline | default, or `CONDUIT_PIPELINE_DIR` |
+| Memory | Development; the server warns a restart will lose them | `CONDUIT_PIPELINE_DIR=:memory:` |
 
 A database wins over a directory, because shared state is what more than one
 replica needs and a directory only this process can see. Migrations are

@@ -13,6 +13,7 @@ use conduit_store::MemoryStore;
 
 use crate::auth::Access;
 use crate::status::RuntimeStatus;
+use crate::turns::{TurnHistory, TurnHistoryRetention};
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
@@ -27,6 +28,8 @@ pub struct AppState {
     metrics: Arc<Metrics>,
     /// Runtime status projection used by the Operator Console.
     status: RuntimeStatus,
+    /// Server-owned turn reconstruction read model.
+    turns: Arc<TurnHistory>,
     /// Who is allowed to call the service API.
     access: Arc<Access>,
     /// How long a turn may publish nothing before it is abandoned.
@@ -43,12 +46,14 @@ impl AppState {
     /// Creates state backed by `bus` and `pipelines`.
     #[must_use]
     pub fn with_store(bus: EventBus, pipelines: Arc<dyn PipelineStore>) -> Self {
+        let turns = TurnHistory::spawn(&bus, TurnHistoryRetention::default());
         Self {
             bus,
             pipelines,
             providers: None,
             metrics: Arc::new(Metrics::new()),
             status: RuntimeStatus::new(),
+            turns,
             access: Arc::new(Access::anonymous()),
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
         }
@@ -70,6 +75,13 @@ impl AppState {
     #[must_use]
     pub const fn turn_idle_timeout(&self) -> Option<Duration> {
         self.turn_idle_timeout
+    }
+
+    /// Configures retention for completed turn reconstruction history.
+    #[must_use]
+    pub fn with_turn_history_retention(self, retention: TurnHistoryRetention) -> Self {
+        self.turns.set_retention(retention);
+        self
     }
 
     /// Requires callers to present a token from `access`.
@@ -101,6 +113,12 @@ impl AppState {
     #[must_use]
     pub fn status(&self) -> RuntimeStatus {
         self.status.clone()
+    }
+
+    /// Server-owned turn reconstruction read model.
+    #[must_use]
+    pub fn turns(&self) -> Arc<TurnHistory> {
+        Arc::clone(&self.turns)
     }
 
     /// Makes `providers` available to conversations.

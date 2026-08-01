@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
 use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
+use crate::turns::TurnHistoryRetention;
 
 /// Base URL of an OpenAI-compatible server.
 const BASE_URL: &str = "CONDUIT_OPENAI_BASE_URL";
@@ -34,9 +36,17 @@ const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
 /// How long a turn may publish nothing before it is abandoned, in seconds.
 /// `0` removes the bound.
 const TURN_IDLE_TIMEOUT: &str = "CONDUIT_TURN_IDLE_TIMEOUT_SECS";
+/// Maximum completed reconstructed turns retained in memory. `0` removes the bound.
+const TURN_HISTORY_MAX_TURNS: &str = "CONDUIT_TURN_HISTORY_MAX_TURNS";
+/// Maximum age for completed reconstructed turns, in seconds. `0` removes the bound.
+const TURN_HISTORY_RETENTION: &str = "CONDUIT_TURN_HISTORY_RETENTION_SECS";
 
-/// Directory to keep pipeline definitions in. Unset means memory only.
+/// Base directory for Conduit-managed local data.
+const DATA_DIR: &str = "CONDUIT_DATA_DIR";
+/// Directory to keep pipeline definitions in. Unset means the default data directory.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
+/// Explicit value for a disposable in-memory pipeline store.
+const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
 const DATABASE_URL: &str = "CONDUIT_DATABASE_URL";
 
@@ -97,18 +107,27 @@ pub async fn access_from_env() -> Result<Access> {
 ///
 /// Returns [`Error::Config`] if the configured directory cannot be used.
 pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
+    store_from_vars(&std::env::vars().collect()).await
+}
+
+/// Opens the pipeline store described by `vars`.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn store_from_vars(vars: &HashMap<String, String>) -> Result<Arc<dyn PipelineStore>> {
     #[cfg(feature = "postgres")]
-    if let Ok(url) = std::env::var(DATABASE_URL) {
-        if !url.is_empty() {
+    if let Some(url) = vars.get(DATABASE_URL) {
+        if !url.trim().is_empty() {
             // A shared database is what more than one replica needs, so it
             // wins over a directory only this process can see.
             tracing::info!("storing pipelines in PostgreSQL");
-            return Ok(Arc::new(conduit_store::PostgresStore::connect(&url).await?));
+            return Ok(Arc::new(conduit_store::PostgresStore::connect(url).await?));
         }
     }
 
     #[cfg(not(feature = "postgres"))]
-    if std::env::var(DATABASE_URL).is_ok_and(|url| !url.is_empty()) {
+    if vars.get(DATABASE_URL).is_some_and(|url| !url.trim().is_empty()) {
         // Silently falling back to memory would lose pipelines a deployment
         // clearly meant to keep.
         return Err(Error::Config(format!(
@@ -117,19 +136,52 @@ pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
         )));
     }
 
-    match std::env::var(PIPELINE_DIR) {
-        Ok(directory) if !directory.is_empty() => {
-            tracing::info!(%directory, "storing pipelines on disk");
-            Ok(Arc::new(FileStore::open(directory).await?))
-        }
-        _ => {
+    match vars.get(PIPELINE_DIR).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        Some(MEMORY_PIPELINE_DIR) => {
             tracing::warn!(
-                "pipelines are kept in memory and will be lost on restart; set \
-                 {PIPELINE_DIR} to keep them"
+                "{PIPELINE_DIR} is {MEMORY_PIPELINE_DIR}: pipelines are kept in memory and \
+                 will be lost on restart"
             );
             Ok(Arc::new(MemoryStore::new()))
         }
+        Some(directory) => {
+            tracing::info!(%directory, "storing pipelines on disk");
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+        None => {
+            let directory = default_pipeline_dir(vars)?;
+            tracing::info!(
+                directory = %directory.display(),
+                "storing pipelines in the default local data directory"
+            );
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
     }
+}
+
+fn default_pipeline_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    if let Some(directory) =
+        vars.get(DATA_DIR).map(|value| value.trim()).filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(directory).join("pipelines"));
+    }
+
+    if let Some(directory) =
+        vars.get("XDG_DATA_HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(directory).join("conduit").join("pipelines"));
+    }
+
+    if let Some(home) =
+        vars.get("HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(home).join(".local/share/conduit/pipelines"));
+    }
+
+    Err(Error::Config(format!(
+        "cannot choose a default pipeline directory; set {PIPELINE_DIR}, {DATA_DIR}, \
+         XDG_DATA_HOME, or HOME"
+    )))
 }
 
 /// What a configuration registered, for logging and for deciding whether any
@@ -197,6 +249,65 @@ fn turn_idle_timeout(vars: &HashMap<String, String>) -> Result<Option<Duration>>
     })
 }
 
+/// Reads turn-history retention bounds from `vars`.
+///
+/// Unset or empty values use bounded defaults. `0` removes one bound, and
+/// invalid values fail startup rather than leaving retention to guess what was
+/// meant.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if either configured value is not a whole number.
+pub fn turn_history_retention_from_vars(
+    vars: &HashMap<String, String>,
+) -> Result<TurnHistoryRetention> {
+    let retention = TurnHistoryRetention {
+        max_turns: count_or(
+            vars,
+            TURN_HISTORY_MAX_TURNS,
+            TurnHistoryRetention::default().max_turns,
+        )?,
+        max_age: seconds_or(
+            vars,
+            TURN_HISTORY_RETENTION,
+            TurnHistoryRetention::default().max_age,
+            || {
+                tracing::warn!(
+                    "{TURN_HISTORY_RETENTION} is 0, so completed turn history has no age bound"
+                );
+            },
+        )?,
+    };
+    if retention.max_turns.is_none() && retention.max_age.is_none() {
+        tracing::warn!(
+            "{TURN_HISTORY_MAX_TURNS} and {TURN_HISTORY_RETENTION} are both 0, so completed \
+             turn history is unbounded"
+        );
+    }
+    Ok(retention)
+}
+
+fn count_or(
+    vars: &HashMap<String, String>,
+    name: &str,
+    fallback: Option<usize>,
+) -> Result<Option<usize>> {
+    let Some(value) =
+        vars.get(name).map(|value| value.trim()).filter(|value| !value.is_empty())
+    else {
+        return Ok(fallback);
+    };
+
+    let count: usize = value
+        .parse()
+        .map_err(|_| Error::Config(format!("{name} must be a whole number, got `{value}`")))?;
+    if count == 0 {
+        tracing::warn!("{name} is 0, so completed turn history has no count bound");
+        return Ok(None);
+    }
+    Ok(Some(count))
+}
+
 /// Reads a duration in whole seconds from `vars`, or `fallback` if unset.
 ///
 /// `0` means no bound, and calls `on_removed` so a deployment that removed one
@@ -248,6 +359,7 @@ pub fn from_env() -> Result<(Providers, Registered)> {
 /// Returns [`Error::Config`] if a provider is configured but cannot be built.
 pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registered)> {
     let mut providers = Providers::new();
+    let _ = turn_history_retention_from_vars(vars)?;
     let mut registered =
         Registered { turn_idle_timeout: turn_idle_timeout(vars)?, ..Registered::default() };
 
@@ -295,9 +407,16 @@ pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registere
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conduit_core::graph::PipelineGraph;
 
     fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(key, value)| ((*key).to_owned(), (*value).to_owned())).collect()
+    }
+
+    fn temp_data_dir(name: &str) -> String {
+        let directory = std::env::temp_dir()
+            .join(format!("conduit-config-test-{name}-{}", uuid::Uuid::new_v4()));
+        directory.display().to_string()
     }
 
     #[test]
@@ -305,6 +424,30 @@ mod tests {
         let (providers, registered) = from_vars(&vars(&[])).expect("builds");
         assert!(registered.is_empty());
         assert!(providers.llm().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipeline_storage_defaults_to_a_persistent_data_directory() {
+        let data_dir = temp_data_dir("default-store");
+        let vars = vars(&[("CONDUIT_DATA_DIR", &data_dir)]);
+        let before = store_from_vars(&vars).await.expect("opens");
+        before.put("kitchen", PipelineGraph::new("kitchen")).await.expect("stores");
+
+        let after = store_from_vars(&vars).await.expect("reopens");
+
+        assert_eq!(after.list().await.expect("lists"), ["kitchen"]);
+        tokio::fs::remove_dir_all(&data_dir).await.expect("cleans up");
+    }
+
+    #[tokio::test]
+    async fn pipeline_storage_uses_memory_only_when_explicitly_requested() {
+        let vars = vars(&[(PIPELINE_DIR, ":memory:")]);
+        let before = store_from_vars(&vars).await.expect("opens");
+        before.put("kitchen", PipelineGraph::new("kitchen")).await.expect("stores");
+
+        let after = store_from_vars(&vars).await.expect("reopens");
+
+        assert!(after.list().await.expect("lists").is_empty());
     }
 
     #[test]

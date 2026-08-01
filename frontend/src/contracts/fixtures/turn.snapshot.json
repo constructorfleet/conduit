@@ -1,0 +1,57 @@
+{
+  "conversation_id": "00000000-0000-0000-0000-000000000002",
+  "ended_at": "2026-08-01T01:02:02Z",
+  "items": [
+    {
+      "evidence": [
+        "00000000-0000-0000-0000-00000000012d"
+      ],
+      "id": "assistant-preamble-1",
+      "kind": "spoken_segment",
+      "role": "assistant_preamble",
+      "sequence": 2,
+      "started_at": "2026-08-01T01:02:00Z",
+      "text": "I will check the lights."
+    },
+    {
+      "calls": [
+        {
+          "duration_ms": 34,
+          "evidence": [
+            "00000000-0000-0000-0000-00000000012e",
+            "00000000-0000-0000-0000-00000000012f",
+            "00000000-0000-0000-0000-000000000130"
+          ],
+          "id": "call_contract",
+          "name": "lights.turn_on",
+          "status": "completed"
+        }
+      ],
+      "completed_at": "2026-08-01T01:02:01Z",
+      "evidence": [
+        "00000000-0000-0000-0000-00000000012c"
+      ],
+      "id": "round-1",
+      "kind": "tool_batch",
+      "model_round": 1,
+      "sequence": 3,
+      "started_at": "2026-08-01T01:02:00Z"
+    },
+    {
+      "evidence": [
+        "00000000-0000-0000-0000-000000000131"
+      ],
+      "id": "assistant-response-1",
+      "kind": "spoken_segment",
+      "role": "assistant_response",
+      "sequence": 4,
+      "started_at": "2026-08-01T01:02:01Z",
+      "text": "The lights are on."
+    }
+  ],
+  "pipeline_name": "kitchen",
+  "sequence": 5,
+  "started_at": "2026-08-01T01:01:59Z",
+  "status": "completed",
+  "turn_id": "00000000-0000-0000-0000-000000000003"
+}

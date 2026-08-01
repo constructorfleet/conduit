@@ -68,6 +68,50 @@ _Avoid_: Offline mode
 An operator-facing view of a conversation turn as an ordered story of invoked components, events, timing, outputs, and failures. Turn reconstruction is the primary purpose of event inspection; the raw event stream is secondary.
 _Avoid_: Event log, firehose
 
+**Turn Reconstruction Contract**:
+The server-owned API/read-model shape for a reconstructed turn, derived from raw runtime events while preserving references back to those events. UI clients may render this contract differently, but should not invent turn ordering, tool grouping, spoken segment boundaries, or pipeline attribution themselves.
+_Avoid_: Frontend reconstruction, derived event UI
+
+**Live Turn Reconstruction**:
+The operator-facing reconstruction of a turn while it is still running. It updates from runtime events as they arrive and may be incomplete until the turn reaches a terminal outcome.
+_Avoid_: Live event log
+
+**Turn History**:
+The queryable set of completed or recently observed turn reconstructions available after live streaming has moved on. Turn history exists so operators can inspect failures and outcomes without depending on a browser-local event buffer.
+_Avoid_: Browser history, cached events
+
+**Raw Event Evidence**:
+The original event envelopes retained behind a turn reconstruction for diagnostics, contract verification, and reconstruction debugging. Raw event evidence supports the reconstruction contract but is not the primary operator-facing representation of a turn.
+_Avoid_: Primary event view, UI source of truth
+
+**Sensitive Tool Evidence**:
+Tool arguments and result payloads retained with raw event evidence for diagnostics but omitted from the default operator-facing reconstruction. Sensitive tool evidence may be exposed only through an explicit inspection path that can apply redaction and access controls.
+_Avoid_: Timeline detail, default tool output
+
+**Diagnostic Payload Access**:
+The explicit, higher-trust inspection path for sensitive tool evidence. Diagnostic payload access is separate from ordinary turn reconstruction viewing and should support redaction before any unredacted payload exposure is considered.
+_Avoid_: Normal operator view, raw details toggle
+
+**Spoken Segment**:
+A text span intentionally sent to speech synthesis during a turn. Spoken segments distinguish assistant preambles, tool-spoken output, and final assistant responses rather than treating language-model token deltas as speech boundaries.
+_Avoid_: Token stream, transcript chunk
+
+**Tool Batch**:
+The set of tool calls requested by one model response and executed concurrently before the next model round. A tool batch may overlap a spoken assistant preamble and contains the lifecycle, outcome, and errors of each requested call.
+_Avoid_: Tool list, tool event group
+
+**Reconstruction Item**:
+A stable, addressable part of a turn reconstruction, such as a spoken segment, tool batch, tool call, component step, or raw event reference. Reconstruction item identity should be stable across live updates and later history queries.
+_Avoid_: Timeline row, projection index
+
+**Turn Status**:
+The coarse outcome state of a reconstructed turn, such as running, completed, cancelled, failed, or degraded. Interruption is presented from a cancelled turn's reason rather than modeled as its own top-level status.
+_Avoid_: Interruption status
+
+**Reconstruction Boundary Event**:
+A runtime event that declares a boundary the runtime knows directly, such as a spoken segment starting or a tool batch beginning. Reconstruction boundary events prevent the server read model and UI from inferring speech or concurrency boundaries from nearby lower-level events.
+_Avoid_: Inferred boundary, UI grouping hint
+
 **Pipeline Health**:
 An operator-facing state that combines whether a pipeline is configured and runnable with the recent outcomes of real turns through that pipeline. A pipeline can be unhealthy because a recent turn failed, including synthesis failures after speech generation was attempted, and remains unhealthy until a later successful turn proves recovery.
 _Avoid_: Validity, readiness

@@ -24,6 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let access = conduit_api::config::access_from_env().await?;
 
     let (providers, registered) = conduit_api::config::from_env()?;
+    let turn_history_retention =
+        conduit_api::config::turn_history_retention_from_vars(&std::env::vars().collect())?;
     for description in &registered.descriptions {
         tracing::info!(provider = %description, "registered provider");
     }
@@ -31,7 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = conduit_api::config::store_from_env().await?;
     let mut state = AppState::with_store(EventBus::default(), store)
         .with_access(access)
-        .with_turn_idle_timeout(registered.turn_idle_timeout);
+        .with_turn_idle_timeout(registered.turn_idle_timeout)
+        .with_turn_history_retention(turn_history_retention);
     if !registered.is_empty() {
         state = state.with_providers(providers);
     }

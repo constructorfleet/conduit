@@ -9,7 +9,7 @@ mod fakes;
 use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
-use conduit_core::event::Event;
+use conduit_core::event::{Event, SpokenSegmentRole};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_provider::llm::Role;
@@ -123,6 +123,61 @@ async fn the_preamble_is_spoken_while_the_tool_runs() {
 
     assert_eq!(tool.invocations().len(), 1);
     assert_eq!(tts.spoken(), ["Sure, let me look that up.", "It is sunny."]);
+}
+
+#[tokio::test]
+async fn tool_turns_emit_reconstruction_boundary_events() {
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let call = ToolCallId::new("call_abc123");
+    let tts = FakeTts::new();
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("weather")]))
+        .with_llm(FakeLlm::scripted(vec![
+            vec![token("Let me check"), tool_call(call.clone(), "search"), wants_tools()],
+            vec![token("It is sunny"), stop()],
+        ]))
+        .with_tool(FakeTool::new("search", serde_json::json!({ "forecast": "sunny" })))
+        .with_tts(tts.clone());
+
+    let runner =
+        Runner::prepare(&graph_with_tool(), &providers, bus).expect("graph is executable");
+    run_turn(&runner).await;
+
+    let events = drain(&mut subscription).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToolBatchStarted { calls, model_round, .. }
+                if calls == &vec![call.clone()] && *model_round == 1
+        )),
+        "expected a tool batch boundary: {:?}",
+        names(&events)
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::SpokenSegmentStarted {
+                role: SpokenSegmentRole::AssistantPreamble,
+                text,
+                ..
+            } if text == "Let me check"
+        )),
+        "expected a preamble boundary: {:?}",
+        names(&events)
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::SpokenSegmentStarted {
+                role: SpokenSegmentRole::AssistantResponse,
+                text,
+                ..
+            } if text == "It is sunny"
+        )),
+        "expected a final response boundary: {:?}",
+        names(&events)
+    );
 }
 
 #[tokio::test]

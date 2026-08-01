@@ -59,10 +59,13 @@ empty list to allow none.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CONDUIT_DATABASE_URL` | unset | PostgreSQL URL for pipeline storage. Takes precedence over `CONDUIT_PIPELINE_DIR` when the `postgres` feature is enabled. |
-| `CONDUIT_PIPELINE_DIR` | unset | Directory for JSON pipeline files. Used when no database URL is configured. |
+| `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data. |
+| `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage. |
 
-If neither variable is set, pipelines are stored in memory and lost on restart.
-The server logs a warning for that mode.
+If neither database nor pipeline directory is set, pipelines are stored as JSON
+files in the default local data directory and survive API restarts. The server
+uses memory only when `CONDUIT_PIPELINE_DIR=:memory:` is set, and logs a warning
+for that disposable mode.
 
 The `conduit-api` crate enables PostgreSQL support by default. A
 `--no-default-features` build refuses to start if `CONDUIT_DATABASE_URL` is set.
