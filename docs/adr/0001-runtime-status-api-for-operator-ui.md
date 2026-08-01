@@ -31,3 +31,13 @@ operator-facing recent activity window. These states are deliberately separate:
 a connected socket can exist before meaningful activity, and recent activity
 can remain after the socket closes. A process restart clears both projections
 until new sockets or events appear.
+
+Provider Status is projected from the runtime provider registry and stored
+pipeline graph references until a durable Provider Settings store exists.
+Registered providers are Configured. Their `Provider::health()` result is the
+reachability check, so saved or registered settings do not imply Reachable.
+Proven Provider status is recorded only when a later snapshot can tie a
+successfully completed turn's invoked component back to the provider referenced
+by the stored graph. This keeps Provider Status separate from Pipeline Health:
+provider warnings can explain risk, but a pipeline is recovered only by a
+successful turn through the pipeline.

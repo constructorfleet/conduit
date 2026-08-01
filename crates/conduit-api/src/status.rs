@@ -5,7 +5,7 @@
 //! vocabulary and small semantic helpers; runtime projection code belongs in
 //! the status API implementation.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -14,6 +14,7 @@ use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Envelope, Event};
 use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
+use conduit_provider::Health;
 use conduit_runtime::Runner;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -189,7 +190,7 @@ pub struct ProviderStatus {
 }
 
 /// Provider capability kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     /// Speech-to-text provider.
@@ -444,21 +445,27 @@ async fn snapshot(state: &AppState) -> Result<OperatorStatusSnapshot, ApiError> 
         .map_err(|error| ApiError::unavailable(error.to_string()))?;
     let providers = state.providers();
 
-    let mut pipelines = Vec::new();
+    let mut graphs = Vec::new();
     for name in names {
         let graph = state
             .pipeline(&name)
             .await
             .map_err(|error| ApiError::unavailable(error.to_string()))?
             .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
-        pipelines.push(project_pipeline(&name, &graph, providers.as_deref(), &projection));
+        graphs.push((name, graph));
     }
 
+    let pipelines = graphs
+        .iter()
+        .map(|(name, graph)| project_pipeline(name, graph, providers.as_deref(), &projection))
+        .collect::<Vec<_>>();
     let launch_state = if pipelines.iter().any(|pipeline| pipeline.usable) {
         LaunchState::OperationsWorkspace
     } else {
         LaunchState::FirstRunSetup
     };
+    let provider_statuses =
+        project_provider_statuses(&graphs, providers.as_deref(), &projection).await;
 
     let recent_after =
         generated_at - TimeDelta::seconds(RECENT_SATELLITE_WINDOW_SECONDS as i64);
@@ -467,7 +474,7 @@ async fn snapshot(state: &AppState) -> Result<OperatorStatusSnapshot, ApiError> 
         generated_at,
         runtime: RuntimeState { launch_state, stale_state: StaleState::Fresh },
         pipelines,
-        providers: Vec::new(),
+        providers: provider_statuses,
         satellites: SatelliteStatus {
             connected: projection.connected_satellites.values().cloned().collect(),
             recently_active: projection
@@ -543,8 +550,286 @@ fn project_pipeline(
         usable,
         health: PipelineHealth { state, summary, last_successful_turn, last_failed_turn },
         components: project_components(graph, runtime, usable),
-        affected_providers: Vec::new(),
+        affected_providers: pipeline_provider_ids(graph),
     }
+}
+
+async fn project_provider_statuses(
+    graphs: &[(String, PipelineGraph)],
+    providers: Option<&conduit_runtime::Providers>,
+    projection: &Projection,
+) -> Vec<ProviderStatus> {
+    let references = provider_references(graphs);
+    let proven = proven_providers(graphs, projection);
+    let mut statuses = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(providers) = providers {
+        collect_stt_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
+        collect_llm_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
+        collect_tts_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
+        collect_tool_statuses(providers, &references, &proven, &mut statuses, &mut seen).await;
+    }
+
+    for kind in [ProviderKind::Llm, ProviderKind::Stt, ProviderKind::Tts] {
+        if provider_kind_missing(kind, &seen) {
+            let id = unavailable_slot_id(kind);
+            let key = ProviderKey { kind, id: id.to_owned() };
+            if seen.insert(key.clone()) {
+                let pipelines = references.get(&key).cloned().unwrap_or_default();
+                statuses.push(unavailable_provider(key, unavailable_message(kind), pipelines));
+            }
+        }
+    }
+
+    for (key, pipelines) in references {
+        if seen.insert(key.clone()) {
+            statuses.push(unavailable_provider(
+                key.clone(),
+                format!("provider `{}` is referenced but not registered", key.id),
+                pipelines,
+            ));
+        }
+    }
+
+    statuses.sort_by(|left, right| left.id.cmp(&right.id).then(left.kind.cmp(&right.kind)));
+    statuses
+}
+
+async fn collect_stt_statuses(
+    providers: &conduit_runtime::Providers,
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    let names = providers.stt().names().map(str::to_owned).collect::<Vec<_>>();
+    for name in names {
+        let provider = providers.stt().require(&name).expect("listed provider exists");
+        let health = provider.health().await;
+        push_registered_status(
+            ProviderKey { kind: ProviderKind::Stt, id: name },
+            health,
+            references,
+            proven,
+            statuses,
+            seen,
+        );
+    }
+}
+
+async fn collect_llm_statuses(
+    providers: &conduit_runtime::Providers,
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    let names = providers.llm().names().map(str::to_owned).collect::<Vec<_>>();
+    for name in names {
+        let provider = providers.llm().require(&name).expect("listed provider exists");
+        let health = provider.health().await;
+        push_registered_status(
+            ProviderKey { kind: ProviderKind::Llm, id: name },
+            health,
+            references,
+            proven,
+            statuses,
+            seen,
+        );
+    }
+}
+
+async fn collect_tts_statuses(
+    providers: &conduit_runtime::Providers,
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    let names = providers.tts().names().map(str::to_owned).collect::<Vec<_>>();
+    for name in names {
+        let provider = providers.tts().require(&name).expect("listed provider exists");
+        let health = provider.health().await;
+        push_registered_status(
+            ProviderKey { kind: ProviderKind::Tts, id: name },
+            health,
+            references,
+            proven,
+            statuses,
+            seen,
+        );
+    }
+}
+
+async fn collect_tool_statuses(
+    providers: &conduit_runtime::Providers,
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    let names = providers.tools().names().map(str::to_owned).collect::<Vec<_>>();
+    for name in names {
+        let provider = providers.tools().require(&name).expect("listed provider exists");
+        let health = provider.health().await;
+        push_registered_status(
+            ProviderKey { kind: ProviderKind::Tool, id: name },
+            health,
+            references,
+            proven,
+            statuses,
+            seen,
+        );
+    }
+}
+
+fn push_registered_status(
+    key: ProviderKey,
+    health: Health,
+    references: &HashMap<ProviderKey, BTreeSet<String>>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    statuses: &mut Vec<ProviderStatus>,
+    seen: &mut HashSet<ProviderKey>,
+) {
+    seen.insert(key.clone());
+    let proven_by_turn = proven.get(&key).copied();
+    let reachable = health.is_usable();
+    let (state, message) = match health {
+        Health::Healthy => (ProviderStatusState::Reachable, None),
+        Health::Degraded { reason } => (ProviderStatusState::Reachable, Some(reason)),
+        Health::Unhealthy { reason } => (ProviderStatusState::Configured, Some(reason)),
+    };
+    statuses.push(ProviderStatus {
+        id: key.id.clone(),
+        kind: key.kind,
+        state: if proven_by_turn.is_some() { ProviderStatusState::Proven } else { state },
+        configured: true,
+        reachable,
+        proven_by_turn,
+        message,
+        affects_pipelines: references
+            .get(&key)
+            .map(|pipelines| pipelines.iter().cloned().collect())
+            .unwrap_or_default(),
+    });
+}
+
+fn unavailable_provider(
+    key: ProviderKey,
+    message: impl Into<String>,
+    pipelines: BTreeSet<String>,
+) -> ProviderStatus {
+    ProviderStatus {
+        id: key.id,
+        kind: key.kind,
+        state: ProviderStatusState::Unavailable,
+        configured: false,
+        reachable: false,
+        proven_by_turn: None,
+        message: Some(message.into()),
+        affects_pipelines: pipelines.into_iter().collect(),
+    }
+}
+
+fn provider_references(
+    graphs: &[(String, PipelineGraph)],
+) -> HashMap<ProviderKey, BTreeSet<String>> {
+    let mut references = HashMap::<ProviderKey, BTreeSet<String>>::new();
+    for (pipeline, graph) in graphs {
+        for node in graph.topological_order().unwrap_or_default() {
+            let Some(kind) = provider_kind_for_node(node.kind) else {
+                continue;
+            };
+            references
+                .entry(ProviderKey { kind, id: node.provider.clone() })
+                .or_default()
+                .insert(pipeline.clone());
+        }
+    }
+    references
+}
+
+fn proven_providers(
+    graphs: &[(String, PipelineGraph)],
+    projection: &Projection,
+) -> HashMap<ProviderKey, TurnId> {
+    let mut proven = HashMap::new();
+    for (pipeline, graph) in graphs {
+        let Some(runtime) = projection.pipelines.get(pipeline) else {
+            continue;
+        };
+        let Some(successful_turn) = runtime.last_successful_turn else {
+            continue;
+        };
+        for node in graph.topological_order().unwrap_or_default() {
+            let Some(component) = component_for_node_kind(node.kind) else {
+                continue;
+            };
+            let Some(kind) = provider_kind_for_node(node.kind) else {
+                continue;
+            };
+            let Some(recorded) = runtime.components.get(&component) else {
+                continue;
+            };
+            if recorded.state == ComponentHealthState::Healthy
+                && recorded.last_turn == Some(successful_turn)
+            {
+                proven.insert(ProviderKey { kind, id: node.provider.clone() }, successful_turn);
+            }
+        }
+    }
+    proven
+}
+
+fn pipeline_provider_ids(graph: &PipelineGraph) -> Vec<String> {
+    graph
+        .topological_order()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|node| provider_kind_for_node(node.kind).is_some())
+        .map(|node| node.provider.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
+    match kind {
+        NodeKind::Stt => Some(ProviderKind::Stt),
+        NodeKind::Llm => Some(ProviderKind::Llm),
+        NodeKind::Tool => Some(ProviderKind::Tool),
+        NodeKind::Tts => Some(ProviderKind::Tts),
+        _ => None,
+    }
+}
+
+fn provider_kind_missing(kind: ProviderKind, seen: &HashSet<ProviderKey>) -> bool {
+    !seen.iter().any(|key| key.kind == kind)
+}
+
+fn unavailable_slot_id(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Stt => "stt",
+        ProviderKind::Llm => "llm",
+        ProviderKind::Tool => "tool",
+        ProviderKind::Tts => "tts",
+    }
+}
+
+fn unavailable_message(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Stt => "no speech-to-text provider is registered",
+        ProviderKind::Llm => "no language-model provider is registered",
+        ProviderKind::Tool => "no tool provider is registered",
+        ProviderKind::Tts => "no text-to-speech provider is registered",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderKey {
+    kind: ProviderKind,
+    id: String,
 }
 
 fn project_components(
@@ -614,6 +899,16 @@ fn default_event_stream_contract() -> EventStreamContract {
             SnapshotEventBinding {
                 resource: SnapshotResource::RecentFailures,
                 events: vec!["StageFailed".to_owned(), "ConversationCompleted".to_owned()],
+            },
+            SnapshotEventBinding {
+                resource: SnapshotResource::ProviderStatus,
+                events: vec![
+                    "SpeechFinal".to_owned(),
+                    "LlmFinished".to_owned(),
+                    "ToolCompleted".to_owned(),
+                    "TtsFinished".to_owned(),
+                    "ConversationCompleted".to_owned(),
+                ],
             },
             SnapshotEventBinding {
                 resource: SnapshotResource::SatelliteStatus,
