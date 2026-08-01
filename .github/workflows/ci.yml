@@ -56,6 +56,26 @@ jobs:
       # The default feature set must build too, and so must the lean one.
       - run: cargo build --workspace --no-default-features
 
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npm run lint
+      - working-directory: frontend
+        run: npm run test
+      - working-directory: frontend
+        run: npm run build
+      - working-directory: frontend
+        run: npm run format
+
   # The repository ruleset enforces a minimum coverage percentage and a maximum
   # drop against the default branch, and that rule blocks a merge when analysis
   # is missing or fails — not only when coverage is low. Nothing produced

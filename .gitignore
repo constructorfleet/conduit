@@ -7,6 +7,8 @@
 __pycache__/
 .venv
 /.cargo/registry
+.playwright-cli/
+output/playwright/
 
 # ESPHome build output and credentials (Wi-Fi password, API encryption key).
 .esphome/
