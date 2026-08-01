@@ -83,7 +83,10 @@ pub(crate) async fn converse(
         .map_err(|error| ApiError::unprocessable(error.to_string()))?;
     let runner = runner
         .with_format(format)
-        .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?
+        // Without this, a provider that accepts a request and never answers
+        // holds the socket open for as long as the device is willing to wait.
+        .with_idle_timeout(state.turn_idle_timeout());
 
     tracing::info!(pipeline = %name, device = %device.name, "conversation socket opened");
     let id = device.id;

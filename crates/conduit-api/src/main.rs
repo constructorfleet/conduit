@@ -29,7 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let store = conduit_api::config::store_from_env().await?;
-    let mut state = AppState::with_store(EventBus::default(), store).with_access(access);
+    let mut state = AppState::with_store(EventBus::default(), store)
+        .with_access(access)
+        .with_turn_idle_timeout(registered.turn_idle_timeout);
     if !registered.is_empty() {
         state = state.with_providers(providers);
     }

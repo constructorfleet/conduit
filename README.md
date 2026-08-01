@@ -123,6 +123,7 @@ Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.
 | `CONDUIT_TOKENS` | — | Token file; required unless `CONDUIT_ALLOW_ANONYMOUS` is set |
 | `CONDUIT_ALLOW_ANONYMOUS` | — | `1` serves the API to anyone who can reach it |
 | `CONDUIT_LOG` | `info` | `tracing` filter |
+| `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60` | How long a turn may publish nothing before it is abandoned; `0` removes the bound |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | — | Directory to keep pipelines in; unset means memory only |
 | `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
@@ -328,6 +329,19 @@ ended by `stop` is cancelled as `user_requested`; one whose socket simply died
 is cancelled as `disconnected`. Keeping those apart is the point — a metric that
 merged them could not answer how often people interrupt.
 
+A turn is also bounded in time, so a provider that accepts a request and never
+answers cannot hold the socket for as long as the device is willing to wait.
+What is bounded is *silence*, not length: every event a turn publishes counts as
+progress, so a reply that keeps arriving is never given up on however long it
+takes, while one that stops reporting for `CONDUIT_TURN_IDLE_TIMEOUT_SECS` (60
+by default; `0` removes the bound) is abandoned. Defining progress as publishing
+means one deadline covers every stage, including providers this runtime has
+never heard of. The device gets a `failed` frame naming the stage that went
+quiet, and the turn is cancelled as `idle_timeout` — distinct from
+`user_requested`, because a wedged provider and an impatient person call for
+different responses. An explicit `stop` outranks the deadline when both are due
+at once: a person who pressed the button did press it.
+
 Everything else about the turn — partial transcripts, tool calls, timings —
 is on `/v1/events`, tagged with the conversation id the socket announces. That
 keeps the audio path free of anything that is not audio, and it is why the
@@ -406,7 +420,7 @@ instrumentation it does not know about.
 | --- | --- |
 | `conduit_time_to_first_audio_seconds` | How long before the assistant *started* speaking — the latency a person actually feels |
 | `conduit_turn_duration_seconds` | How long a whole turn took, by outcome |
-| `conduit_conversations_total` | Turns by outcome: `completed`, `user_requested` (a `stop` command), `disconnected` (the listener left), `error` |
+| `conduit_conversations_total` | Turns by outcome: `completed`, `user_requested` (a `stop` command), `idle_timeout` (a stage stopped reporting progress), `disconnected` (the listener left), `error` |
 | `conduit_conversations_active` | Turns in progress right now |
 | `conduit_tool_calls_total`, `conduit_tool_duration_seconds` | Tool volume and cost, by outcome: `completed`, `failed`, `awaiting_confirmation` |
 | `conduit_tool_calls_requested_total` | Calls the model asked for; minus the outcomes above, how many are still in flight |
@@ -416,11 +430,11 @@ instrumentation it does not know about.
 | `conduit_conversations_forgotten_total` | Turns evicted from tracking before they ended, so a leak of half-finished turns is visible rather than silently skewing the histograms |
 | `conduit_events_dropped_total` | Events a subscriber lost to lag, labelled with which subscriber — a consumer that cannot keep up |
 
-The collector can also label a cancellation `idle_timeout`, `shutdown`, or
-`barge_in`, but nothing in the runtime constructs those reasons yet, so they do
-not appear on a real scrape. `barge_in` is reserved for voice detected over the
-assistant, which is not implemented; a turn the client asked to stop is
-`user_requested` instead.
+The collector can also label a cancellation `shutdown` or `barge_in`, but
+nothing in the runtime constructs those two reasons yet, so they do not appear
+on a real scrape. `barge_in` is reserved for voice detected over the assistant,
+which is not implemented; a turn the client asked to stop is `user_requested`
+instead.
 
 Earlier versions labelled *every* turn that lost its listener `barge_in`,
 whether the client interrupted or its connection died. Those are now
@@ -528,10 +542,6 @@ duplicate, so the two-model arrangement described under
 model can describe it, and a `router` node choosing between the two validates
 as a graph; the runtime refuses both, so the shape is expressible before it is
 executable rather than silently mis-run.
-
-**Nothing times out.** A speech or model provider that accepts a request and
-never answers stalls the turn for as long as the client stays connected. The
-bounded output channel bounds memory, not time.
 
 **Barge-in is not detected, only requested.** A client can say `stop`, and that
 turn is cancelled as `user_requested`. What no one does is *notice* someone

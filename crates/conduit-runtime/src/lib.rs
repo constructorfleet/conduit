@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+pub mod deadline;
 mod emit;
 pub mod plan;
 pub mod sentences;
@@ -33,6 +34,7 @@ pub mod tools;
 mod turn;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
@@ -47,6 +49,7 @@ use conduit_provider::{ChunkStream, Registry};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+pub use deadline::DEFAULT_IDLE_TIMEOUT;
 pub use plan::Plan;
 pub use stop::Stop;
 
@@ -161,6 +164,44 @@ pub struct Conversation {
     /// asked, and the cancellation is reported as
     /// [`CancelReason::UserRequested`](conduit_core::event::CancelReason::UserRequested).
     pub stop: Stop,
+    /// The task running the turn, so a caller holds it rather than losing it.
+    ///
+    /// Kept so that a shutdown has something to wait on or abort. A turn used to
+    /// be spawned and forgotten, which meant a process shutting down could not
+    /// tell whether anyone was mid-sentence, and a turn wedged on a provider that
+    /// never answers had nothing left that could reach it.
+    ///
+    /// Prefer [`Conversation::stop`] to aborting: a stop lets the turn publish
+    /// why it ended, so metrics and subscribers see a cancelled conversation
+    /// rather than a trace that goes silent. Aborting is for shutdown, where
+    /// there may be no time left to be polite.
+    turn: tokio::task::JoinHandle<()>,
+}
+
+impl Conversation {
+    /// Waits for the turn to finish.
+    ///
+    /// Resolves once the turn has published its outcome. A turn always ends by
+    /// itself eventually — it completes, it fails, it is asked to stop, or it
+    /// runs out of idle time — so this cannot wait forever unless a deployment
+    /// removed the deadline with [`Runner::with_idle_timeout`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the turn was aborted or panicked.
+    pub async fn finished(self) -> std::result::Result<(), tokio::task::JoinError> {
+        self.turn.await
+    }
+
+    /// Stops the turn immediately, without letting it say why.
+    ///
+    /// For shutdown. Anything that can afford to be polite should use
+    /// [`Conversation::stop`] instead, which ends the turn *and* publishes the
+    /// cancellation — an aborted turn leaves its trace simply stopping, which is
+    /// indistinguishable from a crash to anyone reading the event stream.
+    pub fn abort(&self) {
+        self.turn.abort();
+    }
 }
 
 impl std::fmt::Debug for Conversation {
@@ -178,6 +219,8 @@ pub struct Runner {
     plan: Arc<Plan>,
     bus: EventBus,
     format: AudioFormat,
+    /// How long a turn may publish nothing before it is abandoned.
+    idle: Option<Duration>,
 }
 
 impl Runner {
@@ -197,7 +240,28 @@ impl Runner {
             plan: Arc::new(Plan::resolve(graph, providers)?),
             bus,
             format: AudioFormat::DEFAULT,
+            idle: Some(DEFAULT_IDLE_TIMEOUT),
         })
+    }
+
+    /// Bounds how long a turn may publish nothing before it is abandoned.
+    ///
+    /// A turn that reaches the deadline is cancelled as
+    /// [`CancelReason::IdleTimeout`](conduit_core::event::CancelReason::IdleTimeout)
+    /// and the caller is handed an [`Error::Timeout`](conduit_core::Error::Timeout)
+    /// naming the stage that went quiet. The clock restarts on every event the
+    /// turn publishes, so this bounds silence rather than length: a model
+    /// streaming tokens for two minutes is never abandoned, while one silent for
+    /// longer than the deadline is.
+    ///
+    /// Defaults to [`DEFAULT_IDLE_TIMEOUT`]. `None` removes the bound, which
+    /// leaves a provider that never answers holding the turn for as long as the
+    /// client stays connected — reasonable only when something above the runtime
+    /// already imposes a deadline of its own.
+    #[must_use]
+    pub const fn with_idle_timeout(mut self, idle: Option<Duration>) -> Self {
+        self.idle = idle;
+        self
     }
 
     /// Sets the audio format used for capture and synthesis.
@@ -287,6 +351,7 @@ impl Runner {
             self.format,
             sender,
             stop.clone(),
+            self.idle,
         );
         if let Some(speaker) = speaker {
             turn = turn.with_speaker(speaker);
@@ -296,7 +361,7 @@ impl Runner {
         }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
-        tokio::spawn(turn.run(audio).instrument(span));
-        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop }
+        let running = tokio::spawn(turn.run(audio).instrument(span));
+        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop, turn: running }
     }
 }

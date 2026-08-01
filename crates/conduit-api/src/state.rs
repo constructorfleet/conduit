@@ -1,13 +1,14 @@
 //! Shared application state.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_metrics::Metrics;
 use conduit_provider::storage::PipelineStore;
-use conduit_runtime::Providers;
+use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
 
 use crate::auth::Access;
@@ -25,6 +26,8 @@ pub struct AppState {
     metrics: Arc<Metrics>,
     /// Who is allowed to call the service API.
     access: Arc<Access>,
+    /// How long a turn may publish nothing before it is abandoned.
+    turn_idle_timeout: Option<Duration>,
 }
 
 impl AppState {
@@ -43,7 +46,26 @@ impl AppState {
             providers: None,
             metrics: Arc::new(Metrics::new()),
             access: Arc::new(Access::anonymous()),
+            turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
         }
+    }
+
+    /// Bounds how long a conversation may publish nothing before it is given up
+    /// on.
+    ///
+    /// `None` removes the bound, which leaves a provider that stops answering
+    /// holding the socket until the device disconnects. See
+    /// [`Runner::with_idle_timeout`](conduit_runtime::Runner::with_idle_timeout).
+    #[must_use]
+    pub const fn with_turn_idle_timeout(mut self, idle: Option<Duration>) -> Self {
+        self.turn_idle_timeout = idle;
+        self
+    }
+
+    /// How long a conversation may publish nothing before it is given up on.
+    #[must_use]
+    pub const fn turn_idle_timeout(&self) -> Option<Duration> {
+        self.turn_idle_timeout
     }
 
     /// Requires callers to present a token from `access`.

@@ -13,7 +13,7 @@ use std::time::Duration;
 use conduit_core::{Error, Result};
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::PipelineStore;
-use conduit_runtime::Providers;
+use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
 use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
@@ -30,6 +30,10 @@ const STT_MODEL: &str = "CONDUIT_OPENAI_STT_MODEL";
 const TTS_MODEL: &str = "CONDUIT_OPENAI_TTS_MODEL";
 /// How long the server may go silent mid-response, in seconds. `0` disables it.
 const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
+
+/// How long a turn may publish nothing before it is abandoned, in seconds.
+/// `0` removes the bound.
+const TURN_IDLE_TIMEOUT: &str = "CONDUIT_TURN_IDLE_TIMEOUT_SECS";
 
 /// Directory to keep pipeline definitions in. Unset means memory only.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
@@ -130,10 +134,22 @@ pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
 
 /// What a configuration registered, for logging and for deciding whether any
 /// providers exist at all.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Registered {
     /// Human-readable descriptions of what was registered.
     pub descriptions: Vec<String>,
+    /// How long a turn may publish nothing before it is abandoned. `None` means
+    /// an operator deliberately removed the bound.
+    pub turn_idle_timeout: Option<Duration>,
+}
+
+/// Written by hand rather than derived, because a derived `Option<Duration>`
+/// default is `None` — which here means "no timeout" and would hand an
+/// unconfigured deployment the exact hang this bound exists to prevent.
+impl Default for Registered {
+    fn default() -> Self {
+        Self { descriptions: Vec::new(), turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT) }
+    }
 }
 
 impl Registered {
@@ -156,22 +172,58 @@ impl Registered {
 /// misspelled duration silently falling back to the default is how a
 /// deployment ends up with a timeout it did not ask for.
 fn read_timeout(vars: &HashMap<String, String>) -> Result<Option<Duration>> {
-    let Some(value) = vars.get(READ_TIMEOUT).map(|value| value.trim()) else {
-        return Ok(OpenAiConfig::default().read_timeout);
-    };
-    if value.is_empty() {
-        return Ok(OpenAiConfig::default().read_timeout);
-    }
-
-    let seconds: u64 = value.parse().map_err(|_| {
-        Error::Config(format!(
-            "{READ_TIMEOUT} must be a whole number of seconds, got `{value}`"
-        ))
-    })?;
-    if seconds == 0 {
+    seconds_or(vars, READ_TIMEOUT, OpenAiConfig::default().read_timeout, || {
         tracing::warn!(
             "{READ_TIMEOUT} is 0, so a provider that stops responding will not be given up on"
         );
+    })
+}
+
+/// How long a turn may publish nothing before it is abandoned, as configured.
+///
+/// Bounds the turn rather than one provider, so it catches a stage that stalls
+/// somewhere the HTTP client's own read timeout cannot see it — including a
+/// provider that is not an HTTP client at all.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the value is not a whole number of seconds.
+fn turn_idle_timeout(vars: &HashMap<String, String>) -> Result<Option<Duration>> {
+    seconds_or(vars, TURN_IDLE_TIMEOUT, Some(DEFAULT_IDLE_TIMEOUT), || {
+        tracing::warn!(
+            "{TURN_IDLE_TIMEOUT} is 0, so a turn whose provider stops answering will hold \
+             the conversation until the client disconnects"
+        );
+    })
+}
+
+/// Reads a duration in whole seconds from `vars`, or `fallback` if unset.
+///
+/// `0` means no bound, and calls `on_removed` so a deployment that removed one
+/// says so in its logs rather than discovering it during an incident.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the value is not a whole number of seconds. A
+/// misspelled duration silently falling back to the default is how a deployment
+/// ends up with a timeout it did not ask for.
+fn seconds_or(
+    vars: &HashMap<String, String>,
+    name: &str,
+    fallback: Option<Duration>,
+    on_removed: impl FnOnce(),
+) -> Result<Option<Duration>> {
+    let Some(value) =
+        vars.get(name).map(|value| value.trim()).filter(|value| !value.is_empty())
+    else {
+        return Ok(fallback);
+    };
+
+    let seconds: u64 = value.parse().map_err(|_| {
+        Error::Config(format!("{name} must be a whole number of seconds, got `{value}`"))
+    })?;
+    if seconds == 0 {
+        on_removed();
         return Ok(None);
     }
     Ok(Some(Duration::from_secs(seconds)))
@@ -196,7 +248,8 @@ pub fn from_env() -> Result<(Providers, Registered)> {
 /// Returns [`Error::Config`] if a provider is configured but cannot be built.
 pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registered)> {
     let mut providers = Providers::new();
-    let mut registered = Registered::default();
+    let mut registered =
+        Registered { turn_idle_timeout: turn_idle_timeout(vars)?, ..Registered::default() };
 
     let base_url = vars.get(BASE_URL);
     let api_key = vars.get(API_KEY);
@@ -320,6 +373,41 @@ mod tests {
         // not ask for and no indication of why.
         let error = read_timeout(&vars(&[(READ_TIMEOUT, "30s")])).expect_err("not a number");
         assert!(error.to_string().contains(READ_TIMEOUT), "{error}");
+    }
+
+    #[test]
+    fn a_turn_is_bounded_by_default() {
+        // The deployment that configures nothing must not be the one that hangs.
+        let (_, registered) = from_vars(&vars(&[])).expect("builds");
+        assert_eq!(registered.turn_idle_timeout, Some(DEFAULT_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn a_default_registered_is_still_bounded() {
+        // `Default` is what a caller that skipped `from_vars` gets, and an
+        // `Option<Duration>` defaulting to `None` would mean no timeout at all.
+        assert_eq!(Registered::default().turn_idle_timeout, Some(DEFAULT_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn the_turn_idle_timeout_can_be_set_in_seconds() {
+        let (_, registered) = from_vars(&vars(&[(TURN_IDLE_TIMEOUT, "5")])).expect("builds");
+        assert_eq!(registered.turn_idle_timeout, Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_zero_turn_idle_timeout_removes_the_bound() {
+        // Expressible on purpose, for a deployment whose own layer above the
+        // runtime already bounds a turn.
+        let (_, registered) = from_vars(&vars(&[(TURN_IDLE_TIMEOUT, "0")])).expect("builds");
+        assert_eq!(registered.turn_idle_timeout, None);
+    }
+
+    #[test]
+    fn an_unreadable_turn_idle_timeout_is_refused_rather_than_ignored() {
+        let error =
+            from_vars(&vars(&[(TURN_IDLE_TIMEOUT, "a minute")])).expect_err("not a number");
+        assert!(error.to_string().contains(TURN_IDLE_TIMEOUT), "{error}");
     }
 
     #[test]

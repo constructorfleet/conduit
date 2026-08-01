@@ -7,10 +7,11 @@
 //! before a tool call is spoken *while* that tool runs.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
-use conduit_core::event::{CancelReason, Event, FinishReason};
+use conduit_core::event::{CancelReason, Event, FinishReason, Stage};
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
@@ -20,6 +21,7 @@ use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 
+use crate::deadline::{until_idle, Progress};
 use crate::emit::Emitter;
 use crate::plan::Plan;
 use crate::sentences;
@@ -53,6 +55,10 @@ pub struct Turn {
     speaker: Option<SpeakerId>,
     /// How a client asks this turn to stop talking.
     stop: Stop,
+    /// How long this turn may publish nothing before it is abandoned, and the
+    /// marker every publication reports through. `None` removes the bound.
+    idle: Option<Duration>,
+    progress: Progress,
     /// This turn within its conversation.
     ///
     /// One per `Turn` because the runtime holds one turn per conversation
@@ -72,20 +78,27 @@ pub struct Turn {
 
 impl Turn {
     /// Prepares a turn that will publish to `bus` and write audio to `output`.
+    ///
+    /// `idle` bounds how long the turn may publish nothing before it gives up;
+    /// `None` removes the bound.
     pub fn new(
         plan: Arc<Plan>,
         bus: EventBus,
         format: AudioFormat,
         output: Sender<Result<SpeechChunk>>,
         stop: Stop,
+        idle: Option<Duration>,
     ) -> Self {
+        let progress = Progress::default();
         Self {
             plan,
-            emitter: Emitter::new(bus, format),
+            emitter: Emitter::new(bus, format, progress.clone()),
             format,
             output,
             speaker: None,
             stop,
+            idle,
+            progress,
             turn: TurnId::new(),
             sequence: 0,
             speaking: false,
@@ -132,20 +145,53 @@ impl Turn {
         // about to spend, and can attribute everything following to that turn.
         self.emitter.emit(Event::TurnStarted { turn: self.turn });
 
-        // Raced against the whole turn rather than checked between stages, so a
-        // stop lands during whichever await is in progress — most usefully mid
-        // synthesis, which is when someone wants to interrupt. Providers are
+        // Both races wrap the whole turn rather than being checked between
+        // stages, so either lands during whichever await is in progress — most
+        // usefully mid synthesis for a stop, and mid *anything* for a deadline,
+        // since a provider can wedge at any await there is. Providers are
         // documented as safe to abandon for exactly this.
+        //
+        // The stop is the outer race so an explicit interruption is reported as
+        // one even if the turn was also out of time: a client that pressed the
+        // button did press it, and `idle_timeout` would misattribute that.
         let stop = self.stop.clone();
-        let finished = until_stopped(&stop, self.body(audio)).await;
+        let (idle, progress) = (self.idle, self.progress.clone());
+        let finished =
+            until_stopped(&stop, until_idle(&progress, idle, self.body(audio))).await;
 
         match finished {
-            Some(Some(())) => {
+            Some(Ok(Some(()))) => {
                 self.emitter.emit(Event::TtsFinished { duration_ms: self.spoken_ms });
                 self.emitter.emit(Event::ConversationCompleted);
             }
             // The turn ended itself, and published why.
-            Some(None) => {}
+            Some(Ok(None)) => {}
+            Some(Err(stalled)) => {
+                // Logged at warn: unlike a stop or a disconnection, this is
+                // nobody's decision — it is a provider that stopped answering,
+                // and an operator wants to know which stage it was.
+                tracing::warn!(
+                    ?stalled,
+                    idle_timeout_ms = idle.map(|idle| idle.as_millis()),
+                    "abandoning a turn that stopped making progress"
+                );
+                // Reported to the caller as well as the bus, because a device
+                // holding an open socket would otherwise see a reply that simply
+                // stopped, with no reason given for it.
+                //
+                // `elapsed` is the deadline that was exceeded rather than the
+                // turn's total age: it is the number an operator can act on,
+                // being the one they configured, and the age of a turn that
+                // spent most of it working says nothing about the stall.
+                let _ = self
+                    .output
+                    .send(Err(Error::Timeout {
+                        operation: stalled_operation(stalled),
+                        elapsed: idle.unwrap_or_default(),
+                    }))
+                    .await;
+                self.cancel(CancelReason::IdleTimeout);
+            }
             None => {
                 tracing::debug!("client asked the turn to stop");
                 self.cancel(CancelReason::UserRequested);
@@ -409,6 +455,25 @@ impl Turn {
     /// Publishes the end of a turn that did not complete.
     fn cancel(&self, reason: CancelReason) {
         self.emitter.emit(Event::ConversationCancelled { reason });
+    }
+}
+
+/// Names the operation a timeout is reported against.
+///
+/// The stage is named where one is known, because "the reasoning stage stopped
+/// answering" tells an operator which provider to look at while "the turn timed
+/// out" leaves them to guess between four of them.
+fn stalled_operation(stalled: Option<Stage>) -> String {
+    match stalled {
+        Some(stage) => {
+            let name = serde_json::to_value(stage)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".to_owned());
+            format!("the {name} stage of this turn")
+        }
+        // Nothing had been published yet, so there is no stage to blame.
+        None => "this turn".to_owned(),
     }
 }
 
