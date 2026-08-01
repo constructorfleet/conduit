@@ -21,6 +21,17 @@ Bearer tokens stay in `sessionStorage` unless the operator chooses
 The app shell is organized around Overview, Pipelines, Providers, Events, and
 Settings. Runtime integration starts from `/v1/status` and then applies
 `/v1/events` updates after the snapshot is loaded.
+After operator access is selected, the console loads `/v1/status`, lists
+`/v1/pipelines`, and fetches each pipeline view through the generated API
+client. Frontend tests mock those HTTP responses with non-fixture data so the
+rendered UI proves it is using the data client path.
+Set `VITE_CONDUIT_DATA_SOURCE=mock` to run the console against generated
+contract fixtures instead of live HTTP while developing the UI without a
+backend.
+In live mode, Vite proxies `/v1/*` requests to
+`VITE_CONDUIT_API_TARGET` or `http://127.0.0.1:8080` by default, so
+`npm run dev` can talk to a local `conduit-api` service without hardcoding an
+API origin into the browser bundle.
 
 The Overview section is the Operations Workspace landing surface when a usable
 pipeline exists. It renders current exceptions before baseline status, keeps

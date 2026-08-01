@@ -28,7 +28,13 @@ import {
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
-import type { NodeKind, PipelineGraph, PipelineView } from "./contracts/client";
+import type { OperatorDataMode, SnapshotState } from "./apiClient";
+import type {
+  NodeKind,
+  PipelineGraph,
+  PipelineNode,
+  PipelineView,
+} from "./contracts/client";
 import {
   eventEnvelopeFixtures,
   type EventEnvelope,
@@ -39,8 +45,9 @@ import type {
   PipelineStatus,
   ProviderKind,
   ProviderStatus,
-  ProviderStatusState,
   RuntimeFailure,
+  ComponentHealth,
+  ComponentKind,
 } from "./contracts/status";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -71,6 +78,7 @@ interface AppProps {
   initialEventPosture?: EventStreamPosture;
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen?: boolean;
+  dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
 }
@@ -81,6 +89,7 @@ function App({
   initialEventPosture,
   initialPipelineViews,
   initialSmallScreen = false,
+  dataMode = defaultDataMode(),
   onPipelineSaved,
   onPipelineValidate,
 }: AppProps = {}) {
@@ -102,6 +111,7 @@ function App({
       initialPipelineViews={initialPipelineViews}
       initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
+      dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
       onPipelineValidate={onPipelineValidate}
       onSectionChange={setActiveSection}
@@ -195,6 +205,7 @@ function OperatorWorkspace({
   initialPipelineViews,
   initialSmallScreen,
   initialSnapshot,
+  dataMode,
   onPipelineSaved,
   onPipelineValidate,
   onSectionChange,
@@ -207,6 +218,7 @@ function OperatorWorkspace({
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
+  dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
   onSectionChange: (section: SectionId) => void;
@@ -218,10 +230,17 @@ function OperatorWorkspace({
         baseUrl: window.location.origin,
         access,
         snapshot: initialSnapshot,
+        dataMode,
       }),
-    [access, initialSnapshot],
+    [access, dataMode, initialSnapshot],
   );
-  const [snapshot, setSnapshot] = useState(snapshotClient.snapshot);
+  const [snapshot, setSnapshot] = useState<OperatorStatusSnapshot | null>(
+    snapshotClient.snapshot,
+  );
+  const [snapshotState, setSnapshotState] = useState<SnapshotState>(
+    snapshotClient.snapshot ? "live" : snapshotClient.state,
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
@@ -232,13 +251,112 @@ function OperatorWorkspace({
       ? { ...plan, posture: initialEventPosture }
       : plan;
   }, [initialEventPosture]);
-  const firstRun = snapshot?.runtime.launch_state === "first_run_setup";
+  const hasStoredPipeline =
+    pipelineViews.length > 0 || (snapshot?.pipelines.length ?? 0) > 0;
+  const firstRun =
+    snapshot?.runtime.launch_state === "first_run_setup" && !hasStoredPipeline;
   const accessLabel =
     access.mode === "anonymous"
       ? "Anonymous operator access"
       : access.mode === "bearer" && access.persisted
         ? "Remembered management token"
         : "Session management token";
+
+  async function savePipeline(graph: PipelineGraph) {
+    const view = await snapshotClient.savePipeline(graph);
+    onPipelineSaved?.(view.graph);
+    setPipelineViews((current) =>
+      upsertPipelineView(current, view.graph, view.order),
+    );
+    setSnapshot((current) => promoteSavedPipeline(current, view.graph));
+    onSectionChange("overview");
+  }
+
+  async function storePipelineGraph(graph: PipelineGraph) {
+    const view = await snapshotClient.savePipeline(graph);
+    onPipelineSaved?.(view.graph);
+    setPipelineViews((current) =>
+      upsertPipelineView(current, view.graph, view.order),
+    );
+  }
+
+  useEffect(() => {
+    if (access.mode === "none" || initialSnapshot) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadOperatorData() {
+      try {
+        await Promise.resolve();
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshotState("loading");
+        setLoadError(null);
+
+        const [loadedSnapshot, loadedPipelineViews] = await Promise.all([
+          snapshotClient.loadSnapshot(),
+          initialPipelineViews
+            ? Promise.resolve([...initialPipelineViews])
+            : snapshotClient.loadPipelineViews(),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(loadedSnapshot);
+        setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
+        setSnapshotState("live");
+      } catch (caught) {
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(null);
+        setPipelineViews(initialPipelineViews ?? []);
+        setSnapshotState("error");
+        setLoadError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to load operator data",
+        );
+      }
+    }
+
+    void loadOperatorData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [access.mode, initialPipelineViews, initialSnapshot, snapshotClient]);
+
+  if (firstRun) {
+    return (
+      <main className="first-run-shell">
+        <header className="first-run-header">
+          <div className="rail-brand">
+            <img src={conduitLogo} alt="Conduit" />
+            <div>
+              <p>Conduit</p>
+              <strong>Operator Console</strong>
+            </div>
+          </div>
+          <div>
+            <p className="eyebrow">{accessLabel}</p>
+            <h1>First-Run Setup</h1>
+          </div>
+          <button className="sign-out" type="button" onClick={onClearAccess}>
+            Clear access
+          </button>
+        </header>
+        <GuidedSetupPanel onPipelineSaved={savePipeline} />
+      </main>
+    );
+  }
 
   return (
     <main className="workspace-shell">
@@ -293,11 +411,7 @@ function OperatorWorkspace({
             </h1>
           </div>
           <div className="runtime-strip">
-            <StatusPill
-              label="Snapshot"
-              value={snapshotClient.state}
-              tone="caution"
-            />
+            <StatusPill label="Snapshot" value={snapshotState} tone="caution" />
             <StatusPill
               label="Events"
               value={eventPlan.posture}
@@ -313,24 +427,18 @@ function OperatorWorkspace({
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
           initialSmallScreen={smallScreen}
+          loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
-          onPipelineSaved={(graph) => {
-            onPipelineSaved?.(graph);
-            setPipelineViews((current) => upsertPipelineView(current, graph));
-            setSnapshot((current) => promoteSavedPipeline(current, graph));
-            onSectionChange("overview");
-          }}
-          onPipelineStored={(graph, order) => {
-            onPipelineSaved?.(graph);
-            setPipelineViews((current) =>
-              upsertPipelineView(current, graph, order),
-            );
-          }}
+          onPipelineStored={storePipelineGraph}
         />
       </section>
     </main>
   );
+}
+
+function defaultDataMode(): OperatorDataMode {
+  return import.meta.env.VITE_CONDUIT_DATA_SOURCE === "mock" ? "mock" : "live";
 }
 
 function SectionPanel({
@@ -340,8 +448,8 @@ function SectionPanel({
   snapshot,
   eventPosture,
   initialSmallScreen,
+  loadError,
   onSectionChange,
-  onPipelineSaved,
   onPipelineStored,
   onPipelineValidate,
 }: {
@@ -351,13 +459,18 @@ function SectionPanel({
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
   initialSmallScreen: boolean;
+  loadError: string | null;
   onSectionChange: (section: SectionId) => void;
-  onPipelineSaved: (graph: PipelineGraph) => void;
-  onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
+  onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
-  if (snapshot?.runtime.launch_state === "first_run_setup") {
-    return <GuidedSetupPanel onPipelineSaved={onPipelineSaved} />;
+  if (loadError) {
+    return (
+      <div className="overview-empty" role="alert">
+        <CircleAlert size={18} aria-hidden="true" />
+        <span>{loadError}</span>
+      </div>
+    );
   }
 
   if (section === "overview") {
@@ -401,9 +514,6 @@ function SectionPanel({
 type ProviderFilter = "all" | ProviderKind;
 
 interface ProviderOverride {
-  state?: ProviderStatusState;
-  reachable?: boolean;
-  message?: string;
   fallbackSelected?: boolean;
 }
 
@@ -418,25 +528,26 @@ function ProvidersPanel({
   const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
     {},
   );
+  const [providerNotices, setProviderNotices] = useState<
+    Record<string, string>
+  >({});
   const visibleProviders = providers
     .map((provider) => ({ ...provider, ...overrides[provider.id] }))
     .filter((provider) => filter === "all" || provider.kind === filter);
   const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
+  const providerIds = new Set(providers.map((provider) => provider.id));
   const referencedProviderCount = new Set(
     pipelineViews.flatMap((view) =>
-      view.graph.nodes.map((node) => node.provider),
+      view.graph.nodes
+        .map((node) => node.provider)
+        .filter((provider) => providerIds.has(provider)),
     ),
   ).size;
 
   function testProvider(provider: ProviderStatus) {
-    setOverrides((current) => ({
+    setProviderNotices((current) => ({
       ...current,
-      [provider.id]: {
-        ...current[provider.id],
-        state: "reachable",
-        reachable: true,
-        message: "Reachability check passed",
-      },
+      [provider.id]: "Reachability checks require the provider API",
     }));
   }
 
@@ -463,7 +574,7 @@ function ProvidersPanel({
           value={providers.length.toString()}
         />
         <MetricTile
-          label="Referenced by graphs"
+          label="Configured in graphs"
           value={referencedProviderCount.toString()}
         />
         <MetricTile
@@ -550,6 +661,9 @@ function ProvidersPanel({
               <p className="panel-notice">
                 Fallback selected for {provider.id}
               </p>
+            ) : null}
+            {providerNotices[provider.id] ? (
+              <p className="panel-notice">{providerNotices[provider.id]}</p>
             ) : null}
           </article>
         ))}
@@ -1047,14 +1161,20 @@ function PipelinesPanel({
     setValidation(onPipelineValidate(draft));
   }
 
-  function saveDraft() {
+  async function saveDraft() {
     if (!draft || validation?.ok !== true) {
       return;
     }
 
-    onPipelineStored(draft, validation.order);
-    setHistory([]);
-    setNotice(`Saved graph for ${draft.name}`);
+    try {
+      await onPipelineStored(draft, validation.order);
+      setHistory([]);
+      setNotice(`Saved graph for ${draft.name}`);
+    } catch (caught) {
+      setNotice(
+        caught instanceof Error ? caught.message : "Unable to save graph",
+      );
+    }
   }
 
   function runTestTurn() {
@@ -1109,15 +1229,29 @@ function PipelinesPanel({
       <div className="pipeline-editor-grid">
         <section className="graph-surface" aria-label="Pipeline graph">
           <div className="graph-nodes">
-            {draft.nodes.map((node, index) => (
-              <article className="graph-node" key={node.id}>
-                <span>{index + 1}</span>
-                <strong>{node.id}</strong>
-                <p>
-                  {node.kind} / {node.provider}
-                </p>
-              </article>
-            ))}
+            {draft.nodes.map((node, index) => {
+              const componentHealth = healthForGraphNode(node, selectedHealth);
+              const componentKind = componentKindForNode(node);
+              return (
+                <article
+                  aria-label={`${node.id} ${componentKind} ${componentHealth?.state ?? "untracked"}`}
+                  className={`graph-node ${componentHealth?.state ?? "untracked"}`}
+                  key={node.id}
+                  role="group"
+                >
+                  <span className="node-index">{index + 1}</span>
+                  <strong>{node.id}</strong>
+                  <p>
+                    {node.kind} / {node.provider}
+                  </p>
+                  {componentHealth ? (
+                    <span className={`node-health ${componentHealth.state}`}>
+                      {componentKind} / {componentHealth.state}
+                    </span>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
           <div className="graph-edges" aria-label="Pipeline edges">
             {draft.edges.map((edge) => (
@@ -1460,7 +1594,7 @@ function filterRawEvents(
 function GuidedSetupPanel({
   onPipelineSaved,
 }: {
-  onPipelineSaved: (graph: PipelineGraph) => void;
+  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
   const [sttProvider, setSttProvider] = useState("whisper");
@@ -1468,9 +1602,10 @@ function GuidedSetupPanel({
   const [ttsProvider, setTtsProvider] = useState("piper");
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [toolSetupSkipped, setToolSetupSkipped] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function save(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = pipelineName.trim();
     if (!name) {
@@ -1483,14 +1618,23 @@ function GuidedSetupPanel({
     }
 
     setError(null);
-    onPipelineSaved(
-      buildMinimalVoiceLoopGraph({
-        name,
-        sttProvider: sttProvider.trim(),
-        llmProvider: llmProvider.trim(),
-        ttsProvider: ttsProvider.trim(),
-      }),
-    );
+    setSaving(true);
+    try {
+      await onPipelineSaved(
+        buildMinimalVoiceLoopGraph({
+          name,
+          sttProvider: sttProvider.trim(),
+          llmProvider: llmProvider.trim(),
+          ttsProvider: ttsProvider.trim(),
+        }),
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to save pipeline",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1572,9 +1716,9 @@ function GuidedSetupPanel({
 
         {error ? <p className="form-error">{error}</p> : null}
 
-        <button className="primary-action" type="submit">
+        <button className="primary-action" type="submit" disabled={saving}>
           <CircleCheck size={17} aria-hidden="true" />
-          Validate and Save
+          {saving ? "Saving" : "Validate and Save"}
         </button>
       </section>
     </form>
@@ -1750,6 +1894,40 @@ function validatePipelineGraph(graph: PipelineGraph): PipelineValidationResult {
   }
 
   return { ok: true, order: graph.nodes.map((node) => node.id) };
+}
+
+function healthForGraphNode(
+  node: PipelineNode,
+  pipeline: PipelineStatus | undefined,
+): ComponentHealth | null {
+  const componentKind = componentKindForNode(node);
+  return (
+    pipeline?.components.find(
+      (component) =>
+        component.kind === componentKind &&
+        (!component.provider || component.provider === node.provider),
+    ) ??
+    pipeline?.components.find(
+      (component) => component.kind === componentKind,
+    ) ??
+    null
+  );
+}
+
+function componentKindForNode(node: PipelineNode): ComponentKind {
+  if (node.kind === "stt") {
+    return "transcription";
+  }
+  if (node.kind === "llm") {
+    return "reasoning";
+  }
+  if (node.kind === "tool") {
+    return "tools";
+  }
+  if (node.kind === "tts") {
+    return "synthesis";
+  }
+  return "capture";
 }
 
 function cloneGraph(graph: PipelineGraph): PipelineGraph {
