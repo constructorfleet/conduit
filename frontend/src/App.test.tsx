@@ -12,9 +12,11 @@ import {
 import { applySnapshotEvent, transitionEventStream } from "./eventStream";
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   sessionStorage.clear();
   localStorage.clear();
   mockSmallScreen(false);
+  mockOperatorApi();
 });
 
 describe("Operator Console shell", () => {
@@ -225,6 +227,52 @@ describe("Overview operations workspace", () => {
     expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(screen.getByText("Snapshot")).toBeInTheDocument();
     expect(screen.getByText("live")).toBeInTheDocument();
+  });
+
+  it("loads status and pipeline graph data from the API after access", async () => {
+    const user = userEvent.setup();
+    const snapshot = liveApiSnapshot();
+    const pipeline = liveApiPipelineView();
+    const fetchMock = mockOperatorApi({
+      snapshot,
+      pipelineViews: [pipeline],
+    });
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+
+    expect(await screen.findByText("Garage Satellite")).toBeInTheDocument();
+    expect(screen.getAllByText("garage-tts").length).toBeGreaterThan(0);
+    expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByText("garage_mic")).toBeInTheDocument();
+    expect(screen.getByText("garage_tts")).toBeInTheDocument();
+    expect(screen.getByText("garage_mic -> garage_stt")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      new URL("/v1/status", window.location.origin),
+      expect.objectContaining({
+        headers: expect.objectContaining({ accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("can use explicit mock data without calling the live API", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App dataMode="mock" />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+
+    expect(await screen.findByText("Kitchen Satellite")).toBeInTheDocument();
+    expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("links current failures to reconstructed turn events when possible", async () => {
@@ -686,6 +734,124 @@ function pipelineView(): PipelineView {
     graph,
     order: graph.nodes.map((node) => node.id),
   };
+}
+
+function liveApiPipelineView(): PipelineView {
+  const graph: PipelineGraph = {
+    name: "garage",
+    nodes: [
+      { id: "garage_mic", kind: "source", provider: "websocket" },
+      { id: "garage_stt", kind: "stt", provider: "garage-whisper" },
+      { id: "garage_llm", kind: "llm", provider: "garage-openai" },
+      { id: "garage_tts", kind: "tts", provider: "garage-tts" },
+      { id: "garage_speaker", kind: "sink", provider: "websocket" },
+    ],
+    edges: [
+      { from: "garage_mic", to: "garage_stt" },
+      { from: "garage_stt", to: "garage_llm" },
+      { from: "garage_llm", to: "garage_tts" },
+      { from: "garage_tts", to: "garage_speaker" },
+    ],
+  };
+
+  return {
+    graph,
+    order: graph.nodes.map((node) => node.id),
+  };
+}
+
+function liveApiSnapshot(): OperatorStatusSnapshot {
+  const snapshot = healthySnapshot();
+  snapshot.generated_at = "2026-08-01T03:00:00Z";
+  snapshot.pipelines = snapshot.pipelines.map((pipeline) => ({
+    ...pipeline,
+    name: "garage",
+    affected_providers: ["garage-tts"],
+    components: pipeline.components.map((component) =>
+      component.kind === "synthesis"
+        ? { ...component, provider: "garage-tts" }
+        : component,
+    ),
+  }));
+  snapshot.providers = [
+    {
+      id: "garage-tts",
+      kind: "tts",
+      state: "reachable",
+      configured: true,
+      reachable: true,
+      proven_by_turn: null,
+      message: "garage endpoint responded",
+      affects_pipelines: ["garage"],
+    },
+  ];
+  snapshot.satellites = {
+    connected: [
+      {
+        device: "00000000-0000-0000-0000-000000000201",
+        name: "Garage Satellite",
+        connected_since: "2026-08-01T02:59:00Z",
+        conversation: "00000000-0000-0000-0000-000000000202",
+        pipeline: "garage",
+      },
+    ],
+    recently_active: [
+      {
+        device: "00000000-0000-0000-0000-000000000201",
+        name: "Garage Satellite",
+        last_seen_at: "2026-08-01T02:59:30Z",
+        last_event: "AudioStarted",
+      },
+    ],
+    recent_window_seconds: 300,
+  };
+  return snapshot;
+}
+
+function mockOperatorApi({
+  snapshot = snapshotFixture(),
+  pipelineViews = [pipelineView()],
+}: {
+  snapshot?: OperatorStatusSnapshot;
+  pipelineViews?: PipelineView[];
+} = {}) {
+  const pipelines = new Map(
+    pipelineViews.map((view) => [view.graph.name, view] as const),
+  );
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof URL ? input : new URL(input.toString());
+    const route = decodeURIComponent(url.pathname);
+
+    if (route === "/v1/status") {
+      return jsonResponse(snapshot);
+    }
+
+    if (route === "/v1/pipelines") {
+      return jsonResponse([...pipelines.keys()]);
+    }
+
+    if (route.startsWith("/v1/pipelines/")) {
+      const name = route.slice("/v1/pipelines/".length);
+      const view = pipelines.get(name);
+      if (!view) {
+        return jsonResponse({ error: "not_found" }, { status: 404 });
+      }
+      return jsonResponse(view);
+    }
+
+    return jsonResponse({ error: "not_found" }, { status: 404 });
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function jsonResponse(body: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
 }
 
 function mockSmallScreen(matches: boolean) {

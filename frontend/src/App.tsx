@@ -28,6 +28,7 @@ import {
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
+import type { OperatorDataMode, SnapshotState } from "./apiClient";
 import type { NodeKind, PipelineGraph, PipelineView } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
@@ -71,6 +72,7 @@ interface AppProps {
   initialEventPosture?: EventStreamPosture;
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen?: boolean;
+  dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
 }
@@ -81,6 +83,7 @@ function App({
   initialEventPosture,
   initialPipelineViews,
   initialSmallScreen = false,
+  dataMode = defaultDataMode(),
   onPipelineSaved,
   onPipelineValidate,
 }: AppProps = {}) {
@@ -102,6 +105,7 @@ function App({
       initialPipelineViews={initialPipelineViews}
       initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
+      dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
       onPipelineValidate={onPipelineValidate}
       onSectionChange={setActiveSection}
@@ -195,6 +199,7 @@ function OperatorWorkspace({
   initialPipelineViews,
   initialSmallScreen,
   initialSnapshot,
+  dataMode,
   onPipelineSaved,
   onPipelineValidate,
   onSectionChange,
@@ -207,6 +212,7 @@ function OperatorWorkspace({
   initialPipelineViews?: readonly PipelineView[];
   initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
+  dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineValidate?: (graph: PipelineGraph) => PipelineValidationResult;
   onSectionChange: (section: SectionId) => void;
@@ -218,10 +224,17 @@ function OperatorWorkspace({
         baseUrl: window.location.origin,
         access,
         snapshot: initialSnapshot,
+        dataMode,
       }),
-    [access, initialSnapshot],
+    [access, dataMode, initialSnapshot],
   );
-  const [snapshot, setSnapshot] = useState(snapshotClient.snapshot);
+  const [snapshot, setSnapshot] = useState<OperatorStatusSnapshot | null>(
+    snapshotClient.snapshot,
+  );
+  const [snapshotState, setSnapshotState] = useState<SnapshotState>(
+    snapshotClient.snapshot ? "live" : snapshotClient.state,
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
@@ -239,6 +252,60 @@ function OperatorWorkspace({
       : access.mode === "bearer" && access.persisted
         ? "Remembered management token"
         : "Session management token";
+
+  useEffect(() => {
+    if (access.mode === "none" || initialSnapshot) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadOperatorData() {
+      try {
+        await Promise.resolve();
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshotState("loading");
+        setLoadError(null);
+
+        const [loadedSnapshot, loadedPipelineViews] = await Promise.all([
+          snapshotClient.loadSnapshot(),
+          initialPipelineViews
+            ? Promise.resolve([...initialPipelineViews])
+            : snapshotClient.loadPipelineViews(),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(loadedSnapshot);
+        setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
+        setSnapshotState("live");
+      } catch (caught) {
+        if (cancelled) {
+          return;
+        }
+
+        setSnapshot(null);
+        setPipelineViews(initialPipelineViews ?? []);
+        setSnapshotState("error");
+        setLoadError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to load operator data",
+        );
+      }
+    }
+
+    void loadOperatorData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [access.mode, initialPipelineViews, initialSnapshot, snapshotClient]);
 
   return (
     <main className="workspace-shell">
@@ -293,11 +360,7 @@ function OperatorWorkspace({
             </h1>
           </div>
           <div className="runtime-strip">
-            <StatusPill
-              label="Snapshot"
-              value={snapshotClient.state}
-              tone="caution"
-            />
+            <StatusPill label="Snapshot" value={snapshotState} tone="caution" />
             <StatusPill
               label="Events"
               value={eventPlan.posture}
@@ -313,6 +376,7 @@ function OperatorWorkspace({
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
           initialSmallScreen={smallScreen}
+          loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
           onPipelineSaved={(graph) => {
@@ -333,6 +397,10 @@ function OperatorWorkspace({
   );
 }
 
+function defaultDataMode(): OperatorDataMode {
+  return import.meta.env.VITE_CONDUIT_DATA_SOURCE === "mock" ? "mock" : "live";
+}
+
 function SectionPanel({
   section,
   events,
@@ -340,6 +408,7 @@ function SectionPanel({
   snapshot,
   eventPosture,
   initialSmallScreen,
+  loadError,
   onSectionChange,
   onPipelineSaved,
   onPipelineStored,
@@ -351,11 +420,21 @@ function SectionPanel({
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
   initialSmallScreen: boolean;
+  loadError: string | null;
   onSectionChange: (section: SectionId) => void;
   onPipelineSaved: (graph: PipelineGraph) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
 }) {
+  if (loadError) {
+    return (
+      <div className="overview-empty" role="alert">
+        <CircleAlert size={18} aria-hidden="true" />
+        <span>{loadError}</span>
+      </div>
+    );
+  }
+
   if (snapshot?.runtime.launch_state === "first_run_setup") {
     return <GuidedSetupPanel onPipelineSaved={onPipelineSaved} />;
   }
