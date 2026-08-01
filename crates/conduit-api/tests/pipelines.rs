@@ -92,6 +92,25 @@ async fn store_valid_graph_provider_definitions(state: &AppState) {
     .await;
 }
 
+async fn store_llm_provider_definition(state: &AppState, id: &str) {
+    call(
+        state,
+        put_json(
+            &format!("/v1/providers/{id}"),
+            serde_json::json!({
+                "id": id,
+                "label": id,
+                "variant": {
+                    "type": "openai_llm",
+                    "base_url": "http://localhost:11434/v1",
+                    "models": ["llama3"]
+                }
+            }),
+        ),
+    )
+    .await;
+}
+
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
     let response = router(state.clone()).oneshot(request).await.expect("router responds");
     let status = response.status();
@@ -145,6 +164,104 @@ fn delete(uri: &str) -> Request<Body> {
 
 fn post(uri: &str) -> Request<Body> {
     Request::builder().method("POST").uri(uri).body(Body::empty()).expect("request")
+}
+
+fn post_json<T: serde::Serialize>(uri: &str, body: &T) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).expect("serialize")))
+        .expect("request")
+}
+
+/// An address nothing is listening on: bound to learn the port, then released.
+async fn unreachable_address() -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    listener.local_addr().expect("address")
+}
+
+/// A TCP listener that accepts connections and says nothing.
+///
+/// Wyoming health is a connect check, so accepting is all a reachable server
+/// has to do here.
+struct MockWyomingServer {
+    address: std::net::SocketAddr,
+}
+
+impl MockWyomingServer {
+    async fn listening() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            loop {
+                // Hold each accepted connection open; dropping the listener
+                // would make later connects fail.
+                let Ok((stream, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let _held = stream;
+                    std::future::pending::<()>().await;
+                });
+            }
+        });
+        Self { address }
+    }
+
+    fn url(&self) -> String {
+        format!("tcp://{}", self.address)
+    }
+}
+
+/// An MCP server over the streamable HTTP transport, exposing named tools.
+struct MockMcpServer {
+    address: std::net::SocketAddr,
+}
+
+impl MockMcpServer {
+    async fn exposing(tools: &[&str]) -> Self {
+        let tools: Vec<String> = tools.iter().map(|tool| (*tool).to_owned()).collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let app = Router::new().route("/", axum::routing::post(mock_mcp)).with_state(tools);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self { address }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}/", self.address)
+    }
+}
+
+async fn mock_mcp(
+    State(tools): State<Vec<String>>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let method = request["method"].as_str().unwrap_or_default().to_owned();
+    // Notifications carry no id and expect no body.
+    let Some(id) = request["id"].as_u64() else {
+        return (StatusCode::ACCEPTED, Json(serde_json::Value::Null));
+    };
+    let result = match method.as_str() {
+        "initialize" => serde_json::json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "mock", "version": "0" }
+        }),
+        "tools/list" => serde_json::json!({
+            "tools": tools
+                .iter()
+                .map(|tool| serde_json::json!({
+                    "name": tool,
+                    "description": format!("mock tool {tool}"),
+                    "inputSchema": { "type": "object" }
+                }))
+                .collect::<Vec<_>>()
+        }),
+        _ => serde_json::json!({}),
+    };
+    (StatusCode::OK, Json(serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result })))
 }
 
 #[derive(Clone)]
@@ -881,6 +998,198 @@ async fn provider_reachability_test_refuses_missing_provider_definitions() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
     assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("missing")), "{body}");
+}
+
+#[tokio::test]
+async fn saving_a_wyoming_tts_definition_registers_a_runtime_tts_provider() {
+    let server = MockWyomingServer::listening().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "piper-local",
+        "label": "Piper",
+        "variant": { "type": "wyoming_tts", "url": server.url(), "voice": "en_US-amy" }
+    });
+    call(&state, put_json("/v1/providers/piper-local", definition)).await;
+
+    let (status, body) = call(&state, post("/v1/providers/piper-local/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["kind"], "tts");
+    assert_eq!(body["state"], "reachable");
+    assert_eq!(body["reachable"], true);
+}
+
+#[tokio::test]
+async fn saving_a_wyoming_stt_definition_registers_a_runtime_stt_provider() {
+    let server = MockWyomingServer::listening().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "whisper-local",
+        "label": "Faster Whisper",
+        "variant": { "type": "wyoming_stt", "url": server.url(), "model": "tiny" }
+    });
+    call(&state, put_json("/v1/providers/whisper-local", definition)).await;
+
+    let (status, body) = call(&state, post("/v1/providers/whisper-local/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["kind"], "stt");
+    assert_eq!(body["state"], "reachable");
+    assert_eq!(body["reachable"], true);
+}
+
+#[tokio::test]
+async fn a_wyoming_definition_saves_while_its_server_is_down() {
+    // Save is a schema check, not a reachability check: an operator must be
+    // able to configure an endpoint before the service behind it is running.
+    let address = unreachable_address().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "piper-local",
+        "label": "Piper",
+        "variant": { "type": "wyoming_tts", "url": format!("tcp://{address}") }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/piper-local", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, post("/v1/providers/piper-local/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "configured");
+    assert_eq!(body["reachable"], false);
+    assert!(body["message"].as_str().is_some_and(|message| !message.is_empty()), "{body}");
+}
+
+#[tokio::test]
+async fn saving_an_mcp_definition_registers_its_discovered_tool() {
+    let server = MockMcpServer::exposing(&["get_weather"]).await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "mcp_tool",
+            "transport": { "type": "streamable_http", "url": server.url() }
+        }
+    });
+    call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+
+    let (status, body) = call(&state, post("/v1/providers/weather-tools/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["kind"], "tool");
+    assert_eq!(body["state"], "reachable");
+    assert_eq!(body["reachable"], true);
+
+    // A graph node may now reference the definition id as a tool provider.
+    store_llm_provider_definition(&state, "ollama").await;
+    let graph = PipelineGraph::new("tools")
+        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
+        .with_node(Node::new("weather", NodeKind::Tool, "weather-tools"))
+        .with_edge(Edge::new("llm", "weather"));
+
+    let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_multi_tool_mcp_definition_registers_each_tool_under_its_own_id() {
+    let server = MockMcpServer::exposing(&["forecast", "history"]).await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "mcp_tool",
+            "transport": { "type": "streamable_http", "url": server.url() }
+        }
+    });
+    call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+
+    store_llm_provider_definition(&state, "ollama").await;
+    let graph = PipelineGraph::new("tools")
+        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
+        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
+        .with_node(Node::new("history", NodeKind::Tool, "weather-tools.history"))
+        .with_edge(Edge::new("llm", "forecast"))
+        .with_edge(Edge::new("llm", "history"));
+
+    let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn an_mcp_definition_saves_while_its_server_is_down() {
+    let address = unreachable_address().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "mcp_tool",
+            "transport": { "type": "streamable_http", "url": format!("http://{address}") }
+        }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, post("/v1/providers/weather-tools/test")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "configured");
+    assert_eq!(body["reachable"], false);
+    assert!(body["message"].as_str().is_some_and(|message| !message.is_empty()), "{body}");
+}
+
+#[tokio::test]
+async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
+    // Wyoming speaks its own protocol over a socket. Storing an http endpoint
+    // would save a definition the runtime could never build a provider from.
+    let state = AppState::new(EventBus::default());
+    let invalid = serde_json::json!({
+        "id": "piper-local",
+        "label": "Piper Local",
+        "variant": { "type": "wyoming_tts", "url": "http://piper.local:10200" }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/piper-local", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("tcp")), "{body}");
+
+    let (status, _) = call(&state, get("/v1/providers/piper-local")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_tools() {
+    let server = MockMcpServer::exposing(&["forecast", "history"]).await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "mcp_tool",
+            "transport": { "type": "streamable_http", "url": server.url() }
+        }
+    });
+    call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+    store_llm_provider_definition(&state, "ollama").await;
+    let graph = PipelineGraph::new("tools")
+        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
+        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
+        .with_edge(Edge::new("llm", "forecast"));
+    let (status, body) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, delete("/v1/providers/weather-tools")).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["affected_pipelines"], serde_json::json!(["tools"]));
 }
 
 #[tokio::test]

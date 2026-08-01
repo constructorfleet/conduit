@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use conduit_mcp::McpClient;
 use conduit_provider::storage::{
     McpTransport, ProviderCapability, ProviderDefinition, ProviderDefinitionVariant,
 };
@@ -129,6 +130,21 @@ pub async fn test(
         .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
     let kind = provider_kind(definition.capability());
     let affected_pipelines = affected_pipelines(&state, &id).await?;
+
+    // An MCP server is probed through its definition rather than the registry.
+    // A server that was down when the definition was saved registers no tools,
+    // and reporting that as "not registered" would hide the connection error
+    // the operator needs to see. A probe that succeeds also rediscovers the
+    // tools, so a provider becomes usable without another write.
+    if let ProviderDefinitionVariant::McpTool { transport } = &definition.variant {
+        let health = probe_mcp(transport).await;
+        if health.is_usable() {
+            state.reload_provider_definitions().await.map_err(store_failure)?;
+        }
+        state.record_provider_reachability(&id, health.clone());
+        return Ok(Json(status_from_health(kind, id, health, affected_pipelines)));
+    }
+
     let Some(providers) = state.providers() else {
         return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
     };
@@ -160,6 +176,15 @@ pub async fn test(
     Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
 }
 
+/// Lists an MCP server's tools: the narrowest check that proves the server is
+/// reachable and speaks the protocol, without invoking anything.
+async fn probe_mcp(transport: &McpTransport) -> Health {
+    match McpClient::new(transport.clone()).list_tools().await {
+        Ok(_) => Health::Healthy,
+        Err(error) => Health::Unhealthy { reason: error.to_string() },
+    }
+}
+
 #[derive(Serialize)]
 struct DeleteConflict {
     error: &'static str,
@@ -185,7 +210,7 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         }
         ProviderDefinitionVariant::WyomingStt { url, .. }
         | ProviderDefinitionVariant::WyomingTts { url, .. } => {
-            validate_absolute_url("url", url)?;
+            validate_tcp_url("url", url)?;
         }
         ProviderDefinitionVariant::McpTool { transport } => {
             validate_mcp_transport(transport)?;
@@ -201,6 +226,21 @@ fn validate_mcp_transport(transport: &McpTransport) -> Result<(), ApiError> {
         }
         McpTransport::Stdio { .. } => Ok(()),
     }
+}
+
+/// Wyoming speaks its own protocol over a plain TCP socket, so the scheme is
+/// checked here rather than at registration: a definition that stores cleanly
+/// must also be one the runtime can build a provider from.
+fn validate_tcp_url(field: &str, value: &str) -> Result<(), ApiError> {
+    let uri = validate_absolute_url(field, value)?;
+    let scheme = uri.scheme_str().expect("absolute URL has a scheme");
+    if scheme != "tcp" {
+        return Err(ApiError::unprocessable(format!("{field} must use tcp, got `{scheme}`")));
+    }
+    if uri.port().is_none() {
+        return Err(ApiError::unprocessable(format!("{field} must include a port")));
+    }
+    Ok(())
 }
 
 fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {
@@ -275,12 +315,18 @@ async fn affected_pipelines(
     state: &AppState,
     provider_id: &str,
 ) -> Result<Vec<String>, ApiError> {
+    // An MCP definition also registers each discovered tool as
+    // `<id>.<tool name>`, so a node naming one of those tools is a reference
+    // to this definition too — deleting it would break that pipeline.
+    let qualified = format!("{provider_id}.");
+    let references =
+        |provider: &str| provider == provider_id || provider.starts_with(&qualified);
     let mut affected = Vec::new();
     for name in state.pipeline_names().await.map_err(store_failure)? {
         let Some(graph) = state.pipeline(&name).await.map_err(store_failure)? else {
             continue;
         };
-        if graph.nodes.iter().any(|node| node.provider == provider_id) {
+        if graph.nodes.iter().any(|node| references(&node.provider)) {
             affected.push(name);
         }
     }

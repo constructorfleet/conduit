@@ -90,6 +90,27 @@ environment variables. Use saved Provider Definitions for operator-managed
 providers, or compile with `dev-providers` for the direct in-memory
 development seam.
 
+### Runtime Providers Built From Definitions
+
+| Variant | Runtime provider | Endpoint |
+| --- | --- | --- |
+| `openai_llm` / `openai_stt` / `openai_tts` | `conduit-openai` | `base_url`, `http` or `https` |
+| `wyoming_stt` / `wyoming_tts` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `mcp_tool` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
+
+Every variant registers under its definition id, so a graph node naming the id
+resolves to the provider that definition describes.
+
+An MCP definition describes a *server*, which may advertise several tools, and
+a graph tool node runs one tool. Each advertised tool is therefore registered as
+`<definition id>.<tool name>`; a server advertising exactly one tool is also
+registered under the definition id itself.
+
+Discovering those tools needs the server to answer, but saving a definition
+does not require it: discovery is given five seconds, and a server that does not
+answer leaves the definition saved with no tools registered. Running a
+reachability test on that definition rediscovers them.
+
 ## OpenTelemetry
 
 | Variable | Default | Description |

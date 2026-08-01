@@ -9,7 +9,7 @@ use bytes::Bytes;
 use conduit_core::audio::AudioFormat;
 use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::ConversationId;
-use conduit_provider::storage::ProviderCapability;
+use conduit_provider::storage::{validate_name, ProviderCapability};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
@@ -291,8 +291,15 @@ async fn validate_provider_references(
         let Some(expected) = provider_capability_for_node(node.kind) else {
             continue;
         };
-        let definition =
-            state.provider_definition(&node.provider).await.map_err(store_failure)?;
+        // A qualified id such as `weather-tools.forecast` names one tool
+        // discovered from an MCP definition, not a stored definition, so it is
+        // resolved against the runtime snapshot instead of the store — which
+        // would reject the string as an unusable key.
+        let definition = if validate_name(&node.provider).is_ok() {
+            state.provider_definition(&node.provider).await.map_err(store_failure)?
+        } else {
+            None
+        };
         let actual = if let Some(definition) = definition {
             Some(definition.capability())
         } else {

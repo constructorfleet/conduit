@@ -305,11 +305,27 @@ Inline secrets are accepted on writes but are redacted from read responses.
 Sending `{ "type": "redacted" }` for an existing secret keeps the stored secret;
 omitting or nulling the secret field clears it.
 
+Each variant registers a Runtime Provider under the definition id:
+
+| Variant | Registers | Notes |
+| --- | --- | --- |
+| `openai_llm`, `openai_stt`, `openai_tts` | One provider under the definition id | |
+| `wyoming_stt`, `wyoming_tts` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `mcp_tool` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+
+An MCP definition registers the tools its server currently advertises, each as
+`<definition id>.<tool name>`. A server advertising exactly one tool is also
+registered under the definition id itself. Discovery needs the server, but
+saving does not: a server that cannot be reached within five seconds saves the
+definition and registers no tools, and `POST /v1/providers/{id}/test`
+rediscovers them once it answers.
+
 ### `DELETE /v1/providers/{id}`
 
 Deletes an unreferenced Provider Definition and rebuilds the active Runtime
 Provider Registry Snapshot. Deletion is refused with `409 conflict` when stored
-pipelines still reference the provider id.
+pipelines still reference the provider id, or — for an MCP definition — any of
+the `<definition id>.<tool name>` ids it registers.
 
 Conflict body:
 
@@ -324,8 +340,10 @@ Conflict body:
 ### `POST /v1/providers/{id}/test`
 
 Runs a narrow active reachability check for one saved Provider Definition
-through the active Runtime Provider Registry Snapshot. The check returns the
-same Provider Status shape used by `/v1/status`. A successful check marks the
+through the active Runtime Provider Registry Snapshot. An OpenAI definition
+lists models, a Wyoming definition opens a socket, and an MCP definition lists
+tools — none of them invokes anything. The check returns the same Provider
+Status shape used by `/v1/status`. A successful check marks the
 provider `reachable`; a failed check leaves it `configured` with the provider
 error message. The endpoint does not run a pipeline turn and does not prove the
 provider inside a real conversation.

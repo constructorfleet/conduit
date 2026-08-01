@@ -7,19 +7,28 @@ use std::time::Duration;
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
+use conduit_mcp::{McpClient, McpTool};
 use conduit_metrics::Metrics;
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
-    PipelineStore, ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant,
-    ProviderSecret,
+    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    ProviderDefinitionVariant, ProviderSecret,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
+use conduit_wyoming::stt::WyomingStt;
+use conduit_wyoming::tts::WyomingTts;
+use tokio::time::timeout;
 
 use crate::auth::Access;
 use crate::status::RuntimeStatus;
 use crate::turns::{TurnHistory, TurnHistoryRetention};
+
+/// How long MCP tool discovery may take while rebuilding the runtime provider
+/// registry snapshot. A provider write waits on this, so it is far shorter
+/// than the client's own per-request budget.
+const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
@@ -269,7 +278,7 @@ impl AppState {
             let Some(definition) = self.provider_definition(&id).await? else {
                 continue;
             };
-            snapshot = register_definition(snapshot, &definition)?;
+            snapshot = register_definition(snapshot, &definition).await?;
         }
         *self.provider_lock() = Some(Arc::new(snapshot));
         Ok(())
@@ -285,7 +294,7 @@ impl AppState {
     }
 }
 
-fn register_definition(
+async fn register_definition(
     providers: Providers,
     definition: &ProviderDefinition,
 ) -> Result<Providers> {
@@ -325,10 +334,68 @@ fn register_definition(
             };
             Ok(providers.with_tts(provider))
         }
-        ProviderDefinitionVariant::WyomingStt { .. }
-        | ProviderDefinitionVariant::WyomingTts { .. }
-        | ProviderDefinitionVariant::McpTool { .. } => Ok(providers),
+        ProviderDefinitionVariant::WyomingStt { url, model, streaming } => Ok(providers
+            .with_stt(WyomingStt::new(&definition.id, url, model.clone(), *streaming)?)),
+        ProviderDefinitionVariant::WyomingTts { url, voice, streaming } => Ok(providers
+            .with_tts(WyomingTts::new(&definition.id, url, voice.clone(), *streaming)?)),
+        ProviderDefinitionVariant::McpTool { transport } => {
+            Ok(register_mcp_tools(providers, &definition.id, transport).await)
+        }
     }
+}
+
+/// Registers whatever tools an MCP server currently advertises.
+///
+/// Discovery needs the server, but saving a provider definition must not: an
+/// operator can configure an endpoint before the service behind it is running.
+/// So a server that cannot be reached registers no tools and is logged, rather
+/// than failing the write. A later reachability test or provider write
+/// rediscovers them.
+///
+/// Every tool is registered as `<definition id>.<tool name>`. A server that
+/// advertises exactly one tool is also registered under the definition id
+/// itself, because the provider component catalog offers one MCP component per
+/// definition and a graph node written from it names the definition.
+async fn register_mcp_tools(
+    providers: Providers,
+    id: &str,
+    transport: &McpTransport,
+) -> Providers {
+    let client = Arc::new(McpClient::new(transport.clone()));
+    let discovery = timeout(MCP_DISCOVERY_TIMEOUT, client.list_tools()).await;
+    let tools = match discovery {
+        Ok(Ok(tools)) => tools,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                provider = id,
+                error = %error,
+                "MCP tool discovery failed; the provider definition is saved but registers \
+                 no tools until the server can be reached"
+            );
+            return providers;
+        }
+        Err(_) => {
+            tracing::warn!(
+                provider = id,
+                timeout_secs = MCP_DISCOVERY_TIMEOUT.as_secs(),
+                "MCP tool discovery timed out; the provider definition is saved but \
+                 registers no tools until the server answers"
+            );
+            return providers;
+        }
+    };
+
+    let only_tool = tools.len() == 1;
+    let mut providers = providers;
+    for tool in tools {
+        let qualified = format!("{id}.{}", tool.name);
+        if only_tool {
+            providers =
+                providers.with_tool(McpTool::new(id, tool.clone(), Arc::clone(&client)));
+        }
+        providers = providers.with_tool(McpTool::new(qualified, tool, Arc::clone(&client)));
+    }
+    providers
 }
 
 fn secret_value(secret: &Option<ProviderSecret>) -> Option<String> {
