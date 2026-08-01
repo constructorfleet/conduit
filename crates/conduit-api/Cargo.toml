@@ -17,6 +17,7 @@ conduit-runtime.workspace = true
 
 axum.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
@@ -49,6 +50,7 @@ http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false }
 tokio-tungstenite = "0.30"
 tower = { version = "0.5", features = ["util"] }
+uuid.workspace = true
 
 [lints]
 workspace = true

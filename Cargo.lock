@@ -231,6 +231,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "chrono",
  "conduit-core",
  "conduit-metrics",
  "conduit-openai",
@@ -253,6 +254,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
