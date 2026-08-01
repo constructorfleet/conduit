@@ -1,10 +1,12 @@
 //! Provider definition endpoints.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use conduit_provider::storage::{ProviderCapability, ProviderDefinition};
+use conduit_provider::storage::{
+    ProviderCapability, ProviderDefinition, ProviderDefinitionVariant,
+};
 use conduit_provider::Health;
 use serde::Serialize;
 
@@ -81,6 +83,7 @@ pub async fn put(
     }
     let existing = state.provider_definition(&id).await.map_err(store_failure)?;
     let definition = definition.with_secret_updates_from(existing.as_ref());
+    validate_provider_definition(&definition)?;
     let replaced =
         state.put_provider_definition(&id, definition.clone()).await.map_err(store_failure)?;
     let status = if replaced { StatusCode::OK } else { StatusCode::CREATED };
@@ -171,6 +174,39 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Tts => ProviderKind::Tts,
         ProviderCapability::Tool => ProviderKind::Tool,
     }
+}
+
+fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), ApiError> {
+    match &definition.variant {
+        ProviderDefinitionVariant::OpenAiLlm { base_url, .. }
+        | ProviderDefinitionVariant::OpenAiStt { base_url, .. }
+        | ProviderDefinitionVariant::OpenAiTts { base_url, .. } => {
+            validate_http_url("base_url", base_url)?;
+        }
+        ProviderDefinitionVariant::WyomingStt { .. }
+        | ProviderDefinitionVariant::WyomingTts { .. }
+        | ProviderDefinitionVariant::McpTool { .. } => {}
+    }
+    Ok(())
+}
+
+fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {
+    let uri = value.parse::<Uri>().map_err(|error| {
+        ApiError::unprocessable(format!("{field} is not a valid URL: {error}"))
+    })?;
+    if uri.host().is_none() {
+        return Err(ApiError::unprocessable(format!("{field} must include a host")));
+    }
+    let Some(scheme) = uri.scheme_str() else {
+        return Err(ApiError::unprocessable(format!("{field} must include a URL scheme")));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(ApiError::unprocessable(format!(
+            "{field} must use http or https, got `{}`",
+            scheme
+        )));
+    }
+    Ok(())
 }
 
 fn status_from_health(

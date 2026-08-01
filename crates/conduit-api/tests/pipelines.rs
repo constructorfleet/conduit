@@ -631,6 +631,46 @@ async fn redacted_provider_secret_update_keeps_the_existing_secret() {
 }
 
 #[tokio::test]
+async fn invalid_provider_definition_updates_do_not_replace_existing_settings() {
+    let state = AppState::new(EventBus::default());
+    let original = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "models": ["gpt-4.1"]
+        }
+    });
+    let invalid = serde_json::json!({
+        "id": "openai-primary",
+        "label": "Broken OpenAI",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "not a url",
+            "models": ["gpt-4.1-mini"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", original)).await;
+
+    let (status, body) = call(&state, put_json("/v1/providers/openai-primary", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("base_url")));
+
+    let (status, body) = call(&state, get("/v1/providers/openai-primary")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["label"], "OpenAI Primary");
+    assert_eq!(body["variant"]["base_url"], "https://api.openai.com/v1");
+    assert_eq!(body["variant"]["models"], serde_json::json!(["gpt-4.1"]));
+    assert_eq!(
+        state.providers().expect("snapshot").llm().names().collect::<Vec<_>>(),
+        ["openai-primary"]
+    );
+}
+
+#[tokio::test]
 async fn provider_reachability_test_marks_a_provider_reachable() {
     let server = MockOpenAiServer::healthy().await;
     let state = AppState::new(EventBus::default());
