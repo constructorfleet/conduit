@@ -480,6 +480,42 @@ describe("First-Run Guided Setup", () => {
     expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
   });
 
+  it("creates provider definitions before saving the first guided pipeline", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockOperatorApi({
+      snapshot: firstRunSnapshot(),
+      pipelineViews: [],
+    });
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.type(screen.getByLabelText("Pipeline name"), "kitchen");
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Overview" }),
+    ).toBeInTheDocument();
+    const writes = fetchMock.mock.calls
+      .map(([input, init]) => ({
+        route: new URL(input.toString()).pathname,
+        method: init?.method ?? "GET",
+      }))
+      .filter((call) => call.method === "PUT");
+
+    expect(writes.slice(0, 3)).toEqual([
+      { route: "/v1/providers/whisper", method: "PUT" },
+      { route: "/v1/providers/openai", method: "PUT" },
+      { route: "/v1/providers/piper", method: "PUT" },
+    ]);
+    expect(writes[3]).toEqual({
+      route: "/v1/pipelines/kitchen",
+      method: "PUT",
+    });
+  });
+
   it("leaves First-Run Setup after reload when the pipeline API has a saved graph but status is stale", async () => {
     const user = userEvent.setup();
     mockOperatorApi({

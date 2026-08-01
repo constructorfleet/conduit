@@ -343,7 +343,20 @@ function OperatorWorkspace({
         ? "Remembered management token"
         : "Session management token";
 
-  async function savePipeline(graph: PipelineGraph) {
+  async function savePipeline(
+    graph: PipelineGraph,
+    providerDefinitionsToSave: readonly ApiProviderDefinition[] = [],
+  ) {
+    for (const definition of providerDefinitionsToSave) {
+      const saved = await snapshotClient.saveProviderDefinition(definition);
+      const mapped = fromApiProviderDefinition(componentCatalog, saved);
+      setProviderDefinitions((current) =>
+        mergeProviderDefinitions(
+          current.filter((provider) => provider.id !== mapped.id),
+          [mapped],
+        ),
+      );
+    }
     const view = await snapshotClient.savePipeline(graph);
     onPipelineSaved?.(view.graph);
     setPipelineViews((current) =>
@@ -4034,7 +4047,10 @@ function filterRawEvents(
 function GuidedSetupPanel({
   onPipelineSaved,
 }: {
-  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
+  onPipelineSaved: (
+    graph: PipelineGraph,
+    providerDefinitions: readonly ApiProviderDefinition[],
+  ) => Promise<void>;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
   const [sttProvider, setSttProvider] = useState("whisper");
@@ -4060,13 +4076,14 @@ function GuidedSetupPanel({
     setError(null);
     setSaving(true);
     try {
+      const providerIds = {
+        sttProvider: sttProvider.trim(),
+        llmProvider: llmProvider.trim(),
+        ttsProvider: ttsProvider.trim(),
+      };
       await onPipelineSaved(
-        buildMinimalVoiceLoopGraph({
-          name,
-          sttProvider: sttProvider.trim(),
-          llmProvider: llmProvider.trim(),
-          ttsProvider: ttsProvider.trim(),
-        }),
+        buildMinimalVoiceLoopGraph({ name, ...providerIds }),
+        guidedSetupProviderDefinitions(providerIds),
       );
     } catch (caught) {
       setError(
@@ -4284,6 +4301,49 @@ function buildMinimalVoiceLoopGraph({
       { from: "tts", to: "speaker" },
     ],
   };
+}
+
+function guidedSetupProviderDefinitions({
+  sttProvider,
+  llmProvider,
+  ttsProvider,
+}: {
+  sttProvider: string;
+  llmProvider: string;
+  ttsProvider: string;
+}): ApiProviderDefinition[] {
+  return [
+    {
+      id: sttProvider,
+      label: sttProvider,
+      variant: {
+        type: "openai_stt",
+        base_url: "https://api.openai.com/v1",
+        model: "whisper-1",
+        stream: false,
+      },
+    },
+    {
+      id: llmProvider,
+      label: llmProvider,
+      variant: {
+        type: "openai_llm",
+        base_url: "https://api.openai.com/v1",
+        models: [],
+        streaming: true,
+      },
+    },
+    {
+      id: ttsProvider,
+      label: ttsProvider,
+      variant: {
+        type: "openai_tts",
+        base_url: "https://api.openai.com/v1",
+        model: "tts-1",
+        voices: [],
+      },
+    },
+  ];
 }
 
 function defaultPipelineViews(
