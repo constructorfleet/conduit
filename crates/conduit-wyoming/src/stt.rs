@@ -114,12 +114,17 @@ impl SpeechToText for WyomingStt {
         let stream = self.connect().await?;
         let (read_half, mut write_half) = stream.into_split();
 
-        let mut data = json!({
+        // Wyoming reads the format off every `audio-chunk`, not just off
+        // `audio-start` — `AudioChunk.from_event` treats `rate`, `width` and
+        // `channels` as required keys — so the same description is repeated on
+        // each chunk below.
+        let chunk_format = json!({
             "rate": options.format.sample_rate,
             "width": 2,
             "channels": options.format.channels,
-            "encoding": "pcm_s16le",
         });
+        let mut data = chunk_format.clone();
+        data["encoding"] = json!("pcm_s16le");
         if let Some(model) = &self.model {
             data["model"] = json!(model);
         }
@@ -139,7 +144,7 @@ impl SpeechToText for WyomingStt {
                         if let Err(error) = write_wyoming_event_with_payload(
                             &mut write_half,
                             "audio-chunk",
-                            json!({}),
+                            chunk_format.clone(),
                             &chunk.data,
                         )
                         .await
@@ -239,7 +244,55 @@ impl SpeechToText for WyomingStt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conduit_core::audio::AudioFormat;
     use conduit_core::Error;
+    use tokio::net::TcpListener;
+
+    /// Accepts one connection and returns every event the provider wrote.
+    async fn collect_session_events(listener: TcpListener) -> Vec<WyomingEvent> {
+        let (stream, _) = listener.accept().await.expect("provider connects");
+        let mut reader = BufReader::new(stream);
+        let mut events = Vec::new();
+        while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+            let stop = event.event_type == "audio-stop";
+            events.push(event);
+            if stop {
+                break;
+            }
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn every_audio_chunk_describes_its_own_format() {
+        // Wyoming's `AudioChunk.from_event` reads `rate`, `width` and
+        // `channels` off each chunk, not off `audio-start`. Sending them only
+        // once makes faster-whisper raise `KeyError` on the first chunk and
+        // drop the session, which reaches an operator as a turn that captured
+        // audio and transcribed nothing.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(collect_session_events(listener));
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let _transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let events = server.await.expect("server task");
+        let chunk = events
+            .iter()
+            .find(|event| event.event_type == "audio-chunk")
+            .expect("a chunk was sent");
+        assert_eq!(chunk.data.get("rate").and_then(Value::as_u64), Some(16000));
+        assert_eq!(chunk.data.get("width").and_then(Value::as_u64), Some(2));
+        assert_eq!(chunk.data.get("channels").and_then(Value::as_u64), Some(1));
+        assert_eq!(chunk.payload, vec![1, 2, 3, 4]);
+    }
 
     #[test]
     fn new_accepts_a_tcp_url() {
