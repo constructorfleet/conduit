@@ -1804,6 +1804,21 @@ describe("Providers workspace", () => {
 
   it("deletes configured provider cards", async () => {
     const user = userEvent.setup();
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "openai",
+          label: "openai",
+          kind: "llm",
+          component: "openai.responses",
+          config: {
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-5",
+          },
+        },
+      ]),
+    );
     render(<App initialComponentCatalog={componentCatalog()} />);
 
     await enterProvidersSection(user);
@@ -1890,8 +1905,23 @@ describe("Providers workspace", () => {
     ).toHaveTextContent("Test");
   });
 
-  it("does not fake-delete providers returned by backend status", async () => {
+  it("blocks deleting provider definitions that are still referenced by pipelines", async () => {
     const user = userEvent.setup();
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "piper-local",
+          label: "piper-local",
+          kind: "tts",
+          component: "wyoming.tts",
+          config: {
+            url: "tcp://piper.local:10200",
+            voice: "en_US-lessac-medium",
+          },
+        },
+      ]),
+    );
     render(<App />);
 
     await enterProvidersSection(user);
@@ -1908,7 +1938,7 @@ describe("Providers workspace", () => {
 
     expect(
       screen.getByText(
-        "Provider piper-local is registered by the server; remove it from server configuration to delete it.",
+        "Provider piper-local is used by pipeline kitchen; remove it from those pipeline graphs before deleting it.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -1919,6 +1949,76 @@ describe("Providers workspace", () => {
         name: "Delete piper-local",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("does not offer fake deletion for providers inferred from status or graphs", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterProvidersSection(user);
+    const piperCard = screen
+      .getByRole("heading", { name: "piper-local" })
+      .closest("article");
+    expect(piperCard).not.toBeNull();
+    expect(
+      within(piperCard as HTMLElement).queryByRole("button", {
+        name: "Delete piper-local",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("deletes unreferenced provider definitions even when runtime status exists", async () => {
+    const user = userEvent.setup();
+    const snapshot = snapshotFixture();
+    snapshot.providers = [
+      {
+        id: "llm",
+        kind: "llm",
+        state: "reachable",
+        configured: true,
+        reachable: true,
+        proven_by_turn: null,
+        message: "provider health check passed",
+        affects_pipelines: [],
+      },
+    ];
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "llm",
+          label: "llm",
+          kind: "llm",
+          component: "openai.responses",
+          config: {
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-5",
+          },
+        },
+      ]),
+    );
+    mockOperatorApi({ snapshot });
+    render(<App />);
+
+    await enterProvidersSection(user);
+    const llmCard = screen
+      .getByRole("heading", { name: "llm" })
+      .closest("article");
+    expect(llmCard).not.toBeNull();
+
+    await user.click(
+      within(llmCard as HTMLElement).getByRole("button", {
+        name: "Delete llm",
+      }),
+    );
+
+    expect(screen.getByText("Provider llm deleted")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "llm" })).toBeInTheDocument();
+    expect(
+      within(llmCard as HTMLElement).queryByRole("button", {
+        name: "Delete llm",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("tests locally configured providers through schema validation", async () => {

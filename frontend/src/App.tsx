@@ -777,6 +777,7 @@ interface ProviderDefinition {
   kind: NodeKind;
   component: string;
   config: Record<string, unknown>;
+  source: "local" | "inferred";
 }
 
 interface ProviderCardView {
@@ -861,6 +862,7 @@ function ProvidersPanel({
       kind: component.kind,
       component: component.id,
       config: {},
+      source: "local",
     });
     setEditingProviderId("new");
     setSelectedProviderKind(null);
@@ -881,6 +883,7 @@ function ProvidersPanel({
       kind: nodeKindForProviderKind(card.kind),
       component: card.component ?? card.id,
       config: {},
+      source: "local",
     });
     setEditingProviderId(card.id);
     setAddProviderDialogOpen(true);
@@ -936,6 +939,7 @@ function ProvidersPanel({
       label: draftProvider.label.trim() || id,
       kind: component.kind,
       config: pruneEmptyConfig(draftProvider.config),
+      source: "local",
     };
     onProviderDefinitionsChange(
       mergeProviderDefinitions(
@@ -968,10 +972,11 @@ function ProvidersPanel({
   }
 
   function deleteProviderDefinition(provider: ProviderCardView) {
-    if (provider.status) {
+    const affectedPipelines = provider.status?.affects_pipelines ?? [];
+    if (affectedPipelines.length > 0) {
       setProviderNotices((current) => ({
         ...current,
-        [provider.id]: `Provider ${provider.id} is registered by the server; remove it from server configuration to delete it.`,
+        [provider.id]: `Provider ${provider.id} is used by pipeline ${affectedPipelines.join(", ")}; remove it from those pipeline graphs before deleting it.`,
       }));
       return;
     }
@@ -1108,7 +1113,7 @@ function ProvidersPanel({
                 >
                   <Settings size={17} aria-hidden="true" />
                 </button>
-                {provider.definition ? (
+                {provider.definition?.source === "local" ? (
                   <button
                     className="icon-action danger"
                     type="button"
@@ -3280,6 +3285,7 @@ function providerDefinitionsForNode(
       kind: node.kind,
       component: node.provider,
       config: nodeConfigObject(node.config),
+      source: "inferred",
     },
   ];
 }
@@ -3384,7 +3390,10 @@ function loadProviderDefinitions(
       const parsed = JSON.parse(saved) as ProviderDefinition[];
       return mergeProviderDefinitions(
         defaultProviderDefinitions(catalog, pipelineViews, snapshot),
-        parsed.filter(isProviderDefinition),
+        parsed.filter(isProviderDefinition).map((provider) => ({
+          ...provider,
+          source: "local",
+        })),
       );
     }
   } catch {
@@ -3395,9 +3404,18 @@ function loadProviderDefinitions(
 }
 
 function saveProviderDefinitions(definitions: readonly ProviderDefinition[]) {
+  const localDefinitions = definitions
+    .filter((provider) => provider.source === "local")
+    .map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      kind: provider.kind,
+      component: provider.component,
+      config: provider.config,
+    }));
   window.localStorage.setItem(
     PROVIDER_DEFINITIONS_STORAGE_KEY,
-    JSON.stringify(definitions),
+    JSON.stringify(localDefinitions),
   );
 }
 
@@ -3406,7 +3424,7 @@ function defaultProviderDefinitions(
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
 ): ProviderDefinition[] {
-  const fromGraphs = pipelineViews.flatMap((view) =>
+  const fromGraphs: ProviderDefinition[] = pipelineViews.flatMap((view) =>
     view.graph.nodes.flatMap((node) => {
       if (!providerKindForNodeKind(node.kind)) {
         return [];
@@ -3420,11 +3438,12 @@ function defaultProviderDefinitions(
           kind: node.kind,
           component: component?.id ?? node.provider,
           config: nodeConfigObject(node.config),
+          source: "inferred",
         },
       ];
     }),
   );
-  const fromStatus =
+  const fromStatus: ProviderDefinition[] =
     snapshot?.providers.map((provider) => ({
       id: provider.id,
       label: provider.id,
@@ -3432,6 +3451,7 @@ function defaultProviderDefinitions(
       component:
         componentForProviderStatus(catalog, provider)?.id ?? provider.id,
       config: {},
+      source: "inferred" as const,
     })) ?? [];
 
   return mergeProviderDefinitions([], [...fromGraphs, ...fromStatus]);
