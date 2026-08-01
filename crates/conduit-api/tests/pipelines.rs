@@ -494,6 +494,63 @@ async fn provider_reachability_test_marks_a_provider_reachable() {
 }
 
 #[tokio::test]
+async fn saved_provider_definition_stays_configured_until_reachability_test_passes() {
+    let server = MockOpenAiServer::healthy().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": server.url(),
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+
+    let (status, body) = call(&state, get("/v1/status")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    let provider = providers
+        .iter()
+        .find(|provider| provider["id"] == "openai-primary")
+        .expect("provider status");
+    assert_eq!(provider["state"], "configured");
+    assert_eq!(provider["reachable"], false);
+    assert_eq!(provider["message"], "no successful reachability check yet");
+}
+
+#[tokio::test]
+async fn successful_provider_reachability_test_updates_provider_status() {
+    let server = MockOpenAiServer::healthy().await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": server.url(),
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+    call(&state, post("/v1/providers/openai-primary/test")).await;
+
+    let (status, body) = call(&state, get("/v1/status")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let providers = body["providers"].as_array().expect("providers");
+    let provider = providers
+        .iter()
+        .find(|provider| provider["id"] == "openai-primary")
+        .expect("provider status");
+    assert_eq!(provider["state"], "reachable");
+    assert_eq!(provider["reachable"], true);
+    assert_eq!(provider["message"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn provider_reachability_test_reports_actionable_failures() {
     let server = MockOpenAiServer::failing(
         StatusCode::UNAUTHORIZED,

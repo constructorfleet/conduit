@@ -153,6 +153,7 @@ pub async fn test(
         return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
     };
 
+    state.record_provider_reachability(&id, health.clone());
     Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
 }
 

@@ -1,5 +1,6 @@
 //! Shared application state.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use conduit_provider::storage::{
     PipelineStore, ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant,
     ProviderSecret,
 };
+use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
 
@@ -29,6 +31,8 @@ pub struct AppState {
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
+    /// Results from explicit provider reachability checks.
+    provider_reachability: Arc<RwLock<BTreeMap<String, Health>>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
     metrics: Arc<Metrics>,
     /// Runtime status projection used by the Operator Console.
@@ -68,6 +72,7 @@ impl AppState {
             pipelines,
             provider_definitions,
             providers: Arc::new(RwLock::new(None)),
+            provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
             status: RuntimeStatus::new(),
             turns,
@@ -155,6 +160,24 @@ impl AppState {
         self.providers.write().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Latest explicit reachability results, keyed by provider definition id.
+    #[must_use]
+    pub fn provider_reachability(&self) -> BTreeMap<String, Health> {
+        self.provider_reachability.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Records the result of an explicit provider reachability check.
+    pub fn record_provider_reachability(&self, id: &str, health: Health) {
+        self.provider_reachability
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned(), health);
+    }
+
+    fn clear_provider_reachability(&self, id: &str) {
+        self.provider_reachability.write().unwrap_or_else(PoisonError::into_inner).remove(id);
+    }
+
     /// Names of every stored pipeline, in order.
     ///
     /// # Errors
@@ -222,6 +245,7 @@ impl AppState {
     ) -> Result<bool> {
         let replaced = self.provider_definitions.put(id, definition).await?;
         self.rebuild_provider_snapshot().await?;
+        self.clear_provider_reachability(id);
         Ok(replaced)
     }
 
@@ -234,6 +258,7 @@ impl AppState {
         let removed = self.provider_definitions.remove(id).await?;
         if removed {
             self.rebuild_provider_snapshot().await?;
+            self.clear_provider_reachability(id);
         }
         Ok(removed)
     }

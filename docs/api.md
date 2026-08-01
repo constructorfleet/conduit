@@ -195,14 +195,16 @@ State vocabulary:
 | `pipelines[].components[].state` | `not_configured`, `unused`, `unproven`, `healthy`, `degraded`, `unhealthy` | Component Health explaining the pipeline state |
 | `providers[].state` | `unavailable`, `configured`, `reachable`, `proven` | Provider Status; configured settings, reachability checks, and real turn proof are separate |
 
-Provider Status is currently projected from runtime provider registrations and
-stored pipeline graph references. A registered provider is Configured. Its
-`Provider::health()` result is the active reachability check: usable health
-means Reachable, while an unhealthy result remains Configured with the reason
-in `message`. Proven Provider status comes only from a completed successful
-turn that invoked the provider's component in a real pipeline. Missing core
-runtime capabilities are reported as Unavailable provider slots, and graph
-references to unregistered providers are reported as Unavailable references.
+Provider Status is projected from saved Provider Definitions, explicit
+reachability checks, runtime provider registrations, and stored pipeline graph
+references. A saved Provider Definition is Configured until
+`POST /v1/providers/{id}/test` records a usable health result. A usable result
+marks the provider Reachable; an unhealthy result leaves it Configured with the
+reason in `message`. Proven Provider status comes only from a completed
+successful turn that invoked the provider's component in a real pipeline.
+Missing core runtime capabilities are reported as Unavailable provider slots,
+and graph references to unregistered providers are reported as Unavailable
+references.
 
 Connected satellites are devices with an open conversation connection right
 now. Recently active satellites are devices that emitted events inside the
