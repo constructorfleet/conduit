@@ -257,6 +257,15 @@ function OperatorWorkspace({
     useState<PipelineComponentCatalog>(
       () => initialComponentCatalog ?? { components: [] },
     );
+  const [providerDefinitions, setProviderDefinitions] = useState<
+    ProviderDefinition[]
+  >(() =>
+    loadProviderDefinitions(
+      initialComponentCatalog ?? { components: [] },
+      initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
+      snapshotClient.snapshot,
+    ),
+  );
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const smallScreen = useSmallScreenMode(initialSmallScreen);
   const eventPlan = useMemo(() => {
@@ -345,6 +354,16 @@ function OperatorWorkspace({
         setSnapshot(loadedSnapshot);
         setPipelineViews(initialPipelineViews ?? loadedPipelineViews);
         setComponentCatalog(initialComponentCatalog ?? loadedComponentCatalog);
+        setProviderDefinitions((current) =>
+          mergeProviderDefinitions(
+            current,
+            defaultProviderDefinitions(
+              initialComponentCatalog ?? loadedComponentCatalog,
+              initialPipelineViews ?? loadedPipelineViews,
+              loadedSnapshot,
+            ),
+          ),
+        );
         setTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
       } catch (caught) {
@@ -377,6 +396,10 @@ function OperatorWorkspace({
     initialSnapshot,
     snapshotClient,
   ]);
+
+  useEffect(() => {
+    saveProviderDefinitions(providerDefinitions);
+  }, [providerDefinitions]);
 
   if (firstRun) {
     return (
@@ -469,6 +492,7 @@ function OperatorWorkspace({
           events={initialEvents ?? eventEnvelopeFixtures}
           turnSnapshot={turnSnapshot}
           componentCatalog={componentCatalog}
+          providerDefinitions={providerDefinitions}
           pipelineViews={pipelineViews}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
@@ -476,6 +500,7 @@ function OperatorWorkspace({
           loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={onPipelineValidate ?? validatePipelineGraph}
+          onProviderDefinitionsChange={setProviderDefinitions}
           onPipelineStored={storePipelineGraph}
         />
       </section>
@@ -492,6 +517,7 @@ function SectionPanel({
   events,
   turnSnapshot,
   componentCatalog,
+  providerDefinitions,
   pipelineViews,
   snapshot,
   eventPosture,
@@ -500,11 +526,13 @@ function SectionPanel({
   onSectionChange,
   onPipelineStored,
   onPipelineValidate,
+  onProviderDefinitionsChange,
 }: {
   section: SectionId;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
   componentCatalog: PipelineComponentCatalog;
+  providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
@@ -513,6 +541,7 @@ function SectionPanel({
   onSectionChange: (section: SectionId) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => Promise<void>;
   onPipelineValidate: (graph: PipelineGraph) => PipelineValidationResult;
+  onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   if (loadError) {
     return (
@@ -546,7 +575,7 @@ function SectionPanel({
   if (section === "pipelines") {
     return (
       <PipelinesPanel
-        componentCatalog={componentCatalog}
+        providerDefinitions={providerDefinitions}
         pipelineViews={pipelineViews}
         readOnly={initialSmallScreen}
         snapshot={snapshot}
@@ -559,8 +588,11 @@ function SectionPanel({
   if (section === "providers") {
     return (
       <ProvidersPanel
+        componentCatalog={componentCatalog}
         pipelineViews={pipelineViews}
+        providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
+        onProviderDefinitionsChange={onProviderDefinitionsChange}
       />
     );
   }
@@ -569,6 +601,7 @@ function SectionPanel({
 }
 
 const OPERATOR_SETTINGS_STORAGE_KEY = "conduit.operator.settings";
+const PROVIDER_DEFINITIONS_STORAGE_KEY = "conduit.provider.definitions";
 const retentionOptions = ["7 d", "30 d", "90 d", "forever"] as const;
 const logLevelOptions = ["debug", "info", "warn", "error"] as const;
 
@@ -585,18 +618,35 @@ interface OperatorConsoleSettings {
 
 type ProviderFilter = "all" | ProviderKind;
 
+interface ProviderDefinition {
+  id: string;
+  label: string;
+  kind: NodeKind;
+  component: string;
+  config: Record<string, unknown>;
+}
+
 interface ProviderOverride {
   fallbackSelected?: boolean;
 }
 
 function ProvidersPanel({
+  componentCatalog,
   pipelineViews,
+  providerDefinitions,
   providers,
+  onProviderDefinitionsChange,
 }: {
+  componentCatalog: PipelineComponentCatalog;
   pipelineViews: readonly PipelineView[];
+  providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
+  onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
 }) {
   const [filter, setFilter] = useState<ProviderFilter>("all");
+  const [draftProvider, setDraftProvider] = useState<ProviderDefinition | null>(
+    null,
+  );
   const [overrides, setOverrides] = useState<Record<string, ProviderOverride>>(
     {},
   );
@@ -607,7 +657,10 @@ function ProvidersPanel({
     .map((provider) => ({ ...provider, ...overrides[provider.id] }))
     .filter((provider) => filter === "all" || provider.kind === filter);
   const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
-  const providerIds = new Set(providers.map((provider) => provider.id));
+  const providerIds = new Set([
+    ...providers.map((provider) => provider.id),
+    ...providerDefinitions.map((provider) => provider.id),
+  ]);
   const referencedProviderCount = new Set(
     pipelineViews.flatMap((view) =>
       view.graph.nodes
@@ -615,6 +668,80 @@ function ProvidersPanel({
         .filter((provider) => providerIds.has(provider)),
     ),
   ).size;
+  const editableProviders = providerDefinitions.filter(
+    (provider) =>
+      filter === "all" || providerKindForNodeKind(provider.kind) === filter,
+  );
+  const selectedDraftComponent = draftProvider
+    ? (componentCatalog.components.find(
+        (component) => component.id === draftProvider.component,
+      ) ?? null)
+    : null;
+
+  function startNewProvider() {
+    const component = componentCatalog.components[0];
+    setDraftProvider({
+      id: component?.id ?? "provider",
+      label: component?.label ?? "Provider",
+      kind: component?.kind ?? "llm",
+      component: component?.id ?? "",
+      config: {},
+    });
+  }
+
+  function editProvider(provider: ProviderDefinition) {
+    setDraftProvider(cloneProviderDefinition(provider));
+  }
+
+  function updateDraftConfig(
+    field: string,
+    property: ComponentConfigProperty,
+    value: string | boolean,
+  ) {
+    setDraftProvider((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        config: updateConfigValue(current.config, field, property, value),
+      };
+    });
+  }
+
+  function saveDraftProvider() {
+    if (!draftProvider) {
+      return;
+    }
+
+    const id = draftProvider.id.trim();
+    const component = componentCatalog.components.find(
+      (candidate) => candidate.id === draftProvider.component,
+    );
+    if (!id || !component) {
+      return;
+    }
+
+    const next: ProviderDefinition = {
+      ...draftProvider,
+      id,
+      label: draftProvider.label.trim() || id,
+      kind: component.kind,
+      config: pruneEmptyConfig(draftProvider.config),
+    };
+    onProviderDefinitionsChange(
+      mergeProviderDefinitions(
+        providerDefinitions.filter((provider) => provider.id !== next.id),
+        [next],
+      ),
+    );
+    setProviderNotices((current) => ({
+      ...current,
+      [next.id]: `Provider ${next.id} saved`,
+    }));
+    setDraftProvider(null);
+  }
 
   function testProvider(provider: ProviderStatus) {
     setProviderNotices((current) => ({
@@ -642,8 +769,8 @@ function ProvidersPanel({
           value={`${visibleProviders.length} visible`}
         />
         <MetricTile
-          label="Snapshot providers"
-          value={providers.length.toString()}
+          label="Provider configs"
+          value={providerDefinitions.length.toString()}
         />
         <MetricTile
           label="Configured in graphs"
@@ -673,6 +800,126 @@ function ProvidersPanel({
           </button>
         ))}
       </div>
+
+      <section
+        className="provider-config-editor"
+        aria-label="Provider configuration"
+      >
+        <div className="panel-heading-row">
+          <div>
+            <p className="eyebrow">Configuration</p>
+            <h2>Provider Instances</h2>
+          </div>
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={startNewProvider}
+          >
+            <Plus size={17} aria-hidden="true" />
+            Add provider
+          </button>
+        </div>
+
+        {draftProvider ? (
+          <div className="provider-definition-form">
+            <label className="field">
+              <span>Provider id</span>
+              <input
+                value={draftProvider.id}
+                onChange={(event) =>
+                  setDraftProvider((current) =>
+                    current ? { ...current, id: event.target.value } : current,
+                  )
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Provider label</span>
+              <input
+                value={draftProvider.label}
+                onChange={(event) =>
+                  setDraftProvider((current) =>
+                    current
+                      ? { ...current, label: event.target.value }
+                      : current,
+                  )
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Provider component</span>
+              <select
+                value={draftProvider.component}
+                onChange={(event) => {
+                  const component = componentCatalog.components.find(
+                    (candidate) => candidate.id === event.target.value,
+                  );
+                  setDraftProvider((current) =>
+                    current && component
+                      ? {
+                          ...current,
+                          component: component.id,
+                          kind: component.kind,
+                          config: {},
+                        }
+                      : current,
+                  );
+                }}
+              >
+                {componentCatalog.components.map((component) => (
+                  <option value={component.id} key={component.id}>
+                    {component.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedDraftComponent ? (
+              <ComponentConfigFields
+                component={selectedDraftComponent}
+                config={draftProvider.config}
+                readOnly={false}
+                onChange={updateDraftConfig}
+              />
+            ) : null}
+            <div className="provider-actions">
+              <button
+                className="primary-action"
+                type="button"
+                onClick={saveDraftProvider}
+              >
+                <Save size={17} aria-hidden="true" />
+                Save provider
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="provider-definition-list">
+          {editableProviders.map((provider) => (
+            <article className="provider-definition" key={provider.id}>
+              <div>
+                <strong>{provider.label}</strong>
+                <span>{provider.id}</span>
+              </div>
+              <code>{provider.component}</code>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => editProvider(provider)}
+              >
+                <Settings size={17} aria-hidden="true" />
+                Edit
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {Object.values(providerNotices).map((notice) => (
+        <p className="panel-notice" key={notice}>
+          {notice}
+        </p>
+      ))}
 
       <section className="provider-card-grid" aria-label="Provider cards">
         {visibleProviders.map((provider) => (
@@ -733,9 +980,6 @@ function ProvidersPanel({
               <p className="panel-notice">
                 Fallback selected for {provider.id}
               </p>
-            ) : null}
-            {providerNotices[provider.id] ? (
-              <p className="panel-notice">{providerNotices[provider.id]}</p>
             ) : null}
           </article>
         ))}
@@ -1265,14 +1509,14 @@ function EventsPanel({
 }
 
 function PipelinesPanel({
-  componentCatalog,
+  providerDefinitions,
   pipelineViews,
   readOnly,
   snapshot,
   onPipelineStored,
   onPipelineValidate,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   readOnly: boolean;
   snapshot: OperatorStatusSnapshot | null;
@@ -1304,9 +1548,9 @@ function PipelinesPanel({
     draft?.nodes.find((node) => node.id === selectedNodeId) ??
     draft?.nodes[0] ??
     null;
-  const selectedComponent = selectedNode
-    ? componentForNode(componentCatalog, selectedNode)
-    : null;
+  const providerChoices = selectedNode
+    ? providerDefinitionsForNode(providerDefinitions, selectedNode)
+    : [];
 
   function selectPipeline(view: PipelineView) {
     setSelectedName(view.graph.name);
@@ -1357,11 +1601,7 @@ function PipelinesPanel({
     });
   }
 
-  function updateSelectedNodeConfig(
-    field: string,
-    property: ComponentConfigProperty,
-    value: string | boolean,
-  ) {
+  function updateSelectedNodeProvider(providerId: string) {
     if (!selectedNode) {
       return;
     }
@@ -1373,23 +1613,10 @@ function PipelinesPanel({
           return node;
         }
 
-        const config =
-          node.config &&
-          typeof node.config === "object" &&
-          !Array.isArray(node.config)
-            ? { ...(node.config as Record<string, unknown>) }
-            : {};
-        if (property.type === "boolean") {
-          config[field] = value === true;
-        } else if (typeof value === "string" && value.length > 0) {
-          config[field] = value;
-        } else {
-          delete config[field];
-        }
-
         return {
           ...node,
-          config: Object.keys(config).length > 0 ? config : undefined,
+          provider: providerId,
+          config: undefined,
         };
       }),
     }));
@@ -1572,17 +1799,23 @@ function PipelinesPanel({
                 ))}
               </select>
             </label>
-            {selectedNode && selectedComponent ? (
-              <ComponentConfigForm
-                component={selectedComponent}
-                node={selectedNode}
-                readOnly={readOnly}
-                onChange={updateSelectedNodeConfig}
-              />
-            ) : selectedNode ? (
-              <p className="muted-text">
-                No configuration schema for {selectedNode.provider}
-              </p>
+            {selectedNode ? (
+              <label className="field">
+                <span>Provider</span>
+                <select
+                  disabled={readOnly}
+                  value={selectedNode.provider}
+                  onChange={(event) =>
+                    updateSelectedNodeProvider(event.target.value)
+                  }
+                >
+                  {providerChoices.map((provider) => (
+                    <option value={provider.id} key={provider.id}>
+                      {provider.label} ({provider.id})
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : null}
           </div>
 
@@ -1676,14 +1909,14 @@ function PipelinesPanel({
   );
 }
 
-function ComponentConfigForm({
+function ComponentConfigFields({
   component,
-  node,
+  config,
   readOnly,
   onChange,
 }: {
   component: PipelineComponentDescriptor;
-  node: PipelineNode;
+  config: Record<string, unknown>;
   readOnly: boolean;
   onChange: (
     field: string,
@@ -1691,12 +1924,6 @@ function ComponentConfigForm({
     value: string | boolean,
   ) => void;
 }) {
-  const config =
-    node.config &&
-    typeof node.config === "object" &&
-    !Array.isArray(node.config)
-      ? (node.config as Record<string, unknown>)
-      : {};
   const required = new Set(component.schema.required);
 
   return (
@@ -1765,6 +1992,181 @@ function componentForNode(
     catalog.components.find((component) => component.id === node.provider) ??
     null
   );
+}
+
+function providerDefinitionsForNode(
+  definitions: readonly ProviderDefinition[],
+  node: PipelineNode,
+): ProviderDefinition[] {
+  const matching = definitions.filter(
+    (provider) => provider.kind === node.kind,
+  );
+  if (matching.some((provider) => provider.id === node.provider)) {
+    return matching;
+  }
+
+  return [
+    ...matching,
+    {
+      id: node.provider,
+      label: node.provider,
+      kind: node.kind,
+      component: node.provider,
+      config: nodeConfigObject(node.config),
+    },
+  ];
+}
+
+function loadProviderDefinitions(
+  catalog: PipelineComponentCatalog,
+  pipelineViews: readonly PipelineView[],
+  snapshot: OperatorStatusSnapshot | null,
+): ProviderDefinition[] {
+  try {
+    const saved = window.localStorage.getItem(PROVIDER_DEFINITIONS_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved) as ProviderDefinition[];
+      return mergeProviderDefinitions(
+        parsed.filter(isProviderDefinition),
+        defaultProviderDefinitions(catalog, pipelineViews, snapshot),
+      );
+    }
+  } catch {
+    // Bad local UI state should not block the console from loading.
+  }
+
+  return defaultProviderDefinitions(catalog, pipelineViews, snapshot);
+}
+
+function saveProviderDefinitions(definitions: readonly ProviderDefinition[]) {
+  window.localStorage.setItem(
+    PROVIDER_DEFINITIONS_STORAGE_KEY,
+    JSON.stringify(definitions),
+  );
+}
+
+function defaultProviderDefinitions(
+  catalog: PipelineComponentCatalog,
+  pipelineViews: readonly PipelineView[],
+  snapshot: OperatorStatusSnapshot | null,
+): ProviderDefinition[] {
+  const fromGraphs = pipelineViews.flatMap((view) =>
+    view.graph.nodes.map((node) => {
+      const component = componentForNode(catalog, node);
+      return {
+        id: node.provider,
+        label: node.provider,
+        kind: node.kind,
+        component: component?.id ?? node.provider,
+        config: nodeConfigObject(node.config),
+      };
+    }),
+  );
+  const fromStatus =
+    snapshot?.providers.map((provider) => ({
+      id: provider.id,
+      label: provider.id,
+      kind: nodeKindForProviderKind(provider.kind),
+      component: provider.id,
+      config: {},
+    })) ?? [];
+
+  return mergeProviderDefinitions([], [...fromGraphs, ...fromStatus]);
+}
+
+function mergeProviderDefinitions(
+  base: readonly ProviderDefinition[],
+  incoming: readonly ProviderDefinition[],
+): ProviderDefinition[] {
+  const byId = new Map<string, ProviderDefinition>();
+  for (const provider of [...base, ...incoming]) {
+    byId.set(provider.id, cloneProviderDefinition(provider));
+  }
+  return [...byId.values()].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+}
+
+function cloneProviderDefinition(
+  provider: ProviderDefinition,
+): ProviderDefinition {
+  return {
+    ...provider,
+    config: { ...provider.config },
+  };
+}
+
+function isProviderDefinition(value: unknown): value is ProviderDefinition {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const provider = value as Partial<ProviderDefinition>;
+  return (
+    typeof provider.id === "string" &&
+    typeof provider.label === "string" &&
+    typeof provider.kind === "string" &&
+    typeof provider.component === "string" &&
+    !!provider.config &&
+    typeof provider.config === "object" &&
+    !Array.isArray(provider.config)
+  );
+}
+
+function updateConfigValue(
+  config: Record<string, unknown>,
+  field: string,
+  property: ComponentConfigProperty,
+  value: string | boolean,
+): Record<string, unknown> {
+  const next = { ...config };
+  if (property.type === "boolean") {
+    next[field] = value === true;
+  } else if (typeof value === "string" && value.length > 0) {
+    next[field] = value;
+  } else {
+    delete next[field];
+  }
+  return next;
+}
+
+function pruneEmptyConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(config).filter(([, value]) => value !== "" && value != null),
+  );
+}
+
+function nodeConfigObject(config: unknown): Record<string, unknown> {
+  return config && typeof config === "object" && !Array.isArray(config)
+    ? { ...(config as Record<string, unknown>) }
+    : {};
+}
+
+function nodeKindForProviderKind(kind: ProviderKind): NodeKind {
+  if (kind === "stt") {
+    return "stt";
+  }
+  if (kind === "tts") {
+    return "tts";
+  }
+  if (kind === "tool") {
+    return "tool";
+  }
+  return "llm";
+}
+
+function providerKindForNodeKind(kind: NodeKind): ProviderKind {
+  if (kind === "stt") {
+    return "stt";
+  }
+  if (kind === "tts") {
+    return "tts";
+  }
+  if (kind === "tool") {
+    return "tool";
+  }
+  return "llm";
 }
 
 function EventStaleBanner() {

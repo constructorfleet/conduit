@@ -727,7 +727,7 @@ describe("Pipelines graph editor", () => {
     });
   });
 
-  it("renders schema-driven component configuration fields into saved node config", async () => {
+  it("selects a configured provider for a pipeline node", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
     render(
@@ -740,21 +740,56 @@ describe("Pipelines graph editor", () => {
 
     await enterPipelinesSection(user);
     await user.selectOptions(screen.getByLabelText("Node"), "llm");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    expect(
+      savedGraphs[0]?.nodes.find((node) => node.id === "llm")?.provider,
+    ).toBe("openai");
+  });
+
+  it("uses providers configured on the Providers page as pipeline choices", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-fast");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "OpenAI Fast");
+    await user.selectOptions(
+      screen.getByLabelText("Provider component"),
+      "openai.completions",
+    );
     await user.type(
       screen.getByLabelText("base_url required"),
       "https://api.openai.com/v1",
     );
     await user.type(screen.getByLabelText("model required"), "gpt.5");
     await user.click(screen.getByLabelText("streaming"));
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await user.selectOptions(screen.getByLabelText("Node"), "llm");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai-fast");
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(
-      savedGraphs[0]?.nodes.find((node) => node.id === "llm")?.config,
-    ).toEqual({
-      base_url: "https://api.openai.com/v1",
-      model: "gpt.5",
-      streaming: true,
+    expect(savedGraphs[0]?.nodes.find((node) => node.id === "llm")).toEqual({
+      id: "llm",
+      kind: "llm",
+      provider: "openai-fast",
     });
   });
 
@@ -835,6 +870,34 @@ describe("Pipelines graph editor", () => {
 });
 
 describe("Providers workspace", () => {
+  it("creates schema-backed provider instances with labels and config", async () => {
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-primary");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "OpenAI Primary");
+    await user.selectOptions(
+      screen.getByLabelText("Provider component"),
+      "openai.completions",
+    );
+    await user.type(
+      screen.getByLabelText("base_url required"),
+      "https://api.openai.com/v1",
+    );
+    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByText("Provider openai-primary saved"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("OpenAI Primary")).toBeInTheDocument();
+    expect(screen.getAllByText("openai.completions").length).toBeGreaterThan(0);
+  });
+
   it("renders provider status from the snapshot and filters by stage", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -844,7 +907,7 @@ describe("Providers workspace", () => {
     expect(
       screen.getByRole("heading", { name: "Providers" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("piper-local")).toBeInTheDocument();
+    expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(
       screen.getByText("no successful reachability check yet"),
     ).toBeInTheDocument();

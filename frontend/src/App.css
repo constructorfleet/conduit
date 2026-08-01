@@ -717,6 +717,19 @@ button {
   padding: 16px;
 }
 
+.panel-heading-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading-row h2 {
+  margin: 0;
+  color: var(--strong);
+  font-size: 16px;
+}
+
 .component-config-form {
   display: grid;
   gap: 10px;
@@ -737,6 +750,48 @@ button {
   color: var(--strong);
   font-size: 12px;
   font-weight: 800;
+}
+
+.provider-config-editor,
+.provider-definition-form,
+.provider-definition-list {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-config-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.provider-definition-form {
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  align-items: end;
+}
+
+.provider-definition-form .component-config-fields,
+.provider-definition-form .provider-actions {
+  grid-column: 1 / -1;
+}
+
+.provider-definition {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, auto) auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.provider-definition div {
+  display: grid;
+  gap: 2px;
+}
+
+.provider-definition span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .validation-ok {

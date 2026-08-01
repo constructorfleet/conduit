@@ -233,8 +233,9 @@ After reconnect, the UI refreshes `/v1/status` before applying new events.
 ### `GET /v1/pipeline-components`
 
 Lists known pipeline component descriptors and the configuration schema each
-component accepts. The Operator Console uses this catalog to render
-provider-specific node configuration forms backed by `graph.nodes[].config`.
+component accepts. The Operator Console uses this catalog to render provider
+instance configuration forms on the Providers page. Pipeline graphs then refer
+to configured provider IDs from `graph.nodes[].provider`.
 
 Success body:
 
