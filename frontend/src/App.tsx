@@ -2583,7 +2583,7 @@ function PipelinesPanel({
               className="pipeline-atom-map"
               style={{ transform: `scale(${graphZoom / 100})` }}
             >
-              {atomFlowNodes.map((node, nodeIndex) => {
+              {atomFlowNodes.map((node) => {
                 const outgoingEdges = atomEdges.filter(
                   (edge) =>
                     edge.from === node.id && !attachesFlowLinkToTarget(edge),
