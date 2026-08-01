@@ -10,4 +10,5 @@ Provider definitions are server-owned structured records, not generic configurat
 - The provider component catalog is exposed at `/v1/catalog/providers`; the old pipeline-component route is removed rather than kept as an alias.
 - Catalog entries include component identity, provider kind, definition variant identity, and form metadata, while saved provider definitions use typed variants.
 - Product runtime providers are built from the provider definition store, not environment variables. Direct provider injection remains only a test/development seam.
+- Each variant registers a runtime provider under its definition id. An MCP definition describes a server rather than a single tool, so each tool it advertises is also registered as `<definition id>.<tool name>`; discovery is best-effort so that saving a definition never depends on the server being up.
 - Existing browser-local provider definitions and old graph provider references are not migrated; operators may recreate provider definitions and pipelines through the backend-backed flow.

@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/pipeline-components`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/test`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -195,14 +195,16 @@ State vocabulary:
 | `pipelines[].components[].state` | `not_configured`, `unused`, `unproven`, `healthy`, `degraded`, `unhealthy` | Component Health explaining the pipeline state |
 | `providers[].state` | `unavailable`, `configured`, `reachable`, `proven` | Provider Status; configured settings, reachability checks, and real turn proof are separate |
 
-Provider Status is currently projected from runtime provider registrations and
-stored pipeline graph references. A registered provider is Configured. Its
-`Provider::health()` result is the active reachability check: usable health
-means Reachable, while an unhealthy result remains Configured with the reason
-in `message`. Proven Provider status comes only from a completed successful
-turn that invoked the provider's component in a real pipeline. Missing core
-runtime capabilities are reported as Unavailable provider slots, and graph
-references to unregistered providers are reported as Unavailable references.
+Provider Status is projected from saved Provider Definitions, explicit
+reachability checks, runtime provider registrations, and stored pipeline graph
+references. A saved Provider Definition is Configured until
+`POST /v1/providers/{id}/test` records a usable health result. A usable result
+marks the provider Reachable; an unhealthy result leaves it Configured with the
+reason in `message`. Proven Provider status comes only from a completed
+successful turn that invoked the provider's component in a real pipeline.
+Missing core runtime capabilities are reported as Unavailable provider slots,
+and graph references to unregistered providers are reported as Unavailable
+references.
 
 Connected satellites are devices with an open conversation connection right
 now. Recently active satellites are devices that emitted events inside the
@@ -228,14 +230,14 @@ from `/v1/events` according to `event_stream.bindings`. If the event stream
 disconnects, the UI must keep the last known view but mark it with Stale State.
 After reconnect, the UI refreshes `/v1/status` before applying new events.
 
-## Pipeline Routes
+## Provider Routes
 
-### `GET /v1/pipeline-components`
+### `GET /v1/catalog/providers`
 
-Lists known pipeline component descriptors and the configuration schema each
-component accepts. The Operator Console uses this catalog to render provider
-instance configuration forms on the Providers page. Pipeline graphs then refer
-to configured provider IDs from `graph.nodes[].provider`.
+Lists known Provider Component Catalog entries and the configuration schema each
+component accepts. The Operator Console uses this catalog to render Provider
+Definition creation forms on the Providers page. Pipeline graphs then refer to
+saved Provider Definition ids from `graph.nodes[].provider`.
 
 Success body:
 
@@ -246,6 +248,7 @@ Success body:
       "id": "openai.responses",
       "label": "OpenAI Responses",
       "kind": "llm",
+      "definition_variant": "openai_llm",
       "schema": {
         "properties": {
           "base_url": { "type": "string", "format": "url" },
@@ -259,6 +262,108 @@ Success body:
   ]
 }
 ```
+
+### `GET /v1/providers`
+
+Lists saved Provider Definition ids.
+
+Success body:
+
+```json
+["openai-primary", "piper-local"]
+```
+
+### `GET /v1/providers/{id}`
+
+Returns one saved Provider Definition with inline secrets redacted.
+
+Success body:
+
+```json
+{
+  "id": "openai-primary",
+  "label": "OpenAI Primary",
+  "kind": "llm",
+  "variant": {
+    "type": "openai_llm",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": { "type": "redacted" },
+    "models": ["gpt-4.1"],
+    "streaming": true
+  }
+}
+```
+
+### `PUT /v1/providers/{id}`
+
+Creates or replaces a typed Provider Definition. The request body id must match
+the route id. Saving a Provider Definition rebuilds the active Runtime Provider
+Registry Snapshot for new validations and turns. Save validates the typed shape
+but does not perform a reachability check.
+
+Inline secrets are accepted on writes but are redacted from read responses.
+Sending `{ "type": "redacted" }` for an existing secret keeps the stored secret;
+omitting or nulling the secret field clears it.
+
+Each variant registers a Runtime Provider under the definition id:
+
+| Variant | Registers | Notes |
+| --- | --- | --- |
+| `openai_llm`, `openai_stt`, `openai_tts` | One provider under the definition id | |
+| `wyoming_stt`, `wyoming_tts` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `mcp_tool` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+
+An MCP definition registers the tools its server currently advertises, each as
+`<definition id>.<tool name>`. A server advertising exactly one tool is also
+registered under the definition id itself. Discovery needs the server, but
+saving does not: a server that cannot be reached within five seconds saves the
+definition and registers no tools, and `POST /v1/providers/{id}/test`
+rediscovers them once it answers.
+
+### `DELETE /v1/providers/{id}`
+
+Deletes an unreferenced Provider Definition and rebuilds the active Runtime
+Provider Registry Snapshot. Deletion is refused with `409 conflict` when stored
+pipelines still reference the provider id, or — for an MCP definition — any of
+the `<definition id>.<tool name>` ids it registers.
+
+Conflict body:
+
+```json
+{
+  "error": "conflict",
+  "detail": "provider definition is still referenced by pipelines",
+  "affected_pipelines": ["kitchen"]
+}
+```
+
+### `POST /v1/providers/{id}/test`
+
+Runs a narrow active reachability check for one saved Provider Definition
+through the active Runtime Provider Registry Snapshot. An OpenAI definition
+lists models, a Wyoming definition opens a socket, and an MCP definition lists
+tools — none of them invokes anything. The check returns the same Provider
+Status shape used by `/v1/status`. A successful check marks the
+provider `reachable`; a failed check leaves it `configured` with the provider
+error message. The endpoint does not run a pipeline turn and does not prove the
+provider inside a real conversation.
+
+Success body:
+
+```json
+{
+  "id": "openai-primary",
+  "kind": "llm",
+  "state": "reachable",
+  "configured": true,
+  "reachable": true,
+  "proven_by_turn": null,
+  "message": null,
+  "affects_pipelines": ["kitchen"]
+}
+```
+
+## Pipeline Routes
 
 ### `GET /v1/pipelines`
 

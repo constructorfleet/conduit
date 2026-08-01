@@ -1,10 +1,12 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
-  PipelineComponentCatalog,
   PipelineGraph,
   PipelineTestRequest,
   PipelineTestResult,
   PipelineView,
+  ProviderComponentCatalog,
+  ProviderDefinition,
+  ProviderDefinitionView,
   RawTurnEvents,
   TurnList,
   TurnSnapshot,
@@ -13,6 +15,7 @@ import { pipelineViewFixture, turnSnapshotFixture } from "./contracts/client";
 import {
   operatorStatusSnapshotFixture,
   type OperatorStatusSnapshot,
+  type ProviderStatus,
 } from "./contracts/status";
 import type { OperatorAccess } from "./operatorAccess";
 
@@ -33,7 +36,8 @@ export interface SnapshotClient {
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
   loadPipelineViews: () => Promise<PipelineView[]>;
-  loadComponentCatalog: () => Promise<PipelineComponentCatalog>;
+  loadComponentCatalog: () => Promise<ProviderComponentCatalog>;
+  loadProviderDefinitions: () => Promise<ProviderDefinitionView[]>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -43,6 +47,11 @@ export interface SnapshotClient {
     name: string,
     request?: PipelineTestRequest,
   ) => Promise<PipelineTestResult>;
+  saveProviderDefinition: (
+    definition: ProviderDefinition,
+  ) => Promise<ProviderDefinitionView>;
+  deleteProviderDefinition: (id: string) => Promise<void>;
+  testProviderDefinition: (id: string) => Promise<ProviderStatus>;
 }
 
 export function createSnapshotClient(
@@ -72,13 +81,21 @@ export function createSnapshotClient(
       const names = await client.listPipelines();
       return Promise.all(names.map((name) => client.getPipeline(name)));
     },
-    loadComponentCatalog: () => client.listPipelineComponents(),
+    loadComponentCatalog: () => client.listProviderComponents(),
+    loadProviderDefinitions: async () => {
+      const ids = await client.listProviderDefinitions();
+      return Promise.all(ids.map((id) => client.getProviderDefinition(id)));
+    },
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
     savePipeline: (graph) => client.putPipeline(graph.name, graph),
     validatePipeline: (graph) => client.validatePipeline(graph),
     runPipelineTest: (name, request) => client.testPipeline(name, request),
+    saveProviderDefinition: (definition) =>
+      client.putProviderDefinition(definition.id, definition),
+    deleteProviderDefinition: (id) => client.deleteProviderDefinition(id),
+    testProviderDefinition: (id) => client.testProviderDefinition(id),
   };
 }
 
@@ -98,6 +115,7 @@ function createMockSnapshotClient(
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
     loadPipelineViews: async () => [pipelineViewFixture],
     loadComponentCatalog: async () => ({ components: [] }),
+    loadProviderDefinitions: async () => [],
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
     loadTurn: async () => turnSnapshotFixture,
     loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),
@@ -116,7 +134,37 @@ function createMockSnapshotClient(
       audio_bytes: 24,
       reply_text: `You said: ${request?.utterance ?? "conduit test"}.`,
     }),
+    saveProviderDefinition: async (definition) => ({
+      ...definition,
+      kind: providerKindFromVariant(definition.variant.type),
+    }),
+    deleteProviderDefinition: async () => {},
+    testProviderDefinition: async (id) => ({
+      id,
+      kind: "llm",
+      state: "reachable",
+      configured: true,
+      reachable: true,
+      proven_by_turn: null,
+      message: null,
+      affects_pipelines: [],
+    }),
   };
+}
+
+function providerKindFromVariant(
+  variant: ProviderDefinition["variant"]["type"],
+): ProviderDefinitionView["kind"] {
+  if (variant === "openai_llm") {
+    return "llm";
+  }
+  if (variant === "openai_stt" || variant === "wyoming_stt") {
+    return "stt";
+  }
+  if (variant === "openai_tts" || variant === "wyoming_tts") {
+    return "tts";
+  }
+  return "tool";
 }
 
 export function authorizationHeaders(access: OperatorAccess): HeadersInit {

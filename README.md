@@ -23,6 +23,8 @@ echoes described under [Running](#running).
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
+| [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition and synthesis |
+| [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
@@ -143,25 +145,12 @@ npm run format
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for local Conduit data |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory to keep pipelines in; `:memory:` makes them disposable |
-| `CONDUIT_OPENAI_BASE_URL` | the hosted API | An OpenAI-compatible server |
-| `CONDUIT_OPENAI_API_KEY` | — | Bearer token; local servers rarely need one |
-| `CONDUIT_OPENAI_NAME` | `openai` | Registry name, so two servers can coexist |
-| `CONDUIT_OPENAI_READ_TIMEOUT_SECS` | `60` | How long a provider may go silent mid-response; `0` removes the bound |
-| `CONDUIT_OPENAI_STT_MODEL` | — | Enables speech recognition, e.g. `whisper-1` |
-| `CONDUIT_OPENAI_TTS_MODEL` | — | Enables synthesis, e.g. `tts-1` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Enables OTLP/HTTP span export to a collector |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | Trace-specific OTLP/HTTP endpoint; takes precedence for spans |
 
-Nothing is registered unless it is asked for, and a model named without a
-server to run it on stops the server at startup rather than failing halfway
-through someone's first sentence. A whole local pipeline:
-
-```sh
-CONDUIT_OPENAI_BASE_URL=http://localhost:8000/v1 \
-CONDUIT_OPENAI_STT_MODEL=Systran/faster-whisper-small \
-CONDUIT_OPENAI_TTS_MODEL=piper \
-cargo run -p conduit-api
-```
+Product runtime providers come from saved Provider Definitions, not
+environment variables. Create them through `/v1/providers` or the Operator
+Console, then reference their ids from pipeline graph nodes.
 
 To hold a conversation without any speech engine or model server, build with
 the `dev-providers` feature. It registers in-memory providers that treat audio

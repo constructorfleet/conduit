@@ -409,8 +409,7 @@ async fn concrete_missing_provider_references_replace_generic_unavailable_slots(
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"));
     let state = guarded();
-    let (status, body) = call(&state, put(&graph)).await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    state.put_pipeline("kitchen", graph).await.expect("stores fixture graph");
 
     let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
 

@@ -40,12 +40,16 @@ import type { OperatorDataMode, SnapshotState } from "./apiClient";
 import type {
   ComponentConfigProperty,
   NodeKind,
-  PipelineComponentCatalog,
-  PipelineComponentDescriptor,
+  ProviderComponentCatalog,
+  ProviderComponentDescriptor,
   PipelineEdge,
   PipelineGraph,
   PipelineNode,
   PipelineView,
+  ProviderDefinition as ApiProviderDefinition,
+  ProviderDefinitionVariant,
+  ProviderDefinitionView,
+  ProviderSecret,
   TurnSnapshot,
 } from "./contracts/client";
 import {
@@ -123,8 +127,9 @@ interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
-  initialComponentCatalog?: PipelineComponentCatalog;
+  initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
+  initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen?: boolean;
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
@@ -138,6 +143,7 @@ function App({
   initialEventPosture,
   initialComponentCatalog,
   initialPipelineViews,
+  initialProviderDefinitions,
   initialSmallScreen = false,
   dataMode = defaultDataMode(),
   onPipelineSaved,
@@ -161,6 +167,7 @@ function App({
       initialEventPosture={initialEventPosture}
       initialComponentCatalog={initialComponentCatalog}
       initialPipelineViews={initialPipelineViews}
+      initialProviderDefinitions={initialProviderDefinitions}
       initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
       dataMode={dataMode}
@@ -257,6 +264,7 @@ function OperatorWorkspace({
   initialEventPosture,
   initialComponentCatalog,
   initialPipelineViews,
+  initialProviderDefinitions,
   initialSmallScreen,
   initialSnapshot,
   dataMode,
@@ -270,8 +278,9 @@ function OperatorWorkspace({
   activeSection: SectionId;
   initialEvents?: readonly EventEnvelope[];
   initialEventPosture?: EventStreamPosture;
-  initialComponentCatalog?: PipelineComponentCatalog;
+  initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
+  initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
   dataMode: OperatorDataMode;
@@ -302,7 +311,7 @@ function OperatorWorkspace({
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
   const [componentCatalog, setComponentCatalog] =
-    useState<PipelineComponentCatalog>(
+    useState<ProviderComponentCatalog>(
       () => initialComponentCatalog ?? { components: [] },
     );
   const [providerDefinitions, setProviderDefinitions] = useState<
@@ -312,6 +321,7 @@ function OperatorWorkspace({
       initialComponentCatalog ?? { components: [] },
       initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
       snapshotClient.snapshot,
+      initialProviderDefinitions ?? [],
     ),
   );
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
@@ -333,7 +343,20 @@ function OperatorWorkspace({
         ? "Remembered management token"
         : "Session management token";
 
-  async function savePipeline(graph: PipelineGraph) {
+  async function savePipeline(
+    graph: PipelineGraph,
+    providerDefinitionsToSave: readonly ApiProviderDefinition[] = [],
+  ) {
+    for (const definition of providerDefinitionsToSave) {
+      const saved = await snapshotClient.saveProviderDefinition(definition);
+      const mapped = fromApiProviderDefinition(componentCatalog, saved);
+      setProviderDefinitions((current) =>
+        mergeProviderDefinitions(
+          current.filter((provider) => provider.id !== mapped.id),
+          [mapped],
+        ),
+      );
+    }
     const view = await snapshotClient.savePipeline(graph);
     onPipelineSaved?.(view.graph);
     setPipelineViews((current) =>
@@ -363,19 +386,39 @@ function OperatorWorkspace({
   }
 
   async function runProviderTest(providerId: string): Promise<string> {
-    const loadedSnapshot = await refreshSnapshotFromApi();
-    const provider = loadedSnapshot.providers.find(
-      (candidate) => candidate.id === providerId,
-    );
-    if (!provider) {
-      return `Provider ${providerId} is not in the latest status snapshot`;
-    }
+    const provider = await snapshotClient.testProviderDefinition(providerId);
+    await refreshSnapshotFromApi();
     if (provider.reachable) {
       return `Provider ${provider.id} is reachable`;
     }
     return `Provider ${provider.id} is ${provider.state}${
       provider.message ? `: ${provider.message}` : ""
     }`;
+  }
+
+  async function saveProviderDefinition(
+    definition: ProviderDefinition,
+  ): Promise<ProviderDefinition> {
+    const saved = await snapshotClient.saveProviderDefinition(
+      toApiProviderDefinition(definition),
+    );
+    const mapped = fromApiProviderDefinition(componentCatalog, saved);
+    setProviderDefinitions((current) =>
+      mergeProviderDefinitions(
+        current.filter((provider) => provider.id !== mapped.id),
+        [mapped],
+      ),
+    );
+    await refreshSnapshotFromApi();
+    return mapped;
+  }
+
+  async function deleteProviderDefinition(id: string): Promise<void> {
+    await snapshotClient.deleteProviderDefinition(id);
+    setProviderDefinitions((current) =>
+      current.filter((provider) => provider.id !== id),
+    );
+    await refreshSnapshotFromApi();
   }
 
   async function refreshSnapshotFromApi(): Promise<OperatorStatusSnapshot> {
@@ -417,6 +460,7 @@ function OperatorWorkspace({
           loadedSnapshot,
           loadedPipelineViews,
           loadedComponentCatalog,
+          loadedProviderDefinitionViews,
           loadedTurns,
         ] = await Promise.all([
           snapshotClient.loadSnapshot(),
@@ -426,6 +470,9 @@ function OperatorWorkspace({
           initialComponentCatalog
             ? Promise.resolve(initialComponentCatalog)
             : snapshotClient.loadComponentCatalog(),
+          initialProviderDefinitions
+            ? Promise.resolve([...initialProviderDefinitions])
+            : snapshotClient.loadProviderDefinitions(),
           initialEvents
             ? Promise.resolve({ turns: [] })
             : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
@@ -451,6 +498,7 @@ function OperatorWorkspace({
           baseComponentCatalog,
           basePipelineViews,
           loadedSnapshot,
+          loadedProviderDefinitionViews,
         );
         let nextSnapshot = loadedSnapshot;
         let nextPipelineViews = basePipelineViews;
@@ -522,13 +570,10 @@ function OperatorWorkspace({
     initialEvents,
     initialComponentCatalog,
     initialPipelineViews,
+    initialProviderDefinitions,
     initialSnapshot,
     snapshotClient,
   ]);
-
-  useEffect(() => {
-    saveProviderDefinitions(providerDefinitions);
-  }, [providerDefinitions]);
 
   if (firstRun) {
     return (
@@ -643,7 +688,8 @@ function OperatorWorkspace({
           }
           onPipelineTest={onPipelineTest ?? runPipelineTest}
           onProviderTest={runProviderTest}
-          onProviderDefinitionsChange={setProviderDefinitions}
+          onProviderDefinitionSave={saveProviderDefinition}
+          onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
         />
       </section>
@@ -671,12 +717,13 @@ function SectionPanel({
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
-  onProviderDefinitionsChange,
+  onProviderDefinitionSave,
+  onProviderDefinitionDelete,
 }: {
   section: SectionId;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
   snapshot: OperatorStatusSnapshot | null;
@@ -688,7 +735,10 @@ function SectionPanel({
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
   onProviderTest: ProviderTester;
-  onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
+  onProviderDefinitionSave: (
+    definition: ProviderDefinition,
+  ) => Promise<ProviderDefinition>;
+  onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
   if (loadError) {
     return (
@@ -740,7 +790,8 @@ function SectionPanel({
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
         onProviderTest={onProviderTest}
-        onProviderDefinitionsChange={onProviderDefinitionsChange}
+        onProviderDefinitionSave={onProviderDefinitionSave}
+        onProviderDefinitionDelete={onProviderDefinitionDelete}
       />
     );
   }
@@ -749,7 +800,6 @@ function SectionPanel({
 }
 
 const OPERATOR_SETTINGS_STORAGE_KEY = "conduit.operator.settings";
-const PROVIDER_DEFINITIONS_STORAGE_KEY = "conduit.provider.definitions";
 const retentionOptions = ["7 d", "30 d", "90 d", "forever"] as const;
 const logLevelOptions = ["debug", "info", "warn", "error"] as const;
 
@@ -790,14 +840,18 @@ function ProvidersPanel({
   providerDefinitions,
   providers,
   onProviderTest,
-  onProviderDefinitionsChange,
+  onProviderDefinitionSave,
+  onProviderDefinitionDelete,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
   onProviderTest: ProviderTester;
-  onProviderDefinitionsChange: (definitions: ProviderDefinition[]) => void;
+  onProviderDefinitionSave: (
+    definition: ProviderDefinition,
+  ) => Promise<ProviderDefinition>;
+  onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
   const [filter, setFilter] = useState<ProviderFilter>("all");
   const [draftProvider, setDraftProvider] = useState<ProviderDefinition | null>(
@@ -845,7 +899,7 @@ function ProvidersPanel({
       )
     : [];
 
-  function startNewProvider(component: PipelineComponentDescriptor) {
+  function startNewProvider(component: ProviderComponentDescriptor) {
     const kind = providerKindForNodeKind(component.kind);
     if (!kind) {
       return;
@@ -908,7 +962,7 @@ function ProvidersPanel({
     setDraftProvider((current) => (current ? updater(current) : current));
   }
 
-  function saveDraftProvider() {
+  async function saveDraftProvider() {
     if (!draftProvider) {
       return;
     }
@@ -936,20 +990,25 @@ function ProvidersPanel({
       config: pruneEmptyConfig(draftProvider.config),
       source: "local",
     };
-    onProviderDefinitionsChange(
-      mergeProviderDefinitions(
-        providerDefinitions.filter((provider) => provider.id !== next.id),
-        [next],
-      ),
-    );
-    setProviderNotices((current) => ({
-      ...current,
-      [next.id]: `Provider ${next.id} saved`,
-    }));
-    setDraftProvider(null);
-    setEditingProviderId(null);
-    setAddProviderDialogOpen(false);
-    setSelectedProviderKind(null);
+    try {
+      const saved = await onProviderDefinitionSave(next);
+      setProviderNotices((current) => ({
+        ...current,
+        [saved.id]: `Provider ${saved.id} saved`,
+      }));
+      setDraftProvider(null);
+      setEditingProviderId(null);
+      setAddProviderDialogOpen(false);
+      setSelectedProviderKind(null);
+    } catch (caught) {
+      setProviderNotices((current) => ({
+        ...current,
+        [next.id]:
+          caught instanceof Error
+            ? caught.message
+            : `Unable to save provider ${next.id}`,
+      }));
+    }
   }
 
   function cancelDraftProvider() {
@@ -966,7 +1025,7 @@ function ProvidersPanel({
     setAddProviderDialogOpen(true);
   }
 
-  function deleteProviderDefinition(provider: ProviderCardView) {
+  async function deleteProviderDefinition(provider: ProviderCardView) {
     const affectedPipelines = provider.status?.affects_pipelines ?? [];
     if (affectedPipelines.length > 0) {
       setProviderNotices((current) => ({
@@ -977,39 +1036,33 @@ function ProvidersPanel({
     }
 
     const providerId = provider.id;
-    onProviderDefinitionsChange(
-      providerDefinitions.filter((provider) => provider.id !== providerId),
-    );
-    if (editingProviderId === providerId) {
-      cancelDraftProvider();
+    try {
+      await onProviderDefinitionDelete(providerId);
+      if (editingProviderId === providerId) {
+        cancelDraftProvider();
+      }
+      setProviderNotices((current) => ({
+        ...current,
+        [providerId]: `Provider ${providerId} deleted`,
+      }));
+    } catch (caught) {
+      setProviderNotices((current) => ({
+        ...current,
+        [providerId]:
+          caught instanceof Error
+            ? caught.message
+            : `Unable to delete provider ${providerId}`,
+      }));
     }
-    setProviderNotices((current) => ({
-      ...current,
-      [providerId]: `Provider ${providerId} deleted`,
-    }));
   }
 
   async function testProvider(provider: ProviderCardView) {
     try {
       let notice: string;
-      if (provider.status) {
-        notice = await onProviderTest(provider.id);
-      } else if (provider.definition) {
-        const component = componentForProviderDefinition(
-          componentCatalog,
-          provider.definition,
-        );
-        const validation = component
-          ? validateProviderDefinitionConfig(provider.definition, component)
-          : {
-              ok: false,
-              message: `Unknown component ${provider.definition.component}`,
-            };
-        notice = validation.ok
-          ? `Provider ${provider.id} configuration is valid for ${component?.label}`
-          : validation.message;
-      } else {
+      if (!provider.definition) {
         notice = `Provider ${provider.id} has no configuration to test`;
+      } else {
+        notice = await onProviderTest(provider.id);
       }
       setProviderNotices((current) => ({
         ...current,
@@ -1210,13 +1263,13 @@ function ProviderAddDialog({
   onSave,
   onSelectComponent,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   draftProvider: ProviderDefinition | null;
   providerKinds: readonly ProviderFilter[];
-  selectedComponent: PipelineComponentDescriptor | null;
+  selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
   selectedKind: ProviderKind | null;
-  selectedKindComponents: readonly PipelineComponentDescriptor[];
+  selectedKindComponents: readonly ProviderComponentDescriptor[];
   onCancel: () => void;
   onConfigChange: (
     field: string,
@@ -1228,7 +1281,7 @@ function ProviderAddDialog({
   ) => void;
   onKindChange: (kind: ProviderKind | null) => void;
   onSave: () => void;
-  onSelectComponent: (component: PipelineComponentDescriptor) => void;
+  onSelectComponent: (component: ProviderComponentDescriptor) => void;
 }) {
   return (
     <div className="modal-backdrop">
@@ -1332,9 +1385,9 @@ function ProviderEditorFields({
   onConfigChange,
   onDraftChange,
 }: {
-  componentCatalog: PipelineComponentCatalog;
+  componentCatalog: ProviderComponentCatalog;
   draftProvider: ProviderDefinition;
-  selectedComponent: PipelineComponentDescriptor | null;
+  selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
   onConfigChange: (
     field: string,
@@ -3065,7 +3118,7 @@ function ComponentConfigFields({
   readOnly,
   onChange,
 }: {
-  component: PipelineComponentDescriptor;
+  component: ProviderComponentDescriptor;
   config: Record<string, unknown>;
   readOnly: boolean;
   onChange: (
@@ -3120,9 +3173,9 @@ function ComponentConfigFields({
 }
 
 function componentForNode(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   node: PipelineNode,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const exact = catalog.components.find(
     (component) =>
       component.id === node.provider && component.kind === node.kind,
@@ -3168,9 +3221,9 @@ function componentForNode(
 }
 
 function componentForProviderStatus(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const nodeKind = nodeKindForProviderKind(provider.kind);
   return componentForNode(catalog, {
     id: provider.id,
@@ -3180,9 +3233,9 @@ function componentForProviderStatus(
 }
 
 function componentForProviderDefinition(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   provider: ProviderDefinition,
-): PipelineComponentDescriptor | null {
+): ProviderComponentDescriptor | null {
   const componentId =
     provider.kind === "tts" && provider.component === "wyoming"
       ? "wyoming.tts"
@@ -3288,47 +3341,223 @@ function showsProviderStatusPill(provider: ProviderCardView): boolean {
 }
 
 function loadProviderDefinitions(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
+  savedDefinitions: readonly ProviderDefinitionView[],
 ): ProviderDefinition[] {
-  try {
-    const saved = window.localStorage.getItem(PROVIDER_DEFINITIONS_STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved) as ProviderDefinition[];
-      return mergeProviderDefinitions(
-        defaultProviderDefinitions(catalog, pipelineViews, snapshot),
-        parsed.filter(isProviderDefinition).map((provider) => ({
-          ...provider,
-          source: "local",
-        })),
-      );
-    }
-  } catch {
-    // Bad local UI state should not block the console from loading.
-  }
-
-  return defaultProviderDefinitions(catalog, pipelineViews, snapshot);
-}
-
-function saveProviderDefinitions(definitions: readonly ProviderDefinition[]) {
-  const localDefinitions = definitions
-    .filter((provider) => provider.source === "local")
-    .map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      kind: provider.kind,
-      component: provider.component,
-      config: provider.config,
-    }));
-  window.localStorage.setItem(
-    PROVIDER_DEFINITIONS_STORAGE_KEY,
-    JSON.stringify(localDefinitions),
+  return mergeProviderDefinitions(
+    defaultProviderDefinitions(catalog, pipelineViews, snapshot),
+    savedDefinitions.map((definition) =>
+      fromApiProviderDefinition(catalog, definition),
+    ),
   );
 }
 
+function fromApiProviderDefinition(
+  catalog: ProviderComponentCatalog,
+  definition: ProviderDefinitionView,
+): ProviderDefinition {
+  const component = componentForApiProviderDefinition(catalog, definition);
+  return {
+    id: definition.id,
+    label: definition.label,
+    kind: nodeKindForProviderKind(definition.kind),
+    component: component?.id ?? definition.variant.type,
+    config: configFromProviderVariant(definition.variant),
+    source: "local",
+  };
+}
+
+function componentForApiProviderDefinition(
+  catalog: ProviderComponentCatalog,
+  definition: Pick<ProviderDefinitionView, "kind" | "variant">,
+): ProviderComponentDescriptor | null {
+  const kind = nodeKindForProviderKind(definition.kind);
+  if (definition.variant.type === "mcp_tool") {
+    const transport = definition.variant.transport.type;
+    const componentId =
+      transport === "streamable_http"
+        ? "mcp.streamable_http"
+        : `mcp.${transport}`;
+    return (
+      catalog.components.find(
+        (component) => component.id === componentId && component.kind === kind,
+      ) ?? null
+    );
+  }
+
+  return (
+    catalog.components.find(
+      (component) =>
+        component.definition_variant === definition.variant.type &&
+        component.kind === kind,
+    ) ?? null
+  );
+}
+
+function configFromProviderVariant(
+  variant: ProviderDefinitionVariant,
+): Record<string, unknown> {
+  if (variant.type === "openai_llm") {
+    return {
+      base_url: variant.base_url,
+      api_key: secretToConfigValue(variant.api_key),
+      model: variant.models[0] ?? "",
+      streaming: variant.streaming,
+      system_prompt: variant.system_prompt ?? "",
+    };
+  }
+  if (variant.type === "openai_stt") {
+    return {
+      base_url: variant.base_url,
+      api_key: secretToConfigValue(variant.api_key),
+      model: variant.model,
+      stream: variant.stream,
+    };
+  }
+  if (variant.type === "openai_tts") {
+    return {
+      base_url: variant.base_url,
+      api_key: secretToConfigValue(variant.api_key),
+      model: variant.model,
+      voices: variant.voices.join(", "),
+    };
+  }
+  if (variant.type === "wyoming_stt") {
+    return {
+      url: variant.url,
+      model: variant.model ?? "",
+      streaming: variant.streaming,
+    };
+  }
+  if (variant.type === "wyoming_tts") {
+    return {
+      url: variant.url,
+      voice: variant.voice ?? "",
+      streaming: variant.streaming,
+    };
+  }
+  if (variant.transport.type === "stdio") {
+    return {
+      command: variant.transport.command,
+      args: variant.transport.args.join(" "),
+    };
+  }
+  return { url: variant.transport.url };
+}
+
+function toApiProviderDefinition(
+  definition: ProviderDefinition,
+): ApiProviderDefinition {
+  return {
+    id: definition.id,
+    label: definition.label,
+    variant: variantFromProviderDefinition(definition),
+  };
+}
+
+function variantFromProviderDefinition(
+  definition: ProviderDefinition,
+): ProviderDefinitionVariant {
+  const config = pruneEmptyConfig(definition.config);
+  const text = (field: string) =>
+    typeof config[field] === "string" ? config[field].trim() : "";
+  const flag = (field: string) => config[field] === true;
+  const apiKey = secretFromConfig(text("api_key"));
+
+  if (
+    definition.component === "openai.responses" ||
+    definition.component === "openai.completions"
+  ) {
+    return {
+      type: "openai_llm",
+      base_url: text("base_url"),
+      ...(apiKey ? { api_key: apiKey } : {}),
+      models: text("model") ? [text("model")] : [],
+      streaming: flag("streaming"),
+      ...(text("system_prompt")
+        ? { system_prompt: text("system_prompt") }
+        : {}),
+    };
+  }
+  if (definition.component === "openai.transcription") {
+    return {
+      type: "openai_stt",
+      base_url: text("base_url") || "https://api.openai.com/v1",
+      model: text("model"),
+      ...(apiKey ? { api_key: apiKey } : {}),
+      stream: flag("stream"),
+    };
+  }
+  if (definition.component === "openai.speech") {
+    return {
+      type: "openai_tts",
+      base_url: text("base_url") || "https://api.openai.com/v1",
+      model: text("model"),
+      ...(apiKey ? { api_key: apiKey } : {}),
+      voices: text("voices")
+        ? text("voices")
+            .split(",")
+            .map((voice) => voice.trim())
+            .filter(Boolean)
+        : [],
+    };
+  }
+  if (definition.component === "wyoming.tts") {
+    return {
+      type: "wyoming_tts",
+      url: text("url"),
+      ...(text("voice") ? { voice: text("voice") } : {}),
+      streaming: flag("streaming"),
+    };
+  }
+  if (definition.component === "mcp.sse") {
+    return { type: "mcp_tool", transport: { type: "sse", url: text("url") } };
+  }
+  if (definition.component === "mcp.streamable_http") {
+    return {
+      type: "mcp_tool",
+      transport: { type: "streamable_http", url: text("url") },
+    };
+  }
+  if (definition.component === "mcp.stdio") {
+    return {
+      type: "mcp_tool",
+      transport: {
+        type: "stdio",
+        command: text("command"),
+        args: text("args").split(/\s+/).filter(Boolean),
+      },
+    };
+  }
+  return {
+    type: "wyoming_stt",
+    url: text("url"),
+    ...(text("model") ? { model: text("model") } : {}),
+    streaming: flag("streaming"),
+  };
+}
+
+function secretToConfigValue(secret: ProviderSecret | undefined): string {
+  if (!secret) {
+    return "";
+  }
+  if (secret.type === "inline") {
+    return secret.value;
+  }
+  if (secret.type === "external") {
+    return secret.reference;
+  }
+  return "";
+}
+
+function secretFromConfig(value: string): ProviderSecret | undefined {
+  return value ? { type: "inline", value } : undefined;
+}
+
 function defaultProviderDefinitions(
-  catalog: PipelineComponentCatalog,
+  catalog: ProviderComponentCatalog,
   pipelineViews: readonly PipelineView[],
   snapshot: OperatorStatusSnapshot | null,
 ): ProviderDefinition[] {
@@ -3387,25 +3616,9 @@ function cloneProviderDefinition(
   };
 }
 
-function isProviderDefinition(value: unknown): value is ProviderDefinition {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const provider = value as Partial<ProviderDefinition>;
-  return (
-    typeof provider.id === "string" &&
-    typeof provider.label === "string" &&
-    typeof provider.kind === "string" &&
-    typeof provider.component === "string" &&
-    !!provider.config &&
-    typeof provider.config === "object" &&
-    !Array.isArray(provider.config)
-  );
-}
-
 function validateProviderDefinitionConfig(
   provider: ProviderDefinition,
-  component: PipelineComponentDescriptor,
+  component: ProviderComponentDescriptor,
 ): PipelineValidationResult {
   const config = pruneEmptyConfig(provider.config);
   const missing = component.schema.required.filter((field) => {
@@ -3834,7 +4047,10 @@ function filterRawEvents(
 function GuidedSetupPanel({
   onPipelineSaved,
 }: {
-  onPipelineSaved: (graph: PipelineGraph) => Promise<void>;
+  onPipelineSaved: (
+    graph: PipelineGraph,
+    providerDefinitions: readonly ApiProviderDefinition[],
+  ) => Promise<void>;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
   const [sttProvider, setSttProvider] = useState("whisper");
@@ -3860,13 +4076,14 @@ function GuidedSetupPanel({
     setError(null);
     setSaving(true);
     try {
+      const providerIds = {
+        sttProvider: sttProvider.trim(),
+        llmProvider: llmProvider.trim(),
+        ttsProvider: ttsProvider.trim(),
+      };
       await onPipelineSaved(
-        buildMinimalVoiceLoopGraph({
-          name,
-          sttProvider: sttProvider.trim(),
-          llmProvider: llmProvider.trim(),
-          ttsProvider: ttsProvider.trim(),
-        }),
+        buildMinimalVoiceLoopGraph({ name, ...providerIds }),
+        guidedSetupProviderDefinitions(providerIds),
       );
     } catch (caught) {
       setError(
@@ -4084,6 +4301,49 @@ function buildMinimalVoiceLoopGraph({
       { from: "tts", to: "speaker" },
     ],
   };
+}
+
+function guidedSetupProviderDefinitions({
+  sttProvider,
+  llmProvider,
+  ttsProvider,
+}: {
+  sttProvider: string;
+  llmProvider: string;
+  ttsProvider: string;
+}): ApiProviderDefinition[] {
+  return [
+    {
+      id: sttProvider,
+      label: sttProvider,
+      variant: {
+        type: "openai_stt",
+        base_url: "https://api.openai.com/v1",
+        model: "whisper-1",
+        stream: false,
+      },
+    },
+    {
+      id: llmProvider,
+      label: llmProvider,
+      variant: {
+        type: "openai_llm",
+        base_url: "https://api.openai.com/v1",
+        models: [],
+        streaming: true,
+      },
+    },
+    {
+      id: ttsProvider,
+      label: ttsProvider,
+      variant: {
+        type: "openai_tts",
+        base_url: "https://api.openai.com/v1",
+        model: "tts-1",
+        voices: [],
+      },
+    },
+  ];
 }
 
 function defaultPipelineViews(

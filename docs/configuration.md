@@ -1,8 +1,8 @@
 # Configuration Reference
 
-Conduit is configured with environment variables. Unset provider variables mean
-the provider is not registered; partial provider configuration is treated as an
-error when it would otherwise fail mid-turn.
+Conduit is configured with environment variables for server, authentication, and
+storage concerns. Product provider configuration is saved as server-owned
+Provider Definitions through the management API.
 
 ## Server
 
@@ -61,54 +61,55 @@ empty list to allow none.
 | `CONDUIT_DATABASE_URL` | unset | PostgreSQL URL for pipeline storage. Takes precedence over `CONDUIT_PIPELINE_DIR` when the `postgres` feature is enabled. |
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data. |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage. |
+| `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers` | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage. |
 
 If neither database nor pipeline directory is set, pipelines are stored as JSON
 files in the default local data directory and survive API restarts. The server
 uses memory only when `CONDUIT_PIPELINE_DIR=:memory:` is set, and logs a warning
 for that disposable mode.
 
+Provider Definitions use their own store. If `CONDUIT_PROVIDER_DIR` is unset,
+definitions are stored as JSON files under the default local data directory and
+survive API restarts. A server rebuilds the Runtime Provider Registry Snapshot
+from those definitions during startup and after successful provider writes or
+deletes.
+
 The `conduit-api` crate enables PostgreSQL support by default. A
 `--no-default-features` build refuses to start if `CONDUIT_DATABASE_URL` is set.
 
-## OpenAI-Compatible Providers
+## Provider Definitions
 
-| Variable | Default | Description |
+The service exposes `GET /v1/catalog/providers` so the Operator Console can
+render provider-specific creation forms from backend-owned component metadata.
+Operators save Provider Definitions with stable ids, then select those ids from
+pipeline graph nodes. Pipeline graphs store only the selected provider id on
+each node; runtime component settings do not belong to graph nodes.
+
+Product runtime providers are not configured from `CONDUIT_OPENAI_*`
+environment variables. Use saved Provider Definitions for operator-managed
+providers, or compile with `dev-providers` for the direct in-memory
+development seam.
+
+### Runtime Providers Built From Definitions
+
+| Variant | Runtime provider | Endpoint |
 | --- | --- | --- |
-| `CONDUIT_OPENAI_BASE_URL` | `https://api.openai.com/v1` when a provider is configured by key | Base URL for an OpenAI-compatible server. |
-| `CONDUIT_OPENAI_API_KEY` | unset | Bearer token for the OpenAI-compatible server. Local servers often do not need one. |
-| `CONDUIT_OPENAI_NAME` | `openai` | Provider registry name used by pipeline nodes. |
-| `CONDUIT_OPENAI_READ_TIMEOUT_SECS` | `60` | How long the server may go silent while a response body is in progress. `0` disables this provider-level read timeout. |
-| `CONDUIT_OPENAI_STT_MODEL` | unset | Registers `OpenAiStt` using this transcription model. |
-| `CONDUIT_OPENAI_TTS_MODEL` | unset | Registers `OpenAiTts` using this speech model. |
+| `openai_llm` / `openai_stt` / `openai_tts` | `conduit-openai` | `base_url`, `http` or `https` |
+| `wyoming_stt` / `wyoming_tts` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `mcp_tool` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 
-Setting `CONDUIT_OPENAI_BASE_URL` or `CONDUIT_OPENAI_API_KEY` registers an
-OpenAI-compatible language model provider. Pipeline graph nodes select
-registered providers by id; provider-specific settings are not stored in the
-graph.
+Every variant registers under its definition id, so a graph node naming the id
+resolves to the provider that definition describes.
 
-The service exposes `GET /v1/pipeline-components` so the Operator Console can
-render provider-specific configuration forms from component schemas. Operators
-configure provider instances with stable IDs on the Providers page, then select
-those IDs from pipeline nodes.
+An MCP definition describes a *server*, which may advertise several tools, and
+a graph tool node runs one tool. Each advertised tool is therefore registered as
+`<definition id>.<tool name>`; a server advertising exactly one tool is also
+registered under the definition id itself.
 
-Provider instance definitions are still stored by the Operator Console.
-Pipeline graphs store only the selected provider id on each node; runtime
-component settings do not belong to graph nodes. Provider definitions remain UI
-definitions until Conduit grows a server-side provider store and runtime plugin
-loader.
-
-Setting an STT or TTS model without a base URL or API key is an error. The
-server refuses to start rather than registering a speech stage with no server.
-
-Example local configuration:
-
-```sh
-CONDUIT_OPENAI_BASE_URL=http://localhost:8000/v1 \
-CONDUIT_OPENAI_NAME=local \
-CONDUIT_OPENAI_STT_MODEL=Systran/faster-whisper-small \
-CONDUIT_OPENAI_TTS_MODEL=piper \
-cargo run -p conduit-api
-```
+Discovering those tools needs the server to answer, but saving a definition
+does not require it: discovery is given five seconds, and a server that does not
+answer leaves the definition saved with no tools registered. Running a
+reachability test on that definition rediscovers them.
 
 ## OpenTelemetry
 

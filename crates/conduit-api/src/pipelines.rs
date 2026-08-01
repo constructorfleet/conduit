@@ -9,6 +9,7 @@ use bytes::Bytes;
 use conduit_core::audio::AudioFormat;
 use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::ConversationId;
+use conduit_provider::storage::{validate_name, ProviderCapability};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
@@ -28,16 +29,18 @@ pub struct PipelineView {
     pub order: Vec<String>,
 }
 
-/// A pipeline component that can be selected for a graph node.
+/// A provider component that can be selected for a provider definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PipelineComponentDescriptor {
-    /// Stable component id used by pipeline nodes as their provider name.
+pub struct ProviderComponentDescriptor {
+    /// Stable component id used by the provider definition form.
     pub id: &'static str,
     /// Human-readable label for operator screens.
     pub label: &'static str,
-    /// What node kind this component can serve.
+    /// What node kind this provider can serve.
     pub kind: NodeKind,
-    /// Configuration fields accepted by this component.
+    /// Provider definition variant created from this catalog entry.
+    pub definition_variant: &'static str,
+    /// Configuration fields accepted by this provider component.
     pub schema: ComponentConfigSchema,
 }
 
@@ -82,11 +85,11 @@ pub enum ComponentConfigFormat {
     Url,
 }
 
-/// Component catalog response.
+/// Provider component catalog response.
 #[derive(Debug, Serialize)]
-pub struct PipelineComponentCatalog {
+pub struct ProviderComponentCatalog {
     /// Known components, in stable display order.
-    pub components: Vec<PipelineComponentDescriptor>,
+    pub components: Vec<ProviderComponentDescriptor>,
 }
 
 /// Input for an operator-triggered pipeline test turn.
@@ -125,11 +128,6 @@ pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     state.pipeline_names().await.map(Json).map_err(store_failure)
-}
-
-/// `GET /v1/pipeline-components` — component configuration schema catalog.
-pub async fn components(_caller: ManagementCaller) -> Json<PipelineComponentCatalog> {
-    Json(PipelineComponentCatalog { components: component_catalog() })
 }
 
 /// Turns a store failure into a response.
@@ -176,6 +174,7 @@ pub async fn put(
     Path(name): Path<String>,
     JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<(StatusCode, Json<PipelineView>), ApiError> {
+    validate_provider_references(&state, &graph).await?;
     let view = view(graph.clone())?;
     let replaced = state.put_pipeline(&name, graph).await.map_err(store_failure)?;
     let status = if replaced { StatusCode::OK } else { StatusCode::CREATED };
@@ -208,8 +207,10 @@ pub async fn delete(
 /// Returns 422 if the graph fails validation.
 pub async fn validate(
     _caller: ManagementCaller,
+    State(state): State<AppState>,
     JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<Json<PipelineView>, ApiError> {
+    validate_provider_references(&state, &graph).await?;
     view(graph).map(Json)
 }
 
@@ -280,26 +281,109 @@ fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
     Ok(PipelineView { graph, order })
 }
 
+async fn validate_provider_references(
+    state: &AppState,
+    graph: &PipelineGraph,
+) -> Result<(), ApiError> {
+    for node in
+        graph.topological_order().map_err(|error| ApiError::unprocessable(error.to_string()))?
+    {
+        let Some(expected) = provider_capability_for_node(node.kind) else {
+            continue;
+        };
+        // A qualified id such as `weather-tools.forecast` names one tool
+        // discovered from an MCP definition, not a stored definition, so it is
+        // resolved against the runtime snapshot instead of the store — which
+        // would reject the string as an unusable key.
+        let definition = if validate_name(&node.provider).is_ok() {
+            state.provider_definition(&node.provider).await.map_err(store_failure)?
+        } else {
+            None
+        };
+        let actual = if let Some(definition) = definition {
+            Some(definition.capability())
+        } else {
+            runtime_provider_capability(state.providers().as_deref(), &node.provider)
+        };
+        let Some(actual) = actual else {
+            return Err(ApiError::unprocessable(format!(
+                "provider definition `{}` is referenced by node `{}` but does not exist",
+                node.provider, node.id
+            )));
+        };
+        if actual != expected {
+            return Err(ApiError::unprocessable(format!(
+                "provider definition `{}` is {} but node `{}` requires {}",
+                node.provider,
+                provider_capability_label(actual),
+                node.id,
+                provider_capability_label(expected)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn runtime_provider_capability(
+    providers: Option<&conduit_runtime::Providers>,
+    id: &str,
+) -> Option<ProviderCapability> {
+    let providers = providers?;
+    if providers.stt().get(id).is_some() {
+        Some(ProviderCapability::Stt)
+    } else if providers.llm().get(id).is_some() {
+        Some(ProviderCapability::Llm)
+    } else if providers.tools().get(id).is_some() {
+        Some(ProviderCapability::Tool)
+    } else if providers.tts().get(id).is_some() {
+        Some(ProviderCapability::Tts)
+    } else {
+        None
+    }
+}
+
+fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
+    match kind {
+        NodeKind::Stt => Some(ProviderCapability::Stt),
+        NodeKind::Llm => Some(ProviderCapability::Llm),
+        NodeKind::Tool => Some(ProviderCapability::Tool),
+        NodeKind::Tts => Some(ProviderCapability::Tts),
+        _ => None,
+    }
+}
+
+fn provider_capability_label(capability: ProviderCapability) -> &'static str {
+    match capability {
+        ProviderCapability::Stt => "stt",
+        ProviderCapability::Llm => "llm",
+        ProviderCapability::Tool => "tool",
+        ProviderCapability::Tts => "tts",
+    }
+}
+
 /// Built-in component descriptors.
 #[must_use]
-pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
+pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
     vec![
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.responses",
             label: "OpenAI Responses",
             kind: NodeKind::Llm,
+            definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.completions",
             label: "OpenAI Completions",
             kind: NodeKind::Llm,
+            definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: NodeKind::Stt,
+            definition_variant: "wyoming_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -309,10 +393,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.transcription",
             label: "OpenAI Transcription",
             kind: NodeKind::Stt,
+            definition_variant: "openai_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -322,10 +407,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["model"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "openai.speech",
             label: "OpenAI Speech",
             kind: NodeKind::Tts,
+            definition_variant: "openai_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -334,10 +420,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["model"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "wyoming.tts",
             label: "Wyoming TTS",
             kind: NodeKind::Tts,
+            definition_variant: "wyoming_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -349,10 +436,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.sse",
             label: "MCP SSE",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -361,10 +449,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.streamable_http",
             label: "MCP Streamable HTTP",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -373,10 +462,11 @@ pub fn component_catalog() -> Vec<PipelineComponentDescriptor> {
                 required: vec!["url"],
             },
         },
-        PipelineComponentDescriptor {
+        ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: NodeKind::Tool,
+            definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([("command", string_property(None, None))]),
                 required: vec!["command"],

@@ -1,9 +1,8 @@
-//! Building a provider registry from the environment.
+//! Building API server configuration from the environment.
 //!
-//! Configuration is explicit: nothing is registered unless it was asked for,
-//! and a partial configuration is an error rather than a silently missing
-//! stage. A server that cannot hear should say so at startup, not halfway
-//! through someone's first sentence.
+//! Provider Definitions are product runtime configuration. Environment parsing
+//! here covers process concerns such as storage, authentication, and runtime
+//! bounds.
 
 use std::collections::HashMap;
 
@@ -12,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use conduit_core::{Error, Result};
-use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
-use conduit_provider::storage::PipelineStore;
+use conduit_openai::OpenAiConfig;
+use conduit_provider::storage::{PipelineStore, ProviderDefinitionStore};
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
@@ -21,14 +20,19 @@ use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
 use crate::turns::TurnHistoryRetention;
 
 /// Base URL of an OpenAI-compatible server.
+#[cfg(test)]
 const BASE_URL: &str = "CONDUIT_OPENAI_BASE_URL";
 /// Bearer token for that server. Local servers usually need none.
+#[cfg(test)]
 const API_KEY: &str = "CONDUIT_OPENAI_API_KEY";
 /// Registry name, so two servers can be configured side by side.
+#[cfg(test)]
 const NAME: &str = "CONDUIT_OPENAI_NAME";
 /// Transcription model, e.g. `whisper-1`. Enables the recognizer.
+#[cfg(test)]
 const STT_MODEL: &str = "CONDUIT_OPENAI_STT_MODEL";
 /// Speech model, e.g. `tts-1`. Enables the synthesizer.
+#[cfg(test)]
 const TTS_MODEL: &str = "CONDUIT_OPENAI_TTS_MODEL";
 /// How long the server may go silent mid-response, in seconds. `0` disables it.
 const READ_TIMEOUT: &str = "CONDUIT_OPENAI_READ_TIMEOUT_SECS";
@@ -45,6 +49,8 @@ const TURN_HISTORY_RETENTION: &str = "CONDUIT_TURN_HISTORY_RETENTION_SECS";
 const DATA_DIR: &str = "CONDUIT_DATA_DIR";
 /// Directory to keep pipeline definitions in. Unset means the default data directory.
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
+/// Directory to keep provider definitions in. Unset means the default data directory.
+const PROVIDER_DIR: &str = "CONDUIT_PROVIDER_DIR";
 /// Explicit value for a disposable in-memory pipeline store.
 const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
@@ -110,6 +116,15 @@ pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
     store_from_vars(&std::env::vars().collect()).await
 }
 
+/// Opens the provider definition store the environment asks for.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn provider_definition_store_from_env() -> Result<Arc<dyn ProviderDefinitionStore>> {
+    provider_definition_store_from_vars(&std::env::vars().collect()).await
+}
+
 /// Opens the pipeline store described by `vars`.
 ///
 /// # Errors
@@ -159,27 +174,70 @@ pub async fn store_from_vars(vars: &HashMap<String, String>) -> Result<Arc<dyn P
     }
 }
 
+/// Opens the provider definition store described by `vars`.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn provider_definition_store_from_vars(
+    vars: &HashMap<String, String>,
+) -> Result<Arc<dyn ProviderDefinitionStore>> {
+    match vars.get(PROVIDER_DIR).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        Some(MEMORY_PIPELINE_DIR) => {
+            tracing::warn!(
+                "{PROVIDER_DIR} is {MEMORY_PIPELINE_DIR}: provider definitions are kept in memory \
+                 and will be lost on restart"
+            );
+            Ok(Arc::new(MemoryStore::new()))
+        }
+        Some(directory) => {
+            tracing::info!(%directory, "storing provider definitions on disk");
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+        None => {
+            let directory = default_provider_dir(vars)?;
+            tracing::info!(
+                directory = %directory.display(),
+                "storing provider definitions in the default local data directory"
+            );
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+    }
+}
+
 fn default_pipeline_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    default_data_subdir(vars, PIPELINE_DIR, "pipelines")
+}
+
+fn default_provider_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    default_data_subdir(vars, PROVIDER_DIR, "providers")
+}
+
+fn default_data_subdir(
+    vars: &HashMap<String, String>,
+    env_name: &str,
+    child: &str,
+) -> Result<PathBuf> {
     if let Some(directory) =
         vars.get(DATA_DIR).map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(directory).join("pipelines"));
+        return Ok(PathBuf::from(directory).join(child));
     }
 
     if let Some(directory) =
         vars.get("XDG_DATA_HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(directory).join("conduit").join("pipelines"));
+        return Ok(PathBuf::from(directory).join("conduit").join(child));
     }
 
     if let Some(home) =
         vars.get("HOME").map(|value| value.trim()).filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(home).join(".local/share/conduit/pipelines"));
+        return Ok(PathBuf::from(home).join(format!(".local/share/conduit/{child}")));
     }
 
     Err(Error::Config(format!(
-        "cannot choose a default pipeline directory; set {PIPELINE_DIR}, {DATA_DIR}, \
+        "cannot choose a default storage directory; set {env_name}, {DATA_DIR}, \
          XDG_DATA_HOME, or HOME"
     )))
 }
@@ -340,68 +398,30 @@ fn seconds_or(
     Ok(Some(Duration::from_secs(seconds)))
 }
 
-/// Reads provider configuration from the process environment.
+/// Reads runtime configuration from the process environment.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Config`] if a provider is configured but cannot be built.
+/// Returns [`Error::Config`] if a runtime setting is invalid.
 pub fn from_env() -> Result<(Providers, Registered)> {
     from_vars(&std::env::vars().collect())
 }
 
-/// Builds providers from `vars`.
+/// Builds runtime configuration from `vars`.
 ///
 /// Taking a map rather than reading the environment directly keeps this
 /// testable: process environment is global, and tests that mutate it race.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Config`] if a provider is configured but cannot be built.
+/// Returns [`Error::Config`] if a runtime setting is invalid.
 pub fn from_vars(vars: &HashMap<String, String>) -> Result<(Providers, Registered)> {
-    let mut providers = Providers::new();
     let _ = turn_history_retention_from_vars(vars)?;
-    let mut registered =
+    let _ = read_timeout(vars)?;
+    let registered =
         Registered { turn_idle_timeout: turn_idle_timeout(vars)?, ..Registered::default() };
 
-    let base_url = vars.get(BASE_URL);
-    let api_key = vars.get(API_KEY);
-    let stt_model = vars.get(STT_MODEL);
-    let tts_model = vars.get(TTS_MODEL);
-
-    // A model without a server to run it on is a typo, not a configuration.
-    if base_url.is_none() && api_key.is_none() {
-        if stt_model.is_some() || tts_model.is_some() {
-            return Err(Error::Config(format!(
-                "a model is configured but no server is; set {BASE_URL} or {API_KEY}"
-            )));
-        }
-        return Ok((providers, registered));
-    }
-
-    let config = OpenAiConfig {
-        base_url: base_url.cloned().unwrap_or_else(|| OpenAiConfig::default().base_url),
-        api_key: api_key.cloned(),
-        name: vars.get(NAME).cloned().unwrap_or_else(|| OpenAiConfig::default().name),
-        read_timeout: read_timeout(vars)?,
-        ..OpenAiConfig::default()
-    };
-
-    if let Some(model) = stt_model {
-        providers = providers.with_stt(OpenAiStt::new(&config, model)?);
-        registered.descriptions.push(format!("stt `{}` using {model}", config.name));
-    }
-    if let Some(model) = tts_model {
-        providers = providers.with_tts(OpenAiTts::new(&config, model)?);
-        registered.descriptions.push(format!("tts `{}` using {model}", config.name));
-    }
-
-    // The language model needs no model name here: a pipeline names its own,
-    // which is what lets one server serve several graphs.
-    let name = config.name.clone();
-    providers = providers.with_llm(OpenAi::new(config)?);
-    registered.descriptions.push(format!("llm `{name}`"));
-
-    Ok((providers, registered))
+    Ok((Providers::new(), registered))
 }
 
 #[cfg(test)]
@@ -451,40 +471,32 @@ mod tests {
     }
 
     #[test]
-    fn a_base_url_alone_registers_a_language_model() {
-        let (providers, registered) =
-            from_vars(&vars(&[(BASE_URL, "http://localhost:11434/v1")])).expect("builds");
-        assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["openai"]);
-        assert!(providers.stt().is_empty(), "no recognizer was asked for");
-        assert_eq!(registered.descriptions.len(), 1);
-    }
-
-    #[test]
-    fn naming_models_registers_speech_providers() {
+    fn openai_environment_variables_do_not_register_product_providers() {
         let map = vars(&[
             (BASE_URL, "http://localhost:8000/v1"),
+            (API_KEY, "sk-test"),
+            (NAME, "local"),
             (STT_MODEL, "whisper-1"),
             (TTS_MODEL, "tts-1"),
         ]);
         let (providers, registered) = from_vars(&map).expect("builds");
 
-        assert_eq!(providers.stt().names().collect::<Vec<_>>(), ["openai"]);
-        assert_eq!(providers.tts().names().collect::<Vec<_>>(), ["openai"]);
-        assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["openai"]);
-        assert_eq!(registered.descriptions.len(), 3);
+        assert!(providers.stt().is_empty());
+        assert!(providers.llm().is_empty());
+        assert!(providers.tts().is_empty());
+        assert!(registered.is_empty());
     }
 
     #[test]
-    fn the_registry_name_can_be_chosen() {
-        let map = vars(&[(BASE_URL, "http://localhost:11434/v1"), (NAME, "ollama")]);
-        let (providers, _) = from_vars(&map).expect("builds");
-        assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["ollama"]);
-    }
+    fn speech_model_environment_variables_are_ignored_without_provider_definitions() {
+        let (providers, registered) =
+            from_vars(&vars(&[(STT_MODEL, "whisper-1"), (TTS_MODEL, "tts-1")]))
+                .expect("builds");
 
-    #[test]
-    fn a_key_alone_is_enough_for_the_hosted_api() {
-        let (providers, _) = from_vars(&vars(&[(API_KEY, "sk-test")])).expect("builds");
-        assert_eq!(providers.llm().names().collect::<Vec<_>>(), ["openai"]);
+        assert!(providers.stt().is_empty());
+        assert!(providers.llm().is_empty());
+        assert!(providers.tts().is_empty());
+        assert!(registered.is_empty());
     }
 
     #[test]
@@ -554,11 +566,10 @@ mod tests {
     }
 
     #[test]
-    fn a_model_without_a_server_is_a_configuration_error() {
-        // Otherwise the recognizer silently goes missing and the first
-        // conversation fails instead of the server refusing to start.
+    fn obsolete_provider_environment_keeps_read_timeout_validation() {
         let error =
-            from_vars(&vars(&[(STT_MODEL, "whisper-1")])).expect_err("a model needs a server");
-        assert!(error.to_string().contains(BASE_URL), "{error}");
+            from_vars(&vars(&[(BASE_URL, "http://localhost:8000/v1"), (READ_TIMEOUT, "30s")]))
+                .expect_err("invalid timeout is still rejected");
+        assert!(error.to_string().contains(READ_TIMEOUT), "{error}");
     }
 }

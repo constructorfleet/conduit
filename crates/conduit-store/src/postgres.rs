@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
-use conduit_provider::storage::{validate_name, PipelineStore};
+use conduit_provider::storage::{
+    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
@@ -141,6 +143,74 @@ impl PipelineStore for PostgresStore {
         validate_name(name)?;
         let result = sqlx::query("DELETE FROM pipelines WHERE name = $1")
             .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderDefinitionStore for PostgresStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT id FROM provider_definitions ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(rows
+            .iter()
+            .map(|row| row.get::<String, _>("id"))
+            .filter(|id| is_listable(id))
+            .collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<ProviderDefinition>> {
+        validate_name(id)?;
+        let row = sqlx::query("SELECT definition FROM provider_definitions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let definition: serde_json::Value = row.try_get("definition").map_err(Self::failure)?;
+        serde_json::from_value(definition).map(Some).map_err(|error| {
+            Error::Config(format!(
+                "the stored provider definition `{id}` is not valid: {error}"
+            ))
+        })
+    }
+
+    async fn put(&self, id: &str, definition: ProviderDefinition) -> Result<bool> {
+        validate_name(id)?;
+        if definition.id != id {
+            return Err(Error::Config(format!(
+                "provider definition id `{}` does not match route id `{id}`",
+                definition.id
+            )));
+        }
+        let json = serde_json::to_value(&definition).map_err(|error| {
+            Error::Config(format!("cannot encode the provider definition: {error}"))
+        })?;
+
+        let row = sqlx::query(
+            "INSERT INTO provider_definitions (id, definition) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE SET definition = EXCLUDED.definition, updated_at = now()
+             RETURNING (xmax <> 0) AS replaced",
+        )
+        .bind(id)
+        .bind(json)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Self::failure)?;
+
+        row.try_get("replaced").map_err(Self::failure)
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        validate_name(id)?;
+        let result = sqlx::query("DELETE FROM provider_definitions WHERE id = $1")
+            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(Self::failure)?;

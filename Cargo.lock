@@ -233,11 +233,13 @@ dependencies = [
  "bytes",
  "chrono",
  "conduit-core",
+ "conduit-mcp",
  "conduit-metrics",
  "conduit-openai",
  "conduit-provider",
  "conduit-runtime",
  "conduit-store",
+ "conduit-wyoming",
  "futures-util",
  "http-body-util",
  "opentelemetry",
@@ -270,6 +272,23 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "conduit-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "conduit-core",
+ "conduit-provider",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -339,6 +358,21 @@ dependencies = [
  "conduit-store",
  "serde_json",
  "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "conduit-wyoming"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "conduit-core",
+ "conduit-provider",
+ "futures-util",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

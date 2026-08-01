@@ -1,19 +1,34 @@
 //! Shared application state.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
+use conduit_mcp::{McpClient, McpTool};
 use conduit_metrics::Metrics;
-use conduit_provider::storage::PipelineStore;
+use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
+use conduit_provider::storage::{
+    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    ProviderDefinitionVariant, ProviderSecret,
+};
+use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
+use conduit_wyoming::stt::WyomingStt;
+use conduit_wyoming::tts::WyomingTts;
+use tokio::time::timeout;
 
 use crate::auth::Access;
 use crate::status::RuntimeStatus;
 use crate::turns::{TurnHistory, TurnHistoryRetention};
+
+/// How long MCP tool discovery may take while rebuilding the runtime provider
+/// registry snapshot. A provider write waits on this, so it is far shorter
+/// than the client's own per-request budget.
+const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
@@ -21,9 +36,12 @@ pub struct AppState {
     /// The process-wide event bus.
     pub bus: EventBus,
     pipelines: Arc<dyn PipelineStore>,
+    provider_definitions: Arc<dyn ProviderDefinitionStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
-    providers: Option<Arc<Providers>>,
+    providers: Arc<RwLock<Option<Arc<Providers>>>>,
+    /// Results from explicit provider reachability checks.
+    provider_reachability: Arc<RwLock<BTreeMap<String, Health>>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
     metrics: Arc<Metrics>,
     /// Runtime status projection used by the Operator Console.
@@ -46,11 +64,24 @@ impl AppState {
     /// Creates state backed by `bus` and `pipelines`.
     #[must_use]
     pub fn with_store(bus: EventBus, pipelines: Arc<dyn PipelineStore>) -> Self {
+        let provider_definitions = Arc::new(MemoryStore::new());
+        Self::with_stores(bus, pipelines, provider_definitions)
+    }
+
+    /// Creates state backed by explicit pipeline and provider definition stores.
+    #[must_use]
+    pub fn with_stores(
+        bus: EventBus,
+        pipelines: Arc<dyn PipelineStore>,
+        provider_definitions: Arc<dyn ProviderDefinitionStore>,
+    ) -> Self {
         let turns = TurnHistory::spawn(&bus, TurnHistoryRetention::default());
         Self {
             bus,
             pipelines,
-            providers: None,
+            provider_definitions,
+            providers: Arc::new(RwLock::new(None)),
+            provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
             status: RuntimeStatus::new(),
             turns,
@@ -123,15 +154,37 @@ impl AppState {
 
     /// Makes `providers` available to conversations.
     #[must_use]
-    pub fn with_providers(mut self, providers: Providers) -> Self {
-        self.providers = Some(Arc::new(providers));
+    pub fn with_providers(self, providers: Providers) -> Self {
+        *self.provider_lock() = Some(Arc::new(providers));
         self
     }
 
     /// The configured providers, if any.
     #[must_use]
     pub fn providers(&self) -> Option<Arc<Providers>> {
-        self.providers.clone()
+        self.providers.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn provider_lock(&self) -> std::sync::RwLockWriteGuard<'_, Option<Arc<Providers>>> {
+        self.providers.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Latest explicit reachability results, keyed by provider definition id.
+    #[must_use]
+    pub fn provider_reachability(&self) -> BTreeMap<String, Health> {
+        self.provider_reachability.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Records the result of an explicit provider reachability check.
+    pub fn record_provider_reachability(&self, id: &str, health: Health) {
+        self.provider_reachability
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_owned(), health);
+    }
+
+    fn clear_provider_reachability(&self, id: &str) {
+        self.provider_reachability.write().unwrap_or_else(PoisonError::into_inner).remove(id);
     }
 
     /// Names of every stored pipeline, in order.
@@ -169,6 +222,186 @@ impl AppState {
     /// Returns an error if the store is unavailable.
     pub async fn remove_pipeline(&self, name: &str) -> Result<bool> {
         self.pipelines.remove(name).await
+    }
+
+    /// Provider definition ids, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn provider_definition_ids(&self) -> Result<Vec<String>> {
+        self.provider_definitions.list().await
+    }
+
+    /// Fetches one provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable or the definition cannot be read.
+    pub async fn provider_definition(&self, id: &str) -> Result<Option<ProviderDefinition>> {
+        self.provider_definitions.get(id).await
+    }
+
+    /// Stores a provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id is unusable or the write fails.
+    pub async fn put_provider_definition(
+        &self,
+        id: &str,
+        definition: ProviderDefinition,
+    ) -> Result<bool> {
+        let replaced = self.provider_definitions.put(id, definition).await?;
+        self.rebuild_provider_snapshot().await?;
+        self.clear_provider_reachability(id);
+        Ok(replaced)
+    }
+
+    /// Removes a provider definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn remove_provider_definition(&self, id: &str) -> Result<bool> {
+        let removed = self.provider_definitions.remove(id).await?;
+        if removed {
+            self.rebuild_provider_snapshot().await?;
+            self.clear_provider_reachability(id);
+        }
+        Ok(removed)
+    }
+
+    async fn rebuild_provider_snapshot(&self) -> Result<()> {
+        let mut snapshot = Providers::new();
+        for id in self.provider_definition_ids().await? {
+            let Some(definition) = self.provider_definition(&id).await? else {
+                continue;
+            };
+            snapshot = register_definition(snapshot, &definition).await?;
+        }
+        *self.provider_lock() = Some(Arc::new(snapshot));
+        Ok(())
+    }
+
+    /// Rebuilds runtime providers from stored provider definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if definitions cannot be read or converted.
+    pub async fn reload_provider_definitions(&self) -> Result<()> {
+        self.rebuild_provider_snapshot().await
+    }
+}
+
+async fn register_definition(
+    providers: Providers,
+    definition: &ProviderDefinition,
+) -> Result<Providers> {
+    let config = |base_url: &str, api_key: &Option<ProviderSecret>| OpenAiConfig {
+        base_url: base_url.to_owned(),
+        api_key: secret_value(api_key),
+        name: definition.id.clone(),
+        ..OpenAiConfig::default()
+    };
+
+    match &definition.variant {
+        ProviderDefinitionVariant::OpenAiLlm { base_url, api_key, models, .. } => {
+            let mut config = config(base_url, api_key);
+            config.models = models.clone();
+            Ok(providers.with_llm(OpenAi::new(config)?))
+        }
+        ProviderDefinitionVariant::OpenAiStt { base_url, model, api_key, .. } => {
+            let config = config(base_url, api_key);
+            Ok(providers.with_stt(OpenAiStt::new(&config, model)?))
+        }
+        ProviderDefinitionVariant::OpenAiTts { base_url, model, api_key, voices } => {
+            let config = config(base_url, api_key);
+            let provider = OpenAiTts::new(&config, model)?;
+            let provider = if voices.is_empty() {
+                provider
+            } else {
+                provider.with_voices(
+                    voices
+                        .iter()
+                        .map(|voice| conduit_provider::tts::Voice {
+                            id: voice.clone(),
+                            name: voice.clone(),
+                            language: "en-US".to_owned(),
+                        })
+                        .collect(),
+                )
+            };
+            Ok(providers.with_tts(provider))
+        }
+        ProviderDefinitionVariant::WyomingStt { url, model, streaming } => Ok(providers
+            .with_stt(WyomingStt::new(&definition.id, url, model.clone(), *streaming)?)),
+        ProviderDefinitionVariant::WyomingTts { url, voice, streaming } => Ok(providers
+            .with_tts(WyomingTts::new(&definition.id, url, voice.clone(), *streaming)?)),
+        ProviderDefinitionVariant::McpTool { transport } => {
+            Ok(register_mcp_tools(providers, &definition.id, transport).await)
+        }
+    }
+}
+
+/// Registers whatever tools an MCP server currently advertises.
+///
+/// Discovery needs the server, but saving a provider definition must not: an
+/// operator can configure an endpoint before the service behind it is running.
+/// So a server that cannot be reached registers no tools and is logged, rather
+/// than failing the write. A later reachability test or provider write
+/// rediscovers them.
+///
+/// Every tool is registered as `<definition id>.<tool name>`. A server that
+/// advertises exactly one tool is also registered under the definition id
+/// itself, because the provider component catalog offers one MCP component per
+/// definition and a graph node written from it names the definition.
+async fn register_mcp_tools(
+    providers: Providers,
+    id: &str,
+    transport: &McpTransport,
+) -> Providers {
+    let client = Arc::new(McpClient::new(transport.clone()));
+    let discovery = timeout(MCP_DISCOVERY_TIMEOUT, client.list_tools()).await;
+    let tools = match discovery {
+        Ok(Ok(tools)) => tools,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                provider = id,
+                error = %error,
+                "MCP tool discovery failed; the provider definition is saved but registers \
+                 no tools until the server can be reached"
+            );
+            return providers;
+        }
+        Err(_) => {
+            tracing::warn!(
+                provider = id,
+                timeout_secs = MCP_DISCOVERY_TIMEOUT.as_secs(),
+                "MCP tool discovery timed out; the provider definition is saved but \
+                 registers no tools until the server answers"
+            );
+            return providers;
+        }
+    };
+
+    let only_tool = tools.len() == 1;
+    let mut providers = providers;
+    for tool in tools {
+        let qualified = format!("{id}.{}", tool.name);
+        if only_tool {
+            providers =
+                providers.with_tool(McpTool::new(id, tool.clone(), Arc::clone(&client)));
+        }
+        providers = providers.with_tool(McpTool::new(qualified, tool, Arc::clone(&client)));
+    }
+    providers
+}
+
+fn secret_value(secret: &Option<ProviderSecret>) -> Option<String> {
+    match secret {
+        Some(ProviderSecret::Inline { value }) => Some(value.clone()),
+        Some(ProviderSecret::External { .. } | ProviderSecret::Redacted) | None => None,
     }
 }
 

@@ -12,6 +12,8 @@ runtime progress is published as events.
 | `conduit-provider` | Object-safe provider traits for speech recognition, language models, synthesis, tools, storage, wake word, speaker identification, and memory. |
 | `conduit-runtime` | Resolves a graph against registered providers and runs one conversation turn from captured audio to synthesized speech. |
 | `conduit-openai` | OpenAI-compatible provider implementations for chat completions, audio transcriptions, and audio speech. |
+| `conduit-wyoming` | Wyoming protocol speech recognition and synthesis over a TCP endpoint. |
+| `conduit-mcp` | Model Context Protocol client and tool providers over stdio, streamable HTTP, and SSE. |
 | `conduit-store` | Memory, file, and PostgreSQL implementations of the pipeline store contract. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
 | `conduit-api` | HTTP service and ops routers, authentication, pipeline CRUD, event streaming, and the conversation WebSocket. |
