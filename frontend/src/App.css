@@ -1039,14 +1039,21 @@ button {
 }
 
 .graph-node strong {
+  display: block;
+  max-width: 100%;
   color: var(--strong);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .graph-node p,
 .pipeline-editor-status p {
+  max-width: 100%;
   margin: 0;
   color: var(--muted);
   font-size: 13px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .graph-canvas-controls {

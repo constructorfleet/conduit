@@ -1049,6 +1049,44 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
   });
 
+  it("keeps long pipeline node labels inside the rendered node card", async () => {
+    const user = userEvent.setup();
+    const longId = "llm_node_with_a_needlessly_long_operator_label";
+    const longProvider = "openai-provider-with-a-very-long-local-name";
+    render(
+      <App
+        initialPipelineViews={[
+          {
+            graph: {
+              ...pipelineView().graph,
+              nodes: pipelineView().graph.nodes.map((node) =>
+                node.id === "llm"
+                  ? { ...node, id: longId, provider: longProvider }
+                  : node,
+              ),
+              edges: pipelineView().graph.edges.map((edge) => ({
+                ...edge,
+                from: edge.from === "llm" ? longId : edge.from,
+                to: edge.to === "llm" ? longId : edge.to,
+              })),
+            },
+            order: ["mic", "stt", longId, "tts", "speaker"],
+          },
+        ]}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+
+    const nodeCard = screen.getByRole("group", {
+      name: `${longId} reasoning`,
+    });
+    expect(within(nodeCard).getByText(longId)).toHaveClass("node-label");
+    expect(within(nodeCard).getByText(longProvider)).toHaveClass(
+      "node-provider-label",
+    );
+  });
+
   it("keeps unsaved drafts when switching between pipelines", async () => {
     const user = userEvent.setup();
     render(
@@ -1252,6 +1290,38 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
   });
 
+  it("validates and saves the current pipeline draft before running a test turn", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    const testedPipelines: string[] = [];
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+        onPipelineValidate={(graph) => ({
+          ok: true,
+          order: graph.nodes.map((node) => node.id),
+        })}
+        onPipelineTest={async (name) => {
+          testedPipelines.push(name);
+          return `Test turn completed for ${name}: validated draft.`;
+        }}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Run test turn" }));
+
+    expect(
+      await screen.findByText(
+        "Test turn completed for kitchen: validated draft.",
+      ),
+    ).toBeInTheDocument();
+    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toContain("memory");
+    expect(testedPipelines).toEqual(["kitchen"]);
+  });
+
   it("places and drags LLM augments without stacking new components", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
@@ -1271,9 +1341,9 @@ describe("Pipelines graph editor", () => {
     const toolOrbital = within(graph).getByLabelText("Move confirm augment");
     expect(memoryOrbital).toHaveStyle({
       "--orbit-x": "0px",
-      "--orbit-y": "-300px",
+      "--orbit-y": "-175px",
       "--orbit-start-x": "0px",
-      "--orbit-start-y": "-300px",
+      "--orbit-start-y": "-175px",
     });
     expect(memoryOrbital).not.toHaveAttribute(
       "data-orbit-slot",
@@ -1309,7 +1379,7 @@ describe("Pipelines graph editor", () => {
       (node) => node.id === "memory",
     )?.config;
     expect(memoryConfig).toMatchObject({
-      ui: { orbit: { x: 60, y: -250 } },
+      ui: { orbit: { x: 60, y: -125 } },
     });
   });
 
@@ -1577,6 +1647,36 @@ describe("Providers workspace", () => {
       within(piperCard as HTMLElement).getByRole("button", {
         name: "Delete piper-local",
       }),
+    ).toBeInTheDocument();
+  });
+
+  it("tests locally configured providers through schema validation", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      "conduit.provider.definitions",
+      JSON.stringify([
+        {
+          id: "openai-fast",
+          label: "OpenAI Fast",
+          kind: "llm",
+          component: "openai.responses",
+          config: {
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-5",
+            streaming: true,
+          },
+        },
+      ]),
+    );
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Test openai-fast" }));
+
+    expect(
+      screen.getByText(
+        "Provider openai-fast configuration is valid for OpenAI Responses",
+      ),
     ).toBeInTheDocument();
   });
 });

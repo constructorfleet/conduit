@@ -939,9 +939,27 @@ function ProvidersPanel({
     }));
   }
 
-  async function testProvider(provider: ProviderStatus) {
+  async function testProvider(provider: ProviderCardView) {
     try {
-      const notice = await onProviderTest(provider.id);
+      let notice: string;
+      if (provider.status) {
+        notice = await onProviderTest(provider.id);
+      } else if (provider.definition) {
+        const component = componentCatalog.components.find(
+          (candidate) => candidate.id === provider.definition?.component,
+        );
+        const validation = component
+          ? validateProviderDefinitionConfig(provider.definition, component)
+          : {
+              ok: false,
+              message: `Unknown component ${provider.definition.component}`,
+            };
+        notice = validation.ok
+          ? `Provider ${provider.id} configuration is valid for ${component?.label}`
+          : validation.message;
+      } else {
+        notice = `Provider ${provider.id} has no configuration to test`;
+      }
       setProviderNotices((current) => ({
         ...current,
         [provider.id]: notice,
@@ -1083,15 +1101,13 @@ function ProvidersPanel({
               </div>
             </div>
 
-            {provider.status ? (
+            {provider.status || provider.definition ? (
               <div className="provider-actions">
                 <button
                   className="secondary-action provider-test-action"
                   type="button"
                   aria-label={`Test ${provider.id}`}
-                  onClick={() =>
-                    provider.status ? testProvider(provider.status) : null
-                  }
+                  onClick={() => testProvider(provider)}
                 >
                   <Play size={17} aria-hidden="true" />
                   Test
@@ -2441,6 +2457,19 @@ function PipelinesPanel({
     }
 
     try {
+      const result = await onPipelineValidate(draft);
+      updateCurrentDraftState((current) => ({
+        ...current,
+        validation: result,
+        notice: null,
+      }));
+      if (!result.ok) {
+        return;
+      }
+      if (hasUnsavedEdits) {
+        await onPipelineStored(draft, result.order);
+        updateCurrentDraftAfterSave(`Saved graph for ${draft.name}`);
+      }
       const message = await onPipelineTest(draft.name);
       markCurrentDraftNotice(message);
     } catch (caught) {
@@ -2514,8 +2543,12 @@ function PipelinesPanel({
             </div>
           ) : null}
         </div>
-        <strong>{node.id}</strong>
-        <p>{node.provider}</p>
+        <strong className="node-label" title={node.id}>
+          {node.id}
+        </strong>
+        <p className="node-provider-label" title={node.provider}>
+          {node.provider}
+        </p>
         {editingNodeId === node.id ? (
           <label className="field node-provider-select">
             <span>Provider</span>
@@ -4060,8 +4093,8 @@ function nextAugmentOrbitPosition(
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
   const angle = -Math.PI / 2 + index * ((2 * Math.PI) / 6);
   return {
-    x: Math.round(Math.cos(angle) * 300),
-    y: Math.round(Math.sin(angle) * 300),
+    x: Math.round(Math.cos(angle) * 175),
+    y: Math.round(Math.sin(angle) * 175),
   };
 }
 
