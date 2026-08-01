@@ -10,6 +10,8 @@
 /.cargo/registry
 /target
 /firmware
+/frontend/dist
+/frontend/node_modules
 /scripts
 /assets
 *.md

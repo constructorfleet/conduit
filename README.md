@@ -26,6 +26,7 @@ echoes described under [Running](#running).
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
+| [`frontend`](frontend) | React Operator Console shell and browser-side access foundation |
 
 ## Design
 
@@ -115,6 +116,18 @@ Builds merged to `main` publish the same set of tags for
 the Linux `conduit-api` binary and the ESPHome firmware YAMLs.
 
 Version policy and bump automation are documented in [VERSIONING.md](VERSIONING.md).
+
+The Operator Console frontend lives in [`frontend`](frontend) and shares this
+repository's release train. Its local gates are:
+
+```sh
+cd frontend
+npm ci
+npm run lint
+npm run test
+npm run build
+npm run format
+```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
