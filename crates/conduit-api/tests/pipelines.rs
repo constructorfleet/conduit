@@ -267,6 +267,55 @@ async fn pipeline_writes_have_a_request_body_limit() {
 #[tokio::test]
 async fn validate_checks_without_storing() {
     let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/whisper",
+            serde_json::json!({
+                "id": "whisper",
+                "label": "Whisper",
+                "variant": {
+                    "type": "openai_stt",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "whisper-1"
+                }
+            }),
+        ),
+    )
+    .await;
+    call(
+        &state,
+        put_json(
+            "/v1/providers/ollama",
+            serde_json::json!({
+                "id": "ollama",
+                "label": "Ollama",
+                "variant": {
+                    "type": "openai_llm",
+                    "base_url": "http://localhost:11434/v1",
+                    "models": ["llama3"]
+                }
+            }),
+        ),
+    )
+    .await;
+    call(
+        &state,
+        put_json(
+            "/v1/providers/piper",
+            serde_json::json!({
+                "id": "piper",
+                "label": "Piper",
+                "variant": {
+                    "type": "openai_tts",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "tts-1",
+                    "voices": []
+                }
+            }),
+        ),
+    )
+    .await;
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -280,6 +329,65 @@ async fn validate_checks_without_storing() {
     let (status, body) = call(&state, get("/v1/pipelines")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn validate_rejects_missing_provider_definitions() {
+    let state = AppState::new(EventBus::default());
+    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
+        "llm",
+        NodeKind::Llm,
+        "missing-openai",
+    ));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/validate")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&graph).expect("serialize")))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    let detail = body["detail"].as_str().expect("detail");
+    assert!(detail.contains("missing-openai"), "{body}");
+    assert!(detail.contains("provider definition"), "{body}");
+}
+
+#[tokio::test]
+async fn validate_rejects_provider_definition_kind_mismatches() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "openai-primary",
+        "label": "OpenAI Primary",
+        "variant": {
+            "type": "openai_llm",
+            "base_url": "https://api.openai.com/v1",
+            "models": ["gpt-test"]
+        }
+    });
+    call(&state, put_json("/v1/providers/openai-primary", definition)).await;
+    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
+        "tts",
+        NodeKind::Tts,
+        "openai-primary",
+    ));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/validate")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&graph).expect("serialize")))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    let detail = body["detail"].as_str().expect("detail");
+    assert!(detail.contains("openai-primary"), "{body}");
+    assert!(detail.contains("tts"), "{body}");
+    assert!(detail.contains("llm"), "{body}");
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use bytes::Bytes;
 use conduit_core::audio::AudioFormat;
 use conduit_core::graph::{NodeKind, PipelineGraph};
 use conduit_core::id::ConversationId;
+use conduit_provider::storage::ProviderCapability;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use conduit_runtime::Runner;
@@ -210,8 +211,10 @@ pub async fn delete(
 /// Returns 422 if the graph fails validation.
 pub async fn validate(
     _caller: ManagementCaller,
+    State(state): State<AppState>,
     JsonBody(graph): JsonBody<PipelineGraph>,
 ) -> Result<Json<PipelineView>, ApiError> {
+    validate_provider_references(&state, &graph).await?;
     view(graph).map(Json)
 }
 
@@ -280,6 +283,57 @@ fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
         .map(|node| node.id.clone())
         .collect();
     Ok(PipelineView { graph, order })
+}
+
+async fn validate_provider_references(
+    state: &AppState,
+    graph: &PipelineGraph,
+) -> Result<(), ApiError> {
+    for node in
+        graph.topological_order().map_err(|error| ApiError::unprocessable(error.to_string()))?
+    {
+        let Some(expected) = provider_capability_for_node(node.kind) else {
+            continue;
+        };
+        let definition =
+            state.provider_definition(&node.provider).await.map_err(store_failure)?;
+        let Some(definition) = definition else {
+            return Err(ApiError::unprocessable(format!(
+                "provider definition `{}` is referenced by node `{}` but does not exist",
+                node.provider, node.id
+            )));
+        };
+        let actual = definition.capability();
+        if actual != expected {
+            return Err(ApiError::unprocessable(format!(
+                "provider definition `{}` is {} but node `{}` requires {}",
+                node.provider,
+                provider_capability_label(actual),
+                node.id,
+                provider_capability_label(expected)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
+    match kind {
+        NodeKind::Stt => Some(ProviderCapability::Stt),
+        NodeKind::Llm => Some(ProviderCapability::Llm),
+        NodeKind::Tool => Some(ProviderCapability::Tool),
+        NodeKind::Tts => Some(ProviderCapability::Tts),
+        _ => None,
+    }
+}
+
+fn provider_capability_label(capability: ProviderCapability) -> &'static str {
+    match capability {
+        ProviderCapability::Stt => "stt",
+        ProviderCapability::Llm => "llm",
+        ProviderCapability::Tool => "tool",
+        ProviderCapability::Tts => "tts",
+    }
 }
 
 /// Built-in component descriptors.
