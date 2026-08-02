@@ -32,6 +32,26 @@ _Avoid_: Fake deletion, silent unlink
 The configuration surface for inspecting and editing a pipeline as nodes and edges. The graph editor is the advanced and ongoing configuration view, not the required first step for a new operator.
 _Avoid_: Flowchart
 
+**Transport Pipeline**:
+The acyclic dataflow portion of a pipeline graph: the modality transforms from source through sink. A transport pipeline runs once per turn in topological order, and its edges describe what feeds what.
+_Avoid_: Spine, main flow
+
+**Reasoning Core**:
+The single graph node holding a language model binding together with its tool and memory bindings. A reasoning core runs a model-driven iteration whose length is decided at runtime, so its bindings have no execution order and are not pipeline stages.
+_Avoid_: Agent, LLM node, brain
+
+**Core Binding**:
+A tool or memory attachment on a reasoning core, referencing a provider definition by id and carrying the settings that belong to that attachment in that pipeline. A core binding is configuration on the core, not an edge in the transport pipeline.
+_Avoid_: Augment, orbital, spoke
+
+**Modality**:
+The kind of data an edge carries: audio, text, or utterance. Sources and sinks declare their modality and every other stage derives one from its kind, so an incompatible connection is a validation error rather than a runtime surprise.
+_Avoid_: Media type, format
+
+**Utterance**:
+What a reasoning core emits, before any decision about how to render it. Speech is an utterance rendered by synthesis and text is an utterance rendered by a text sink, which is why a core is unchanged by adding a modality.
+_Avoid_: Reply, response text
+
 **Pipeline Validation**:
 The backend check that a pipeline graph is structurally valid, references existing compatible provider definitions or injected test providers, and can be prepared by the current runtime provider registry snapshot. Pipeline validation does not perform provider reachability checks or create missing providers.
 _Avoid_: Provider test, turn test, graph repair
@@ -144,16 +164,20 @@ _Avoid_: Timeline detail, default tool output
 The explicit, higher-trust inspection path for sensitive tool evidence. Diagnostic payload access is separate from ordinary turn reconstruction viewing and should support redaction before any unredacted payload exposure is considered.
 _Avoid_: Normal operator view, raw details toggle
 
-**Spoken Segment**:
-A text span intentionally sent to speech synthesis during a turn. Spoken segments distinguish assistant preambles, tool-spoken output, and final assistant responses rather than treating language-model token deltas as speech boundaries.
+**Utterance Segment**:
+A text span a turn intentionally emitted as one unit, carrying the modality it was rendered in. Utterance segments distinguish assistant preambles, tool-spoken output, and final assistant responses rather than treating language-model token deltas as boundaries.
 _Avoid_: Token stream, transcript chunk
+
+**Spoken Segment**:
+An utterance segment rendered as audio by speech synthesis. The narrower term is correct only for a turn that synthesized speech; a text pipeline emits utterance segments that were never spoken.
+_Avoid_: Using this for every segment
 
 **Tool Batch**:
 The set of tool calls requested by one model response and executed concurrently before the next model round. A tool batch may overlap a spoken assistant preamble and contains the lifecycle, outcome, and errors of each requested call.
 _Avoid_: Tool list, tool event group
 
 **Reconstruction Item**:
-A stable, addressable part of a turn reconstruction, such as a spoken segment, tool batch, tool call, component step, or raw event reference. Reconstruction item identity should be stable across live updates and later history queries.
+A stable, addressable part of a turn reconstruction, such as an utterance segment, tool batch, tool call, component step, or raw event reference. Reconstruction item identity should be stable across live updates and later history queries.
 _Avoid_: Timeline row, projection index
 
 **Turn Status**:
@@ -161,7 +185,7 @@ The coarse outcome state of a reconstructed turn, such as running, completed, ca
 _Avoid_: Interruption status
 
 **Reconstruction Boundary Event**:
-A runtime event that declares a boundary the runtime knows directly, such as a spoken segment starting or a tool batch beginning. Reconstruction boundary events prevent the server read model and UI from inferring speech or concurrency boundaries from nearby lower-level events.
+A runtime event that declares a boundary the runtime knows directly, such as an utterance segment starting or a tool batch beginning. Reconstruction boundary events prevent the server read model and UI from inferring utterance or concurrency boundaries from nearby lower-level events.
 _Avoid_: Inferred boundary, UI grouping hint
 
 **Pipeline Health**:
