@@ -142,11 +142,20 @@ pub(crate) async fn read_wyoming_event<R: tokio::io::AsyncRead + Unpin>(
     Ok(Some(WyomingEvent { event_type: header.event_type, data, payload }))
 }
 
-/// Merges the object keys of `extra` into `base`, leaving non-objects alone.
+/// Merges the object keys of `extra` into `base`.
+///
+/// A `base` that is not an object is replaced outright. Wyoming serializes
+/// `data` into its own framed bytes and drops the `data` key from the header
+/// line, so the base is usually the `null` a missing key deserializes to —
+/// and merging into it object-key-wise silently discarded the entire event.
 fn merge_data(base: &mut Value, extra: Value) {
-    if let (Some(base), Some(extra)) = (base.as_object_mut(), extra.as_object()) {
+    let Some(target) = base.as_object_mut() else {
+        *base = extra;
+        return;
+    };
+    if let Some(extra) = extra.as_object() {
         for (key, value) in extra {
-            base.insert(key.clone(), value.clone());
+            target.insert(key.clone(), value.clone());
         }
     }
 }
@@ -161,7 +170,32 @@ pub(crate) fn tcp_address(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{duplex, BufReader};
+    use tokio::io::{duplex, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn data_framed_separately_survives_a_header_that_omits_it() {
+        // How Wyoming actually writes: `data` is serialized to its own bytes,
+        // `data_length` is set, and the `data` key is dropped from the header
+        // line. Merging that into a header whose `data` defaulted to null
+        // silently discarded all of it, so a real transcript arrived as empty
+        // text. Our own writer inlines `data`, so a round-trip through it
+        // never exercised this.
+        let (mut client, server) = duplex(1024);
+        let data = br#"{"text": "what time is it"}"#;
+        let header = format!("{{\"type\": \"transcript\", \"data_length\": {}}}\n", data.len());
+        client.write_all(header.as_bytes()).await.unwrap();
+        client.write_all(data).await.unwrap();
+        drop(client);
+
+        let mut reader = BufReader::new(server);
+        let event = read_wyoming_event(&mut reader).await.unwrap().expect("one event");
+        assert_eq!(event.event_type, "transcript");
+        assert_eq!(
+            event.data.get("text").and_then(Value::as_str),
+            Some("what time is it"),
+            "framed data must survive a header with no `data` key"
+        );
+    }
 
     #[tokio::test]
     async fn round_trips_an_event_with_data_only() {

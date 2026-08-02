@@ -448,19 +448,33 @@ async fn snapshot(state: &AppState) -> Result<OperatorStatusSnapshot, ApiError> 
     let provider_definitions = provider_definitions(state).await?;
     let provider_reachability = state.provider_reachability();
 
+    // A stored graph that will not decode — one written before a model change,
+    // or edited by hand — is reported as its own broken pipeline rather than
+    // failing the whole snapshot. Failing it would leave the operator with no
+    // console to fix the pipeline from, which is the one thing they need.
     let mut graphs = Vec::new();
+    let mut unreadable = Vec::new();
     for name in names {
-        let graph = state
-            .pipeline(&name)
-            .await
-            .map_err(|error| ApiError::unavailable(error.to_string()))?
-            .ok_or_else(|| ApiError::not_found(format!("no pipeline named `{name}`")))?;
-        graphs.push((name, graph));
+        match state.pipeline(&name).await {
+            Ok(Some(graph)) => graphs.push((name, graph)),
+            // Listing named it, so a pipeline that is now absent was removed
+            // between the two calls and simply is not there any more.
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    pipeline = %name,
+                    error = %error,
+                    "stored pipeline cannot be read; reporting it as not runnable"
+                );
+                unreadable.push(unreadable_pipeline(name, &error));
+            }
+        }
     }
 
     let pipelines = graphs
         .iter()
         .map(|(name, graph)| project_pipeline(name, graph, providers.as_deref(), &projection))
+        .chain(unreadable)
         .collect::<Vec<_>>();
     let launch_state = if pipelines.iter().any(|pipeline| pipeline.usable) {
         LaunchState::OperationsWorkspace
@@ -532,6 +546,26 @@ async fn provider_definitions(state: &AppState) -> Result<Vec<ProviderDefinition
         definitions.push(definition);
     }
     Ok(definitions)
+}
+
+/// Reports a stored pipeline that cannot be decoded.
+///
+/// There is no graph to project components or providers from, so the status
+/// carries only what is known: the name it is stored under and why reading it
+/// failed.
+fn unreadable_pipeline(name: String, error: &conduit_core::Error) -> PipelineStatus {
+    PipelineStatus {
+        name,
+        usable: false,
+        health: PipelineHealth {
+            state: PipelineHealthState::NotRunnable,
+            summary: format!("this pipeline cannot be read: {error}"),
+            last_successful_turn: None,
+            last_failed_turn: None,
+        },
+        components: Vec::new(),
+        affected_providers: Vec::new(),
+    }
 }
 
 fn project_pipeline(

@@ -125,6 +125,41 @@ describe("Overview operations workspace", () => {
     ).toHaveClass("warning");
   });
 
+  it("does not report a reachable provider as an exception", () => {
+    // `reachable` means a probe succeeded. Only `proven` counted as healthy,
+    // so an operator who had just tested every provider still saw one warning
+    // per provider and no way to clear them: a tool provider a turn never
+    // calls can never reach `proven` at all.
+    const snapshot = healthySnapshot();
+    snapshot.providers = snapshot.providers.map((provider) => ({
+      ...provider,
+      state: "reachable",
+      reachable: true,
+      proven_by_turn: null,
+    }));
+
+    render(<OverviewPanel snapshot={snapshot} eventPosture="live" />);
+
+    expect(screen.getByText("No current exceptions")).toBeInTheDocument();
+  });
+
+  it("still reports a provider that is not reachable", () => {
+    const snapshot = healthySnapshot();
+    snapshot.providers = snapshot.providers.map((provider) => ({
+      ...provider,
+      state: "configured",
+      reachable: false,
+      proven_by_turn: null,
+      message: "connection refused",
+    }));
+
+    render(<OverviewPanel snapshot={snapshot} eventPosture="live" />);
+
+    expect(
+      screen.getByRole("listitem", { name: "Provider exception: piper-local" }),
+    ).toHaveClass("warning");
+  });
+
   it("keeps healthy baseline quiet", () => {
     render(<OverviewPanel snapshot={healthySnapshot()} eventPosture="live" />);
 
@@ -1550,9 +1585,18 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
     expect(
       await screen.findByText(
-        "Test turn completed for kitchen: You said: conduit test.",
+        "Test turn completed for kitchen: 24 audio bytes",
       ),
     ).toBeInTheDocument();
+
+    // The reply is audio. It used to be rendered as lossy UTF-8 of the raw
+    // samples, which put mojibake on screen instead of something an operator
+    // could listen to.
+    const player = await screen.findByLabelText("Test turn reply audio");
+    expect(player).toHaveAttribute(
+      "src",
+      expect.stringContaining("data:audio/wav;base64,"),
+    );
   });
 
   it("validates and saves the current pipeline draft before running a test turn", async () => {
@@ -1569,7 +1613,10 @@ describe("Pipelines graph editor", () => {
         })}
         onPipelineTest={async (name) => {
           testedPipelines.push(name);
-          return `Test turn completed for ${name}: validated draft.`;
+          return {
+            message: `Test turn completed for ${name}: validated draft.`,
+            replyAudio: null,
+          };
         }}
       />,
     );
@@ -2494,7 +2541,11 @@ function mockOperatorApi({
             conversation: "00000000-0000-0000-0000-000000000999",
             status: "completed",
             audio_bytes: 24,
-            reply_text: `You said: ${request.utterance ?? "conduit test"}.`,
+            // A minimal RIFF/WAVE header, base64-encoded, standing in for the
+            // synthesized reply.
+            reply_audio: btoa(
+              `RIFF$\u0000\u0000\u0000WAVE${request.utterance ?? "conduit test"}`,
+            ),
           });
         }
 

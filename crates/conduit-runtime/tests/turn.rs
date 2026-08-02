@@ -134,6 +134,35 @@ async fn speech_starts_before_the_model_finishes() {
 }
 
 #[tokio::test]
+async fn synthesized_audio_is_converted_to_the_requested_rate() {
+    // A voice trained at 22.05 kHz played at 16 kHz is not an error anyone
+    // hears as an error: it plays 1.38x too slow and about four semitones low,
+    // which sounds like the assistant slowed way down.
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(FakeLlm::new(vec!["ok"]))
+        .with_tts(FakeTts::new().speaking_at(22_050));
+
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let spoken: usize = conversation
+        .audio
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(|chunk| chunk.expect("chunk").data.len())
+        .sum();
+
+    // One second in at 22.05 kHz has to be one second out at 16 kHz.
+    let frames = spoken / 2;
+    assert!(
+        (frames as i64 - 16_000).abs() < 320,
+        "expected about 16000 frames at the requested rate, got {frames}"
+    );
+}
+
+#[tokio::test]
 async fn passes_the_transcript_to_the_model() {
     let llm = FakeLlm::new(vec!["ok"]);
     let providers = Providers::new()
@@ -149,6 +178,25 @@ async fn passes_the_transcript_to_the_model() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].model, "fake-llm");
     assert_eq!(requests[0].messages.last().expect("message").content, "what time is it");
+}
+
+#[tokio::test]
+async fn requests_the_model_the_provider_definition_configures() {
+    // A node names a provider *definition*, and the model to request is one of
+    // that definition's fields. Falling back to the node's provider id instead
+    // silently asks for a model nobody configured — and ids cannot even spell
+    // an `ollama`-style tag, so `qwen3:8b` would go out as `qwen3`.
+    let llm = FakeLlm::new(vec!["ok"]).serving(&["qwen3:8b"]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    assert_eq!(llm.requests()[0].model, "qwen3:8b");
 }
 
 #[tokio::test]
@@ -419,21 +467,23 @@ async fn rejects_stages_it_cannot_execute() {
 }
 
 #[tokio::test]
-async fn rejects_a_model_the_provider_does_not_serve() {
+async fn a_definition_serving_several_models_uses_the_first() {
+    // Replaces a test that refused any model not in the served list. That
+    // check could only ever fire against the node's provider id, which was
+    // never a model name to begin with — the refusal it produced was the bug,
+    // not the guard. A graph has no way to pick among several models yet, so
+    // the definition's first is the one an operator can predict.
+    let llm = FakeLlm::new(vec!["ok"]).serving(&["qwen3:8b", "llama3.2:3b"]);
     let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![]))
-        .with_llm(FakeLlm::new(vec![]).serving(&["real-model"]))
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(llm.clone())
         .with_tts(FakeTts::new());
 
-    let error = Runner::prepare(&linear_graph(), &providers, EventBus::default())
-        .expect_err("the configured model must be in the provider catalogue");
-    assert!(matches!(
-        error,
-        Error::Config(message)
-            if message.contains("fake-llm")
-                && message.contains("fake-llm")
-                && message.contains("real-model")
-    ));
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    assert_eq!(llm.requests()[0].model, "qwen3:8b");
 }
 
 #[tokio::test]

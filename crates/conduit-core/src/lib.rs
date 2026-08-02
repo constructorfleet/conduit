@@ -38,5 +38,7 @@ pub mod error;
 pub mod event;
 pub mod graph;
 pub mod id;
+pub mod resample;
+pub mod wav;
 
 pub use error::{Error, GraphError, Result};

@@ -1377,6 +1377,11 @@ button {
   font-weight: 750;
 }
 
+.test-turn-reply {
+  width: 100%;
+  margin-top: 10px;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));

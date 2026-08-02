@@ -85,13 +85,20 @@ impl Plan {
                 }
                 NodeKind::Llm => {
                     reject_duplicate(&llm, node)?;
-                    llm = Some((
-                        providers.llm().require(&node.provider)?,
-                        node.id.clone(),
-                        node.provider.clone(),
-                        None,
-                        DEFAULT_MAX_TOOL_ROUNDS,
-                    ));
+                    let provider = providers.llm().require(&node.provider)?;
+                    // A node names a provider *definition*, and which model to
+                    // request is one of that definition's fields — not the id
+                    // it is filed under. The id is only a fallback for a
+                    // provider that declares no models and so passes any name
+                    // through, because definition ids cannot spell a tag like
+                    // `qwen3:8b` in the first place.
+                    let model = provider
+                        .models()
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| node.provider.clone());
+                    llm =
+                        Some((provider, node.id.clone(), model, None, DEFAULT_MAX_TOOL_ROUNDS));
                 }
                 NodeKind::Tool => {
                     let tool = providers.tools().require(&node.provider)?;
@@ -155,14 +162,10 @@ impl Plan {
                 tools.len()
             )));
         }
-        let models = llm.models();
-        if !models.is_empty() && !models.iter().any(|served| served == &model) {
-            return Err(Error::Config(format!(
-                "node `{llm_node}` requests model `{model}`, but provider `{}` only serves: {}",
-                llm.name(),
-                models.join(", ")
-            )));
-        }
+        // No allowlist check belongs here any more: the model *is* the
+        // provider's own first served model, or — when it serves none — a name
+        // it has already said it passes through. There is nothing left that
+        // could disagree.
 
         Ok(Self {
             pipeline: graph.name.clone(),

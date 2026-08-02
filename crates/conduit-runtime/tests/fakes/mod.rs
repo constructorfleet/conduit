@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use conduit_core::audio::Encoding;
+use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::event::FinishReason;
 use conduit_core::id::ToolCallId;
 use conduit_core::{Error, Result};
@@ -309,6 +309,8 @@ pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
     spoke: Arc<Notify>,
     encodings: Vec<Encoding>,
+    /// Rate this synthesizer speaks at, when it is not the requested one.
+    native_rate: Option<u32>,
 }
 
 impl FakeTts {
@@ -317,7 +319,15 @@ impl FakeTts {
             spoken: Arc::new(Mutex::new(Vec::new())),
             spoke: Arc::new(Notify::new()),
             encodings: Vec::new(),
+            native_rate: None,
         }
+    }
+
+    /// Speaks at `sample_rate` regardless of what was asked for, as a real
+    /// voice trained at one rate does. Emits exactly one second of audio.
+    pub fn speaking_at(mut self, sample_rate: u32) -> Self {
+        self.native_rate = Some(sample_rate);
+        self
     }
 
     pub fn producing_encodings(mut self, encodings: &[Encoding]) -> Self {
@@ -350,6 +360,14 @@ impl TextToSpeech for FakeTts {
     async fn synthesize(&self, request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>> {
         self.spoken.lock().expect("lock").push(request.text.clone());
         self.spoke.notify_one();
+        if let Some(sample_rate) = self.native_rate {
+            let format = AudioFormat { sample_rate, ..request.format };
+            return Ok(stream_of(vec![SpeechChunk {
+                sequence: 0,
+                format,
+                data: Bytes::from(vec![0_u8; sample_rate as usize * 2]),
+            }]));
+        }
         Ok(stream_of(vec![SpeechChunk {
             sequence: 0,
             format: request.format,

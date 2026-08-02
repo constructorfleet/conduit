@@ -4,8 +4,8 @@
 //! uploaded *file* and sniffs its type. Raw PCM therefore needs a container,
 //! and a WAV header is 44 bytes of arithmetic — far less than a dependency.
 
-use conduit_core::audio::{AudioFormat, Encoding};
-use conduit_core::{Error, Result};
+use crate::audio::{AudioFormat, Encoding};
+use crate::{Error, Result};
 
 /// Audio packaged for upload.
 pub struct Upload {
@@ -36,12 +36,12 @@ pub fn package(format: AudioFormat, samples: Vec<u8>) -> Result<Upload> {
         Encoding::Flac => {
             Ok(Upload { bytes: samples, filename: "audio.flac", mime: "audio/flac" })
         }
+        // `Encoding` is non-exhaustive to its dependents, but this now lives
+        // beside the enum, so a new variant is a compile error here rather than
+        // a runtime refusal — which is the better place to find out.
         Encoding::Opus => Err(Error::Config(
             "raw Opus frames cannot be uploaded; capture as PCM or FLAC".to_owned(),
         )),
-        // `Encoding` is non-exhaustive: a newer core may name a format this
-        // packager predates. Refusing beats mislabelling the bytes.
-        other => Err(Error::Config(format!("cannot package {other:?} audio for upload"))),
     }
 }
 

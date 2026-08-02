@@ -58,7 +58,7 @@ export interface PipelineTestResult {
   conversation: IdString;
   status: "completed";
   audio_bytes: number;
-  reply_text: string;
+  reply_audio?: string;
 }
 
 export type ComponentConfigValueType = "string" | "boolean";
@@ -401,7 +401,7 @@ async function requestJson<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`Conduit API request failed: ${response.status} ${response.statusText}`);
+    throw new Error(await failureMessage(response));
   }
 
   if (response.status === 204) {
@@ -409,6 +409,26 @@ async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+/**
+ * The API answers every failure with `{"error": ..., "detail": ...}`, and the
+ * detail is the only part that says why — "no providers are configured" rather
+ * than "422". Anything else is a body we cannot read, so the status line is all
+ * that is left to report.
+ */
+async function failureMessage(response: Response): Promise<string> {
+  const fallback =
+    `Conduit API request failed: ${response.status} ${response.statusText}`.trimEnd();
+
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return typeof body.detail === "string" && body.detail.length > 0
+      ? body.detail
+      : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export const pipelineViewFixture = {

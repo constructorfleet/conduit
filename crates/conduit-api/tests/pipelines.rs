@@ -581,9 +581,16 @@ async fn test_turn_runs_the_stored_pipeline_through_real_providers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["pipeline"], "echo");
     assert_eq!(body["status"], "completed");
-    assert_eq!(body["reply_text"], "You said: hello conduit.");
     assert!(body["conversation"].as_str().is_some());
     assert!(body["audio_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
+
+    // The reply comes back as something an operator can play, not as the raw
+    // samples rendered into a string.
+    let audio = body["reply_audio"].as_str().expect("reply audio");
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, audio)
+        .expect("valid base64");
+    assert_eq!(&decoded[..4], b"RIFF", "the reply must be a playable container");
+    assert_eq!(&decoded[8..12], b"WAVE");
 }
 
 #[tokio::test]

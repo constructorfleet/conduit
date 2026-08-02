@@ -133,6 +133,14 @@ async fn run(
     // Every event this turn publishes carries the device, which is what lets an
     // operator filter the event stream by satellite.
     let conversation = runner.run_for_device(device.id, audio);
+    // The upgrade is logged before the conversation exists, so this is what
+    // ties a socket to the id every turn event and every close below carries.
+    tracing::info!(
+        conversation = %conversation.id,
+        device = %device.name,
+        pipeline = %pipeline,
+        "conversation turn started"
+    );
     status.connect_satellite(device.id, device.name.clone(), pipeline, conversation.id).await;
 
     // The reader cannot hold the turn's stop handle, because the turn needs the
@@ -147,6 +155,18 @@ async fn run(
     });
 
     if send(&mut outgoing, Notice::Started { conversation: conversation.id }).await.is_err() {
+        // Every exit from here on says why, and how much reply audio the device
+        // actually got. `conversation socket opened` with no matching close is
+        // what makes a turn that dies mid-flight indistinguishable from one
+        // still running, and which side hung up first is exactly the thing that
+        // cannot be reconstructed afterwards from a provider's logs.
+        tracing::info!(
+            conversation = %conversation.id,
+            device = %device.name,
+            reason = "device_gone_before_start",
+            reply_chunks = 0,
+            "conversation socket closed"
+        );
         relay.abort();
         status.disconnect_satellite(device.id).await;
         return;
@@ -154,6 +174,7 @@ async fn run(
 
     let mut speech = conversation.audio;
     let mut failed = None;
+    let mut reply_chunks = 0_u64;
     while let Some(chunk) = speech.next().await {
         match chunk {
             Ok(chunk) => {
@@ -161,17 +182,45 @@ async fn run(
                 if outgoing.send(Message::Binary(chunk.data)).await.is_err() {
                     // The device hung up. Dropping the stream cancels the turn,
                     // reported as a disconnection rather than an interruption.
-                    tracing::debug!("device disconnected mid-reply");
+                    tracing::info!(
+                        conversation = %conversation.id,
+                        device = %device.name,
+                        reason = "device_disconnected_mid_reply",
+                        reply_chunks,
+                        "conversation socket closed"
+                    );
                     relay.abort();
                     status.disconnect_satellite(device.id).await;
                     return;
                 }
+                reply_chunks += 1;
             }
             Err(error) => {
                 failed = Some(error.to_string());
                 break;
             }
         }
+    }
+
+    // A turn that ends with no reply audio at all is the shape of a stage that
+    // failed rather than a turn that answered, so the count is worth having
+    // even on the successful path.
+    match &failed {
+        Some(error) => tracing::warn!(
+            conversation = %conversation.id,
+            device = %device.name,
+            reason = "turn_failed",
+            reply_chunks,
+            error = %error,
+            "conversation socket closed"
+        ),
+        None => tracing::info!(
+            conversation = %conversation.id,
+            device = %device.name,
+            reason = "completed",
+            reply_chunks,
+            "conversation socket closed"
+        ),
     }
 
     let notice = match failed {

@@ -101,7 +101,14 @@ export type PipelineValidationResult =
 type PipelineValidator = (
   graph: PipelineGraph,
 ) => PipelineValidationResult | Promise<PipelineValidationResult>;
-type PipelineTester = (name: string) => Promise<string>;
+/// What a test turn produced: a line for the operator, and the reply itself
+/// when the pipeline synthesized one.
+interface PipelineTestOutcome {
+  message: string;
+  replyAudio: string | null;
+}
+
+type PipelineTester = (name: string) => Promise<PipelineTestOutcome>;
 type ProviderTester = (providerId: string) => Promise<string>;
 
 interface PipelineEditorDraftState {
@@ -109,6 +116,8 @@ interface PipelineEditorDraftState {
   history: PipelineGraph[];
   validation: PipelineValidationResult | null;
   notice: string | null;
+  /// Playable reply from the last test turn, as a data URI.
+  replyAudio?: string | null;
 }
 
 interface OrbitPosition {
@@ -375,14 +384,17 @@ function OperatorWorkspace({
     await refreshSnapshotFromApi();
   }
 
-  async function runPipelineTest(name: string): Promise<string> {
+  async function runPipelineTest(name: string): Promise<PipelineTestOutcome> {
     const result = await snapshotClient.runPipelineTest(name, {
       utterance: "conduit test",
     });
     await refreshSnapshotFromApi();
-    return `Test turn completed for ${result.pipeline}: ${
-      result.reply_text || `${result.audio_bytes} audio bytes`
-    }`;
+    return {
+      message: `Test turn completed for ${result.pipeline}: ${result.audio_bytes} audio bytes`,
+      replyAudio: result.reply_audio
+        ? `data:audio/wav;base64,${result.reply_audio}`
+        : null,
+    };
   }
 
   async function runProviderTest(providerId: string): Promise<string> {
@@ -1097,7 +1109,7 @@ function ProvidersPanel({
         <MetricTile
           label="Warnings"
           value={providers
-            .filter((provider) => provider.state !== "proven")
+            .filter((provider) => !provider.reachable)
             .length.toString()}
         />
       </section>
@@ -2022,6 +2034,7 @@ function PipelinesPanel({
   const history = selectedDraftState?.history ?? [];
   const validation = selectedDraftState?.validation ?? null;
   const notice = selectedDraftState?.notice ?? null;
+  const replyAudio = selectedDraftState?.replyAudio ?? null;
   const [selectedNodeByPipeline, setSelectedNodeByPipeline] = useState<
     Record<string, string>
   >(
@@ -2205,6 +2218,17 @@ function PipelinesPanel({
     updateCurrentDraftState((current) => ({
       ...current,
       notice: message,
+      // Any other notice supersedes the last test turn, so its player goes
+      // with it rather than leaving stale audio to play under new text.
+      replyAudio: null,
+    }));
+  }
+
+  function markCurrentDraftTestResult(outcome: PipelineTestOutcome) {
+    updateCurrentDraftState((current) => ({
+      ...current,
+      notice: outcome.message,
+      replyAudio: outcome.replyAudio,
     }));
   }
 
@@ -2584,8 +2608,7 @@ function PipelinesPanel({
         await onPipelineStored(hydratedDraft, result.order);
         updateCurrentDraftAfterSave(`Saved graph for ${hydratedDraft.name}`);
       }
-      const message = await onPipelineTest(hydratedDraft.name);
-      markCurrentDraftNotice(message);
+      markCurrentDraftTestResult(await onPipelineTest(hydratedDraft.name));
     } catch (caught) {
       markCurrentDraftNotice(
         caught instanceof Error ? caught.message : "Unable to run test turn",
@@ -3105,6 +3128,17 @@ function PipelinesPanel({
             ) : null}
 
             {notice ? <p className="panel-notice">{notice}</p> : null}
+
+            {replyAudio ? (
+              <audio
+                className="test-turn-reply"
+                controls
+                src={replyAudio}
+                aria-label="Test turn reply audio"
+              >
+                <track kind="captions" />
+              </audio>
+            ) : null}
           </section>
         ) : null}
       </div>
@@ -4203,8 +4237,12 @@ export function OverviewPanel({
   const unhealthyPipelines = snapshot.pipelines.filter((pipeline) =>
     ["degraded", "unhealthy", "not_runnable"].includes(pipeline.health.state),
   );
+  // A provider is a warning when nothing has reached it, not when no turn has
+  // happened to use it. `reachable` is exactly "a probe succeeded", so testing
+  // a provider can clear it — where `proven` could not: that needs a real turn
+  // to exercise the provider, and a tool a model never calls never gets one.
   const providerWarnings = snapshot.providers.filter(
-    (provider) => provider.state !== "proven",
+    (provider) => !provider.reachable,
   );
   const exceptions =
     snapshot.recent_failures.length +

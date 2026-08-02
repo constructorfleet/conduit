@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use crate::http::Http;
-use crate::{wav, OpenAiConfig};
+use crate::OpenAiConfig;
 
 /// The API's response to a transcription request.
 #[derive(Debug, Deserialize)]
@@ -74,7 +74,7 @@ impl SpeechToText for OpenAiStt {
         }
 
         let captured = samples.len();
-        let upload = wav::package(options.format, samples)?;
+        let upload = conduit_core::wav::package(options.format, samples)?;
         tracing::debug!(model = %self.model, captured, "transcribing utterance");
 
         let mut form = reqwest::multipart::Form::new()

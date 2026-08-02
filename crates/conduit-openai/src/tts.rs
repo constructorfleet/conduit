@@ -71,6 +71,18 @@ impl OpenAiTts {
         self.voices = voices;
         self
     }
+
+    /// The voice to speak with, most specific choice first.
+    ///
+    /// A pipeline that names one gets it. Otherwise the provider definition's
+    /// own first voice is what the operator configured, and speaking as the
+    /// hosted default instead would ignore the only voice they asked for —
+    /// which on a local `openedai-speech` server is not even a voice it has.
+    fn voice_for(&self, requested: Option<String>) -> String {
+        requested
+            .or_else(|| self.voices.first().map(|voice| voice.id.clone()))
+            .unwrap_or_else(|| DEFAULT_VOICE.to_owned())
+    }
 }
 
 /// The `response_format` value for an encoding.
@@ -112,7 +124,7 @@ impl TextToSpeech for OpenAiTts {
         let body = Request {
             model: self.model.clone(),
             input: request.text,
-            voice: request.voice.unwrap_or_else(|| DEFAULT_VOICE.to_owned()),
+            voice: self.voice_for(request.voice),
             response_format: response_format(request.format.encoding)?,
             speed: request.rate,
         };
@@ -171,5 +183,32 @@ mod tests {
     #[test]
     fn the_default_audio_format_is_supported() {
         assert!(response_format(AudioFormat::DEFAULT.encoding).is_ok());
+    }
+
+    fn synthesizer() -> OpenAiTts {
+        OpenAiTts::new(&OpenAiConfig::default(), "tts-1").expect("client")
+    }
+
+    fn voice(id: &str) -> Voice {
+        Voice { id: id.to_owned(), name: id.to_owned(), language: "en-US".to_owned() }
+    }
+
+    #[test]
+    fn a_requested_voice_wins() {
+        let provider = synthesizer().with_voices(vec![voice("shimmer")]);
+        assert_eq!(provider.voice_for(Some("echo".to_owned())), "echo");
+    }
+
+    #[test]
+    fn the_configured_voice_is_used_when_the_pipeline_names_none() {
+        // The operator put a voice on the provider definition; speaking as
+        // `alloy` anyway ignores the only voice they asked for.
+        let provider = synthesizer().with_voices(vec![voice("shimmer"), voice("echo")]);
+        assert_eq!(provider.voice_for(None), "shimmer");
+    }
+
+    #[test]
+    fn the_hosted_default_remains_the_last_resort() {
+        assert_eq!(synthesizer().with_voices(Vec::new()).voice_for(None), DEFAULT_VOICE);
     }
 }
