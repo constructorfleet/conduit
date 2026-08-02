@@ -115,6 +115,15 @@ pub enum GraphError {
     #[error("graph has more than one reasoning node: {}", .0.join(", "))]
     MultipleCores(Vec<String>),
 
+    /// A source's stream never reaches the core, so nothing would reason about
+    /// what it captured.
+    #[error("source `{0}` does not reach the core")]
+    SourceMissesCore(String),
+
+    /// The core's answer never reaches a sink, so nothing would deliver it.
+    #[error("sink `{0}` is not fed by the core")]
+    SinkMissesCore(String),
+
     /// An edge delivers something the node at its far end cannot read.
     ///
     /// This is the structural form of a mistake that used to be found — when

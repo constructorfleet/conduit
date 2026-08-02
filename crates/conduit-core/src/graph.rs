@@ -723,6 +723,7 @@ impl PipelineGraph {
         // delete is the answer either way.
         self.check_single_core()?;
         self.check_modalities()?;
+        self.check_core_reachability()?;
 
         Ok(ordered)
     }
@@ -742,6 +743,42 @@ impl PipelineGraph {
 
         if reasoning.len() > 1 {
             return Err(GraphError::MultipleCores(reasoning));
+        }
+        Ok(())
+    }
+
+    /// Checks that every source feeds the core and the core feeds every sink.
+    ///
+    /// Modality typing is a property of one edge and cannot see this: a graph
+    /// wiring `stt -> core` beside `stt -> tts` has two compatible edges and
+    /// still drops the answer. Stating the rule needs a graph to have exactly
+    /// one core, which is why it lives here now rather than in the runtime,
+    /// which used to ask about each pair of stages it happened to know about.
+    ///
+    /// A graph with no core is not this check's business: resolution reports
+    /// that, and complaining that nothing reaches a node the author never
+    /// wrote would send them looking for the wrong problem.
+    fn check_core_reachability(&self) -> Result<(), GraphError> {
+        let Some(core) = self.nodes.iter().find(|node| node.is_reasoning()) else {
+            return Ok(());
+        };
+
+        // Asked of where a node sits rather than of what kind it is. A
+        // pipeline may end at a `tts` with no `sink` written down, and that
+        // stage is still where the reply comes out.
+        for node in &self.nodes {
+            if node.id() == core.id() {
+                continue;
+            }
+            let origin = !self.edges.iter().any(|edge| &edge.to == node.id());
+            let terminal = !self.edges.iter().any(|edge| &edge.from == node.id());
+
+            if origin && !self.reaches(node.id(), core.id()) {
+                return Err(GraphError::SourceMissesCore(node.id().clone()));
+            }
+            if terminal && !self.reaches(core.id(), node.id()) {
+                return Err(GraphError::SinkMissesCore(node.id().clone()));
+            }
         }
         Ok(())
     }
@@ -1331,6 +1368,60 @@ mod tests {
             .with_edge(Edge::new("core", "tts"))
             .validate()
             .expect("a core sits where a model node sat");
+    }
+
+    #[test]
+    fn a_source_that_never_reaches_the_core_is_refused() {
+        // Every edge here is modality-compatible — synthesis renders written
+        // words as readily as an utterance — so no per-edge rule can see that
+        // the model's answer is discarded and the transcript spoken instead.
+        let sideways = PipelineGraph::new("sideways")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("stt", "tts"));
+
+        assert_eq!(sideways.validate(), Err(GraphError::SinkMissesCore("tts".to_owned())));
+    }
+
+    #[test]
+    fn a_sink_the_core_never_feeds_is_refused() {
+        let orphaned = PipelineGraph::new("orphan sink")
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::sink("out", "websocket", Modality::Text))
+            .with_node(Node::sink("other", "websocket", Modality::Text))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "out"))
+            .with_edge(Edge::new("chat", "other"));
+
+        assert_eq!(orphaned.validate(), Err(GraphError::SinkMissesCore("other".to_owned())));
+    }
+
+    #[test]
+    fn a_hybrid_pipeline_feeds_one_core_from_either_modality() {
+        // The shape this track exists for: speak or type the question, hear
+        // and read the answer, with one core in the middle that knows about
+        // neither.
+        PipelineGraph::new("hybrid")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_node(Node::sink("speaker", "websocket", Modality::Audio))
+            .with_node(Node::sink("transcript", "websocket", Modality::Text))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "tts"))
+            .with_edge(Edge::new("tts", "speaker"))
+            .with_edge(Edge::new("core", "transcript"))
+            .validate()
+            .expect("two ways in and two ways out is one pipeline");
     }
 
     #[test]

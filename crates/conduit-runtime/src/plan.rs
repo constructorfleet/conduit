@@ -181,26 +181,6 @@ impl Plan {
             ));
         }
 
-        // This runtime executes recognition, then reasoning, then synthesis,
-        // in that order. A graph is only a description of *this* pipeline if
-        // its edges say the same thing.
-        //
-        // Modality typing catches the backwards graph, `tts -> llm -> stt`,
-        // structurally now. It cannot catch a graph that branches past the
-        // model — `stt -> llm` beside `stt -> tts` — because every edge there
-        // carries something its far end reads, and the defect is a missing
-        // path rather than a bad edge. Reachability still has to be asked
-        // about; `crates/conduit-runtime/tests/plan.rs` pins that shape.
-        //
-        // A core's tools and memory are not asked about at all, and not by
-        // omission: a binding is configuration rather than a stage, so there
-        // is no edge for it to be reachable over.
-        if let Some(recognizer) = &stt {
-            require_downstream(graph, &recognizer.node, &reasoning.node)?;
-        }
-        if let Some(synthesizer) = &tts {
-            require_downstream(graph, &reasoning.node, &synthesizer.node)?;
-        }
         if !tools.is_empty() && !reasoning.llm.supports_tools() {
             return Err(Error::Config(format!(
                 "node `{}` uses provider `{}`, which cannot call tools, but the \
@@ -340,22 +320,6 @@ fn reject_duplicate<T>(existing: &Option<T>, node: &Node) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-/// Requires that `downstream` is reachable from `upstream`.
-///
-/// The check is reachability rather than a direct edge, so a graph may put a
-/// wake word, speaker id, or router node between two stages once those are
-/// executable, and an existing graph does not have to be rewired to keep
-/// working.
-fn require_downstream(graph: &PipelineGraph, upstream: &str, downstream: &str) -> Result<()> {
-    if graph.reaches(upstream, downstream) {
-        return Ok(());
-    }
-    Err(Error::Config(format!(
-        "node `{downstream}` is not downstream of `{upstream}`, but this runtime would \
-         run it as though it were; add the edges the pipeline needs"
-    )))
 }
 
 /// Written by hand because a plan holds trait objects, which are not `Debug`.

@@ -153,25 +153,34 @@ fn branches_past_the_model() -> PipelineGraph {
 #[test]
 fn synthesis_that_does_not_follow_the_model_is_refused() {
     // Both stages exist and both are wired to something, so only the *order*
-    // is wrong — which is exactly the case node-kind matching could not see.
-    let message = config_message(&refusal(&branches_past_the_model(), &providers())).to_owned();
-    assert!(message.contains("tts"), "{message}");
+    // is wrong. That used to be the runtime's complaint; it is the graph's
+    // now, because a graph with one core can state the rule itself.
+    let error = refusal(&branches_past_the_model(), &providers());
+    let Error::InvalidGraph(GraphError::SinkMissesCore(node)) = &error else {
+        panic!("a branch past the model is an invalid graph: {error}");
+    };
+    assert_eq!(node, "tts");
 }
 
 #[test]
-fn a_graph_whose_every_edge_is_modality_compatible_can_still_branch_past_the_model() {
-    // Pinned because the reachability check above looks redundant beside
-    // modality typing and is not. Deleting it would make this shape run: the
-    // person speaking would hear their own words read back, synthesized from
-    // the transcript, with the model's answer discarded in silence.
-    //
-    // The rule that does subsume it is core reachability — every source
-    // reaches the core, the core reaches every sink — which needs a graph to
-    // have exactly one core to be stated at all. That arrives with the
-    // reasoning core; until then the runtime keeps asking.
-    branches_past_the_model()
-        .validate()
-        .expect("every edge carries something its far end reads");
+fn every_edge_can_be_modality_compatible_while_the_path_is_wrong() {
+    // Why core reachability had to exist: each edge here carries something
+    // its far end reads, so no per-edge rule sees the defect. Without the
+    // path rule this shape ran, and the person speaking heard their own words
+    // read back, synthesized from the transcript, with the model's answer
+    // discarded in silence.
+    let graph = branches_past_the_model();
+    assert!(
+        graph.edges.iter().all(|edge| {
+            let (Some(from), Some(to)) = (graph.node(&edge.from), graph.node(&edge.to)) else {
+                return true;
+            };
+            from.output_modality()
+                .is_none_or(|produced| to.accepted_modalities().contains(&produced))
+        }),
+        "every edge is compatible on its own terms"
+    );
+    assert!(graph.validate().is_err(), "and the graph is still wrong");
 }
 
 #[test]
