@@ -9,6 +9,7 @@
 //! - [`event`] — the event vocabulary of the pipeline
 //! - [`bus`] — publish/subscribe distribution of those events
 //! - [`graph`] — the serializable pipeline definition
+//! - [`memory`] — how long what a pipeline remembers should live
 //! - [`audio`] — audio format description
 //! - [`error`] — shared error types
 //!
@@ -38,6 +39,7 @@ pub mod error;
 pub mod event;
 pub mod graph;
 pub mod id;
+pub mod memory;
 pub mod resample;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
