@@ -248,12 +248,10 @@ binary_sensor:
 micro_wake_word:
   id: mww
   models:
-    # - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
-    #   id: hey_jarvis
-    # - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
-    #   id: okay_nabu
-    - model: https://automation.home.prettybaked.com/local/hey_eddie/hey_eddie.json
-      id: hey_eddie
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
+      id: hey_jarvis
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
+      id: okay_nabu
     - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json
       id: stop
       internal: true
