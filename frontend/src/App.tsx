@@ -1097,7 +1097,7 @@ function ProvidersPanel({
         <MetricTile
           label="Warnings"
           value={providers
-            .filter((provider) => provider.state !== "proven")
+            .filter((provider) => !provider.reachable)
             .length.toString()}
         />
       </section>
@@ -4203,8 +4203,12 @@ export function OverviewPanel({
   const unhealthyPipelines = snapshot.pipelines.filter((pipeline) =>
     ["degraded", "unhealthy", "not_runnable"].includes(pipeline.health.state),
   );
+  // A provider is a warning when nothing has reached it, not when no turn has
+  // happened to use it. `reachable` is exactly "a probe succeeded", so testing
+  // a provider can clear it — where `proven` could not: that needs a real turn
+  // to exercise the provider, and a tool a model never calls never gets one.
   const providerWarnings = snapshot.providers.filter(
-    (provider) => provider.state !== "proven",
+    (provider) => !provider.reachable,
   );
   const exceptions =
     snapshot.recent_failures.length +

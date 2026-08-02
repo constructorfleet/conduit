@@ -125,6 +125,41 @@ describe("Overview operations workspace", () => {
     ).toHaveClass("warning");
   });
 
+  it("does not report a reachable provider as an exception", () => {
+    // `reachable` means a probe succeeded. Only `proven` counted as healthy,
+    // so an operator who had just tested every provider still saw one warning
+    // per provider and no way to clear them: a tool provider a turn never
+    // calls can never reach `proven` at all.
+    const snapshot = healthySnapshot();
+    snapshot.providers = snapshot.providers.map((provider) => ({
+      ...provider,
+      state: "reachable",
+      reachable: true,
+      proven_by_turn: null,
+    }));
+
+    render(<OverviewPanel snapshot={snapshot} eventPosture="live" />);
+
+    expect(screen.getByText("No current exceptions")).toBeInTheDocument();
+  });
+
+  it("still reports a provider that is not reachable", () => {
+    const snapshot = healthySnapshot();
+    snapshot.providers = snapshot.providers.map((provider) => ({
+      ...provider,
+      state: "configured",
+      reachable: false,
+      proven_by_turn: null,
+      message: "connection refused",
+    }));
+
+    render(<OverviewPanel snapshot={snapshot} eventPosture="live" />);
+
+    expect(
+      screen.getByRole("listitem", { name: "Provider exception: piper-local" }),
+    ).toHaveClass("warning");
+  });
+
   it("keeps healthy baseline quiet", () => {
     render(<OverviewPanel snapshot={healthySnapshot()} eventPosture="live" />);
 
