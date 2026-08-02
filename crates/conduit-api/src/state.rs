@@ -253,8 +253,11 @@ impl AppState {
         definition: ProviderDefinition,
     ) -> Result<bool> {
         let replaced = self.provider_definitions.put(id, definition).await?;
-        self.rebuild_provider_snapshot().await?;
+        // Cleared before the rebuild, because the rebuild starts the probe that
+        // replaces this result: clearing afterwards would race it and could
+        // discard the answer it just produced.
         self.clear_provider_reachability(id);
+        self.rebuild_provider_snapshot().await?;
         Ok(replaced)
     }
 
@@ -266,8 +269,8 @@ impl AppState {
     pub async fn remove_provider_definition(&self, id: &str) -> Result<bool> {
         let removed = self.provider_definitions.remove(id).await?;
         if removed {
-            self.rebuild_provider_snapshot().await?;
             self.clear_provider_reachability(id);
+            self.rebuild_provider_snapshot().await?;
         }
         Ok(removed)
     }
@@ -281,7 +284,53 @@ impl AppState {
             snapshot = register_definition(snapshot, &definition).await?;
         }
         *self.provider_lock() = Some(Arc::new(snapshot));
+        self.spawn_reachability_probe();
         Ok(())
+    }
+
+    /// Asks every registered provider how it is, in the background.
+    ///
+    /// Reachability was only ever written by the explicit test endpoint, so a
+    /// provider an operator created in the console read "no successful
+    /// reachability check yet" however healthy it was — and said so again after
+    /// every restart, since the results do not outlive the process. Probing
+    /// here rather than while building a status snapshot keeps the cost tied to
+    /// how often definitions change rather than to how often the console polls:
+    /// a probe can mean a request to a paid API, and the console polls.
+    ///
+    /// Detached so that saving a definition does not wait on a provider that is
+    /// slow or down, and failures are recorded rather than raised: an
+    /// unreachable provider is a status to display, not an error that should
+    /// fail the write that discovered it.
+    fn spawn_reachability_probe(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let Some(providers) = state.providers() else {
+                return;
+            };
+            let ids = match state.provider_definition_ids().await {
+                Ok(ids) => ids,
+                Err(error) => {
+                    tracing::debug!(%error, "cannot list definitions to probe");
+                    return;
+                }
+            };
+            for id in ids {
+                let health = if let Some(provider) = providers.stt().get(&id) {
+                    provider.health().await
+                } else if let Some(provider) = providers.llm().get(&id) {
+                    provider.health().await
+                } else if let Some(provider) = providers.tts().get(&id) {
+                    provider.health().await
+                } else if let Some(provider) = providers.tools().get(&id) {
+                    provider.health().await
+                } else {
+                    continue;
+                };
+                tracing::debug!(provider = %id, ?health, "probed provider reachability");
+                state.record_provider_reachability(&id, health);
+            }
+        });
     }
 
     /// Rebuilds runtime providers from stored provider definitions.
