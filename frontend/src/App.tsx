@@ -76,6 +76,7 @@ import {
   buildMinimalTextLoopGraph,
   buildMinimalVoiceLoopGraph,
   cloneGraph,
+  defaultPipelineViews,
   componentKindForNode,
   initializePipelineDrafts,
   insertLinearStageNode,
@@ -4818,45 +4819,6 @@ function guidedSetupProviderDefinitions({
       },
     },
   ];
-}
-
-function defaultPipelineViews(
-  snapshot: OperatorStatusSnapshot | null,
-): readonly PipelineView[] {
-  const pipeline = snapshot?.pipelines[0];
-  if (!pipeline) {
-    return [];
-  }
-
-  const graph: PipelineGraph = {
-    name: pipeline.name,
-    nodes: [
-      { id: "mic", kind: "source", provider: "websocket" },
-      { id: "stt", kind: "stt", provider: "whisper" },
-      {
-        id: "core",
-        kind: "core",
-        core: { model: { provider: "openai" }, max_rounds: DEFAULT_MAX_ROUNDS },
-      },
-      {
-        id: "tts",
-        kind: "tts",
-        provider:
-          pipeline.components.find(
-            (component) => component.kind === "synthesis",
-          )?.provider ?? "piper",
-      },
-      { id: "speaker", kind: "sink", provider: "websocket" },
-    ],
-    edges: [
-      { from: "mic", to: "stt" },
-      { from: "stt", to: "llm" },
-      { from: "llm", to: "tts" },
-      { from: "tts", to: "speaker" },
-    ],
-  };
-
-  return [{ graph, order: graph.nodes.map((node) => node.id) }];
 }
 
 function pipelineViewToValidation(

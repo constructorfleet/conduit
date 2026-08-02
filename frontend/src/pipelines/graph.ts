@@ -12,7 +12,10 @@ import type {
   PipelineNode,
   PipelineView,
 } from "../contracts/client";
-import type { ComponentKind } from "../contracts/status";
+import type {
+  ComponentKind,
+  OperatorStatusSnapshot,
+} from "../contracts/status";
 
 export const DEFAULT_MAX_ROUNDS = 4;
 export const DEFAULT_MEMORY_LIMIT = 8;
@@ -363,4 +366,49 @@ export function insertLinearStageNode(
       ...(next ? [{ from: node.id, to: next.id }] : []),
     ],
   });
+}
+
+/// A seed view for the Pipelines page, drawn from the runtime snapshot before
+/// stored graphs have loaded.
+///
+/// The snapshot reports which providers a pipeline runs, not how it is wired,
+/// so the shape here is the conventional voice loop with the snapshot's
+/// synthesis provider dropped in.
+export function defaultPipelineViews(
+  snapshot: OperatorStatusSnapshot | null,
+): readonly PipelineView[] {
+  const pipeline = snapshot?.pipelines[0];
+  if (!pipeline) {
+    return [];
+  }
+
+  const graph: PipelineGraph = {
+    name: pipeline.name,
+    nodes: [
+      { id: "mic", kind: "source", provider: "websocket" },
+      { id: "stt", kind: "stt", provider: "whisper" },
+      {
+        id: "core",
+        kind: "core",
+        core: { model: { provider: "openai" }, max_rounds: DEFAULT_MAX_ROUNDS },
+      },
+      {
+        id: "tts",
+        kind: "tts",
+        provider:
+          pipeline.components.find(
+            (component) => component.kind === "synthesis",
+          )?.provider ?? "piper",
+      },
+      { id: "speaker", kind: "sink", provider: "websocket" },
+    ],
+    edges: [
+      { from: "mic", to: "stt" },
+      { from: "stt", to: "core" },
+      { from: "core", to: "tts" },
+      { from: "tts", to: "speaker" },
+    ],
+  };
+
+  return [{ graph, order: graph.nodes.map((node) => node.id) }];
 }
