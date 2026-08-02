@@ -152,6 +152,25 @@ async fn passes_the_transcript_to_the_model() {
 }
 
 #[tokio::test]
+async fn requests_the_model_the_provider_definition_configures() {
+    // A node names a provider *definition*, and the model to request is one of
+    // that definition's fields. Falling back to the node's provider id instead
+    // silently asks for a model nobody configured — and ids cannot even spell
+    // an `ollama`-style tag, so `qwen3:8b` would go out as `qwen3`.
+    let llm = FakeLlm::new(vec!["ok"]).serving(&["qwen3:8b"]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    assert_eq!(llm.requests()[0].model, "qwen3:8b");
+}
+
+#[tokio::test]
 async fn speaks_each_sentence_as_soon_as_it_is_complete() {
     let tts = FakeTts::new();
     let providers = Providers::new()
@@ -419,21 +438,23 @@ async fn rejects_stages_it_cannot_execute() {
 }
 
 #[tokio::test]
-async fn rejects_a_model_the_provider_does_not_serve() {
+async fn a_definition_serving_several_models_uses_the_first() {
+    // Replaces a test that refused any model not in the served list. That
+    // check could only ever fire against the node's provider id, which was
+    // never a model name to begin with — the refusal it produced was the bug,
+    // not the guard. A graph has no way to pick among several models yet, so
+    // the definition's first is the one an operator can predict.
+    let llm = FakeLlm::new(vec!["ok"]).serving(&["qwen3:8b", "llama3.2:3b"]);
     let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![]))
-        .with_llm(FakeLlm::new(vec![]).serving(&["real-model"]))
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(llm.clone())
         .with_tts(FakeTts::new());
 
-    let error = Runner::prepare(&linear_graph(), &providers, EventBus::default())
-        .expect_err("the configured model must be in the provider catalogue");
-    assert!(matches!(
-        error,
-        Error::Config(message)
-            if message.contains("fake-llm")
-                && message.contains("fake-llm")
-                && message.contains("real-model")
-    ));
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    assert_eq!(llm.requests()[0].model, "qwen3:8b");
 }
 
 #[tokio::test]
