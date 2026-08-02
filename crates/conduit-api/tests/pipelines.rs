@@ -906,7 +906,7 @@ async fn provider_reachability_test_marks_a_provider_reachable() {
 }
 
 #[tokio::test]
-async fn saved_provider_definition_stays_configured_until_reachability_test_passes() {
+async fn a_saved_provider_definition_is_probed_without_being_asked() {
     let server = MockOpenAiServer::healthy().await;
     let state = AppState::new(EventBus::default());
     let definition = serde_json::json!({
@@ -920,17 +920,34 @@ async fn saved_provider_definition_stays_configured_until_reachability_test_pass
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
 
-    let (status, body) = call(&state, get("/v1/status")).await;
+    // Reachability used to be written only by the explicit test endpoint, so a
+    // provider created in the console read "no successful reachability check
+    // yet" however healthy it was — and said so again after every restart,
+    // since the results do not outlive the process. An operator was left with
+    // a warning per provider and a button to press to clear each one.
+    //
+    // Probing still happens on definition change rather than while building a
+    // status snapshot: a probe can mean a request to a paid API, and the
+    // console polls.
+    let mut provider = serde_json::Value::Null;
+    for _ in 0..50 {
+        let (status, body) = call(&state, get("/v1/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        provider = body["providers"]
+            .as_array()
+            .expect("providers")
+            .iter()
+            .find(|provider| provider["id"] == "openai-primary")
+            .expect("provider status")
+            .clone();
+        if provider["reachable"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let providers = body["providers"].as_array().expect("providers");
-    let provider = providers
-        .iter()
-        .find(|provider| provider["id"] == "openai-primary")
-        .expect("provider status");
-    assert_eq!(provider["state"], "configured");
-    assert_eq!(provider["reachable"], false);
-    assert_eq!(provider["message"], "no successful reachability check yet");
+    assert_eq!(provider["reachable"], true, "a healthy provider must be probed: {provider}");
+    assert_eq!(provider["state"], "reachable");
 }
 
 #[tokio::test]
