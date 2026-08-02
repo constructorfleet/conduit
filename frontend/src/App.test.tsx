@@ -1585,9 +1585,18 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
     expect(
       await screen.findByText(
-        "Test turn completed for kitchen: You said: conduit test.",
+        "Test turn completed for kitchen: 24 audio bytes",
       ),
     ).toBeInTheDocument();
+
+    // The reply is audio. It used to be rendered as lossy UTF-8 of the raw
+    // samples, which put mojibake on screen instead of something an operator
+    // could listen to.
+    const player = await screen.findByLabelText("Test turn reply audio");
+    expect(player).toHaveAttribute(
+      "src",
+      expect.stringContaining("data:audio/wav;base64,"),
+    );
   });
 
   it("validates and saves the current pipeline draft before running a test turn", async () => {
@@ -1604,7 +1613,10 @@ describe("Pipelines graph editor", () => {
         })}
         onPipelineTest={async (name) => {
           testedPipelines.push(name);
-          return `Test turn completed for ${name}: validated draft.`;
+          return {
+            message: `Test turn completed for ${name}: validated draft.`,
+            replyAudio: null,
+          };
         }}
       />,
     );
@@ -2529,7 +2541,11 @@ function mockOperatorApi({
             conversation: "00000000-0000-0000-0000-000000000999",
             status: "completed",
             audio_bytes: 24,
-            reply_text: `You said: ${request.utterance ?? "conduit test"}.`,
+            // A minimal RIFF/WAVE header, base64-encoded, standing in for the
+            // synthesized reply.
+            reply_audio: btoa(
+              `RIFF$\u0000\u0000\u0000WAVE${request.utterance ?? "conduit test"}`,
+            ),
           });
         }
 

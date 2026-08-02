@@ -25,6 +25,7 @@ conduit-runtime = { path = "crates/conduit-runtime", version = "0.1.0" }
 
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.23"
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-core = "0.3"

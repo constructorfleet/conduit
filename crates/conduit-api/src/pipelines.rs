@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use bytes::Bytes;
 use conduit_core::audio::AudioFormat;
 use conduit_core::graph::{NodeKind, PipelineGraph};
@@ -114,8 +116,16 @@ pub struct PipelineTestResult {
     pub status: &'static str,
     /// Number of synthesized audio bytes returned by the TTS stage.
     pub audio_bytes: usize,
-    /// Best-effort text rendering of the synthesized stream.
-    pub reply_text: String,
+    /// The reply as a playable WAV file, base64-encoded, or `None` when the
+    /// turn produced no audio.
+    ///
+    /// The point of a test turn is hearing what the pipeline says. The samples
+    /// were previously rendered as lossy UTF-8, which put the raw PCM on
+    /// screen as mojibake — audio is not text, and no operator could tell a
+    /// working synthesizer from a broken one by reading it. A container and an
+    /// encoding make it something a browser can simply play.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_audio: Option<String>,
 }
 
 /// `GET /v1/pipelines` — names of every stored pipeline.
@@ -250,12 +260,20 @@ pub async fn test_turn(
         output.extend_from_slice(&chunk.data);
     }
 
+    let reply_audio = if output.is_empty() {
+        None
+    } else {
+        let upload = conduit_core::wav::package(request.format, output.clone())
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        Some(BASE64.encode(&upload.bytes))
+    };
+
     Ok(Json(PipelineTestResult {
         pipeline: name,
         conversation: conversation_id,
         status: "completed",
         audio_bytes: output.len(),
-        reply_text: String::from_utf8_lossy(&output).into_owned(),
+        reply_audio,
     }))
 }
 

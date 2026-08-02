@@ -393,7 +393,7 @@ export interface PipelineTestResult {{
   conversation: IdString;
   status: "completed";
   audio_bytes: number;
-  reply_text: string;
+  reply_audio?: string;
 }}
 
 export type ComponentConfigValueType = "string" | "boolean";
