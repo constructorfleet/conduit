@@ -12,6 +12,7 @@ use crate::{stream, OpenAiConfig};
 pub struct OpenAi {
     http: Http,
     models: Vec<String>,
+    system_prompt: Option<String>,
 }
 
 impl OpenAi {
@@ -22,7 +23,11 @@ impl OpenAi {
     /// Returns [`Error::Config`] if the HTTP client cannot be built, which
     /// happens when the platform has no usable TLS backend.
     pub fn new(config: OpenAiConfig) -> Result<Self> {
-        Ok(Self { http: Http::new(&config)?, models: config.models })
+        Ok(Self {
+            http: Http::new(&config)?,
+            models: config.models,
+            system_prompt: config.system_prompt,
+        })
     }
 }
 
@@ -52,6 +57,10 @@ impl LanguageModel for OpenAi {
 
     fn models(&self) -> &[String] {
         &self.models
+    }
+
+    fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
     }
 
     fn supports_tools(&self) -> bool {

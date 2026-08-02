@@ -150,11 +150,12 @@ impl Plan {
                     for binding in &core.memory {
                         memory.push(resolve_memory(binding, providers)?);
                     }
+                    let system = combined_system(llm.system_prompt(), core.system.as_deref());
                     reasoning = Some(Reasoning {
                         node: id.clone(),
                         llm,
                         model,
-                        system: core.system.clone(),
+                        system,
                         max_rounds: core.max_rounds,
                     });
                 }
@@ -272,6 +273,20 @@ fn offer_tool(
         )));
     }
     Ok(())
+}
+
+/// Joins the provider definition's system prompt with this pipeline's.
+///
+/// The definition's comes first because it is the wider statement — what this
+/// endpoint should be, inherited by every pipeline pointing at it — and the
+/// pipeline's narrows it. Replacing rather than appending would let one
+/// pipeline quietly drop a deployment-wide instruction.
+fn combined_system(definition: Option<&str>, pipeline: Option<&str>) -> Option<String> {
+    match (definition, pipeline) {
+        (Some(definition), Some(pipeline)) => Some(format!("{definition}\n\n{pipeline}")),
+        (Some(only), None) | (None, Some(only)) => Some(only.to_owned()),
+        (None, None) => None,
+    }
 }
 
 /// Resolves one memory binding against the registered stores.

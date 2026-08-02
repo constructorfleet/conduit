@@ -169,6 +169,17 @@ pub trait LanguageModel: Provider {
         &[]
     }
 
+    /// A system prompt this provider's configuration attaches to every turn.
+    ///
+    /// Set where the provider is defined rather than per pipeline: it says how
+    /// this endpoint should behave — a jailbroken local model that needs
+    /// reining in, a deployment-wide policy — and every pipeline pointing at
+    /// it inherits that. A pipeline's own prompt is about that pipeline and is
+    /// appended to this one rather than replacing it.
+    fn system_prompt(&self) -> Option<&str> {
+        None
+    }
+
     /// Whether this provider can execute tool calls.
     fn supports_tools(&self) -> bool {
         false

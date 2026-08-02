@@ -355,9 +355,16 @@ async fn register_definition(
     };
 
     match &definition.variant {
-        ProviderDefinitionVariant::OpenAiLlm { base_url, api_key, models, .. } => {
+        ProviderDefinitionVariant::OpenAiLlm {
+            base_url,
+            api_key,
+            models,
+            system_prompt,
+            ..
+        } => {
             let mut config = config(base_url, api_key);
             config.models = models.clone();
+            config.system_prompt = system_prompt.clone();
             Ok(providers.with_llm(OpenAi::new(config)?))
         }
         ProviderDefinitionVariant::OpenAiStt { base_url, model, api_key, .. } => {

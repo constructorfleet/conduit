@@ -236,6 +236,7 @@ pub struct FakeLlm {
     /// test can drive a model that never stops asking for tools.
     repeat_last: bool,
     models: Vec<String>,
+    system_prompt: Option<String>,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 
@@ -257,6 +258,7 @@ impl FakeLlm {
             // refuses a pipeline where nothing names a model. Fakes advertise
             // one so a test about something else does not have to.
             models: vec!["fake-model".to_owned()],
+            system_prompt: None,
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -270,6 +272,12 @@ impl FakeLlm {
     /// Advertises a finite model catalogue.
     pub fn serving(mut self, models: &[&str]) -> Self {
         self.models = models.iter().map(|model| (*model).to_owned()).collect();
+        self
+    }
+
+    /// Stands in for a provider definition carrying a system prompt.
+    pub fn with_system_prompt(mut self, prompt: &str) -> Self {
+        self.system_prompt = Some(prompt.to_owned());
         self
     }
 
@@ -308,6 +316,10 @@ impl LanguageModel for FakeLlm {
 
     fn models(&self) -> &[String] {
         &self.models
+    }
+
+    fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
     }
 }
 
