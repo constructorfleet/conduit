@@ -158,6 +158,62 @@ fn remembering_graph(mode: MemoryMode) -> PipelineGraph {
 }
 
 #[tokio::test]
+async fn both_system_prompts_reach_the_model_widest_first() {
+    // The definition's prompt says what this endpoint should be and every
+    // pipeline pointing at it inherits that; the pipeline's narrows it. A
+    // pipeline that replaced rather than added to it could quietly drop a
+    // deployment-wide instruction.
+    let llm = FakeLlm::new(vec!["Fine."]).with_system_prompt("Never mention the weather.");
+    let core = ReasoningCore {
+        system: Some("Answer in one word.".to_owned()),
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("prompted")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "core".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph, &providers, EventBus::default()).expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    let system = llm.requests()[0]
+        .messages
+        .iter()
+        .find(|message| message.role == conduit_provider::llm::Role::System)
+        .expect("a system message")
+        .content
+        .clone();
+    assert!(system.contains("Never mention the weather."), "{system}");
+    assert!(system.contains("Answer in one word."), "{system}");
+    assert!(
+        system.find("Never mention").expect("present")
+            < system.find("Answer in one").expect("present"),
+        "the definition's prompt comes first: {system}"
+    );
+}
+
+#[tokio::test]
+async fn a_definitions_system_prompt_reaches_a_pipeline_that_sets_none() {
+    let llm = FakeLlm::new(vec!["Fine."]).with_system_prompt("Be terse.");
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, EventBus::default()).expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert!(llm.requests()[0].messages.iter().any(|message| message.content == "Be terse."));
+}
+
+#[tokio::test]
 async fn a_core_is_reminded_before_it_answers_and_stores_after() {
     let memory = fakes::FakeMemory::recalling("the oven is in the kitchen");
     let llm = FakeLlm::new(vec!["It is in the kitchen."]);
@@ -446,7 +502,10 @@ async fn passes_the_transcript_to_the_model() {
 
     let requests = llm.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model, "fake-llm");
+    // The model the provider advertises, not its registration name. Asking a
+    // provider for a model named after itself is what the old fallback did,
+    // and it fails at the first token.
+    assert_eq!(requests[0].model, "fake-model");
     assert_eq!(requests[0].messages.last().expect("message").content, "what time is it");
 }
 

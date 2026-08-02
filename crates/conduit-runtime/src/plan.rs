@@ -150,11 +150,12 @@ impl Plan {
                     for binding in &core.memory {
                         memory.push(resolve_memory(binding, providers)?);
                     }
+                    let system = combined_system(llm.system_prompt(), core.system.as_deref());
                     reasoning = Some(Reasoning {
                         node: id.clone(),
                         llm,
                         model,
-                        system: core.system.clone(),
+                        system,
                         max_rounds: core.max_rounds,
                     });
                 }
@@ -274,6 +275,20 @@ fn offer_tool(
     Ok(())
 }
 
+/// Joins the provider definition's system prompt with this pipeline's.
+///
+/// The definition's comes first because it is the wider statement — what this
+/// endpoint should be, inherited by every pipeline pointing at it — and the
+/// pipeline's narrows it. Replacing rather than appending would let one
+/// pipeline quietly drop a deployment-wide instruction.
+fn combined_system(definition: Option<&str>, pipeline: Option<&str>) -> Option<String> {
+    match (definition, pipeline) {
+        (Some(definition), Some(pipeline)) => Some(format!("{definition}\n\n{pipeline}")),
+        (Some(only), None) | (None, Some(only)) => Some(only.to_owned()),
+        (None, None) => None,
+    }
+}
+
 /// Resolves one memory binding against the registered stores.
 fn resolve_memory(binding: &MemoryBinding, providers: &Providers) -> Result<ResolvedMemory> {
     Ok(ResolvedMemory {
@@ -299,11 +314,20 @@ fn resolve_model(
     requested: Option<&str>,
 ) -> Result<String> {
     let Some(requested) = requested else {
-        return Ok(provider
-            .models()
-            .first()
-            .cloned()
-            .unwrap_or_else(|| node.provider().to_owned()));
+        // The definition's first served model, when it serves any. A
+        // definition that serves none and a node that names none leave nothing
+        // to ask for — and the id is not an answer: asking OpenAI for a model
+        // called `openai` fails at the first token, which is a long way from
+        // the form where the model was never filled in.
+        return provider.models().first().cloned().ok_or_else(|| {
+            Error::Config(format!(
+                "node `{}` names no model and provider `{}` advertises none, so there \
+                 is nothing to ask for; set a model on the node or on the provider \
+                 definition",
+                node.id(),
+                node.provider()
+            ))
+        });
     };
 
     // An empty list means the provider passes any name through, so there is

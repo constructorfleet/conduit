@@ -99,6 +99,12 @@ pub struct OpenAiConfig {
     pub read_timeout: Option<Duration>,
     /// Models this provider advertises. Empty passes any name through.
     pub models: Vec<String>,
+    /// A system prompt attached to every turn this provider serves.
+    ///
+    /// Belongs to the endpoint rather than to any one pipeline: it is how a
+    /// deployment says what this server should be, and every pipeline pointing
+    /// at it inherits it.
+    pub system_prompt: Option<String>,
 }
 
 impl Default for OpenAiConfig {
@@ -110,6 +116,7 @@ impl Default for OpenAiConfig {
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             read_timeout: Some(DEFAULT_READ_TIMEOUT),
             models: Vec::new(),
+            system_prompt: None,
         }
     }
 }

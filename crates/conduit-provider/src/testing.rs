@@ -67,6 +67,15 @@ impl Provider for EchoLlm {
 
 #[async_trait::async_trait]
 impl LanguageModel for EchoLlm {
+    /// Advertises one model, as a real provider does.
+    ///
+    /// Resolution refuses a pipeline where neither the node nor the provider
+    /// names a model, since there would be nothing to ask for.
+    fn models(&self) -> &[String] {
+        static MODELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        MODELS.get_or_init(|| vec!["echo-model".to_owned()])
+    }
+
     async fn complete(&self, request: CompletionRequest) -> Result<ChunkStream<Completion>> {
         let heard = request
             .messages
