@@ -1907,6 +1907,51 @@ describe("Pipelines graph editor", () => {
     ]);
   });
 
+  it("lists an MCP server once and still offers each tool it advertises", async () => {
+    // A server advertising a dozen tools used to put a dozen entries on the
+    // Providers page — and health-checked every one of them per snapshot.
+    const user = userEvent.setup();
+    const snapshot = snapshotFixture();
+    snapshot.providers = [
+      {
+        id: "plex",
+        kind: "tool",
+        state: "reachable",
+        configured: true,
+        reachable: true,
+        proven_by_turn: null,
+        message: null,
+        affects_pipelines: [],
+        offers_tools: ["plex.search_movies", "plex.play_media"],
+      },
+    ];
+    render(
+      <App
+        initialSnapshot={snapshot}
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.click(screen.getByRole("tab", { name: "Providers" }));
+
+    // One card for the one thing configured, and none for its tools.
+    expect(screen.getAllByText("plex").length).toBeGreaterThan(0);
+    expect(screen.queryByText("plex.search_movies")).toBeNull();
+    expect(screen.queryByText("plex.play_media")).toBeNull();
+
+    // And its tools are still bindable, because a core binds them one at a
+    // time even though the server is one provider.
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    expect(
+      screen.getByRole("menuitem", { name: "plex.search_movies" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows a pipeline the server cannot read, and offers to delete it", async () => {
     // Stored graphs are not migrated across schema changes, so a name whose
     // graph will not parse is a state an operator can land in. Before this,

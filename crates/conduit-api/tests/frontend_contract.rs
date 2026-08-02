@@ -173,6 +173,7 @@ fn status_fixture() -> OperatorStatusSnapshot {
             proven_by_turn: None,
             message: Some("no successful reachability check yet".to_owned()),
             affects_pipelines: vec!["kitchen".to_owned()],
+            offers_tools: Vec::new(),
         }],
         satellites: SatelliteStatus {
             connected: vec![ConnectedSatellite {
@@ -903,6 +904,7 @@ export interface ProviderStatus {{
   proven_by_turn: IdString | null;
   message: string | null;
   affects_pipelines: string[];
+  offers_tools?: string[];
 }}
 
 export interface SatelliteStatus {{

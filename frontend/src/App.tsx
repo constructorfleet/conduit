@@ -899,6 +899,11 @@ interface ProviderDefinition {
   component: string;
   config: Record<string, unknown>;
   source: "local" | "inferred";
+  /// The definition this belongs to, for a tool discovered from an MCP
+  /// server. Set means it is bindable but not separately configured, so the
+  /// Providers page leaves it out: one server the operator set up is one card,
+  /// however many tools it advertises.
+  partOf?: string;
 }
 
 interface ProviderCardView {
@@ -3722,6 +3727,11 @@ function providerCardViews(
   const cards = new Map<string, ProviderCardView>();
 
   for (const definition of definitions) {
+    // A tool belonging to a server is configured through that server, so it
+    // gets no card of its own.
+    if (definition.partOf) {
+      continue;
+    }
     const kind = providerKindForCapability(definition.kind);
 
     cards.set(definition.id, {
@@ -4013,15 +4023,30 @@ function defaultProviderDefinitions(
     }),
   );
   const fromStatus: ProviderDefinition[] =
-    snapshot?.providers.map((provider) => ({
-      id: provider.id,
-      label: provider.id,
-      kind: capabilityForProviderKind(provider.kind),
-      component:
-        componentForProviderStatus(catalog, provider)?.id ?? provider.id,
-      config: {},
-      source: "inferred" as const,
-    })) ?? [];
+    snapshot?.providers.flatMap((provider) => [
+      {
+        id: provider.id,
+        label: provider.id,
+        kind: capabilityForProviderKind(provider.kind),
+        component:
+          componentForProviderStatus(catalog, provider)?.id ?? provider.id,
+        config: {},
+        source: "inferred" as const,
+      },
+      // A server's tools are bindable individually even though the server is
+      // one provider. They are listed under it rather than reported beside
+      // it, so this is where they become selectable — the Providers page still
+      // shows one card for the one thing that was configured.
+      ...(provider.offers_tools ?? []).map((tool) => ({
+        id: tool,
+        label: tool,
+        kind: "tool" as const,
+        component: provider.id,
+        config: {},
+        source: "inferred" as const,
+        partOf: provider.id,
+      })),
+    ]) ?? [];
 
   return mergeProviderDefinitions([], [...fromGraphs, ...fromStatus]);
 }

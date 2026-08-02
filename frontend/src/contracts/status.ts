@@ -68,6 +68,7 @@ export interface ProviderStatus {
   proven_by_turn: IdString | null;
   message: string | null;
   affects_pipelines: string[];
+  offers_tools?: string[];
 }
 
 export interface SatelliteStatus {

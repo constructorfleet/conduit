@@ -289,6 +289,7 @@ fn status_from_health(
         proven_by_turn: None,
         message,
         affects_pipelines,
+        offers_tools: Vec::new(),
     }
 }
 
@@ -308,6 +309,7 @@ fn unregistered_status(
             "provider definition `{id}` is not registered in the runtime provider snapshot"
         )),
         affects_pipelines,
+        offers_tools: Vec::new(),
     }
 }
 
