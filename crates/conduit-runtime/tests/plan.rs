@@ -58,6 +58,44 @@ fn a_correctly_wired_pipeline_resolves() {
     Runner::prepare(&wired(), &providers(), EventBus::default()).expect("executable");
 }
 
+/// A pipeline fed by typed words rather than by a microphone.
+fn typed_input() -> PipelineGraph {
+    PipelineGraph::new("typed")
+        .with_node(Node::source("chat", "websocket", Modality::Text))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("chat", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+}
+
+#[test]
+fn a_pipeline_fed_by_text_resolves_without_a_recognizer() {
+    // Nothing is listening, so requiring a recognizer would mean configuring
+    // one that never runs before a pipeline could be saved at all.
+    let providers = Providers::new().with_llm(FakeLlm::new(vec![])).with_tts(FakeTts::new());
+
+    Runner::prepare(&typed_input(), &providers, EventBus::default())
+        .expect("a text pipeline needs no recognizer");
+}
+
+#[test]
+fn a_pipeline_fed_by_audio_still_requires_a_recognizer() {
+    // The absence of a recognizer means text input, so a graph that captures
+    // audio and never transcribes it must not quietly become a text pipeline.
+    let deaf = PipelineGraph::new("deaf")
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let error = refusal(&deaf, &providers());
+    assert!(
+        matches!(error, Error::InvalidGraph(GraphError::ModalityMismatch { .. })),
+        "audio reaching a model is a wiring error, not a missing stage: {error}"
+    );
+}
+
 #[test]
 fn a_pipeline_wired_backwards_is_refused_structurally() {
     // The defect this test exists for: `tts -> llm -> stt` used to resolve

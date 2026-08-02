@@ -11,7 +11,7 @@ use std::time::Duration;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
@@ -50,6 +50,74 @@ fn names(events: &[Event]) -> Vec<String> {
                 .to_owned()
         })
         .collect()
+}
+
+#[tokio::test]
+async fn speaks_the_model_response_for_a_typed_utterance() {
+    // A pipeline fed by text has no recognizer at all, so the turn has to
+    // reach the model without one rather than transcribing something.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers =
+        Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
+    let graph = PipelineGraph::new("typed")
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("chat", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
+    let spoken: Vec<_> = runner.run_text("turn on the light").audio.collect().await;
+
+    let audio: Vec<u8> = spoken
+        .into_iter()
+        .map(|chunk| chunk.expect("chunk"))
+        .flat_map(|chunk| chunk.data.to_vec())
+        .collect();
+    assert_eq!(String::from_utf8(audio).expect("utf-8"), "Done.");
+
+    // No capture and no partials, because nothing was heard — but SpeechFinal
+    // still opens the turn, so a reconstruction shows what was asked without
+    // needing to know which modality asked it.
+    let events = drain(&mut subscription).await;
+    let published = names(&events);
+    assert!(!published.contains(&"AudioStarted".to_owned()), "{published:?}");
+    assert!(!published.contains(&"SpeechPartial".to_owned()), "{published:?}");
+    assert_eq!(
+        published.iter().filter(|name| *name == "SpeechFinal").count(),
+        1,
+        "{published:?}"
+    );
+    let Some(Event::SpeechFinal { text, .. }) =
+        events.iter().find(|event| matches!(event, Event::SpeechFinal { .. }))
+    else {
+        panic!("a typed turn still reports what was asked");
+    };
+    assert_eq!(text, "turn on the light");
+}
+
+#[tokio::test]
+async fn audio_handed_to_a_text_pipeline_fails_the_turn_rather_than_panicking() {
+    // The mismatch is a caller's, not an operator's, but it happens inside a
+    // spawned task where a panic would be invisible.
+    let bus = EventBus::default();
+    let providers =
+        Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
+    let graph = PipelineGraph::new("typed")
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("chat", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
+    let spoken: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+
+    assert!(
+        spoken.iter().any(std::result::Result::is_err),
+        "the turn must report the mismatch rather than speaking anyway"
+    );
 }
 
 #[tokio::test]

@@ -29,6 +29,19 @@ use crate::sentences;
 use crate::stop::{until_stopped, Stop};
 use crate::tools;
 
+/// What a turn was given to reason about.
+///
+/// A voice pipeline hands over audio and a text pipeline hands over words that
+/// were already words. The distinction stops at the model: everything after
+/// `converse` is the same either way, which is what lets one runtime serve
+/// both.
+pub enum TurnInput {
+    /// Captured audio, to be transcribed by the pipeline's recognizer.
+    Audio(ChunkStream<AudioChunk>),
+    /// Words a client typed, needing no recognizer.
+    Text(String),
+}
+
 /// What one call to the model produced.
 struct Round {
     /// Everything the model said, whether or not it has been spoken yet.
@@ -143,7 +156,7 @@ impl Turn {
     /// Never returns an error: failures are published as events and forwarded
     /// to the caller as stream items, because by this point there is no one
     /// left to return an error to.
-    pub async fn run(mut self, audio: ChunkStream<AudioChunk>) {
+    pub async fn run(mut self, input: TurnInput) {
         self.emitter.emit(Event::ConversationStarted);
         // After the conversation, before anything a turn does: a subscriber
         // reading in order sees the conversation open, then the turn it is
@@ -162,7 +175,7 @@ impl Turn {
         let stop = self.stop.clone();
         let (idle, progress) = (self.idle, self.progress.clone());
         let finished =
-            until_stopped(&stop, until_idle(&progress, idle, self.body(audio))).await;
+            until_stopped(&stop, until_idle(&progress, idle, self.body(input))).await;
 
         match finished {
             Some(Ok(Some(()))) => {
@@ -207,8 +220,22 @@ impl Turn {
     /// The turn itself, minus the stop race and the ending events.
     ///
     /// Returns `None` if it published its own cancellation on the way out.
-    async fn body(&mut self, audio: ChunkStream<AudioChunk>) -> Option<()> {
-        let transcript = self.listen(audio).await?;
+    async fn body(&mut self, input: TurnInput) -> Option<()> {
+        let transcript = match input {
+            TurnInput::Audio(audio) => self.listen(audio).await?,
+            // Nothing was heard, so nothing is transcribed. `SpeechFinal` is
+            // still published: it is what opens a turn for anyone
+            // reconstructing it, and a reader should not have to know which
+            // modality a pipeline used to find what was asked.
+            TurnInput::Text(text) => {
+                self.emitter.emit(Event::SpeechFinal {
+                    text: text.clone(),
+                    confidence: None,
+                    language: None,
+                });
+                text
+            }
+        };
         self.converse(transcript).await
     }
 
@@ -219,10 +246,30 @@ impl Turn {
         // a socket, a file, or a test all reach the recognizer through here.
         let audio = self.emitter.observe_capture(audio);
 
+        // A caller that hands audio to a pipeline with no recognizer has
+        // mismatched the two. Failing here reports which pipeline and stays on
+        // the same path as any other stage failure, rather than panicking in a
+        // spawned task where nothing would see it.
+        let Some(recognizer) =
+            self.plan.stt.as_ref().map(|stt| (Arc::clone(&stt.provider), stt.node.clone()))
+        else {
+            let pipeline = self.plan.pipeline.clone();
+            return self
+                .fail(
+                    &pipeline.clone(),
+                    Error::Config(format!(
+                        "pipeline `{pipeline}` is fed by text and has no recognizer, but \
+                         this turn was given audio"
+                    )),
+                )
+                .await;
+        };
+        let (provider, node) = recognizer;
+
         let options = TranscribeOptions { format: self.format, ..TranscribeOptions::default() };
-        let mut transcripts = match self.plan.stt.transcribe(audio, options).await {
+        let mut transcripts = match provider.transcribe(audio, options).await {
             Ok(transcripts) => transcripts,
-            Err(error) => return self.fail(&self.plan.stt_node.clone(), error).await,
+            Err(error) => return self.fail(&node.clone(), error).await,
         };
 
         let mut final_text = String::new();
@@ -239,7 +286,7 @@ impl Turn {
                 Ok(transcript) => {
                     self.emitter.emit(Event::SpeechPartial { text: transcript.text });
                 }
-                Err(error) => return self.fail(&self.plan.stt_node.clone(), error).await,
+                Err(error) => return self.fail(&node.clone(), error).await,
             }
         }
 

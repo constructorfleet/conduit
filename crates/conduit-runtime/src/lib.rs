@@ -52,6 +52,7 @@ use tracing::Instrument;
 pub use deadline::DEFAULT_IDLE_TIMEOUT;
 pub use plan::Plan;
 pub use stop::Stop;
+pub use turn::TurnInput;
 
 /// How many synthesized chunks may be queued before synthesis waits.
 ///
@@ -266,13 +267,17 @@ impl Runner {
 
     /// Sets the audio format used for capture and synthesis.
     pub fn with_format(mut self, format: AudioFormat) -> Result<Self> {
-        if !self.plan.stt.supports_encoding(format.encoding) {
-            return Err(conduit_core::Error::Config(format!(
-                "node `{}` uses provider `{}`, which cannot accept {:?} audio",
-                self.plan.stt_node,
-                self.plan.stt.name(),
-                format.encoding
-            )));
+        // A pipeline fed by text has no recognizer to ask, and the format
+        // still describes the audio it produces.
+        if let Some(stt) = &self.plan.stt {
+            if !stt.provider.supports_encoding(format.encoding) {
+                return Err(conduit_core::Error::Config(format!(
+                    "node `{}` uses provider `{}`, which cannot accept {:?} audio",
+                    stt.node,
+                    stt.provider.name(),
+                    format.encoding
+                )));
+            }
         }
         if !self.plan.tts.supports_encoding(format.encoding) {
             return Err(conduit_core::Error::Config(format!(
@@ -300,7 +305,16 @@ impl Runner {
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
     pub fn run(&self, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, None, None)
+        self.start(TurnInput::Audio(audio), None, None)
+    }
+
+    /// Runs one turn from words a client already typed.
+    ///
+    /// The reply is delivered the same way a spoken turn's is, so a pipeline
+    /// that types its question and hears its answer is one graph rather than a
+    /// special case.
+    pub fn run_text(&self, text: impl Into<String>) -> Conversation {
+        self.start(TurnInput::Text(text.into()), None, None)
     }
 
     /// Runs one turn on behalf of an identified device.
@@ -318,7 +332,7 @@ impl Runner {
         device: DeviceId,
         audio: ChunkStream<AudioChunk>,
     ) -> Conversation {
-        self.start(audio, None, Some(device))
+        self.start(TurnInput::Audio(audio), None, Some(device))
     }
 
     /// Runs one turn attributed to an identified speaker.
@@ -333,13 +347,13 @@ impl Runner {
     /// or a pipeline name in this argument would make every per-speaker policy
     /// silently wrong rather than merely unenforced.
     pub fn run_as(&self, speaker: SpeakerId, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, Some(speaker), None)
+        self.start(TurnInput::Audio(audio), Some(speaker), None)
     }
 
     /// Spawns a turn, which is all the `run*` methods differ in.
     fn start(
         &self,
-        audio: ChunkStream<AudioChunk>,
+        input: TurnInput,
         speaker: Option<SpeakerId>,
         device: Option<DeviceId>,
     ) -> Conversation {
@@ -361,7 +375,7 @@ impl Runner {
         }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
-        let running = tokio::spawn(turn.run(audio).instrument(span));
+        let running = tokio::spawn(turn.run(input).instrument(span));
         Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop, turn: running }
     }
 }

@@ -12,6 +12,17 @@ use conduit_provider::tts::TextToSpeech;
 
 use crate::Providers;
 
+/// The recognizer a pipeline resolved, and the node that chose it.
+///
+/// Paired because every failure report needs both: the provider does the work
+/// and the node id is what an operator can find in their graph.
+pub struct Recognizer {
+    /// The provider that transcribes.
+    pub provider: Arc<dyn SpeechToText>,
+    /// Node id of the recognizer.
+    pub node: String,
+}
+
 /// The resolved providers and settings for one pipeline.
 ///
 /// Resolution happens once, at prepare time, so a turn never pays for a
@@ -20,9 +31,12 @@ pub struct Plan {
     /// Pipeline this plan executes.
     pub pipeline: String,
     /// Recognizer, and the node that selected it.
-    pub stt: Arc<dyn SpeechToText>,
-    /// Node id of the recognizer, used when reporting failures.
-    pub stt_node: String,
+    ///
+    /// `None` for a pipeline fed by text. Absence is what says the input is
+    /// already words: a graph that carried audio to the model without
+    /// transcribing it would fail modality validation long before here, so
+    /// there is no third case where audio arrives with nothing to hear it.
+    pub stt: Option<Recognizer>,
     /// Language model, and the node that selected it.
     pub llm: Arc<dyn LanguageModel>,
     /// Node id of the model.
@@ -75,7 +89,10 @@ impl Plan {
                 Node::Source { .. } | Node::Sink { .. } => {}
                 Node::Stt { id, provider } => {
                     reject_duplicate(&stt, node)?;
-                    stt = Some((providers.stt().require(provider)?, id.clone()));
+                    stt = Some(Recognizer {
+                        provider: providers.stt().require(provider)?,
+                        node: id.clone(),
+                    });
                 }
                 Node::Llm { id, provider, model, system, max_rounds } => {
                     reject_duplicate(&llm, node)?;
@@ -120,7 +137,6 @@ impl Plan {
             }
         }
 
-        let (stt, stt_node) = stt.ok_or_else(|| missing("stt"))?;
         let (llm, llm_node, model, system, max_tool_rounds) =
             llm.ok_or_else(|| missing("llm"))?;
         let (tts, tts_node, voice) = tts.ok_or_else(|| missing("tts"))?;
@@ -135,7 +151,9 @@ impl Plan {
         // carries something its far end reads, and the defect is a missing
         // path rather than a bad edge. Reachability still has to be asked
         // about; `crates/conduit-runtime/tests/plan.rs` pins that shape.
-        require_downstream(graph, &stt_node, &llm_node)?;
+        if let Some(recognizer) = &stt {
+            require_downstream(graph, &recognizer.node, &llm_node)?;
+        }
         require_downstream(graph, &llm_node, &tts_node)?;
         for tool_node in &tool_nodes {
             require_downstream(graph, &llm_node, tool_node)?;
@@ -153,7 +171,6 @@ impl Plan {
         Ok(Self {
             pipeline: graph.name.clone(),
             stt,
-            stt_node,
             llm,
             llm_node,
             model,
@@ -249,7 +266,10 @@ fn missing(kind: &str) -> Error {
 impl std::fmt::Debug for Plan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Plan")
-            .field("stt", &format_args!("{} ({})", self.stt_node, self.stt.name()))
+            .field(
+                "stt",
+                &self.stt.as_ref().map(|stt| format!("{} ({})", stt.node, stt.provider.name())),
+            )
             .field("llm", &format_args!("{} ({})", self.llm_node, self.llm.name()))
             .field("model", &self.model)
             .field("system", &self.system)
