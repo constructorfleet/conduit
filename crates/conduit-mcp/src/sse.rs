@@ -41,8 +41,8 @@ impl Decoder {
         self.buffer.extend_from_slice(packet);
 
         let mut events = Vec::new();
-        while let Some(end) = find(&self.buffer, b"\n\n") {
-            let raw: Vec<u8> = self.buffer.drain(..end + 2).collect();
+        while let Some((end, width)) = terminator(&self.buffer) {
+            let raw: Vec<u8> = self.buffer.drain(..end + width).collect();
             let raw = String::from_utf8_lossy(&raw);
             if let Some(event) = parse(&raw) {
                 events.push(event);
@@ -50,6 +50,29 @@ impl Decoder {
         }
         events
     }
+}
+
+/// Where the first event ends, and how many bytes its terminator takes.
+///
+/// An event ends at a blank line, and the spec allows CRLF, LF, or CR line
+/// endings — so the blank line is any of `\r\n\r\n`, `\n\n`, or `\r\r`. Looking
+/// only for `\n\n` finds nothing in a CRLF stream, which is not a parse error
+/// anyone sees: the buffer simply grows until the stream ends and the reply
+/// appears never to have arrived.
+///
+/// The earliest terminator wins, and CRLF is preferred where they start at the
+/// same byte so its trailing `\n` is not left to open the next event.
+fn terminator(buffer: &[u8]) -> Option<(usize, usize)> {
+    let mut found: Option<(usize, usize)> = None;
+    for (needle, width) in [(&b"\r\n\r\n"[..], 4), (&b"\n\n"[..], 2), (&b"\r\r"[..], 2)] {
+        if let Some(at) = find(buffer, needle) {
+            found = match found {
+                Some((best, _)) if best <= at => found,
+                _ => Some((at, width)),
+            };
+        }
+    }
+    found
 }
 
 /// Offset of `needle` in `haystack`.
@@ -133,6 +156,27 @@ mod tests {
     fn multi_line_data_is_joined() {
         let mut decoder = Decoder::new();
         assert_eq!(decoder.push(b"data: one\ndata: two\n\n")[0].data, "one\ntwo");
+    }
+
+    #[test]
+    fn events_separated_by_crlf_are_decoded() {
+        // The SSE spec allows CRLF, and sse-starlette — which the Python MCP
+        // SDK serves streamable HTTP through — uses it. Splitting only on
+        // "\n\n" found no terminator in "\r\n\r\n", so every event stayed in
+        // the buffer and the stream looked like it answered nothing.
+        let mut decoder = Decoder::new();
+        let events = decoder.push(b"event: message\r\ndata: {\"a\":1}\r\n\r\n");
+
+        assert_eq!(events, [SseEvent { name: "message".into(), data: "{\"a\":1}".into() }]);
+    }
+
+    #[test]
+    fn a_crlf_event_split_across_packets_is_reassembled() {
+        let mut decoder = Decoder::new();
+        assert!(decoder.push(b"event: message\r\ndata: {\"a\":").is_empty());
+        let events = decoder.push(b"1}\r\n\r\n");
+
+        assert_eq!(events, [SseEvent { name: "message".into(), data: "{\"a\":1}".into() }]);
     }
 
     #[test]
