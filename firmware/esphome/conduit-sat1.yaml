@@ -62,6 +62,11 @@ esp32:
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
       CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
       CONFIG_MBEDTLS_SSL_PROTO_TLS1_3: "y"
+      # Root certificates for `wss` and for an https wake-debug endpoint.
+      # Without the bundle, esp-tls has no way to verify a server and refuses
+      # to open the session at all.
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: "y"
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: "y"
 
 psram:
   mode: octal

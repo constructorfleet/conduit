@@ -106,7 +106,11 @@ Set the substitutions before flashing:
 
 - `conduit_server`: host and port for Conduit, for example `192.168.1.10:8080`.
 - `conduit_pipeline`: the Conduit pipeline name.
-- `conduit_scheme`: `ws` or `wss`.
+- `conduit_scheme`: `ws` or `wss`. `wss` and an `https` wake-debug endpoint
+  verify the server against the ESP-IDF root certificate bundle, which both
+  targets enable through `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`. A server whose
+  certificate is signed by a private CA is not in that bundle and will be
+  refused; use `ws` behind a trusted network, or add the CA to the build.
 - `conduit_authorization`: optional value for the WebSocket `Authorization`
   header, for example `Bearer ...`. Empty disables the header.
 - `conduit_max_utterance_ms`: maximum microphone streaming window after a

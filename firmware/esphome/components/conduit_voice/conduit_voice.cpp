@@ -5,6 +5,7 @@
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
@@ -96,6 +97,11 @@ void ConduitVoice::start() {
   config.reconnect_timeout_ms = 1000;
   config.buffer_size = 4096;
   config.user_context = this;
+  // Without a way to verify the server, esp-tls refuses to build a session at
+  // all -- "No server verification option set" -- so a `wss` scheme failed
+  // before it reached the network, despite being documented as supported.
+  // Ignored for plain `ws`, which never opens a TLS session.
+  config.crt_bundle_attach = esp_crt_bundle_attach;
 
   this->client_ = esp_websocket_client_init(&config);
   if (this->client_ == nullptr) {
@@ -173,6 +179,7 @@ void ConduitVoice::wake_debug_event() {
   config.url = url.c_str();
   config.method = HTTP_METHOD_POST;
   config.timeout_ms = 3000;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (client == nullptr) {
