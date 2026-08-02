@@ -47,7 +47,6 @@ pub mod llm;
 pub mod sse;
 pub mod stt;
 pub mod tts;
-pub mod wav;
 pub mod wire;
 
 mod http;
