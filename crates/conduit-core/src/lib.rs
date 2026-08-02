@@ -39,6 +39,8 @@ pub mod event;
 pub mod graph;
 pub mod id;
 pub mod resample;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod wav;
 
 pub use error::{Error, GraphError, Result};

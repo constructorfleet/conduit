@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::testing::voice_graph;
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
@@ -17,23 +18,11 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 fn valid_graph() -> PipelineGraph {
-    PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("kitchen").source("websocket").stt("whisper").llm("ollama").tts("piper").build()
 }
 
 fn echo_graph() -> PipelineGraph {
-    PipelineGraph::new("echo")
-        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("echo").stt("echo-stt").llm("echo-llm").tts("echo-tts").build()
 }
 
 fn providers() -> Providers {

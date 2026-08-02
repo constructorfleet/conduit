@@ -12,6 +12,7 @@ use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Runner};
@@ -20,14 +21,7 @@ use futures_util::StreamExt;
 
 /// mic -> stt -> llm -> tts, the shape the runtime can execute today.
 fn linear_graph() -> PipelineGraph {
-    PipelineGraph::new("test")
-        .with_node(Node::new("mic", NodeKind::Source, "test"))
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("test").source("test").stt("fake-stt").llm("fake-llm").tts("fake-tts").build()
 }
 
 /// Reads events until the turn ends, so assertions see the whole sequence.

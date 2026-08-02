@@ -8,7 +8,8 @@
 
 use std::sync::Arc;
 
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::PipelineGraph;
+use conduit_core::testing::voice_graph;
 use conduit_provider::storage::{
     validate_name, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
     ProviderDefinitionVariant, ProviderSecret,
@@ -16,12 +17,7 @@ use conduit_provider::storage::{
 
 /// A small but complete pipeline, named `name`.
 pub fn graph(name: &str) -> PipelineGraph {
-    PipelineGraph::new(name)
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph(name).stt("whisper").llm("ollama").tts("piper").build()
 }
 
 /// Names no backend may accept, whatever it would do with them.

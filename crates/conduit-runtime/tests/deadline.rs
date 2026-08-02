@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::PipelineGraph;
+use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Runner, DEFAULT_IDLE_TIMEOUT};
@@ -26,12 +27,7 @@ use futures_util::StreamExt;
 
 /// stt -> llm -> tts, the shape the runtime can execute.
 fn linear_graph() -> PipelineGraph {
-    PipelineGraph::new("deadline")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("deadline").stt("fake-stt").llm("fake-llm").tts("fake-tts").build()
 }
 
 /// A deadline short enough that a stalled turn ends within a test's patience.

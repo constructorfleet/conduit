@@ -12,6 +12,7 @@ use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{Event, SpokenSegmentRole};
 use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
 use conduit_core::id::{SpeakerId, ToolCallId};
+use conduit_core::testing::voice_graph;
 use conduit_provider::llm::Role;
 use conduit_provider::stt::Transcript;
 use conduit_provider::tool::Permission;
@@ -24,14 +25,12 @@ use futures_util::StreamExt;
 
 /// A pipeline with one tool available to the model.
 fn graph_with_tool() -> PipelineGraph {
-    PipelineGraph::new("tools")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("search", "tts"))
+    voice_graph("tools")
+        .stt("fake-stt")
+        .llm("fake-llm")
+        .tool("search", "search")
+        .tts("fake-tts")
+        .build()
 }
 
 /// A model that speaks, calls `search`, then speaks again.
@@ -533,17 +532,13 @@ async fn tools_requested_together_run_together() {
 async fn branched_tool_graphs_execute_without_linearizing_the_topology() {
     let first = ToolCallId::new("call_one");
     let second = ToolCallId::new("call_two");
-    let graph = PipelineGraph::new("branched")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("search", "tts"))
-        .with_edge(Edge::new("clock", "tts"));
+    let graph = voice_graph("branched")
+        .stt("fake-stt")
+        .llm("fake-llm")
+        .tool("search", "search")
+        .tool("clock", "clock")
+        .tts("fake-tts")
+        .build();
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
     let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
     let providers = Providers::new()
