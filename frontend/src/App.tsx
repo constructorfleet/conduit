@@ -2128,6 +2128,10 @@ function PipelinesPanel({
     draft?.nodes[0]?.id ??
     "";
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  /// The name being typed for a new pipeline, or `null` when none is being
+  /// created. Named at creation because the graph editor has no rename, so a
+  /// pipeline stored under a generated name would keep it.
+  const [newPipelineName, setNewPipelineName] = useState<string | null>(null);
   const selectedNode =
     draft?.nodes.find((node) => node.id === selectedNodeId) ??
     draft?.nodes[0] ??
@@ -2181,6 +2185,42 @@ function PipelinesPanel({
     }));
     setEditingNodeId(null);
     setPendingPipelineName(null);
+  }
+
+  /// Stores a copy of the selected pipeline under a new name.
+  ///
+  /// A copy rather than an empty graph, because a pipeline is only useful once
+  /// it names providers that exist, and the one on screen already does. A
+  /// second pipeline is usually a variant of the first — a different voice, a
+  /// different model — so the operator starts from something that runs and
+  /// edits it, instead of from something that cannot validate.
+  async function addPipeline(name: string) {
+    if (!selectedView || !canCreatePipeline(name)) {
+      return;
+    }
+    const copy = { ...selectedView.graph, name };
+    await onPipelineStored(copy, [...selectedView.order]);
+    setNewPipelineName(null);
+    setSelectedName(name);
+  }
+
+  /// The name offered when the operator asks for a new pipeline.
+  function suggestedPipelineName(): string {
+    return nextPipelineName(
+      selectedView?.graph.name ?? "pipeline",
+      pipelineViews.map((view) => view.graph.name),
+    );
+  }
+
+  /// Whether `name` could be stored: the server refuses names that mean
+  /// something to a filesystem, and refuses to overwrite by accident.
+  function canCreatePipeline(name: string): boolean {
+    const trimmed = name.trim();
+    return (
+      trimmed.length > 0 &&
+      !/[^A-Za-z0-9_-]/.test(trimmed) &&
+      !pipelineViews.some((view) => view.graph.name === trimmed)
+    );
   }
 
   function selectPipeline(view: PipelineView) {
@@ -3041,6 +3081,41 @@ function PipelinesPanel({
                   {view.graph.name}
                 </button>
               ))}
+              {!readOnly && newPipelineName === null ? (
+                <button
+                  className="icon-action"
+                  type="button"
+                  aria-label="Add pipeline"
+                  title="Add pipeline"
+                  onClick={() => setNewPipelineName(suggestedPipelineName())}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                </button>
+              ) : null}
+              {newPipelineName !== null ? (
+                <div className="new-pipeline">
+                  <input
+                    aria-label="New pipeline name"
+                    value={newPipelineName}
+                    onChange={(event) => setNewPipelineName(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    disabled={!canCreatePipeline(newPipelineName)}
+                    onClick={() => void addPipeline(newPipelineName)}
+                  >
+                    Create pipeline
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => setNewPipelineName(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -4977,6 +5052,20 @@ function sortLinearNodes(nodes: readonly PipelineNode[]): PipelineNode[] {
 /// Every node is on that chain now: a core's tools and memory are bindings, so
 /// there is nothing left that hangs off the pipeline rather than sitting in
 /// it, and every edge is a link between two stages.
+/// A name for a copy of `base` that no stored pipeline already uses.
+///
+/// Suffixed rather than prefixed so copies of one pipeline sort beside it, and
+/// numbered from two because the original is the first.
+function nextPipelineName(base: string, taken: readonly string[]): string {
+  const root = base.replace(/-\d+$/, "");
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${root}-${suffix}`;
+    if (!taken.includes(candidate)) {
+      return candidate;
+    }
+  }
+}
+
 function normalizePipelineGraph(graph: PipelineGraph): PipelineGraph {
   const linearNodes = sortLinearNodes(graph.nodes);
   const linearEdges = linearNodes.slice(0, -1).map((node, index) => ({

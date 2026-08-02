@@ -1254,6 +1254,21 @@ button {
   color: var(--warning-text);
 }
 
+/* Naming a new pipeline, inline in the picker rather than in a dialog: it is
+   one field, and the pipeline it copies is the one still on screen behind it. */
+.new-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-pipeline input {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  max-width: 160px;
+}
+
 .node-config-field {
   gap: 5px;
   margin-top: 8px;

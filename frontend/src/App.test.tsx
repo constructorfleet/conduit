@@ -1940,6 +1940,40 @@ describe("Pipelines graph editor", () => {
     ).toBeNull();
   });
 
+  it("adds a second pipeline beside the first", async () => {
+    // Guided Setup only runs on first launch, so without this an operator
+    // with one pipeline could never make another.
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(screen.getByRole("button", { name: "Add pipeline" }));
+
+    // Named at creation, because the graph editor has no rename: a pipeline
+    // stored under a generated name would keep it.
+    const name = screen.getByLabelText("New pipeline name");
+    expect(name).toHaveValue("kitchen-2");
+    await user.clear(name);
+    await user.type(name, "bedroom");
+    await user.click(screen.getByRole("button", { name: "Create pipeline" }));
+
+    // Copied from the one on screen, because a second pipeline is usually a
+    // variant of the first and its providers already exist.
+    expect(savedGraphs).toHaveLength(1);
+    expect(savedGraphs[0]?.name).toBe("bedroom");
+    expect(savedGraphs[0]?.nodes).toEqual(pipelineView().graph.nodes);
+
+    // And it is selectable, so the operator lands on the thing they made.
+    expect(screen.getByRole("button", { name: "bedroom" })).toBeInTheDocument();
+  });
+
   it("keeps graph editing read-only on small screens", async () => {
     const user = userEvent.setup();
     render(
