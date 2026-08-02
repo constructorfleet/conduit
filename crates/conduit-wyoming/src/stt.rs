@@ -221,6 +221,16 @@ impl SpeechToText for WyomingStt {
         Ok(Box::pin(stream::unfold(
             (reader, provider, emit_partials, false, writer),
             |(mut reader, provider, emit_partials, mut saw_final, writer)| async move {
+                // The final transcript ends the session: it is the answer the
+                // turn was waiting for, and there is nothing further to read.
+                // Waiting for the server to hang up instead only worked while
+                // the write half was dropped early enough to make it hang up —
+                // a server that keeps the connection open for another utterance
+                // never sends EOF, and the stage timed out sixty seconds after
+                // the transcript it had already read.
+                if saw_final {
+                    return None;
+                }
                 loop {
                     match read_wyoming_event(&mut reader).await {
                         Ok(Some(event))
@@ -333,6 +343,50 @@ mod tests {
             }
         }
         events
+    }
+
+    #[tokio::test]
+    async fn the_stream_ends_once_the_final_transcript_is_delivered() {
+        // A server that keeps the connection open for another utterance never
+        // sends EOF, so ending the stream only on EOF left the turn waiting on
+        // a session that had already answered — the transcription stage timed
+        // out sixty seconds after a transcript it had successfully read.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                if event.event_type == "audio-stop" {
+                    break;
+                }
+            }
+            write_wyoming_event(&mut write_half, "transcript", json!({ "text": "that's it" }))
+                .await
+                .expect("transcript written");
+            // Deliberately holds the socket open, as faster-whisper does.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let first = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert!(first.is_final);
+        assert_eq!(first.text, "that's it");
+
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(2), transcripts.next())
+            .await
+            .expect("the stream must end without waiting for the server to hang up");
+        assert!(ended.is_none(), "a final transcript ends the session");
+        server.abort();
     }
 
     #[tokio::test]
