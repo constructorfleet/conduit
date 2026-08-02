@@ -133,19 +133,30 @@ impl SpeechToText for WyomingStt {
         }
         write_wyoming_event(&mut write_half, "audio-start", data).await?;
 
-        // Pump captured audio into the session. The server sees EOF when this
-        // task drops the write half, which is exactly the behaviour we want
-        // when the input stream itself fails.
+        // Held by both the pump and the transcript stream, so the socket is
+        // only closed once the caller is done with it.
+        //
+        // `audio-stop` already ends the audio in band. Dropping the write half
+        // as soon as the pump finished said the same thing again as a FIN, and
+        // a server built on asyncio tears the whole connection down when its
+        // event loop sees EOF — whether or not the handler is reading. That
+        // raced the transcription and destroyed transcripts the server had
+        // already produced, which reached an operator as a turn that captured
+        // clean audio and recognized nothing.
+        let writer = std::sync::Arc::new(tokio::sync::Mutex::new(write_half));
+        let pump_writer = std::sync::Arc::clone(&writer);
         let provider = self.name.clone();
         let pump_provider = provider.clone();
         tokio::spawn(async move {
+            let mut guard = pump_writer.lock().await;
+            let write_half = &mut *guard;
             let mut audio = audio;
             while let Some(chunk) = audio.next().await {
                 match chunk {
                     Ok(chunk) => {
                         let sequence = chunk.sequence;
                         if let Err(error) = write_wyoming_event_with_payload(
-                            &mut write_half,
+                            write_half,
                             "audio-chunk",
                             chunk_format.clone(),
                             &chunk.data,
@@ -171,9 +182,7 @@ impl SpeechToText for WyomingStt {
                     }
                 }
             }
-            if let Err(error) =
-                write_wyoming_event(&mut write_half, "audio-stop", json!({})).await
-            {
+            if let Err(error) = write_wyoming_event(write_half, "audio-stop", json!({})).await {
                 tracing::warn!(pump_provider, error = %error, "failed to signal end of audio");
             }
         });
@@ -181,8 +190,8 @@ impl SpeechToText for WyomingStt {
         let reader = BufReader::new(read_half);
         let emit_partials = options.partials;
         Ok(Box::pin(stream::unfold(
-            (reader, provider, emit_partials, false),
-            |(mut reader, provider, emit_partials, mut saw_final)| async move {
+            (reader, provider, emit_partials, false, writer),
+            |(mut reader, provider, emit_partials, mut saw_final, writer)| async move {
                 loop {
                     match read_wyoming_event(&mut reader).await {
                         Ok(Some(event))
@@ -201,13 +210,13 @@ impl SpeechToText for WyomingStt {
                                 };
                                 return Some((
                                     Ok(transcript),
-                                    (reader, provider, emit_partials, saw_final),
+                                    (reader, provider, emit_partials, saw_final, writer),
                                 ));
                             }
                             if emit_partials {
                                 return Some((
                                     Ok(Transcript::partial(text)),
-                                    (reader, provider, emit_partials, saw_final),
+                                    (reader, provider, emit_partials, saw_final, writer),
                                 ));
                             }
                         }
@@ -225,7 +234,7 @@ impl SpeechToText for WyomingStt {
                                             "connection closed before final transcript",
                                         ),
                                     )),
-                                    (reader, provider, emit_partials, saw_final),
+                                    (reader, provider, emit_partials, saw_final, writer),
                                 ));
                             }
                             return None;
@@ -233,7 +242,7 @@ impl SpeechToText for WyomingStt {
                         Err(error) => {
                             return Some((
                                 Err(Error::provider(provider.clone(), error)),
-                                (reader, provider, emit_partials, saw_final),
+                                (reader, provider, emit_partials, saw_final, writer),
                             ));
                         }
                     }
@@ -252,6 +261,7 @@ mod tests {
     use super::*;
     use conduit_core::audio::AudioFormat;
     use conduit_core::Error;
+    use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
 
     /// Accepts one connection and returns every event the provider wrote.
@@ -267,6 +277,110 @@ mod tests {
             }
         }
         events
+    }
+
+    #[tokio::test]
+    async fn the_write_half_stays_open_until_the_transcript_arrives() {
+        // `audio-stop` already says the audio is over, in band. Dropping the
+        // write half straight afterwards says it again as a FIN, and a server
+        // built on asyncio tears the connection down when it reads EOF —
+        // losing a transcript it had already produced. This models that server:
+        // it treats EOF as the end of the connection, so it only answers if we
+        // are still holding the socket open.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            let mut saw_stop = false;
+            loop {
+                match read_wyoming_event(&mut reader).await {
+                    Ok(Some(event)) if event.event_type == "audio-stop" => {
+                        saw_stop = true;
+                        break;
+                    }
+                    Ok(Some(_)) => {}
+                    // EOF: an asyncio server stops here and the socket dies.
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            if !saw_stop {
+                return Err("connection ended before audio-stop".to_owned());
+            }
+            // asyncio's event loop notices the peer's FIN whether or not the
+            // handler is reading, and tears the connection down. Racing the
+            // transcription against a further read is what models that; a
+            // server that only looked at EOF when it chose to read would not.
+            let mut byte = [0_u8; 1];
+            tokio::select! {
+                _ = reader.read(&mut byte) => {
+                    return Err("connection torn down on EOF before the transcript".to_owned());
+                }
+                () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            }
+            write_wyoming_event(
+                &mut write_half,
+                "transcript",
+                json!({ "text": "what time is it" }),
+            )
+            .await
+            .map_err(|error| error.to_string())
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let first = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert!(first.is_final);
+        assert_eq!(first.text, "what time is it");
+        server.await.expect("server task").expect("the transcript must reach the client");
+    }
+
+    #[tokio::test]
+    async fn a_transcript_sent_after_audio_stop_still_arrives() {
+        // faster-whisper transcribes only once it sees `audio-stop`, so the
+        // final transcript always lands *after* the provider has finished
+        // writing and dropped its write half. If that drop tears down the whole
+        // socket rather than half-closing it, the server's write is reset and
+        // the turn reports "connection closed before final transcript" for a
+        // transcript that was successfully produced.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                if event.event_type == "audio-stop" {
+                    break;
+                }
+            }
+            // Stand in for transcription time.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            write_wyoming_event(&mut write_half, "transcript", json!({ "text": "never mind" }))
+                .await
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let first = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert!(first.is_final);
+        assert_eq!(first.text, "never mind");
+        server.await.expect("server task").expect("the server's write must not be reset");
     }
 
     #[tokio::test]
