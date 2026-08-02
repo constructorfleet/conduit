@@ -349,10 +349,12 @@ fn a_memory_binding_is_refused_rather_than_quietly_dropped() {
 }
 
 #[test]
-fn a_tool_that_must_be_confirmed_is_refused_rather_than_dispatched_unasked() {
-    // `confirm: always` exists so an operator can gate a tool that changes
-    // something. Running it anyway is the one outcome the setting was chosen
-    // to prevent, so the pipeline does not resolve until track G can ask.
+fn a_tool_that_must_be_confirmed_resolves_and_is_asked_about_at_dispatch() {
+    // `confirm: always` used to refuse the whole pipeline, because dispatching
+    // a tool the operator asked to be consulted about is the one outcome the
+    // setting was chosen to prevent. Now the question can be asked, so the
+    // pipeline runs and the asking happens per call — see
+    // `crates/conduit-runtime/tests/tools.rs`.
     let core = ReasoningCore {
         tools: vec![ToolBinding {
             provider: "search".to_owned(),
@@ -367,10 +369,8 @@ fn a_tool_that_must_be_confirmed_is_refused_rather_than_dispatched_unasked() {
         .with_edge(Edge::new("stt", "brain"))
         .with_edge(Edge::new("brain", "tts"));
 
-    let message = config_message(&refusal(&graph, &providers_with_a_tool())).to_owned();
-    assert!(message.contains("search"), "the tool refused: {message}");
-    assert!(message.contains("brain"), "the node carrying it: {message}");
-    assert!(message.contains("confirm"), "and why: {message}");
+    Runner::prepare(&graph, &providers_with_a_tool(), EventBus::default())
+        .expect("a gated tool is executable now that it can be asked about");
 }
 
 #[test]

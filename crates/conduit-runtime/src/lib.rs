@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+pub mod confirm;
 pub mod deadline;
 mod emit;
 pub mod plan;
@@ -50,6 +51,7 @@ use futures_util::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+pub use confirm::{ConfirmationListener, Confirmations};
 pub use deadline::DEFAULT_IDLE_TIMEOUT;
 pub use plan::Plan;
 pub use stop::Stop;
@@ -163,6 +165,19 @@ pub struct Conversation {
     /// segments. [`Conversation::speech`] narrows this to audio for a caller
     /// that only knows how to play it.
     pub output: ChunkStream<Reply>,
+    /// Answers this turn's confirmation requests.
+    ///
+    /// A turn refuses a tool that needs confirming unless something is
+    /// listening through [`Confirmations::listen`], so a deployment with no
+    /// way to ask still refuses rather than waiting for an answer that is not
+    /// coming.
+    ///
+    /// Call [`Confirmations::listen`] before reading [`Conversation::output`].
+    /// The turn is already running by the time this is returned, and a
+    /// listener registered after it reaches a gated tool arrives too late —
+    /// the call is refused rather than waited on, because at the moment it
+    /// asked there was nothing to ask.
+    pub confirmations: Confirmations,
     /// Asks this turn to stop talking.
     ///
     /// Distinct from dropping [`Conversation::audio`], which also ends the turn
@@ -393,12 +408,14 @@ impl Runner {
     ) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
         let stop = Stop::new();
+        let confirmations = Confirmations::new();
         let mut turn = turn::Turn::new(
             Arc::clone(&self.plan),
             self.bus.clone(),
             self.format,
             sender,
             stop.clone(),
+            confirmations.clone(),
             self.idle,
         );
         if let Some(speaker) = speaker {
@@ -413,6 +430,7 @@ impl Runner {
         Conversation {
             id,
             output: Box::pin(ReceiverStream::new(receiver)),
+            confirmations,
             stop,
             turn: running,
         }

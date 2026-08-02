@@ -58,7 +58,7 @@ pub struct CorePlan {
     ///
     /// Unlike the transport stages a core may reach for any number of these,
     /// so they are collected rather than treated as one slot.
-    pub tools: BTreeMap<String, Arc<dyn Tool>>,
+    pub tools: BTreeMap<String, BoundTool>,
     /// Memory this core retrieves from and stores to.
     ///
     /// Empty today: resolution refuses every mode rather than accepting a
@@ -74,7 +74,7 @@ impl CorePlan {
     /// The tool schemas to advertise to the model.
     #[must_use]
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.tools.values().map(|tool| tool.spec()).collect()
+        self.tools.values().map(|bound| bound.tool.spec()).collect()
     }
 }
 
@@ -215,6 +215,17 @@ impl Plan {
     }
 }
 
+/// A tool a core offers, and whether to ask before running it.
+///
+/// The policy travels with the tool because the question is asked at dispatch,
+/// where the graph is long out of reach.
+pub struct BoundTool {
+    /// The tool itself.
+    pub tool: Arc<dyn Tool>,
+    /// Whether this pipeline wants to be asked before it runs.
+    pub confirm: ConfirmPolicy,
+}
+
 /// One model and its settings, before its tools and memory join it.
 ///
 /// Tools arrive from a core's bindings *and* from tool nodes, so they are
@@ -233,25 +244,14 @@ struct Reasoning {
 /// The model picks a tool by name, so two tools answering to one name is a
 /// pipeline where it cannot say which it meant.
 fn offer_tool(
-    tools: &mut BTreeMap<String, Arc<dyn Tool>>,
+    tools: &mut BTreeMap<String, BoundTool>,
     providers: &Providers,
     binding: &ToolBinding,
     node: &str,
 ) -> Result<()> {
-    // Modelled now, enforced in track G. Dispatching a tool the operator asked
-    // to be consulted about is the one outcome the setting was chosen to
-    // prevent, so accepting it and running it anyway is worse than refusing.
-    if binding.confirm == ConfirmPolicy::Always {
-        return Err(Error::Config(format!(
-            "tool `{}` on node `{node}` is bound with `confirm: always`, and this \
-             runtime cannot ask before dispatching yet; it would call the tool unasked",
-            binding.provider
-        )));
-    }
-
     let tool = providers.tools().require(&binding.provider)?;
     let name = tool.spec().name;
-    if tools.insert(name.clone(), tool).is_some() {
+    if tools.insert(name.clone(), BoundTool { tool, confirm: binding.confirm }).is_some() {
         return Err(Error::Config(format!(
             "two tools are both called `{name}`; the model could not tell them apart \
              (node `{node}`)"

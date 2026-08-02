@@ -23,6 +23,7 @@ use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 
+use crate::confirm::Confirmations;
 use crate::deadline::{until_idle, Progress};
 use crate::emit::Emitter;
 use crate::plan::Plan;
@@ -82,6 +83,8 @@ pub struct Turn {
     speaker: Option<SpeakerId>,
     /// How a client asks this turn to stop talking.
     stop: Stop,
+    /// How a client answers this turn's confirmation requests.
+    confirmations: Confirmations,
     /// How long this turn may publish nothing before it is abandoned, and the
     /// marker every publication reports through. `None` removes the bound.
     idle: Option<Duration>,
@@ -116,6 +119,7 @@ impl Turn {
         format: AudioFormat,
         output: Sender<Result<Reply>>,
         stop: Stop,
+        confirmations: Confirmations,
         idle: Option<Duration>,
     ) -> Self {
         let progress = Progress::default();
@@ -127,6 +131,7 @@ impl Turn {
             output,
             speaker: None,
             stop,
+            confirmations,
             idle,
             progress,
             turn: TurnId::new(),
@@ -375,6 +380,7 @@ impl Turn {
         let running = tools::execute(
             Arc::clone(&self.plan),
             self.emitter.clone(),
+            self.confirmations.clone(),
             self.emitter.conversation(),
             self.speaker,
             round.requests.clone(),

@@ -229,10 +229,79 @@ fn tool_result(llm: &FakeLlm, round: usize) -> String {
 }
 
 #[tokio::test]
-async fn a_tool_needing_confirmation_is_refused_rather_than_reported_done() {
+async fn a_confirmed_tool_runs() {
+    // The point of track G: a deployment that can ask gets to answer, and a
+    // yes means the tool actually runs.
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, true);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    assert_eq!(tool.invocations().len(), 1, "a confirmed tool runs");
+}
+
+#[tokio::test]
+async fn a_refused_tool_does_not_run_and_the_model_is_told_so() {
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, false);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    assert!(tool.invocations().is_empty(), "a refused tool must not run");
+    let result = tool_result(&llm, 1);
+    assert!(result.contains("NOT run"), "the refusal must be unmissable: {result}");
+    assert!(result.contains("refused"), "and say who refused it: {result}");
+}
+
+#[tokio::test]
+async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
     // The dangerous failure this guards against: a model told something
     // ambiguous about a lock or a purchase, deciding it succeeded, and saying
     // so. The result must read as a refusal to anything reading it.
+    //
+    // Nothing calls `Confirmations::listen` here, which is what a deployment
+    // with no way to ask looks like. Waiting for an answer nobody will send
+    // would leave the person who spoke in silence until the idle deadline.
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
     let call = ToolCallId::new("call_abc123");
