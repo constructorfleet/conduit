@@ -347,6 +347,13 @@ dispatch.
 Acceptance: a tool binding with `confirm: always` does not dispatch until
 answered.
 
+**Landed** as `d43792e`. A turn with nothing listening still refuses rather
+than waiting, because waiting for a decision no one can send leaves the person
+who spoke in silence until the idle deadline. `Confirmations::listen` must be
+called before reading the reply: the turn is already running when the
+conversation is returned, and a listener that arrives after a gated call is
+too late for it.
+
 ---
 
 ## Cross-Cutting
