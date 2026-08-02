@@ -446,7 +446,10 @@ async fn passes_the_transcript_to_the_model() {
 
     let requests = llm.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model, "fake-llm");
+    // The model the provider advertises, not its registration name. Asking a
+    // provider for a model named after itself is what the old fallback did,
+    // and it fails at the first token.
+    assert_eq!(requests[0].model, "fake-model");
     assert_eq!(requests[0].messages.last().expect("message").content, "what time is it");
 }
 

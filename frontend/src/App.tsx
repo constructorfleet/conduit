@@ -4520,6 +4520,12 @@ function GuidedSetupPanel({
   const [shape, setShape] = useState<"voice" | "text">("voice");
   const [sttProvider, setSttProvider] = useState("whisper");
   const [llmProvider, setLlmProvider] = useState("openai");
+  /// Which model the language model provider should serve.
+  ///
+  /// Asked here because a provider that advertises none leaves a pipeline
+  /// nothing to request: resolution refuses rather than inventing a name, so
+  /// setup that never asked produced a pipeline that could not run.
+  const [llmModel, setLlmModel] = useState("gpt-4o-mini");
   const [ttsProvider, setTtsProvider] = useState("piper");
   const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [toolSetupSkipped, setToolSetupSkipped] = useState(false);
@@ -4548,6 +4554,7 @@ function GuidedSetupPanel({
       const providerIds = {
         sttProvider: sttProvider.trim(),
         llmProvider: llmProvider.trim(),
+        llmModel: llmModel.trim(),
         ttsProvider: ttsProvider.trim(),
       };
       await onPipelineSaved(
@@ -4643,6 +4650,14 @@ function GuidedSetupPanel({
               <input
                 value={llmProvider}
                 onChange={(event) => setLlmProvider(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Language model</span>
+              <input
+                aria-label="Language model"
+                value={llmModel}
+                onChange={(event) => setLlmModel(event.target.value)}
               />
             </label>
             {shape === "voice" ? (
@@ -4850,10 +4865,12 @@ function buildMinimalTextLoopGraph({
 function guidedSetupProviderDefinitions({
   sttProvider,
   llmProvider,
+  llmModel,
   ttsProvider,
 }: {
   sttProvider: string;
   llmProvider: string;
+  llmModel: string;
   ttsProvider: string;
 }): ApiProviderDefinition[] {
   return [
@@ -4873,7 +4890,7 @@ function guidedSetupProviderDefinitions({
       variant: {
         type: "openai_llm",
         base_url: "https://api.openai.com/v1",
-        models: [],
+        models: llmModel ? [llmModel] : [],
         streaming: true,
       },
     },

@@ -299,11 +299,20 @@ fn resolve_model(
     requested: Option<&str>,
 ) -> Result<String> {
     let Some(requested) = requested else {
-        return Ok(provider
-            .models()
-            .first()
-            .cloned()
-            .unwrap_or_else(|| node.provider().to_owned()));
+        // The definition's first served model, when it serves any. A
+        // definition that serves none and a node that names none leave nothing
+        // to ask for — and the id is not an answer: asking OpenAI for a model
+        // called `openai` fails at the first token, which is a long way from
+        // the form where the model was never filled in.
+        return provider.models().first().cloned().ok_or_else(|| {
+            Error::Config(format!(
+                "node `{}` names no model and provider `{}` advertises none, so there \
+                 is nothing to ask for; set a model on the node or on the provider \
+                 definition",
+                node.id(),
+                node.provider()
+            ))
+        });
     };
 
     // An empty list means the provider passes any name through, so there is

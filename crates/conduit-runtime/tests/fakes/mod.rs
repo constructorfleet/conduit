@@ -186,6 +186,11 @@ impl Provider for SilentLlm {
 
 #[async_trait::async_trait]
 impl LanguageModel for SilentLlm {
+    fn models(&self) -> &[String] {
+        static MODELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        MODELS.get_or_init(|| vec!["fake-model".to_owned()])
+    }
+
     async fn complete(&self, _request: CompletionRequest) -> Result<ChunkStream<Completion>> {
         std::future::pending().await
     }
@@ -248,7 +253,10 @@ impl FakeLlm {
         Self {
             rounds: Arc::new(Mutex::new(rounds)),
             repeat_last: false,
-            models: Vec::new(),
+            // A real provider advertises what it serves, and resolution now
+            // refuses a pipeline where nothing names a model. Fakes advertise
+            // one so a test about something else does not have to.
+            models: vec!["fake-model".to_owned()],
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }

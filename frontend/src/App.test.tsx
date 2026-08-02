@@ -487,6 +487,27 @@ describe("First-Run Guided Setup", () => {
     ).toBeInTheDocument();
   });
 
+  it("asks which model the language model provider should serve", async () => {
+    // Guided Setup stored no model at all, so the pipeline it built had
+    // nothing to ask the provider for — and the runtime then asked for a
+    // model named after the provider itself.
+    const user = userEvent.setup();
+    render(<App initialSnapshot={firstRunSnapshot()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Configure Providers" }),
+    );
+
+    const model = screen.getByLabelText("Language model");
+    expect(model).toHaveValue("gpt-4o-mini");
+    await user.clear(model);
+    await user.type(model, "gpt-4o");
+    expect(model).toHaveValue("gpt-4o");
+  });
+
   it("builds a text pipeline that asks for no speech providers", async () => {
     // The minimal working loop for a text assistant needs a language model and
     // nothing else, so guided setup must not demand speech providers that
