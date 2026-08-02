@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use conduit_core::graph::{Node, PipelineGraph};
+use conduit_core::graph::{
+    ConfirmPolicy, MemoryBinding, MemoryMode, Node, PipelineGraph, ToolBinding,
+};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{LanguageModel, ToolSpec};
 use conduit_provider::stt::SpeechToText;
@@ -36,6 +38,46 @@ pub struct Synthesizer {
     pub voice: Option<String>,
 }
 
+/// The reasoning core a pipeline resolved: one model, and what it may reach
+/// for while answering.
+///
+/// A turn reads everything about reasoning from here, which is what lets a
+/// graph spell the same pipeline as a `core` node or as an `llm` beside its
+/// tool and memory nodes. The two shapes resolve to one plan, so nothing
+/// downstream of resolution knows which was written.
+pub struct CorePlan {
+    /// Node id of the core, for reports an operator can find in their graph.
+    pub node: String,
+    /// The provider that reasons.
+    pub llm: Arc<dyn LanguageModel>,
+    /// Model identifier to request.
+    pub model: String,
+    /// System prompt this pipeline asks for, when present.
+    pub system: Option<String>,
+    /// Tools offered to the model, keyed by the name it calls them by.
+    ///
+    /// Unlike the transport stages a core may reach for any number of these,
+    /// so they are collected rather than treated as one slot.
+    pub tools: BTreeMap<String, Arc<dyn Tool>>,
+    /// Memory this core retrieves from and stores to.
+    ///
+    /// Empty today: resolution refuses every mode rather than accepting a
+    /// binding it would not run, so nothing reaches this field until track F
+    /// executes memory. It is here because the alternative — dropping the
+    /// binding at resolution — is what the refusal exists to avoid.
+    pub memory: Vec<MemoryBinding>,
+    /// Cap on model calls in one turn.
+    pub max_rounds: usize,
+}
+
+impl CorePlan {
+    /// The tool schemas to advertise to the model.
+    #[must_use]
+    pub fn tool_specs(&self) -> Vec<ToolSpec> {
+        self.tools.values().map(|tool| tool.spec()).collect()
+    }
+}
+
 /// The resolved providers and settings for one pipeline.
 ///
 /// Resolution happens once, at prepare time, so a turn never pays for a
@@ -50,14 +92,8 @@ pub struct Plan {
     /// transcribing it would fail modality validation long before here, so
     /// there is no third case where audio arrives with nothing to hear it.
     pub stt: Option<Recognizer>,
-    /// Language model, and the node that selected it.
-    pub llm: Arc<dyn LanguageModel>,
-    /// Node id of the model.
-    pub llm_node: String,
-    /// Model identifier to request.
-    pub model: String,
-    /// System prompt this pipeline's model node asks for, when present.
-    pub system: Option<String>,
+    /// The model that answers, and everything it may reach for.
+    pub core: CorePlan,
     /// Synthesizer, and the node that selected it.
     ///
     /// `None` for a pipeline that writes its reply down instead of speaking
@@ -65,22 +101,9 @@ pub struct Plan {
     /// which one a pipeline uses is a property of its graph rather than of the
     /// model that produced the words.
     pub tts: Option<Synthesizer>,
-    /// Tools offered to the model, keyed by the name it calls them by.
-    ///
-    /// Unlike the other stages a pipeline may have any number of these, so
-    /// tool nodes are collected rather than treated as one slot.
-    pub tools: BTreeMap<String, Arc<dyn Tool>>,
-    /// Cap on model calls in one turn.
-    pub max_tool_rounds: usize,
 }
 
 impl Plan {
-    /// The tool schemas to advertise to the model.
-    #[must_use]
-    pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.tools.values().map(|tool| tool.spec()).collect()
-    }
-
     /// Resolves `graph` against `providers`.
     ///
     /// # Errors
@@ -91,9 +114,10 @@ impl Plan {
     /// cannot execute yet.
     pub fn resolve(graph: &PipelineGraph, providers: &Providers) -> Result<Self> {
         let mut stt = None;
-        let mut llm = None;
+        let mut reasoning = None;
         let mut tts = None;
         let mut tools = BTreeMap::new();
+        let mut memory = Vec::new();
         let mut tool_nodes = Vec::new();
 
         for node in graph.topological_order()? {
@@ -108,23 +132,55 @@ impl Plan {
                         node: id.clone(),
                     });
                 }
+                // A core and an `llm` describe the same pipeline, so both
+                // arrive at one `Reasoning`. What differs is only where the
+                // tools and memory were written down.
+                Node::Core { id, core } => {
+                    reject_duplicate(&reasoning, node)?;
+                    let llm = providers.llm().require(&core.model.provider)?;
+                    let model = resolve_model(llm.as_ref(), node, core.model.model.as_deref())?;
+                    for binding in &core.tools {
+                        offer_tool(&mut tools, providers, binding, id)?;
+                    }
+                    for binding in &core.memory {
+                        memory.push(resolve_memory(binding, id)?);
+                    }
+                    reasoning = Some(Reasoning {
+                        node: id.clone(),
+                        llm,
+                        model,
+                        system: core.system.clone(),
+                        max_rounds: core.max_rounds,
+                    });
+                }
                 Node::Llm { id, provider, model, system, max_rounds } => {
-                    reject_duplicate(&llm, node)?;
-                    let language_model = providers.llm().require(provider)?;
-                    let model = resolve_model(language_model.as_ref(), node, model.as_deref())?;
-                    llm =
-                        Some((language_model, id.clone(), model, system.clone(), *max_rounds));
+                    reject_duplicate(&reasoning, node)?;
+                    let llm = providers.llm().require(provider)?;
+                    let model = resolve_model(llm.as_ref(), node, model.as_deref())?;
+                    reasoning = Some(Reasoning {
+                        node: id.clone(),
+                        llm,
+                        model,
+                        system: system.clone(),
+                        max_rounds: *max_rounds,
+                    });
                 }
                 Node::Tool { id, provider } => {
-                    let tool = providers.tools().require(provider)?;
-                    let name = tool.spec().name;
-                    if tools.insert(name.clone(), tool).is_some() {
-                        return Err(Error::Config(format!(
-                            "two tools are both called `{name}`; the model could not \
-                             tell them apart (node `{id}`)"
-                        )));
-                    }
+                    let binding = ToolBinding {
+                        provider: provider.clone(),
+                        confirm: ConfirmPolicy::Never,
+                    };
+                    offer_tool(&mut tools, providers, &binding, id)?;
                     tool_nodes.push(id.clone());
+                }
+                Node::Memory { id, provider, mode, scope, limit } => {
+                    let binding = MemoryBinding {
+                        provider: provider.clone(),
+                        mode: *mode,
+                        scope: *scope,
+                        limit: *limit,
+                    };
+                    memory.push(resolve_memory(&binding, id)?);
                 }
                 Node::Tts { id, provider, voice } => {
                     reject_duplicate(&tts, node)?;
@@ -154,8 +210,9 @@ impl Plan {
             }
         }
 
-        let (llm, llm_node, model, system, max_tool_rounds) =
-            llm.ok_or_else(|| missing("llm"))?;
+        let reasoning = reasoning.ok_or_else(|| {
+            Error::Config("pipeline has no `core` node, so nothing would answer".to_owned())
+        })?;
         // Nothing renders the reply unless the graph either speaks it or
         // writes it somewhere. A sink is what "writes it somewhere" looks
         // like, so a graph with neither would reason and then discard.
@@ -177,37 +234,103 @@ impl Plan {
         // carries something its far end reads, and the defect is a missing
         // path rather than a bad edge. Reachability still has to be asked
         // about; `crates/conduit-runtime/tests/plan.rs` pins that shape.
+        //
+        // A core's own bindings are exempt, and not by omission: a binding is
+        // configuration rather than a stage, so there is no edge for it to be
+        // reachable over. Only tools written as nodes are asked about.
         if let Some(recognizer) = &stt {
-            require_downstream(graph, &recognizer.node, &llm_node)?;
+            require_downstream(graph, &recognizer.node, &reasoning.node)?;
         }
         if let Some(synthesizer) = &tts {
-            require_downstream(graph, &llm_node, &synthesizer.node)?;
+            require_downstream(graph, &reasoning.node, &synthesizer.node)?;
         }
         for tool_node in &tool_nodes {
-            require_downstream(graph, &llm_node, tool_node)?;
+            require_downstream(graph, &reasoning.node, tool_node)?;
         }
 
-        if !tools.is_empty() && !llm.supports_tools() {
+        if !tools.is_empty() && !reasoning.llm.supports_tools() {
             return Err(Error::Config(format!(
-                "node `{llm_node}` uses provider `{}`, which cannot call tools, but the \
+                "node `{}` uses provider `{}`, which cannot call tools, but the \
                  pipeline defines {} of them",
-                llm.name(),
+                reasoning.node,
+                reasoning.llm.name(),
                 tools.len()
             )));
         }
 
+        let Reasoning { node, llm, model, system, max_rounds } = reasoning;
         Ok(Self {
             pipeline: graph.name.clone(),
             stt,
-            llm,
-            llm_node,
-            model,
-            system,
+            core: CorePlan { node, llm, model, system, tools, memory, max_rounds },
             tts,
-            tools,
-            max_tool_rounds,
         })
     }
+}
+
+/// One model and its settings, before its tools and memory join it.
+///
+/// Tools arrive from a core's bindings *and* from tool nodes, so they are
+/// collected across the whole walk and attached once at the end. Keeping them
+/// apart until then is what lets one loop resolve either spelling.
+struct Reasoning {
+    node: String,
+    llm: Arc<dyn LanguageModel>,
+    model: String,
+    system: Option<String>,
+    max_rounds: usize,
+}
+
+/// Adds a tool to the set the model will be offered.
+///
+/// The model picks a tool by name, so two tools answering to one name is a
+/// pipeline where it cannot say which it meant.
+fn offer_tool(
+    tools: &mut BTreeMap<String, Arc<dyn Tool>>,
+    providers: &Providers,
+    binding: &ToolBinding,
+    node: &str,
+) -> Result<()> {
+    // Modelled now, enforced in track G. Dispatching a tool the operator asked
+    // to be consulted about is the one outcome the setting was chosen to
+    // prevent, so accepting it and running it anyway is worse than refusing.
+    if binding.confirm == ConfirmPolicy::Always {
+        return Err(Error::Config(format!(
+            "tool `{}` on node `{node}` is bound with `confirm: always`, and this \
+             runtime cannot ask before dispatching yet; it would call the tool unasked",
+            binding.provider
+        )));
+    }
+
+    let tool = providers.tools().require(&binding.provider)?;
+    let name = tool.spec().name;
+    if tools.insert(name.clone(), tool).is_some() {
+        return Err(Error::Config(format!(
+            "two tools are both called `{name}`; the model could not tell them apart \
+             (node `{node}`)"
+        )));
+    }
+    Ok(())
+}
+
+/// Resolves a memory binding, or explains why it cannot run yet.
+///
+/// Every mode is refused today, because retrieval and storage are track F. The
+/// refusal is per mode rather than blanket so that track F can turn them on one
+/// at a time — and it is a refusal rather than a silent drop for the reason the
+/// router refusal is: a pipeline told to remember what was said, which answers
+/// as though nothing was, has nothing to show that it ignored the instruction.
+fn resolve_memory(binding: &MemoryBinding, node: &str) -> Result<MemoryBinding> {
+    let asked = match binding.mode {
+        MemoryMode::Read => "retrieve what was said before",
+        MemoryMode::Write => "store what is said now",
+        MemoryMode::ReadWrite => "retrieve what was said before and store what is said now",
+    };
+    Err(Error::Config(format!(
+        "memory `{}` on node `{node}` asks to {asked}, and this runtime cannot execute \
+         memory yet; the pipeline would answer as though it had none",
+        binding.provider
+    )))
 }
 
 /// The model a language model node asks for.
@@ -282,11 +405,6 @@ fn require_downstream(graph: &PipelineGraph, upstream: &str, downstream: &str) -
     )))
 }
 
-/// Error for a pipeline missing a stage the runtime requires.
-fn missing(kind: &str) -> Error {
-    Error::Config(format!("pipeline has no `{kind}` node"))
-}
-
 /// Written by hand because a plan holds trait objects, which are not `Debug`.
 /// Shows the resolved wiring, which is what anyone printing a plan wants.
 impl std::fmt::Debug for Plan {
@@ -296,15 +414,15 @@ impl std::fmt::Debug for Plan {
                 "stt",
                 &self.stt.as_ref().map(|stt| format!("{} ({})", stt.node, stt.provider.name())),
             )
-            .field("llm", &format_args!("{} ({})", self.llm_node, self.llm.name()))
-            .field("model", &self.model)
-            .field("system", &self.system)
+            .field("core", &format_args!("{} ({})", self.core.node, self.core.llm.name()))
+            .field("model", &self.core.model)
+            .field("system", &self.core.system)
             .field(
                 "tts",
                 &self.tts.as_ref().map(|tts| format!("{} ({})", tts.node, tts.provider.name())),
             )
             .field("voice", &self.tts.as_ref().and_then(|tts| tts.voice.as_deref()))
-            .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .field("tools", &self.core.tools.keys().collect::<Vec<_>>())
             .finish()
     }
 }

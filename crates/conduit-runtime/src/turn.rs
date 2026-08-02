@@ -313,12 +313,12 @@ impl Turn {
     /// look that up" is heard while the lookup happens rather than after it.
     async fn converse(&mut self, transcript: String) -> Option<()> {
         let mut messages = Vec::new();
-        if let Some(system) = &self.plan.system {
+        if let Some(system) = &self.plan.core.system {
             messages.push(Message::system(system.clone()));
         }
         messages.push(Message::user(transcript));
 
-        for round_number in 0..self.plan.max_tool_rounds {
+        for round_number in 0..self.plan.core.max_rounds {
             let round = self.ask(&messages).await?;
 
             if round.requests.is_empty() {
@@ -342,12 +342,12 @@ impl Turn {
 
         // A model that never stops asking for tools would otherwise loop while
         // someone waits for an answer.
-        tracing::warn!(rounds = self.plan.max_tool_rounds, "tool round limit reached");
+        tracing::warn!(rounds = self.plan.core.max_rounds, "tool round limit reached");
         self.emitter.emit(Event::StageFailed {
-            node: self.plan.llm_node.clone(),
+            node: self.plan.core.node.clone(),
             error: format!(
                 "stopped after {} tool rounds without a final answer",
-                self.plan.max_tool_rounds
+                self.plan.core.max_rounds
             ),
             recovered: true,
         });
@@ -410,14 +410,14 @@ impl Turn {
     /// Streams one model response, speaking sentences as they complete.
     async fn ask(&mut self, messages: &[Message]) -> Option<Round> {
         let request = CompletionRequest {
-            tools: self.plan.tool_specs(),
-            ..CompletionRequest::new(self.plan.model.clone(), messages.to_vec())
+            tools: self.plan.core.tool_specs(),
+            ..CompletionRequest::new(self.plan.core.model.clone(), messages.to_vec())
         };
-        self.emitter.emit(Event::LlmRequestStarted { model: self.plan.model.clone() });
+        self.emitter.emit(Event::LlmRequestStarted { model: self.plan.core.model.clone() });
 
-        let mut completions = match self.plan.llm.complete(request).await {
+        let mut completions = match self.plan.core.llm.complete(request).await {
             Ok(completions) => completions,
-            Err(error) => return self.fail(&self.plan.llm_node.clone(), error).await,
+            Err(error) => return self.fail(&self.plan.core.node.clone(), error).await,
         };
 
         let mut round =
@@ -457,7 +457,7 @@ impl Turn {
                 Ok(unknown) => {
                     tracing::debug!(?unknown, "ignoring unrecognized completion item");
                 }
-                Err(error) => return self.fail(&self.plan.llm_node.clone(), error).await,
+                Err(error) => return self.fail(&self.plan.core.node.clone(), error).await,
             }
         }
 

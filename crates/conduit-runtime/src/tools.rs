@@ -74,9 +74,9 @@ async fn run_one(
     let Request { id, name, arguments } = request;
     emitter.emit(Event::ToolRequested { call: id.clone(), name: name.clone() });
 
-    let Some(tool) = plan.tools.get(&name) else {
+    let Some(tool) = plan.core.tools.get(&name) else {
         // Models do invent tool names. Say so instead of dropping the call.
-        let known: Vec<&str> = plan.tools.keys().map(String::as_str).collect();
+        let known: Vec<&str> = plan.core.tools.keys().map(String::as_str).collect();
         let content = format!(
             "there is no tool called `{name}`; available tools: {}",
             if known.is_empty() { "none".to_owned() } else { known.join(", ") }

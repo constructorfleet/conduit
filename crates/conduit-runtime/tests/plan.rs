@@ -10,8 +10,12 @@
 mod fakes;
 
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
+use conduit_core::graph::{
+    ConfirmPolicy, Edge, MemoryBinding, MemoryMode, Modality, ModelBinding, Node,
+    PipelineGraph, ReasoningCore, ToolBinding,
+};
 use conduit_core::{Error, GraphError};
+use conduit_runtime::plan::Plan;
 use conduit_runtime::{Providers, Runner};
 use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
 
@@ -285,6 +289,184 @@ fn a_second_model_is_refused_by_validation_rather_than_by_this_runtime() {
         panic!("two models is an invalid graph, not a runtime limitation: {error}");
     };
     assert_eq!(nodes, &["local".to_owned(), "cloud".to_owned()]);
+}
+
+/// stt -> core -> tts, with one tool bound to the core.
+///
+/// The same pipeline as `nodes_around_a_model`, said the way ADR-0012 says it:
+/// the tool is configuration on the core rather than a stage between the model
+/// and synthesis.
+fn cored() -> PipelineGraph {
+    let core = ReasoningCore {
+        model: ModelBinding {
+            provider: "fake-llm".to_owned(),
+            model: Some("qwen3:8b".to_owned()),
+        },
+        system: Some("Be brief.".to_owned()),
+        tools: vec![ToolBinding {
+            provider: "search".to_owned(),
+            confirm: ConfirmPolicy::Never,
+        }],
+        memory: Vec::new(),
+        max_rounds: 2,
+    };
+
+    PipelineGraph::new("same pipeline")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "brain".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "tts"))
+}
+
+/// stt -> llm -> search -> tts, the same pipeline written the old way.
+fn nodes_around_a_model() -> PipelineGraph {
+    PipelineGraph::new("same pipeline")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Llm {
+            id: "brain".to_owned(),
+            provider: "fake-llm".to_owned(),
+            model: Some("qwen3:8b".to_owned()),
+            system: Some("Be brief.".to_owned()),
+            max_rounds: 2,
+        })
+        .with_node(Node::tool("search", "search"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "search"))
+        .with_edge(Edge::new("search", "tts"))
+}
+
+/// Providers for both shapes above.
+fn providers_with_a_tool() -> Providers {
+    Providers::new()
+        .with_stt(FakeStt::new(vec![]))
+        .with_llm(FakeLlm::new(vec![]).serving(&["qwen3:8b"]))
+        .with_tool(FakeTool::new("search", serde_json::json!({})))
+        .with_tts(FakeTts::new())
+}
+
+#[test]
+fn a_core_and_the_nodes_it_replaces_resolve_to_the_same_pipeline() {
+    // The seam this track leans on: while both spellings exist, they must not
+    // mean two different pipelines. Everything the runtime reads at turn time
+    // comes off the core plan, so equal core plans run equal turns.
+    let providers = providers_with_a_tool();
+    let core = Plan::resolve(&cored(), &providers).expect("a core pipeline is executable");
+    let nodes =
+        Plan::resolve(&nodes_around_a_model(), &providers).expect("and so is the old shape");
+
+    assert_eq!(core.core.node, nodes.core.node);
+    assert_eq!(core.core.model, nodes.core.model);
+    assert_eq!(core.core.system, nodes.core.system);
+    assert_eq!(core.core.max_rounds, nodes.core.max_rounds);
+    assert_eq!(
+        core.core.tools.keys().collect::<Vec<_>>(),
+        nodes.core.tools.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(core.core.tool_specs().len(), 1, "the tool is offered to the model");
+}
+
+#[test]
+fn a_core_names_the_model_it_asks_for_rather_than_taking_the_providers_first() {
+    // The rule per-node configuration exists for, restated on the core: a
+    // binding that names a model the provider does not serve is refused here
+    // rather than at the first token.
+    let core = ReasoningCore {
+        model: ModelBinding {
+            provider: "fake-llm".to_owned(),
+            model: Some("llama3.2:3b".to_owned()),
+        },
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("wrong model")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "brain".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers_with_a_tool())).to_owned();
+    assert!(message.contains("llama3.2:3b"), "the model asked for: {message}");
+    assert!(message.contains("qwen3:8b"), "and what the provider serves: {message}");
+}
+
+#[test]
+fn a_memory_binding_is_refused_rather_than_quietly_dropped() {
+    // Accepting a binding and then not running it turns "remember what I told
+    // you" into "answer as though nothing was said", with nothing to show for
+    // it. Executing memory is track F; until then the pipeline is refused.
+    let core = ReasoningCore {
+        memory: vec![MemoryBinding {
+            provider: "recall".to_owned(),
+            mode: MemoryMode::ReadWrite,
+            scope: None,
+            limit: 5,
+        }],
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("remembering")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "brain".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers())).to_owned();
+    assert!(message.contains("recall"), "the binding refused: {message}");
+    assert!(message.contains("brain"), "the node carrying it: {message}");
+    assert!(message.contains("memory"), "and what it is: {message}");
+}
+
+#[test]
+fn a_memory_node_and_a_memory_binding_are_refused_the_same_way() {
+    // The two spellings must not disagree about what the runtime can do, or
+    // moving a pipeline onto a core would look like it gained a capability.
+    let graph = wired()
+        .with_node(Node::memory("brain-memory", "recall"))
+        .with_edge(Edge::new("llm", "brain-memory"))
+        .with_edge(Edge::new("brain-memory", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers())).to_owned();
+    assert!(message.contains("recall"), "{message}");
+    assert!(message.contains("memory"), "{message}");
+}
+
+#[test]
+fn a_tool_that_must_be_confirmed_is_refused_rather_than_dispatched_unasked() {
+    // `confirm: always` exists so an operator can gate a tool that changes
+    // something. Running it anyway is the one outcome the setting was chosen
+    // to prevent, so the pipeline does not resolve until track G can ask.
+    let core = ReasoningCore {
+        tools: vec![ToolBinding {
+            provider: "search".to_owned(),
+            confirm: ConfirmPolicy::Always,
+        }],
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("gated")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "brain".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers_with_a_tool())).to_owned();
+    assert!(message.contains("search"), "the tool refused: {message}");
+    assert!(message.contains("brain"), "the node carrying it: {message}");
+    assert!(message.contains("confirm"), "and why: {message}");
+}
+
+#[test]
+fn a_cores_bindings_do_not_have_to_be_downstream_of_anything() {
+    // A binding is not a stage, so there is no edge for it to be reachable
+    // over. The old shape needed `llm -> search`; the core needs nothing.
+    let graph = cored();
+    assert!(
+        !graph.edges.iter().any(|edge| edge.to == "search"),
+        "a bound tool is not wired into the transport pipeline"
+    );
+    Plan::resolve(&graph, &providers_with_a_tool()).expect("executable all the same");
 }
 
 #[test]
