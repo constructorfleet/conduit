@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use bytes::Bytes;
 use conduit_core::audio::AudioFormat;
-use conduit_core::graph::{NodeKind, PipelineGraph};
+use conduit_core::graph::{Node, NodeKind, PipelineGraph};
 use conduit_core::id::ConversationId;
 use conduit_provider::storage::{validate_name, ProviderCapability};
 use conduit_provider::stt::AudioChunk;
@@ -38,8 +38,12 @@ pub struct ProviderComponentDescriptor {
     pub id: &'static str,
     /// Human-readable label for operator screens.
     pub label: &'static str,
-    /// What node kind this provider can serve.
-    pub kind: NodeKind,
+    /// What this provider can do.
+    ///
+    /// A capability rather than a node kind: tools and memory are core
+    /// bindings rather than graph stages, so there is no node kind left for
+    /// their components to name.
+    pub kind: ProviderCapability,
     /// Provider definition variant created from this catalog entry.
     pub definition_variant: &'static str,
     /// Configuration fields accepted by this provider component.
@@ -326,38 +330,54 @@ async fn validate_provider_references(
     for node in
         graph.topological_order().map_err(|error| ApiError::unprocessable(error.to_string()))?
     {
-        let Some(expected) = provider_capability_for_node(node.kind()) else {
-            continue;
+        // A core is checked binding by binding rather than as one node: its
+        // model must be a language model and each tool must be a tool, and no
+        // single capability could say that.
+        let expectations: Vec<(&str, ProviderCapability)> = match node {
+            Node::Core { core, .. } => {
+                std::iter::once((core.model.provider.as_str(), ProviderCapability::Llm))
+                    .chain(
+                        core.tools
+                            .iter()
+                            .map(|tool| (tool.provider.as_str(), ProviderCapability::Tool)),
+                    )
+                    .collect()
+            }
+            other => provider_capability_for_node(other.kind())
+                .map(|capability| vec![(other.provider(), capability)])
+                .unwrap_or_default(),
         };
-        // A qualified id such as `weather-tools.forecast` names one tool
-        // discovered from an MCP definition, not a stored definition, so it is
-        // resolved against the runtime snapshot instead of the store — which
-        // would reject the string as an unusable key.
-        let definition = if validate_name(node.provider()).is_ok() {
-            state.provider_definition(node.provider()).await.map_err(store_failure)?
-        } else {
-            None
-        };
-        let actual = if let Some(definition) = definition {
-            Some(definition.capability())
-        } else {
-            runtime_provider_capability(state.providers().as_deref(), node.provider())
-        };
-        let Some(actual) = actual else {
-            return Err(ApiError::unprocessable(format!(
-                "provider definition `{}` is referenced by node `{}` but does not exist",
-                node.provider(),
-                node.id()
-            )));
-        };
-        if actual != expected {
-            return Err(ApiError::unprocessable(format!(
-                "provider definition `{}` is {} but node `{}` requires {}",
-                node.provider(),
-                provider_capability_label(actual),
-                node.id(),
-                provider_capability_label(expected)
-            )));
+
+        for (provider, expected) in expectations {
+            // A qualified id such as `weather-tools.forecast` names one tool
+            // discovered from an MCP definition, not a stored definition, so it is
+            // resolved against the runtime snapshot instead of the store — which
+            // would reject the string as an unusable key.
+            let definition = if validate_name(provider).is_ok() {
+                state.provider_definition(provider).await.map_err(store_failure)?
+            } else {
+                None
+            };
+            let actual = if let Some(definition) = definition {
+                Some(definition.capability())
+            } else {
+                runtime_provider_capability(state.providers().as_deref(), provider)
+            };
+            let Some(actual) = actual else {
+                return Err(ApiError::unprocessable(format!(
+                    "provider definition `{provider}` is referenced by node `{}` but \
+                     does not exist",
+                    node.id()
+                )));
+            };
+            if actual != expected {
+                return Err(ApiError::unprocessable(format!(
+                    "provider definition `{provider}` is {} but node `{}` requires {}",
+                    provider_capability_label(actual),
+                    node.id(),
+                    provider_capability_label(expected)
+                )));
+            }
         }
     }
     Ok(())
@@ -381,11 +401,14 @@ fn runtime_provider_capability(
     }
 }
 
+/// What a transport node's provider has to be able to do.
+///
+/// A core is absent on purpose: it names a model, any number of tools, and any
+/// number of stores, so one capability could not describe it. Its bindings are
+/// checked against their own capabilities instead.
 fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
     match kind {
         NodeKind::Stt => Some(ProviderCapability::Stt),
-        NodeKind::Llm => Some(ProviderCapability::Llm),
-        NodeKind::Tool => Some(ProviderCapability::Tool),
         NodeKind::Tts => Some(ProviderCapability::Tts),
         _ => None,
     }
@@ -407,21 +430,21 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "openai.responses",
             label: "OpenAI Responses",
-            kind: NodeKind::Llm,
+            kind: ProviderCapability::Llm,
             definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
         ProviderComponentDescriptor {
             id: "openai.completions",
             label: "OpenAI Completions",
-            kind: NodeKind::Llm,
+            kind: ProviderCapability::Llm,
             definition_variant: "openai_llm",
             schema: openai_llm_schema(),
         },
         ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
-            kind: NodeKind::Stt,
+            kind: ProviderCapability::Stt,
             definition_variant: "wyoming_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
@@ -435,7 +458,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "openai.transcription",
             label: "OpenAI Transcription",
-            kind: NodeKind::Stt,
+            kind: ProviderCapability::Stt,
             definition_variant: "openai_stt",
             schema: ComponentConfigSchema {
                 properties: properties([
@@ -449,7 +472,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "openai.speech",
             label: "OpenAI Speech",
-            kind: NodeKind::Tts,
+            kind: ProviderCapability::Tts,
             definition_variant: "openai_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
@@ -462,7 +485,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "wyoming.tts",
             label: "Wyoming TTS",
-            kind: NodeKind::Tts,
+            kind: ProviderCapability::Tts,
             definition_variant: "wyoming_tts",
             schema: ComponentConfigSchema {
                 properties: properties([
@@ -478,7 +501,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "mcp.sse",
             label: "MCP SSE",
-            kind: NodeKind::Tool,
+            kind: ProviderCapability::Tool,
             definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
@@ -491,7 +514,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "mcp.streamable_http",
             label: "MCP Streamable HTTP",
-            kind: NodeKind::Tool,
+            kind: ProviderCapability::Tool,
             definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([(
@@ -504,7 +527,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
-            kind: NodeKind::Tool,
+            kind: ProviderCapability::Tool,
             definition_variant: "mcp_tool",
             schema: ComponentConfigSchema {
                 properties: properties([("command", string_property(None, None))]),

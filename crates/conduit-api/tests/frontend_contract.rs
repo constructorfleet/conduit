@@ -19,7 +19,9 @@ use conduit_api::status::{
     SnapshotEventBinding, SnapshotResource, StaleState,
 };
 use conduit_core::event::{Envelope, Event};
-use conduit_core::graph::{Edge, Modality, Node, PipelineGraph, DEFAULT_MAX_ROUNDS};
+use conduit_core::graph::{
+    Edge, Modality, ModelBinding, Node, PipelineGraph, ReasoningCore, DEFAULT_MAX_ROUNDS,
+};
 use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
 use uuid::Uuid;
 
@@ -264,14 +266,21 @@ fn pipeline_fixture() -> PipelineView {
     let graph = PipelineGraph::new("kitchen")
         .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "whisper"))
-        .with_node(Node::Llm {
+        .with_node(Node::Core {
             id: "llm".to_owned(),
-            provider: "openai".to_owned(),
-            // The fixture names a model because that is the point of a typed
-            // node: the frontend has to render a field the wire may omit.
-            model: Some("gpt-4o-mini".to_owned()),
-            system: None,
-            max_rounds: DEFAULT_MAX_ROUNDS,
+            core: ReasoningCore {
+                // The fixture names a model because that is the point of a
+                // binding: the frontend has to render a field the wire may
+                // omit.
+                model: ModelBinding {
+                    provider: "openai".to_owned(),
+                    model: Some("gpt-4o-mini".to_owned()),
+                },
+                system: None,
+                tools: Vec::new(),
+                memory: Vec::new(),
+                max_rounds: DEFAULT_MAX_ROUNDS,
+            },
         })
         .with_node(Node::tts("tts", "piper-local"))
         .with_node(Node::sink("speaker", "websocket", Modality::Audio))
@@ -355,11 +364,7 @@ export type NodeKind =
   | "wake_word"
   | "stt"
   | "speaker_id"
-  | "router"
   | "core"
-  | "llm"
-  | "tool"
-  | "memory"
   | "tts"
   | "sink";
 
@@ -404,20 +409,6 @@ export type PipelineNode =
   | (PipelineNodeBase & {{ kind: "wake_word" }})
   | (PipelineNodeBase & {{ kind: "stt" }})
   | (PipelineNodeBase & {{ kind: "speaker_id" }})
-  | (PipelineNodeBase & {{ kind: "router" }})
-  | (PipelineNodeBase & {{
-      kind: "llm";
-      model?: string;
-      system?: string;
-      max_rounds?: number;
-    }})
-  | (PipelineNodeBase & {{ kind: "tool" }})
-  | (PipelineNodeBase & {{
-      kind: "memory";
-      mode?: MemoryMode;
-      scope?: MemoryScope;
-      limit?: number;
-    }})
   | (PipelineNodeBase & {{ kind: "tts"; voice?: string }})
   | (PipelineNodeBase & {{ kind: "sink"; modality?: Modality }})
   | {{ kind: "core"; id: IdString; core: ReasoningCore }};

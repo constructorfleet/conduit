@@ -118,7 +118,6 @@ impl Plan {
         let mut tts = None;
         let mut tools = BTreeMap::new();
         let mut memory = Vec::new();
-        let mut tool_nodes = Vec::new();
 
         for node in graph.topological_order()? {
             match node {
@@ -132,9 +131,6 @@ impl Plan {
                         node: id.clone(),
                     });
                 }
-                // A core and an `llm` describe the same pipeline, so both
-                // arrive at one `Reasoning`. What differs is only where the
-                // tools and memory were written down.
                 Node::Core { id, core } => {
                     reject_duplicate(&reasoning, node)?;
                     let llm = providers.llm().require(&core.model.provider)?;
@@ -153,35 +149,6 @@ impl Plan {
                         max_rounds: core.max_rounds,
                     });
                 }
-                Node::Llm { id, provider, model, system, max_rounds } => {
-                    reject_duplicate(&reasoning, node)?;
-                    let llm = providers.llm().require(provider)?;
-                    let model = resolve_model(llm.as_ref(), node, model.as_deref())?;
-                    reasoning = Some(Reasoning {
-                        node: id.clone(),
-                        llm,
-                        model,
-                        system: system.clone(),
-                        max_rounds: *max_rounds,
-                    });
-                }
-                Node::Tool { id, provider } => {
-                    let binding = ToolBinding {
-                        provider: provider.clone(),
-                        confirm: ConfirmPolicy::Never,
-                    };
-                    offer_tool(&mut tools, providers, &binding, id)?;
-                    tool_nodes.push(id.clone());
-                }
-                Node::Memory { id, provider, mode, scope, limit } => {
-                    let binding = MemoryBinding {
-                        provider: provider.clone(),
-                        mode: *mode,
-                        scope: *scope,
-                        limit: *limit,
-                    };
-                    memory.push(resolve_memory(&binding, id)?);
-                }
                 Node::Tts { id, provider, voice } => {
                     reject_duplicate(&tts, node)?;
                     tts = Some(Synthesizer {
@@ -189,16 +156,6 @@ impl Plan {
                         node: id.clone(),
                         voice: voice.clone(),
                     });
-                }
-                // Explicitly refused rather than skipped. A router that is
-                // accepted and then ignored turns "send hard questions to the
-                // cloud model" into "send everything to whichever model
-                // resolved", which is worse than refusing to run the graph.
-                Node::Router { id, .. } => {
-                    return Err(Error::Config(format!(
-                        "`router` nodes are not executable yet, and running this graph \
-                         would ignore the routing it describes (node `{id}`)"
-                    )))
                 }
                 other => {
                     return Err(Error::Config(format!(
@@ -235,19 +192,15 @@ impl Plan {
         // path rather than a bad edge. Reachability still has to be asked
         // about; `crates/conduit-runtime/tests/plan.rs` pins that shape.
         //
-        // A core's own bindings are exempt, and not by omission: a binding is
-        // configuration rather than a stage, so there is no edge for it to be
-        // reachable over. Only tools written as nodes are asked about.
+        // A core's tools and memory are not asked about at all, and not by
+        // omission: a binding is configuration rather than a stage, so there
+        // is no edge for it to be reachable over.
         if let Some(recognizer) = &stt {
             require_downstream(graph, &recognizer.node, &reasoning.node)?;
         }
         if let Some(synthesizer) = &tts {
             require_downstream(graph, &reasoning.node, &synthesizer.node)?;
         }
-        for tool_node in &tool_nodes {
-            require_downstream(graph, &reasoning.node, tool_node)?;
-        }
-
         if !tools.is_empty() && !reasoning.llm.supports_tools() {
             return Err(Error::Config(format!(
                 "node `{}` uses provider `{}`, which cannot call tools, but the \

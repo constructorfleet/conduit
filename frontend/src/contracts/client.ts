@@ -10,11 +10,7 @@ export type NodeKind =
   | "wake_word"
   | "stt"
   | "speaker_id"
-  | "router"
   | "core"
-  | "llm"
-  | "tool"
-  | "memory"
   | "tts"
   | "sink";
 
@@ -59,20 +55,6 @@ export type PipelineNode =
   | (PipelineNodeBase & { kind: "wake_word" })
   | (PipelineNodeBase & { kind: "stt" })
   | (PipelineNodeBase & { kind: "speaker_id" })
-  | (PipelineNodeBase & { kind: "router" })
-  | (PipelineNodeBase & {
-      kind: "llm";
-      model?: string;
-      system?: string;
-      max_rounds?: number;
-    })
-  | (PipelineNodeBase & { kind: "tool" })
-  | (PipelineNodeBase & {
-      kind: "memory";
-      mode?: MemoryMode;
-      scope?: MemoryScope;
-      limit?: number;
-    })
   | (PipelineNodeBase & { kind: "tts"; voice?: string })
   | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
   | { kind: "core"; id: IdString; core: ReasoningCore };
@@ -503,11 +485,15 @@ export const pipelineViewFixture = {
         "provider": "whisper"
       },
       {
-        "kind": "llm",
+        "kind": "core",
         "id": "llm",
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "max_rounds": 4
+        "core": {
+          "model": {
+            "provider": "openai",
+            "model": "gpt-4o-mini"
+          },
+          "max_rounds": 4
+        }
       },
       {
         "kind": "tts",

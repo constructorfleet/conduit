@@ -961,8 +961,7 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
         NodeKind::Stt => Some(ProviderKind::Stt),
         // A core's provider is the model it binds; its tools and memory are
         // bindings rather than nodes, and are reported from the core plan.
-        NodeKind::Core | NodeKind::Llm => Some(ProviderKind::Llm),
-        NodeKind::Tool => Some(ProviderKind::Tool),
+        NodeKind::Core => Some(ProviderKind::Llm),
         NodeKind::Tts => Some(ProviderKind::Tts),
         _ => None,
     }
@@ -1039,8 +1038,7 @@ fn project_components(
 fn component_for_node_kind(kind: NodeKind) -> Option<ComponentKind> {
     match kind {
         NodeKind::Stt => Some(ComponentKind::Transcription),
-        NodeKind::Core | NodeKind::Llm => Some(ComponentKind::Reasoning),
-        NodeKind::Tool => Some(ComponentKind::Tools),
+        NodeKind::Core => Some(ComponentKind::Reasoning),
         NodeKind::Tts => Some(ComponentKind::Synthesis),
         _ => None,
     }

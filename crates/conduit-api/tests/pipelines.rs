@@ -8,7 +8,9 @@ use axum::routing::get as axum_get;
 use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
+use conduit_core::graph::{
+    ConfirmPolicy, Edge, Modality, Node, PipelineGraph, ReasoningCore, ToolBinding,
+};
 use conduit_core::testing::voice_graph;
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
@@ -28,6 +30,19 @@ fn valid_graph() -> PipelineGraph {
 
 fn echo_graph() -> PipelineGraph {
     voice_graph("echo").stt("echo-stt").core("echo-llm").tts("echo-tts").build()
+}
+
+/// A core bound to `provider` for reasoning and to `tools` for doing.
+///
+/// Tools are configuration on the core, so a pipeline that offers one has one
+/// node rather than a node and an edge.
+fn core_with_tools(id: &str, provider: &str, tools: &[&str]) -> Node {
+    let mut core = ReasoningCore::new(provider);
+    core.tools = tools
+        .iter()
+        .map(|tool| ToolBinding { provider: (*tool).to_owned(), confirm: ConfirmPolicy::Never })
+        .collect();
+    Node::Core { id: id.to_owned(), core }
 }
 
 fn providers() -> Providers {
@@ -400,7 +415,7 @@ async fn invalid_graphs_are_rejected_and_not_stored() {
 #[tokio::test]
 async fn storing_a_pipeline_rejects_missing_provider_definitions_and_does_not_store() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "missing-openai"));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "missing-openai"));
 
     let (status, body) = call(&state, put(&graph)).await;
 
@@ -494,7 +509,7 @@ async fn validate_checks_without_storing() {
 #[tokio::test]
 async fn validate_rejects_missing_provider_definitions() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "missing-openai"));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "missing-openai"));
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -579,7 +594,7 @@ async fn test_turn_on_a_text_pipeline_returns_the_reply_as_writing() {
         AppState::new(EventBus::default()).with_providers(Providers::new().with_llm(EchoLlm));
     let graph = PipelineGraph::new("chat")
         .with_node(Node::source("in", "websocket", Modality::Text))
-        .with_node(Node::llm("llm", "echo-llm"))
+        .with_node(Node::core("llm", "echo-llm"))
         .with_node(Node::sink("out", "websocket", Modality::Text))
         .with_edge(Edge::new("in", "llm"))
         .with_edge(Edge::new("llm", "out"));
@@ -1121,10 +1136,11 @@ async fn saving_an_mcp_definition_registers_its_discovered_tool() {
 
     // A graph node may now reference the definition id as a tool provider.
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::llm("llm", "ollama"))
-        .with_node(Node::tool("weather", "weather-tools"))
-        .with_edge(Edge::new("llm", "weather"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools"],
+    ));
 
     let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
 
@@ -1146,12 +1162,11 @@ async fn a_multi_tool_mcp_definition_registers_each_tool_under_its_own_id() {
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
 
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::llm("llm", "ollama"))
-        .with_node(Node::tool("forecast", "weather-tools.forecast"))
-        .with_node(Node::tool("history", "weather-tools.history"))
-        .with_edge(Edge::new("llm", "forecast"))
-        .with_edge(Edge::new("llm", "history"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools.forecast", "weather-tools.history"],
+    ));
 
     let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
 
@@ -1216,10 +1231,11 @@ async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_
     });
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::llm("llm", "ollama"))
-        .with_node(Node::tool("forecast", "weather-tools.forecast"))
-        .with_edge(Edge::new("llm", "forecast"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools.forecast"],
+    ));
     let (status, body) = call(&state, put(&graph)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
@@ -1242,7 +1258,7 @@ async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "openai-primary"));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "openai-primary"));
     call(&state, put(&graph)).await;
 
     let (status, body) = call(&state, delete("/v1/providers/openai-primary")).await;

@@ -214,7 +214,7 @@ fn provider_status_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "configured-stt"))
-        .with_node(Node::llm("llm", "configured-llm"))
+        .with_node(Node::core("llm", "configured-llm"))
         .with_node(Node::tts("tts", "configured-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
@@ -404,7 +404,7 @@ async fn status_reports_unavailable_provider_slots_without_a_runtime_registry() 
 async fn concrete_missing_provider_references_replace_generic_unavailable_slots() {
     let graph = PipelineGraph::new("kitchen")
         .with_node(Node::stt("stt", "whisper"))
-        .with_node(Node::llm("llm", "qwen3:8b"))
+        .with_node(Node::core("llm", "qwen3:8b"))
         .with_node(Node::tts("tts", "piper"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"));

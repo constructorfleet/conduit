@@ -14,11 +14,15 @@
         "provider": "whisper"
       },
       {
-        "kind": "llm",
+        "kind": "core",
         "id": "llm",
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "max_rounds": 4
+        "core": {
+          "model": {
+            "provider": "openai",
+            "model": "gpt-4o-mini"
+          },
+          "max_rounds": 4
+        }
       },
       {
         "kind": "tts",

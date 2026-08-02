@@ -45,16 +45,8 @@ pub enum NodeKind {
     Stt,
     /// Speaker identification.
     SpeakerId,
-    /// Conditional fan-out to one of several downstream branches.
-    Router,
     /// A language model with its tool and memory bindings.
     Core,
-    /// Language model inference.
-    Llm,
-    /// Tool execution.
-    Tool,
-    /// Memory read/write.
-    Memory,
     /// Text-to-speech.
     Tts,
     /// Egress to a device.
@@ -73,11 +65,7 @@ impl NodeKind {
             Self::WakeWord => "wake_word",
             Self::Stt => "stt",
             Self::SpeakerId => "speaker_id",
-            Self::Router => "router",
             Self::Core => "core",
-            Self::Llm => "llm",
-            Self::Tool => "tool",
-            Self::Memory => "memory",
             Self::Tts => "tts",
             Self::Sink => "sink",
         }
@@ -299,64 +287,12 @@ pub enum Node {
         /// Provider definition id.
         provider: String,
     },
-    /// Conditional fan-out to one of several downstream branches.
-    Router {
-        /// Author-chosen identifier, unique within the graph.
-        id: NodeId,
-        /// Provider definition id.
-        provider: String,
-    },
     /// A language model with its tool and memory bindings.
     Core {
         /// Author-chosen identifier, unique within the graph.
         id: NodeId,
         /// The model, and what it may reach for.
         core: ReasoningCore,
-    },
-    /// Language model inference.
-    Llm {
-        /// Author-chosen identifier, unique within the graph.
-        id: NodeId,
-        /// Provider definition id, e.g. `"ollama"`.
-        provider: String,
-        /// Model to request, or `None` for whichever model the provider
-        /// definition serves first.
-        ///
-        /// Naming one here is what lets two pipelines share a provider
-        /// definition and still reason with different models.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-        /// System prompt for this pipeline, prepended to the definition's own.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        system: Option<String>,
-        /// Cap on model calls in one turn.
-        #[serde(default = "default_max_rounds")]
-        max_rounds: usize,
-    },
-    /// Tool execution.
-    Tool {
-        /// Author-chosen identifier, unique within the graph.
-        id: NodeId,
-        /// Provider definition id, or a qualified tool id such as
-        /// `"weather-tools.forecast"`.
-        provider: String,
-    },
-    /// Memory read/write.
-    Memory {
-        /// Author-chosen identifier, unique within the graph.
-        id: NodeId,
-        /// Provider definition id.
-        provider: String,
-        /// Whether this node retrieves, stores, or both.
-        #[serde(default)]
-        mode: MemoryMode,
-        /// Scope to confine retrieval and storage to, or `None` for all of
-        /// them.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        scope: Option<Scope>,
-        /// Most records to retrieve in one turn.
-        #[serde(default = "default_memory_limit")]
-        limit: usize,
     },
     /// Text-to-speech.
     Tts {
@@ -383,7 +319,7 @@ pub enum Node {
     },
 }
 
-/// The default [`Node::Llm::max_rounds`], as a serde default.
+/// The default [`ReasoningCore::max_rounds`], as a serde default.
 const fn default_max_rounds() -> usize {
     DEFAULT_MAX_ROUNDS
 }
@@ -397,7 +333,7 @@ const fn default_modality() -> Modality {
     Modality::Audio
 }
 
-/// The default [`Node::Memory::limit`], as a serde default.
+/// The default [`MemoryBinding::limit`], as a serde default.
 const fn default_memory_limit() -> usize {
     DEFAULT_MEMORY_LIMIT
 }
@@ -431,55 +367,16 @@ impl Node {
         Self::SpeakerId { id: id.into(), provider: provider.into() }
     }
 
-    /// Creates a `router` node.
-    #[must_use]
-    pub fn router(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Router { id: id.into(), provider: provider.into() }
-    }
-
-    /// Creates an `llm` node configured as the provider definition sees fit.
-    ///
-    /// A pipeline that wants a particular model, prompt, or round cap builds
-    /// [`Node::Llm`] directly; those fields are the point of the variant, and
-    /// a constructor taking all of them would read as five positional
-    /// arguments at every call site that wants none of them.
-    #[must_use]
-    pub fn llm(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Llm {
-            id: id.into(),
-            provider: provider.into(),
-            model: None,
-            system: None,
-            max_rounds: DEFAULT_MAX_ROUNDS,
-        }
-    }
-
     /// Creates a `core` node reasoning with whichever model `provider` serves
     /// first, bound to no tools and no memory.
     ///
     /// A core with bindings is built through [`ReasoningCore`] and
-    /// [`Node::Core`], for the same reason [`Node::llm`] takes no settings.
+    /// [`Node::Core`]: the bindings are the point of the type, and a
+    /// constructor taking all of them would read as five positional arguments
+    /// at every call site that wants none of them.
     #[must_use]
     pub fn core(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
         Self::Core { id: id.into(), core: ReasoningCore::new(provider) }
-    }
-
-    /// Creates a `tool` node.
-    #[must_use]
-    pub fn tool(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Tool { id: id.into(), provider: provider.into() }
-    }
-
-    /// Creates a `memory` node that retrieves from every scope.
-    #[must_use]
-    pub fn memory(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Memory {
-            id: id.into(),
-            provider: provider.into(),
-            mode: MemoryMode::Read,
-            scope: None,
-            limit: DEFAULT_MEMORY_LIMIT,
-        }
     }
 
     /// Creates a `tts` node using the provider's default voice.
@@ -506,11 +403,7 @@ impl Node {
             | Self::WakeWord { id, .. }
             | Self::Stt { id, .. }
             | Self::SpeakerId { id, .. }
-            | Self::Router { id, .. }
             | Self::Core { id, .. }
-            | Self::Llm { id, .. }
-            | Self::Tool { id, .. }
-            | Self::Memory { id, .. }
             | Self::Tts { id, .. }
             | Self::Sink { id, .. } => id,
         }
@@ -529,12 +422,25 @@ impl Node {
             | Self::WakeWord { provider, .. }
             | Self::Stt { provider, .. }
             | Self::SpeakerId { provider, .. }
-            | Self::Router { provider, .. }
-            | Self::Llm { provider, .. }
-            | Self::Tool { provider, .. }
-            | Self::Memory { provider, .. }
             | Self::Tts { provider, .. }
             | Self::Sink { provider, .. } => provider,
+        }
+    }
+
+    /// Every provider definition id this node names.
+    ///
+    /// A core names one for its model and one per tool and memory binding, so
+    /// anything asking "which providers does this pipeline depend on" — the
+    /// delete refusal, provider validation — has to ask this rather than
+    /// [`Node::provider`], which answers with the model alone.
+    #[must_use]
+    pub fn provider_references(&self) -> Vec<&str> {
+        match self {
+            Self::Core { core, .. } => std::iter::once(core.model.provider.as_str())
+                .chain(core.tools.iter().map(|tool| tool.provider.as_str()))
+                .chain(core.memory.iter().map(|store| store.provider.as_str()))
+                .collect(),
+            other => vec![other.provider()],
         }
     }
 
@@ -546,11 +452,7 @@ impl Node {
             Self::WakeWord { .. } => NodeKind::WakeWord,
             Self::Stt { .. } => NodeKind::Stt,
             Self::SpeakerId { .. } => NodeKind::SpeakerId,
-            Self::Router { .. } => NodeKind::Router,
             Self::Core { .. } => NodeKind::Core,
-            Self::Llm { .. } => NodeKind::Llm,
-            Self::Tool { .. } => NodeKind::Tool,
-            Self::Memory { .. } => NodeKind::Memory,
             Self::Tts { .. } => NodeKind::Tts,
             Self::Sink { .. } => NodeKind::Sink,
         }
@@ -564,12 +466,8 @@ impl Node {
 
     /// What this node puts on its outgoing edges, or `None` when nothing does.
     ///
-    /// A `sink` terminates the pipeline, so nothing leaves it. A `tool`,
-    /// `memory`, or `router` node is not a modality transform at all — it is
-    /// the visible half of a call-and-return arc, which is why
-    /// [ADR-0012](https://github.com/Teagan42/conduit/blob/main/docs/adr/0012-transport-pipeline-and-reasoning-core.md)
-    /// moves tools and memory onto a reasoning core — so there is nothing
-    /// truthful to say about what it emits, and its edges go unchecked.
+    /// Only a `sink` answers `None`: it terminates the pipeline, so there is
+    /// nothing downstream for it to describe.
     #[must_use]
     pub const fn output_modality(&self) -> Option<Modality> {
         match self {
@@ -578,31 +476,34 @@ impl Node {
                 Some(Modality::Audio)
             }
             Self::Stt { .. } => Some(Modality::Text),
-            Self::Core { .. } | Self::Llm { .. } => Some(Modality::Utterance),
-            Self::Sink { .. }
-            | Self::Router { .. }
-            | Self::Tool { .. }
-            | Self::Memory { .. } => None,
+            Self::Core { .. } => Some(Modality::Utterance),
+            Self::Sink { .. } => None,
         }
     }
 
-    /// What this node can read from its incoming edges, or `None` when the kind
-    /// is not a modality transform and its edges therefore go unchecked.
+    /// What this node can read from its incoming edges.
+    ///
+    /// Every kind answers, because every kind left in the graph is a stage in
+    /// the transport pipeline. Tools and memory used to be the exception —
+    /// each was the visible half of a call-and-return arc rather than a
+    /// modality transform, so its edges went unchecked — and
+    /// [ADR-0012](https://github.com/Teagan42/conduit/blob/main/docs/adr/0012-transport-pipeline-and-reasoning-core.md)
+    /// moved both onto a reasoning core, where they have no edges at all.
     ///
     /// An empty slice is a node that reads nothing: a `source` originates its
     /// stream, so an edge into one delivers something nothing will consume.
     #[must_use]
-    pub const fn accepted_modalities(&self) -> Option<&'static [Modality]> {
+    pub const fn accepted_modalities(&self) -> &'static [Modality] {
         match self {
-            Self::Source { .. } => Some(&[]),
+            Self::Source { .. } => &[],
             Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Stt { .. } => {
-                Some(&[Modality::Audio])
+                &[Modality::Audio]
             }
-            Self::Core { .. } | Self::Llm { .. } => Some(&[Modality::Text]),
+            Self::Core { .. } => &[Modality::Text],
             // Speech is one rendering of an utterance, and plain text is an
             // utterance nothing had to decide about, so synthesis speaks both.
-            Self::Tts { .. } => Some(&[Modality::Utterance, Modality::Text]),
-            Self::Sink { modality, .. } => Some(match modality {
+            Self::Tts { .. } => &[Modality::Utterance, Modality::Text],
+            Self::Sink { modality, .. } => match modality {
                 Modality::Audio => &[Modality::Audio],
                 // The other rendering of an utterance. A text sink writing one
                 // down is what lets a model stay unaware of how it is
@@ -610,21 +511,18 @@ impl Node {
                 // speech.
                 Modality::Text => &[Modality::Text, Modality::Utterance],
                 Modality::Utterance => &[Modality::Utterance],
-            }),
-            Self::Router { .. } | Self::Tool { .. } | Self::Memory { .. } => None,
+            },
         }
     }
 
     /// Whether this node is where a model reasons.
     ///
-    /// A `core` and an `llm` both are: the first carries its tool and memory
-    /// bindings and the second leaves them lying beside it in the graph, but
-    /// each is one model deciding what to say. Validation counts them together
-    /// because two models in one pipeline is the thing being refused, however
-    /// the graph spells it.
+    /// Asked rather than matched on, because validation counts reasoning nodes
+    /// to refuse a pipeline with two models, and what that count means should
+    /// not have to be re-derived at the one call site that needs it.
     #[must_use]
     pub const fn is_reasoning(&self) -> bool {
-        matches!(self, Self::Core { .. } | Self::Llm { .. })
+        matches!(self, Self::Core { .. })
     }
 }
 
@@ -635,8 +533,9 @@ pub struct Edge {
     pub from: NodeId,
     /// Id of the downstream node.
     pub to: NodeId,
-    /// Named output port on `from`, used by multi-output nodes such as
-    /// [`NodeKind::Router`]. `None` selects the node's default output.
+    /// Named output port on `from`, for a node with more than one output.
+    /// `None` selects the node's default output, which is what every kind in
+    /// the graph today has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<String>,
 }
@@ -857,11 +756,10 @@ impl PipelineGraph {
             let (Some(from), Some(to)) = (self.node(&edge.from), self.node(&edge.to)) else {
                 continue;
             };
-            let (Some(produced), Some(expected)) =
-                (from.output_modality(), to.accepted_modalities())
-            else {
+            let Some(produced) = from.output_modality() else {
                 continue;
             };
+            let expected = to.accepted_modalities();
             if !expected.contains(&produced) {
                 return Err(GraphError::ModalityMismatch {
                     edge: position,
@@ -966,18 +864,18 @@ impl PipelineGraph {
 mod tests {
     use super::*;
 
-    /// mic -> wake -> stt -> llm -> tts
+    /// mic -> wake -> stt -> core -> tts
     fn linear() -> PipelineGraph {
         PipelineGraph::new("linear")
             .with_node(Node::source("mic", "websocket", Modality::Audio))
             .with_node(Node::wake_word("wake", "openwakeword"))
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("mic", "wake"))
             .with_edge(Edge::new("wake", "stt"))
-            .with_edge(Edge::new("stt", "llm"))
-            .with_edge(Edge::new("llm", "tts"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("core", "tts"))
     }
 
     #[test]
@@ -985,42 +883,33 @@ mod tests {
         let graph = linear();
         let order: Vec<&str> =
             graph.topological_order().expect("valid").iter().map(|n| n.id().as_str()).collect();
-        assert_eq!(order, ["mic", "wake", "stt", "llm", "tts"]);
+        assert_eq!(order, ["mic", "wake", "stt", "core", "tts"]);
     }
 
-    /// A router choosing between two branches.
+    /// One transcript rendered by two synthesizers, rejoining at one sink.
     ///
-    /// This is a valid *graph* and not an executable *pipeline*: the runtime
-    /// refuses the router node. The graph model is deliberately the wider of
+    /// A valid *graph* rather than an executable *pipeline*: the runtime runs
+    /// one synthesizer per turn. The graph model is deliberately the wider of
     /// the two — a shape has to be expressible before it can be implemented —
-    /// but the two must not disagree silently, so
-    /// `crates/conduit-runtime/tests/plan.rs` asserts the refusal against this
-    /// exact shape.
-    ///
-    /// The branches are tools rather than the two models a router would
-    /// really choose between, because a graph reasoning in two places is now
-    /// refused outright; what is being asserted here is the ordering of a
-    /// fan-out that rejoins.
-    fn router_fan_out() -> PipelineGraph {
-        PipelineGraph::new("router")
+    /// and this is where the ordering of a fan-out that rejoins is pinned.
+    fn fan_out() -> PipelineGraph {
+        PipelineGraph::new("fan out")
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::router("router", "builtin"))
-            .with_node(Node::tool("local", "builtin"))
-            .with_node(Node::tool("cloud", "remote"))
-            .with_node(Node::tts("tts", "piper"))
-            .with_edge(Edge::new("stt", "router"))
-            .with_edge(Edge::from_port("router", "local", "local"))
-            .with_edge(Edge::from_port("router", "cloud", "cloud"))
-            .with_edge(Edge::new("local", "tts"))
-            .with_edge(Edge::new("cloud", "tts"))
+            .with_node(Node::tts("local", "piper"))
+            .with_node(Node::tts("cloud", "openai"))
+            .with_node(Node::sink("speaker", "websocket", Modality::Audio))
+            .with_edge(Edge::from_port("stt", "local", "local"))
+            .with_edge(Edge::from_port("stt", "cloud", "cloud"))
+            .with_edge(Edge::new("local", "speaker"))
+            .with_edge(Edge::new("cloud", "speaker"))
     }
 
     #[test]
-    fn router_fan_out_joins_before_the_sink() {
-        let graph = router_fan_out();
+    fn a_fan_out_joins_before_the_sink() {
+        let graph = fan_out();
         let order: Vec<&str> =
             graph.topological_order().expect("valid").iter().map(|n| n.id().as_str()).collect();
-        assert_eq!(order, ["stt", "router", "local", "cloud", "tts"]);
+        assert_eq!(order, ["stt", "local", "cloud", "speaker"]);
     }
 
     #[test]
@@ -1030,7 +919,7 @@ mod tests {
         // check this shape validated while saying nothing about order.
         let graph = PipelineGraph::new("unwired")
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::tts("tts", "piper"));
 
         let Err(GraphError::Disconnected(nodes)) = graph.validate() else {
@@ -1038,7 +927,7 @@ mod tests {
         };
         assert_eq!(
             nodes,
-            ["llm", "tts"],
+            ["core", "tts"],
             "named relative to the pipeline the first node is in"
         );
     }
@@ -1047,7 +936,7 @@ mod tests {
     fn an_unreachable_node_is_rejected_rather_than_ignored() {
         // A node nothing feeds and that feeds nothing would never run, and a
         // graph that accepts it tells its author the opposite.
-        let graph = linear().with_node(Node::tool("orphan", "builtin"));
+        let graph = linear().with_node(Node::stt("orphan", "vosk"));
 
         assert_eq!(graph.validate(), Err(GraphError::Disconnected(vec!["orphan".to_owned()])));
     }
@@ -1056,25 +945,26 @@ mod tests {
     fn two_separate_pipelines_in_one_graph_are_rejected() {
         let graph = PipelineGraph::new("two")
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::stt("other-stt", "vosk"))
-            .with_node(Node::llm("other-llm", "vllm"))
-            .with_edge(Edge::new("stt", "llm"))
-            .with_edge(Edge::new("other-stt", "other-llm"));
+            .with_node(Node::tts("other-tts", "piper"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("other-stt", "other-tts"));
 
         let Err(GraphError::Disconnected(nodes)) = graph.validate() else {
             panic!("two pipelines in one graph must not validate");
         };
-        assert_eq!(nodes, ["other-stt", "other-llm"]);
+        assert_eq!(nodes, ["other-stt", "other-tts"]);
     }
 
     #[test]
     fn a_node_that_only_feeds_the_pipeline_is_connected() {
-        // Connectivity ignores direction: a tool hanging off the model is part
-        // of the pipeline whichever way the edge points.
+        // Connectivity ignores direction: a second recognizer feeding the core
+        // is part of the pipeline even though nothing in it feeds the
+        // recognizer.
         linear()
-            .with_node(Node::tool("clock", "builtin"))
-            .with_edge(Edge::new("clock", "llm"))
+            .with_node(Node::stt("aux", "vosk"))
+            .with_edge(Edge::new("aux", "core"))
             .validate()
             .expect("an upstream branch is still one pipeline");
     }
@@ -1090,10 +980,10 @@ mod tests {
 
     #[test]
     fn reachability_over_a_branch_covers_both_sides() {
-        let graph = router_fan_out();
+        let graph = fan_out();
         assert!(graph.reaches("stt", "local"));
         assert!(graph.reaches("stt", "cloud"));
-        assert!(graph.reaches("router", "tts"));
+        assert!(graph.reaches("stt", "speaker"), "transitively, over either branch");
         assert!(!graph.reaches("local", "cloud"), "siblings do not reach each other");
     }
 
@@ -1111,8 +1001,8 @@ mod tests {
         // Cyclic graphs do not validate, but `reaches` is callable on any
         // graph and must not spin.
         let graph = PipelineGraph::new("cyclic")
-            .with_node(Node::llm("a", "ollama"))
-            .with_node(Node::tool("b", "builtin"))
+            .with_node(Node::core("a", "ollama"))
+            .with_node(Node::tts("b", "piper"))
             .with_edge(Edge::new("a", "b"))
             .with_edge(Edge::new("b", "a"));
 
@@ -1140,9 +1030,9 @@ mod tests {
     #[test]
     fn cycles_are_rejected_and_name_the_participants() {
         let graph = PipelineGraph::new("cyclic")
-            .with_node(Node::source("source", "websocket", Modality::Audio))
-            .with_node(Node::llm("a", "ollama"))
-            .with_node(Node::tool("b", "builtin"))
+            .with_node(Node::source("source", "websocket", Modality::Text))
+            .with_node(Node::core("a", "ollama"))
+            .with_node(Node::tts("b", "piper"))
             .with_node(Node::sink("sink", "websocket", Modality::Audio))
             .with_edge(Edge::new("source", "a"))
             .with_edge(Edge::new("a", "b"))
@@ -1167,8 +1057,8 @@ mod tests {
         // caught by NoSource first, so use a node that points at itself plus
         // a reachable head.
         let graph = PipelineGraph::new("no sink")
-            .with_node(Node::source("head", "websocket", Modality::Audio))
-            .with_node(Node::llm("loop", "ollama"))
+            .with_node(Node::source("head", "websocket", Modality::Text))
+            .with_node(Node::core("loop", "ollama"))
             .with_edge(Edge::new("head", "loop"))
             .with_edge(Edge::new("loop", "loop"));
         assert_eq!(graph.validate(), Err(GraphError::NoSink));
@@ -1187,23 +1077,19 @@ mod tests {
     fn a_node_is_tagged_by_its_kind_and_carries_its_own_settings() {
         // The tag is what makes a node's configuration readable: `kind` says
         // which fields the rest of the object is allowed to have.
-        let node = Node::Llm {
-            id: "llm".to_owned(),
-            provider: "ollama".to_owned(),
-            model: Some("qwen3:8b".to_owned()),
-            system: Some("Be brief.".to_owned()),
-            max_rounds: 2,
+        let node = Node::Tts {
+            id: "tts".to_owned(),
+            provider: "piper".to_owned(),
+            voice: Some("alba".to_owned()),
         };
 
         assert_eq!(
             serde_json::to_value(&node).expect("serialize"),
             serde_json::json!({
-                "kind": "llm",
-                "id": "llm",
-                "provider": "ollama",
-                "model": "qwen3:8b",
-                "system": "Be brief.",
-                "max_rounds": 2,
+                "kind": "tts",
+                "id": "tts",
+                "provider": "piper",
+                "voice": "alba",
             })
         );
     }
@@ -1221,63 +1107,50 @@ mod tests {
     #[test]
     fn omitted_node_settings_fall_back_to_the_documented_defaults() {
         let node: Node = serde_json::from_value(
-            serde_json::json!({ "kind": "llm", "id": "llm", "provider": "ollama" }),
+            serde_json::json!({ "kind": "tts", "id": "tts", "provider": "piper" }),
         )
         .expect("deserialize");
 
-        assert_eq!(node, Node::llm("llm", "ollama"));
-        let Node::Llm { model, system, max_rounds, .. } = node else {
-            panic!("an `llm` tag deserializes to an `llm` node");
+        assert_eq!(node, Node::tts("tts", "piper"));
+        let Node::Tts { voice, .. } = node else {
+            panic!("a `tts` tag deserializes to a `tts` node");
         };
-        assert_eq!(model, None, "no model named means the provider's first");
-        assert_eq!(system, None);
-        assert_eq!(max_rounds, DEFAULT_MAX_ROUNDS);
+        assert_eq!(voice, None, "no voice named means the provider's own");
     }
 
     #[test]
     fn a_setting_from_the_wrong_kind_of_node_is_rejected() {
-        // Accepting `voice` on a model node would let an operator configure
+        // Accepting `voice` on a recognizer would let an operator configure
         // something that could never take effect, and nothing would say so.
         let error = serde_json::from_value::<Node>(serde_json::json!({
-            "kind": "llm",
-            "id": "llm",
-            "provider": "ollama",
+            "kind": "stt",
+            "id": "stt",
+            "provider": "whisper",
             "voice": "alba",
         }))
-        .expect_err("`voice` is not a language model setting");
+        .expect_err("`voice` is not a recognition setting");
 
         assert!(error.to_string().contains("voice"), "{error}");
     }
 
     #[test]
-    fn a_memory_node_defaults_to_retrieving_from_every_scope() {
-        let Node::Memory { mode, scope, limit, .. } = Node::memory("memory", "builtin") else {
-            panic!("the constructor builds a memory node");
-        };
-
-        assert_eq!(mode, MemoryMode::Read);
-        assert_eq!(scope, None, "unset means every scope, as in a memory query");
-        assert_eq!(limit, DEFAULT_MEMORY_LIMIT);
-    }
-
-    #[test]
     fn a_pipeline_wired_backwards_names_the_edge_that_cannot_carry_its_load() {
-        // The defect modalities exist for: `tts -> llm -> stt` used to be a
+        // The defect modalities exist for: `tts -> core -> stt` used to be a
         // structurally perfect graph, and only the runtime's hand-written
         // expectation that recognition precedes reasoning caught it.
         let graph = PipelineGraph::new("backwards")
             .with_node(Node::tts("tts", "piper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::stt("stt", "whisper"))
-            .with_edge(Edge::new("tts", "llm"))
-            .with_edge(Edge::new("llm", "stt"));
+            .with_edge(Edge::new("tts", "core"))
+            .with_edge(Edge::new("core", "stt"));
 
         assert_eq!(
             graph.validate(),
             Err(GraphError::ModalityMismatch {
                 edge: 0,
                 from: "tts".to_owned(),
-                to: "llm".to_owned(),
+                to: "core".to_owned(),
                 produced: Modality::Audio,
                 expected: vec![Modality::Text],
             })
@@ -1288,14 +1161,14 @@ mod tests {
     fn a_modality_mismatch_reads_as_a_sentence_about_one_edge() {
         let graph = PipelineGraph::new("backwards")
             .with_node(Node::tts("tts", "piper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::stt("stt", "whisper"))
-            .with_edge(Edge::new("tts", "llm"))
-            .with_edge(Edge::new("llm", "stt"));
+            .with_edge(Edge::new("tts", "core"))
+            .with_edge(Edge::new("core", "stt"));
 
         assert_eq!(
             graph.validate().unwrap_err().to_string(),
-            "edge `tts` -> `llm` carries audio, but `llm` accepts text"
+            "edge `tts` -> `core` carries audio, but `core` accepts text"
         );
     }
 
@@ -1320,10 +1193,10 @@ mod tests {
         // is a rendering of an utterance rather than a different thing.
         PipelineGraph::new("text out")
             .with_node(Node::source("chat", "websocket", Modality::Text))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::sink("reply", "websocket", Modality::Text))
-            .with_edge(Edge::new("chat", "llm"))
-            .with_edge(Edge::new("llm", "reply"))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "reply"))
             .validate()
             .expect("a text sink writes down what the model said");
     }
@@ -1336,23 +1209,23 @@ mod tests {
         let graph = PipelineGraph::new("silent")
             .with_node(Node::source("mic", "websocket", Modality::Audio))
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_node(Node::sink("speaker", "websocket", Modality::Audio))
             .with_edge(Edge::new("mic", "stt"))
-            .with_edge(Edge::new("stt", "llm"))
-            .with_edge(Edge::new("llm", "speaker"));
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("core", "speaker"));
 
         let Err(GraphError::ModalityMismatch { from, to, produced, .. }) = graph.validate()
         else {
             panic!("an utterance is not audio until something speaks it");
         };
-        assert_eq!((from.as_str(), to.as_str()), ("llm", "speaker"));
+        assert_eq!((from.as_str(), to.as_str()), ("core", "speaker"));
         assert_eq!(produced, Modality::Utterance);
     }
 
     #[test]
     fn synthesis_speaks_both_an_utterance_and_plain_text() {
-        for produced in [Node::llm("upstream", "ollama"), Node::stt("upstream", "whisper")] {
+        for produced in [Node::core("upstream", "ollama"), Node::stt("upstream", "whisper")] {
             PipelineGraph::new("spoken")
                 .with_node(produced)
                 .with_node(Node::tts("tts", "piper"))
@@ -1367,9 +1240,9 @@ mod tests {
         let graph = PipelineGraph::new("backwards at the edge")
             .with_node(Node::source("mic", "websocket", Modality::Audio))
             .with_node(Node::stt("stt", "whisper"))
-            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::core("core", "ollama"))
             .with_edge(Edge::new("stt", "mic"))
-            .with_edge(Edge::new("stt", "llm"));
+            .with_edge(Edge::new("stt", "core"));
 
         let error = graph.validate().unwrap_err();
         assert_eq!(
@@ -1379,27 +1252,14 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_that_is_not_a_modality_transform_leaves_its_edges_unchecked() {
-        // A tool node is half of a call-and-return arc rather than a stage
-        // that consumes one stream and produces another, so there is nothing
-        // truthful to check it against until ADR-0012 moves tools onto a core.
-        linear()
-            .with_node(Node::tool("clock", "builtin"))
-            .with_edge(Edge::new("llm", "clock"))
-            .with_edge(Edge::new("clock", "tts"))
-            .validate()
-            .expect("a tool branch is not a modality transform");
-    }
-
-    #[test]
     fn a_graph_that_is_not_a_pipeline_is_described_as_such_before_its_modalities() {
         // This graph is wired backwards *and* cyclic. "These two nodes point at
         // each other" is the problem to fix; the modality complaint is a
         // consequence of it and names a different node.
         let graph = PipelineGraph::new("both wrong")
-            .with_node(Node::source("mic", "websocket", Modality::Audio))
-            .with_node(Node::llm("a", "ollama"))
-            .with_node(Node::llm("b", "ollama"))
+            .with_node(Node::source("mic", "websocket", Modality::Text))
+            .with_node(Node::core("a", "ollama"))
+            .with_node(Node::core("b", "ollama"))
             .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("mic", "a"))
             .with_edge(Edge::new("a", "b"))
@@ -1451,15 +1311,15 @@ mod tests {
     }
 
     #[test]
-    fn a_core_reads_words_and_produces_an_utterance_exactly_as_a_model_node_does() {
-        // A core is the same stage in the transport pipeline as the `llm` it
-        // replaces; what changed is where its tools and memory live. If the
-        // two differed here, moving a pipeline onto a core would rewire it.
+    fn a_core_reads_words_and_produces_an_utterance() {
+        // A core sits in the transport pipeline exactly where the model node
+        // it replaced did: reading text and producing something nothing has
+        // yet decided how to render. Its tools and memory are bindings and so
+        // change nothing about the edges it can carry.
         let core = Node::core("core", "ollama");
-        let llm = Node::llm("llm", "ollama");
 
-        assert_eq!(core.output_modality(), llm.output_modality());
-        assert_eq!(core.accepted_modalities(), llm.accepted_modalities());
+        assert_eq!(core.output_modality(), Some(Modality::Utterance));
+        assert_eq!(core.accepted_modalities(), &[Modality::Text][..]);
 
         PipelineGraph::new("cored")
             .with_node(Node::source("mic", "websocket", Modality::Audio))
@@ -1474,29 +1334,24 @@ mod tests {
     }
 
     #[test]
-    fn two_reasoning_nodes_are_refused_however_the_graph_spells_them() {
-        // The refusal is about a pipeline having two models, so it cannot be
-        // dodged by writing one of them the old way.
-        for (left, right) in [
-            (Node::core("first", "ollama"), Node::core("second", "anthropic")),
-            (Node::core("first", "ollama"), Node::llm("second", "anthropic")),
-            (Node::llm("first", "ollama"), Node::llm("second", "anthropic")),
-        ] {
-            let graph = PipelineGraph::new("two minds")
-                .with_node(Node::stt("stt", "whisper"))
-                .with_node(left)
-                .with_node(right)
-                .with_node(Node::tts("tts", "piper"))
-                .with_edge(Edge::new("stt", "first"))
-                .with_edge(Edge::new("stt", "second"))
-                .with_edge(Edge::new("first", "tts"))
-                .with_edge(Edge::new("second", "tts"));
+    fn two_reasoning_nodes_are_refused() {
+        // A graph with two models says nothing about which answer is the
+        // reply, so it is refused rather than resolved to whichever came
+        // first.
+        let graph = PipelineGraph::new("two minds")
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::core("first", "ollama"))
+            .with_node(Node::core("second", "anthropic"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("stt", "first"))
+            .with_edge(Edge::new("stt", "second"))
+            .with_edge(Edge::new("first", "tts"))
+            .with_edge(Edge::new("second", "tts"));
 
-            assert_eq!(
-                graph.validate(),
-                Err(GraphError::MultipleCores(vec!["first".to_owned(), "second".to_owned()]))
-            );
-        }
+        assert_eq!(
+            graph.validate(),
+            Err(GraphError::MultipleCores(vec!["first".to_owned(), "second".to_owned()]))
+        );
     }
 
     #[test]
@@ -1626,11 +1481,7 @@ mod tests {
             Node::wake_word("b", "p"),
             Node::stt("c", "p"),
             Node::speaker_id("d", "p"),
-            Node::router("e", "p"),
-            Node::core("e2", "p"),
-            Node::llm("f", "p"),
-            Node::tool("g", "p"),
-            Node::memory("h", "p"),
+            Node::core("e", "p"),
             Node::tts("i", "p"),
             Node::sink("j", "p", Modality::Audio),
         ] {
