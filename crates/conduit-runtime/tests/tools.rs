@@ -74,7 +74,7 @@ fn names(events: &[Event]) -> Vec<String> {
 /// Runs one turn to completion, failing fast rather than hanging.
 async fn run_turn(runner: &Runner) {
     let turn = async {
-        let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+        let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     };
     tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
 }
@@ -321,7 +321,7 @@ async fn the_identified_speaker_reaches_the_tool() {
     let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
         .expect("graph is executable");
     let turn = async {
-        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).audio.collect().await;
+        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).speech().collect().await;
     };
     tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
 
@@ -668,7 +668,7 @@ async fn authenticating_a_device_does_not_identify_a_speaker() {
         .expect("graph is executable");
     let _: Vec<_> = runner
         .run_for_device(conduit_core::id::DeviceId::new(), audio_of(&["a"]))
-        .audio
+        .speech()
         .collect()
         .await;
 

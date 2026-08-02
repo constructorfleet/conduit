@@ -252,7 +252,7 @@ pub async fn test_turn(
         .with_idle_timeout(state.turn_idle_timeout());
     let conversation = runner.run(test_audio(request.utterance));
     let conversation_id = conversation.id;
-    let mut audio = conversation.audio;
+    let mut audio = conversation.speech();
     let mut output = Vec::new();
 
     while let Some(chunk) = audio.next().await {

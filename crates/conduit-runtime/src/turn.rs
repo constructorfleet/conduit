@@ -42,6 +42,18 @@ pub enum TurnInput {
     Text(String),
 }
 
+/// One piece of a reply, rendered the way its pipeline renders replies.
+///
+/// Speech and text are the two renderings of an utterance. A caller reads
+/// whichever its pipeline produces; nothing upstream of here had to know which
+/// that would be.
+pub enum Reply {
+    /// Synthesized audio.
+    Speech(SpeechChunk),
+    /// One written segment, as the model said it.
+    Text(String),
+}
+
 /// What one call to the model produced.
 struct Round {
     /// Everything the model said, whether or not it has been spoken yet.
@@ -57,7 +69,7 @@ pub struct Turn {
     plan: Arc<Plan>,
     emitter: Emitter,
     format: AudioFormat,
-    output: Sender<Result<SpeechChunk>>,
+    output: Sender<Result<Reply>>,
     /// Who is speaking, when anything has identified them.
     ///
     /// Always `None` in production today: no speaker identification provider
@@ -101,7 +113,7 @@ impl Turn {
         plan: Arc<Plan>,
         bus: EventBus,
         format: AudioFormat,
-        output: Sender<Result<SpeechChunk>>,
+        output: Sender<Result<Reply>>,
         stop: Stop,
         idle: Option<Duration>,
     ) -> Self {
@@ -450,14 +462,33 @@ impl Turn {
         Some(round)
     }
 
-    /// Synthesizes one sentence and forwards its audio.
+    /// Renders one sentence and forwards it, as speech or as text.
     ///
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
     async fn speak(&mut self, sentence: String, role: SpokenSegmentRole) -> bool {
+        let Some(synthesizer) = self.plan.tts.as_ref() else {
+            // Written down rather than spoken. The segment event is published
+            // either way, because what the model said in one piece is the same
+            // fact however it is rendered.
+            self.spoken_segments = self.spoken_segments.saturating_add(1);
+            self.emitter.emit(Event::SpokenSegmentStarted {
+                segment: format!("{}-spoken-{}", self.turn, self.spoken_segments),
+                role,
+                text: sentence.clone(),
+            });
+            return self.output.send(Ok(Reply::Text(sentence))).await.is_ok();
+        };
+        let (provider, node, voice) = (
+            Arc::clone(&synthesizer.provider),
+            synthesizer.node.clone(),
+            synthesizer.voice.clone(),
+        );
+
         if !self.speaking {
-            let voice = self.plan.voice.clone().unwrap_or_else(|| "default".to_owned());
-            self.emitter.emit(Event::TtsStarted { voice });
+            self.emitter.emit(Event::TtsStarted {
+                voice: voice.clone().unwrap_or_else(|| "default".to_owned()),
+            });
             self.speaking = true;
         }
         self.spoken_segments = self.spoken_segments.saturating_add(1);
@@ -468,15 +499,15 @@ impl Turn {
         });
 
         let request = SynthesisRequest {
-            voice: self.plan.voice.clone(),
+            voice: voice.clone(),
             format: self.format,
             ..SynthesisRequest::new(sentence)
         };
 
-        let mut chunks = match self.plan.tts.synthesize(request).await {
+        let mut chunks = match provider.synthesize(request).await {
             Ok(chunks) => chunks,
             Err(error) => {
-                self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                self.fail::<()>(&node.clone(), error).await;
                 return false;
             }
         };
@@ -491,7 +522,7 @@ impl Turn {
             let mut chunk = match item {
                 Ok(chunk) => chunk,
                 Err(error) => {
-                    self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                    self.fail::<()>(&node.clone(), error).await;
                     return false;
                 }
             };
@@ -502,7 +533,7 @@ impl Turn {
                     None => match Resampler::new(chunk.format, self.format) {
                         Ok(converter) => {
                             tracing::info!(
-                                node = %self.plan.tts_node,
+                                node = %node,
                                 from = chunk.format.sample_rate,
                                 to = self.format.sample_rate,
                                 "resampling synthesized audio to the requested format"
@@ -510,7 +541,7 @@ impl Turn {
                             resampler.insert(converter)
                         }
                         Err(error) => {
-                            self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                            self.fail::<()>(&node.clone(), error).await;
                             return false;
                         }
                     },
@@ -525,7 +556,7 @@ impl Turn {
                         chunk.format = self.format;
                     }
                     Err(error) => {
-                        self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                        self.fail::<()>(&node.clone(), error).await;
                         return false;
                     }
                 }
@@ -539,7 +570,7 @@ impl Turn {
                 bytes: chunk.data.len(),
             });
 
-            if self.output.send(Ok(chunk)).await.is_err() {
+            if self.output.send(Ok(Reply::Speech(chunk))).await.is_err() {
                 // The listener left. Whether they meant to is unknowable from
                 // here, so this is not reported as an interruption.
                 tracing::debug!("output closed; abandoning turn");
@@ -554,7 +585,7 @@ impl Turn {
             let tail = match converter.flush() {
                 Ok(tail) => tail,
                 Err(error) => {
-                    self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                    self.fail::<()>(&node.clone(), error).await;
                     return false;
                 }
             };
@@ -570,7 +601,7 @@ impl Turn {
                     sequence: chunk.sequence,
                     bytes: chunk.data.len(),
                 });
-                if self.output.send(Ok(chunk)).await.is_err() {
+                if self.output.send(Ok(Reply::Speech(chunk))).await.is_err() {
                     tracing::debug!("output closed; abandoning turn");
                     self.cancel(CancelReason::Disconnected);
                     return false;

@@ -46,12 +46,14 @@ use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::{ChunkStream, Registry};
+use futures_util::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
 pub use deadline::DEFAULT_IDLE_TIMEOUT;
 pub use plan::Plan;
 pub use stop::Stop;
+pub use turn::Reply;
 pub use turn::TurnInput;
 
 /// How many synthesized chunks may be queued before synthesis waits.
@@ -155,8 +157,12 @@ impl std::fmt::Debug for Providers {
 pub struct Conversation {
     /// The conversation every event from this turn carries.
     pub id: ConversationId,
-    /// Synthesized audio, as it is produced.
-    pub audio: ChunkStream<SpeechChunk>,
+    /// The reply, as it is produced.
+    ///
+    /// A voice pipeline yields speech and a text pipeline yields written
+    /// segments. [`Conversation::speech`] narrows this to audio for a caller
+    /// that only knows how to play it.
+    pub output: ChunkStream<Reply>,
     /// Asks this turn to stop talking.
     ///
     /// Distinct from dropping [`Conversation::audio`], which also ends the turn
@@ -180,6 +186,22 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// The reply as audio, dropping any written segments.
+    ///
+    /// For callers on an audio transport, which have nothing to do with a text
+    /// segment. Failures are preserved: a turn that fails still reports it
+    /// here, because a caller that hears nothing must be able to tell silence
+    /// from a broken pipeline.
+    pub fn speech(self) -> ChunkStream<SpeechChunk> {
+        Box::pin(self.output.filter_map(|item| async move {
+            match item {
+                Ok(Reply::Speech(chunk)) => Some(Ok(chunk)),
+                Ok(Reply::Text(_)) => None,
+                Err(error) => Some(Err(error)),
+            }
+        }))
+    }
+
     /// Waits for the turn to finish.
     ///
     /// Resolves once the turn has published its outcome. A turn always ends by
@@ -279,13 +301,16 @@ impl Runner {
                 )));
             }
         }
-        if !self.plan.tts.supports_encoding(format.encoding) {
-            return Err(conduit_core::Error::Config(format!(
-                "node `{}` uses provider `{}`, which cannot produce {:?} audio",
-                self.plan.tts_node,
-                self.plan.tts.name(),
-                format.encoding
-            )));
+        // A pipeline that writes its reply down has no synthesizer to ask.
+        if let Some(tts) = &self.plan.tts {
+            if !tts.provider.supports_encoding(format.encoding) {
+                return Err(conduit_core::Error::Config(format!(
+                    "node `{}` uses provider `{}`, which cannot produce {:?} audio",
+                    tts.node,
+                    tts.provider.name(),
+                    format.encoding
+                )));
+            }
         }
         self.format = format;
         Ok(self)
@@ -376,6 +401,11 @@ impl Runner {
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
         let running = tokio::spawn(turn.run(input).instrument(span));
-        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop, turn: running }
+        Conversation {
+            id,
+            output: Box::pin(ReceiverStream::new(receiver)),
+            stop,
+            turn: running,
+        }
     }
 }

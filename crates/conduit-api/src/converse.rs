@@ -172,7 +172,10 @@ async fn run(
         return;
     }
 
-    let mut speech = conversation.audio;
+    // Captured before `speech` consumes the conversation; the id is still
+    // what every log line about this turn is filed under.
+    let conversation_id = conversation.id;
+    let mut speech = conversation.speech();
     let mut failed = None;
     let mut reply_chunks = 0_u64;
     while let Some(chunk) = speech.next().await {
@@ -183,7 +186,7 @@ async fn run(
                     // The device hung up. Dropping the stream cancels the turn,
                     // reported as a disconnection rather than an interruption.
                     tracing::info!(
-                        conversation = %conversation.id,
+                        conversation = %conversation_id,
                         device = %device.name,
                         reason = "device_disconnected_mid_reply",
                         reply_chunks,
@@ -207,7 +210,7 @@ async fn run(
     // even on the successful path.
     match &failed {
         Some(error) => tracing::warn!(
-            conversation = %conversation.id,
+            conversation = %conversation_id,
             device = %device.name,
             reason = "turn_failed",
             reply_chunks,
@@ -215,7 +218,7 @@ async fn run(
             "conversation socket closed"
         ),
         None => tracing::info!(
-            conversation = %conversation.id,
+            conversation = %conversation_id,
             device = %device.name,
             reason = "completed",
             reply_chunks,

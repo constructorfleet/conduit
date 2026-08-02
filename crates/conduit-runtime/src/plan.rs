@@ -23,6 +23,19 @@ pub struct Recognizer {
     pub node: String,
 }
 
+/// The synthesizer a pipeline resolved, and the node that chose it.
+///
+/// `None` on a plan means the reply is delivered as text: a pipeline with no
+/// synthesizer renders what the model said by writing it down.
+pub struct Synthesizer {
+    /// The provider that speaks.
+    pub provider: Arc<dyn TextToSpeech>,
+    /// Node id of the synthesizer.
+    pub node: String,
+    /// Voice this pipeline's synthesis node asks for, when present.
+    pub voice: Option<String>,
+}
+
 /// The resolved providers and settings for one pipeline.
 ///
 /// Resolution happens once, at prepare time, so a turn never pays for a
@@ -45,12 +58,13 @@ pub struct Plan {
     pub model: String,
     /// System prompt this pipeline's model node asks for, when present.
     pub system: Option<String>,
-    /// Synthesizer.
-    pub tts: Arc<dyn TextToSpeech>,
-    /// Node id of the synthesizer.
-    pub tts_node: String,
-    /// Voice this pipeline's synthesis node asks for, when present.
-    pub voice: Option<String>,
+    /// Synthesizer, and the node that selected it.
+    ///
+    /// `None` for a pipeline that writes its reply down instead of speaking
+    /// it. Speech is one rendering of an utterance and text is the other, so
+    /// which one a pipeline uses is a property of its graph rather than of the
+    /// model that produced the words.
+    pub tts: Option<Synthesizer>,
     /// Tools offered to the model, keyed by the name it calls them by.
     ///
     /// Unlike the other stages a pipeline may have any number of these, so
@@ -114,8 +128,11 @@ impl Plan {
                 }
                 Node::Tts { id, provider, voice } => {
                     reject_duplicate(&tts, node)?;
-                    let provider = providers.tts().require(provider)?;
-                    tts = Some((provider, id.clone(), voice.clone()));
+                    tts = Some(Synthesizer {
+                        provider: providers.tts().require(provider)?,
+                        node: id.clone(),
+                        voice: voice.clone(),
+                    });
                 }
                 // Explicitly refused rather than skipped. A router that is
                 // accepted and then ignored turns "send hard questions to the
@@ -139,7 +156,16 @@ impl Plan {
 
         let (llm, llm_node, model, system, max_tool_rounds) =
             llm.ok_or_else(|| missing("llm"))?;
-        let (tts, tts_node, voice) = tts.ok_or_else(|| missing("tts"))?;
+        // Nothing renders the reply unless the graph either speaks it or
+        // writes it somewhere. A sink is what "writes it somewhere" looks
+        // like, so a graph with neither would reason and then discard.
+        if tts.is_none() && !graph.nodes.iter().any(|node| matches!(node, Node::Sink { .. })) {
+            return Err(Error::Config(
+                "pipeline has no `tts` node and no `sink`, so nothing would deliver the \
+                 reply"
+                    .to_owned(),
+            ));
+        }
 
         // This runtime executes recognition, then reasoning, then synthesis,
         // in that order. A graph is only a description of *this* pipeline if
@@ -154,7 +180,9 @@ impl Plan {
         if let Some(recognizer) = &stt {
             require_downstream(graph, &recognizer.node, &llm_node)?;
         }
-        require_downstream(graph, &llm_node, &tts_node)?;
+        if let Some(synthesizer) = &tts {
+            require_downstream(graph, &llm_node, &synthesizer.node)?;
+        }
         for tool_node in &tool_nodes {
             require_downstream(graph, &llm_node, tool_node)?;
         }
@@ -176,8 +204,6 @@ impl Plan {
             model,
             system,
             tts,
-            tts_node,
-            voice,
             tools,
             max_tool_rounds,
         })
@@ -273,8 +299,11 @@ impl std::fmt::Debug for Plan {
             .field("llm", &format_args!("{} ({})", self.llm_node, self.llm.name()))
             .field("model", &self.model)
             .field("system", &self.system)
-            .field("tts", &format_args!("{} ({})", self.tts_node, self.tts.name()))
-            .field("voice", &self.voice)
+            .field(
+                "tts",
+                &self.tts.as_ref().map(|tts| format!("{} ({})", tts.node, tts.provider.name())),
+            )
+            .field("voice", &self.tts.as_ref().and_then(|tts| tts.voice.as_deref()))
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
             .finish()
     }

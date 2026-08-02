@@ -60,7 +60,7 @@ async fn a_turn_reports_the_audio_it_captured() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["one", "two", "three"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["one", "two", "three"])).speech().collect().await;
 
     // Filtered to one stage, so the terminal event never arrives to end the
     // drain; read exactly what capture should have produced.
@@ -94,7 +94,7 @@ async fn capture_events_arrive_while_the_audio_is_still_flowing() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a", "b"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a", "b"])).speech().collect().await;
 
     let events = drain(&mut subscription).await;
     let position = |wanted: &str| {
@@ -123,7 +123,7 @@ async fn the_reported_duration_comes_from_the_captured_bytes() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of_size(2, 16_000)).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of_size(2, 16_000)).speech().collect().await;
 
     let finished = capture_finished(&mut subscription).await;
     assert_eq!(finished, Some(1_000), "32 000 bytes of the default format is one second");
@@ -147,7 +147,7 @@ async fn a_compressed_stream_reports_an_unknown_duration_rather_than_a_wrong_one
         .with_format(AudioFormat { encoding: Encoding::Opus, ..AudioFormat::DEFAULT })
         .expect("the providers handle opus");
 
-    let _: Vec<_> = runner.run(audio_of_size(2, 16_000)).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of_size(2, 16_000)).speech().collect().await;
 
     let finished = capture_finished(&mut subscription).await;
     assert_eq!(finished, Some(0), "an unknown duration is reported as zero, not invented");
@@ -171,7 +171,7 @@ async fn the_format_reported_is_the_one_being_captured() {
         .with_format(captured)
         .expect("the providers handle 8 kHz f32");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let started = tokio::time::timeout(Duration::from_secs(5), subscription.recv())
         .await
@@ -194,7 +194,7 @@ async fn capture_that_fails_mid_utterance_is_still_reported_as_finished() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_failing_after(2)).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_failing_after(2)).speech().collect().await;
 
     let events = drain(&mut subscription).await;
     let names: Vec<String> = events
@@ -219,7 +219,7 @@ async fn a_failed_chunk_is_not_counted_as_captured_audio() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_failing_after(2)).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_failing_after(2)).speech().collect().await;
 
     let mut chunks = 0;
     for _ in 0..4 {
@@ -252,7 +252,7 @@ async fn a_turn_that_captures_nothing_reports_no_capture() {
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&[])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&[])).speech().collect().await;
 
     let events = drain(&mut subscription).await;
     assert!(
@@ -270,7 +270,7 @@ async fn a_turn_names_itself_before_doing_anything() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let events = drain(&mut subscription).await;
     assert_eq!(events[0], Event::ConversationStarted);
@@ -290,9 +290,9 @@ async fn each_turn_gets_its_own_turn_id() {
     let runner =
         Runner::prepare(&linear_graph(), &providers(), bus).expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     let first = drain(&mut subscription).await;
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     let second = drain(&mut subscription).await;
 
     let turn_id = |events: &[Event]| {
