@@ -23,341 +23,297 @@ Stored pipelines and browser-local drafts are not migrated, per ADR-0012.
 
 ## Non-Goals
 
-- Multiple reasoning cores in one graph. Validation rejects them for now.
+- Multiple reasoning cores in one graph. Validation rejects them.
 - Executing core routing policy between models. The binding is modelled so the
   vocabulary exists, but resolution picks the primary model.
 - Migrating stored pipelines.
-- Changing provider traits in `conduit-provider`. Memory, wake word, and
+- Changing the provider traits in `conduit-provider`. Memory, wake word, and
   speaker identification traits already exist and are unchanged.
+
+---
+
+## How This Is Broken Up
+
+The four goals are close to independent, and only one of them needs the
+reasoning core:
+
+| Goal | Depends on |
+| --- | --- |
+| Per-node configuration | — |
+| Modality typing | — |
+| Text and hybrid pipelines | Modality typing |
+| Reasoning core | Per-node configuration |
+
+Work is therefore cut by capability rather than by layer. Each track below
+changes `conduit-core` through to the operator console together, builds and
+passes quality gates on its own, and is independently valuable. A track sliced
+by layer instead — types, then validation, then resolution — cannot be
+committed independently, because removing a `NodeKind` variant breaks
+`Plan::resolve` in the same change that introduces its replacement.
+
+Two rules keep the diffs reviewable:
+
+- **Mechanical churn is separated from semantic change.** Track A reshapes
+  `Node` while preserving today's node kinds and behavior; track D changes what
+  the kinds mean on an already-typed model. Combined, the real change would be
+  invisible inside ~110 lines of fixture churn.
+- **Track D expands before it contracts.** `Core` lands alongside the existing
+  kinds, resolution learns both, fixtures migrate, then the old variants are
+  deleted. This is a transitional seam for the build, not user-facing
+  compatibility; the final step removes it.
+
+| # | Track | Delivers |
+| --- | --- | --- |
+| 0 | Graph fixture builders | Shrinks every later diff |
+| A | Typed node variants with per-node config | Per-pipeline model and voice |
+| B | Modality typing and edge validation | Structural wiring errors |
+| C | Optional recognition and synthesis | Text pipelines |
+| D | Reasoning core | Core bindings; deletes frontend workarounds |
+| E | Multiple sources and sinks | Hybrid pipelines |
+| F | Memory binding execution | Closes a listed gap |
+| G | Tool confirmation enforcement | Closes a listed gap |
+
+---
+
+## Resolved Decisions
+
+**Memory scope lives in `conduit-core`.** A `MemoryBinding` in the graph needs a
+scope, but `Scope` is defined in `conduit_provider::memory` and
+`conduit-provider` depends on `conduit-core`, so the graph cannot reference it.
+`Scope` moves to a new `conduit_core::memory` module — it is already expressed
+in terms of `conduit_core::id::{ConversationId, SpeakerId}` — and is re-exported
+from `conduit_provider::memory` so provider code is unchanged. It has no other
+consumers today, so the move is mechanical. Duplicating the enum in the graph
+was rejected: two spellings of the same three-variant vocabulary is exactly the
+competing-shape problem ADR-0011 avoids.
+
+**Node configuration is typed per variant, not a config map.** Consistent with
+[ADR-0011](../adr/0011-typed-provider-definitions.md). Adding a configurable
+node kind expands the typed contract.
+
+**`order` in `PipelineView` stays transport-only.** Core bindings have no
+execution order, so they never appear in it.
 
 ---
 
 ## Domain Vocabulary
 
-New terms for `CONTEXT.md`:
-
-**Transport Pipeline**: The acyclic dataflow portion of a pipeline graph — the
-modality transforms from source through sink. Runs once per turn in topological
-order. _Avoid_: Spine, main flow.
-
-**Reasoning Core**: The single graph node that holds a language model binding
-and its tool and memory bindings, and runs a model-driven iteration whose length
-is decided at runtime. _Avoid_: Agent, LLM node, brain.
-
-**Modality**: The kind of data an edge carries — `audio`, `text`, or
-`utterance`. Sources and sinks declare theirs; other stages derive theirs from
-their kind. _Avoid_: Media type, format.
-
-**Utterance**: What a reasoning core emits, before any decision about how to
-render it. Speech is an utterance rendered by a synthesizer; text is an
-utterance rendered by a text sink. _Avoid_: Reply, response text.
-
-**Core Binding**: A tool or memory attachment on a reasoning core, referencing a
-provider definition by id and carrying the per-pipeline settings for that
-attachment. _Avoid_: Augment, orbital, spoke.
+Recorded in [CONTEXT.md](../../CONTEXT.md): Transport Pipeline, Reasoning Core,
+Core Binding, Modality, Utterance. `Spoken Segment` narrowed to the audio
+rendering of an `Utterance Segment`.
 
 ---
 
-## Backend
+## Track 0 — Graph Fixture Builders
 
-### B1. Graph model — `conduit-core/src/graph.rs`
+`Node::new(id, kind, provider)` appears ~110 times across 12 files, nearly all
+of them test fixtures rebuilding the same voice pipeline. Every later track
+would rewrite all of them.
 
-Replace `Node { id, kind, provider }` and `NodeKind` with typed variants,
-internally tagged on `kind` so the wire format stays readable and the frontend
-discriminates on one field.
+Add a `conduit-core` test-support module, behind a `testing` feature matching
+the existing `conduit-provider` precedent, exposing intent-named builders:
+
+```rust
+pub fn voice_graph(name: &str) -> PipelineGraph;   // mic -> stt -> llm -> tts
+pub fn voice_graph_with_tools(name: &str, tools: &[&str]) -> PipelineGraph;
+```
+
+Rewrite existing fixtures in `conduit-runtime/tests/`, `conduit-api/tests/`, and
+`conduit-store/tests/` to call these where they are asserting something other
+than graph shape. Tests that assert on graph structure itself — most of
+`graph.rs` and `plan.rs` — keep building their graphs explicitly, because the
+shape is the subject.
+
+No behavior change. Quality gates prove it: the same tests pass unchanged.
+
+## Track A — Typed Node Variants With Per-Node Config
+
+`Node` becomes an internally tagged enum, **keeping today's node kinds**:
 
 ```rust
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Node {
-    Source     { id: NodeId, modality: Modality, provider: String },
-    WakeWord   { id: NodeId, provider: String },
-    Stt        { id: NodeId, provider: String },
-    SpeakerId  { id: NodeId, provider: String },
-    Core       { id: NodeId, core: ReasoningCore },
-    Tts        { id: NodeId, provider: String, voice: Option<String> },
-    Sink       { id: NodeId, modality: Modality, provider: String },
-}
-
-#[serde(rename_all = "snake_case")]
-pub enum Modality { Audio, Text, Utterance }
-
-#[serde(deny_unknown_fields)]
-pub struct ReasoningCore {
-    pub model: ModelBinding,
-    pub system: Option<String>,
-    pub tools: Vec<ToolBinding>,
-    pub memory: Vec<MemoryBinding>,
-    pub max_rounds: usize,          // default 4, was DEFAULT_MAX_TOOL_ROUNDS
-}
-
-pub struct ModelBinding { pub provider: String, pub model: Option<String> }
-
-pub struct ToolBinding {
-    pub provider: String,
-    pub confirm: ConfirmPolicy,     // Never | Always
-}
-
-pub struct MemoryBinding {
-    pub provider: String,
-    pub mode: MemoryMode,           // Read | Write | ReadWrite
-    pub scope: Option<Scope>,       // conduit_provider::memory::Scope
-    pub limit: usize,               // retrieval cap, ignored for Write
+    Source    { id: NodeId, provider: String },
+    WakeWord  { id: NodeId, provider: String },
+    Stt       { id: NodeId, provider: String },
+    SpeakerId { id: NodeId, provider: String },
+    Router    { id: NodeId, provider: String },
+    Llm       { id: NodeId, provider: String, model: Option<String>,
+                system: Option<String>, max_rounds: usize },
+    Tool      { id: NodeId, provider: String },
+    Memory    { id: NodeId, provider: String, mode: MemoryMode,
+                scope: Option<Scope>, limit: usize },
+    Tts       { id: NodeId, provider: String, voice: Option<String> },
+    Sink      { id: NodeId, provider: String },
 }
 ```
 
-`Node::id` and `Node::kind_name` become accessor methods so existing call sites
-that read `node.id` keep a one-line equivalent.
+`Node::id()` and `Node::kind_name()` become accessors. `NodeKind` survives as a
+discriminant for the provider catalog until track D.
 
-`ModelBinding::model` being `None` means "the provider definition's first served
-model", preserving today's behavior as an explicit opt-in rather than the only
-option. This deletes the fallback comment at `plan.rs:90-99`.
+`Llm::model` being `None` means "the provider definition's first served model",
+preserving today's behavior as an explicit opt-in rather than the only option.
+This deletes the fallback at [plan.rs:90-99](../../crates/conduit-runtime/src/plan.rs#L90-L99),
+so two pipelines can use one provider definition with different models.
+`max_rounds` replaces the `DEFAULT_MAX_TOOL_ROUNDS` constant.
 
-`ConfirmPolicy` is modelled and validated now, and enforced in B4. The
-`Event::ToolConfirmationRequested` variant already exists and is currently
-unreachable.
+Includes the `Scope` move described under Resolved Decisions.
 
-### B2. Validation — `conduit-core/src/graph.rs`
+Backend: `Plan::resolve` reads config off the node instead of the provider.
+API: `PipelineView` shape is unchanged; node JSON gains fields.
+Frontend: node inspector gains model, system prompt, max rounds, and voice
+fields; regenerate contracts.
 
-Unchanged: duplicate ids, dangling edges, cycles, no-source, no-sink,
-disconnected subgraphs, and `reaches`. These apply to the transport pipeline and
-keep their current tests.
+Acceptance: two pipelines reference one language model provider definition with
+different `model` values, and each test turn requests its own model.
 
-Added to `PipelineGraph::validate`:
+## Track B — Modality Typing And Edge Validation
 
-- **Exactly one core.** `GraphError::NoCore` when zero,
-  `GraphError::MultipleCores(Vec<NodeId>)` when more than one.
-- **Modality compatibility per edge.** Each node kind declares
-  `input_modality()` and `output_modality()`:
+Add `Modality { Audio, Text, Utterance }`. `Source` and `Sink` gain a declared
+modality; every other kind derives its own:
 
-  | Kind | In | Out |
-  | --- | --- | --- |
-  | `source` | — | declared |
-  | `wake_word` | audio | audio |
-  | `stt` | audio | text |
-  | `speaker_id` | audio | audio |
-  | `core` | text | utterance |
-  | `tts` | utterance, text | audio |
-  | `sink` | declared; a `text` sink also accepts `utterance` | — |
+| Kind | In | Out |
+| --- | --- | --- |
+| `source` | — | declared |
+| `wake_word` | audio | audio |
+| `stt` | audio | text |
+| `speaker_id` | audio | audio |
+| `llm` | text | utterance |
+| `tts` | utterance, text | audio |
+| `sink` | declared; a `text` sink also accepts `utterance` | — |
 
-  Mismatch is `GraphError::ModalityMismatch { edge, from, to, produced, expected }`.
+`PipelineGraph::validate` gains
+`GraphError::ModalityMismatch { edge, from, to, produced, expected }`. All
+existing validation — duplicate ids, dangling edges, cycles, no-source,
+no-sink, disconnected subgraphs, `reaches` — is unchanged and keeps its tests.
 
-- **Core reachability.** Every source must reach the core and the core must
-  reach every sink, as `GraphError::CoreNotReachable(NodeId)` /
-  `GraphError::SinkNotFedByCore(NodeId)`. This subsumes the runtime's
-  `require_downstream` checks.
+Removes `require_downstream` and its three call sites from `plan.rs`: a graph
+wired `tts -> llm -> stt` now fails structurally rather than on a runtime
+stage-order assertion.
 
-`Edge` keeps `{ from, to, port }`. `port` stays for future core-adjacent fan-out
-and is currently only meaningful on multi-output nodes; nothing produces one
-after `router` is removed, so validation rejects a `port` on any current kind.
+Frontend: edges labelled by modality; an edge drawn between incompatible
+modalities is refused at draw time with the reason. Backend validation stays
+authoritative; this is a local echo of one rule.
 
-Tests: keep every existing test in `graph.rs`, rewritten against the new node
-constructors, plus one per new error variant, a text pipeline that validates
-with no `stt`/`tts`, and a hybrid pipeline with two sources and two sinks.
+Acceptance: `tts -> llm -> stt` is refused with a modality mismatch naming the
+offending edge.
 
-### B3. Plan resolution — `conduit-runtime/src/plan.rs`
+## Track C — Optional Recognition And Synthesis
+
+`Plan::stt` and `Plan::tts` become `Option`. A turn's input becomes either an
+audio stream or a text utterance; when there is no recognizer the transcription
+stage is skipped and `SpeechFinal` is published directly from the supplied text,
+so reconstruction still sees a turn opening. Output fans to the resolved sinks;
+sentence segmentation in `sentences.rs` is already the right boundary for both
+renderings and is unchanged. Barge-in, idle deadline, and stop handling are
+unchanged.
+
+`SpokenSegmentRole` and `Event::SpokenSegmentStarted` generalize to
+`UtteranceSegmentRole` and `Event::UtteranceSegmentStarted { modality, .. }`.
+Per ADR-0012 this is the [ADR-0010](../adr/0010-server-owned-turn-reconstruction.md)
+vocabulary widening, not a competing contract. `Event::contract_examples` must
+cover a text-modality segment, since it generates the frontend fixtures.
+
+API: `PipelineTestResult` gains `reply_text`; `audio_bytes` and `reply_audio`
+are `None` for a text pipeline.
+
+Frontend: `Guided Setup` gains a pipeline-shape choice, voice by default, text
+producing `source(text) -> llm -> sink(text)` and asking for no speech
+providers. Turn view keys off segment modality.
+
+Acceptance: a text pipeline with no speech providers configured validates and
+runs a test turn returning `reply_text`.
+
+## Track D — Reasoning Core
+
+Collapse `Llm`, `Tool`, `Memory`, and `Router` into one variant:
 
 ```rust
-pub struct Plan {
-    pub pipeline: String,
-    pub input: Modality,
-    pub output: Vec<Modality>,
-    pub stt: Option<Resolved<dyn SpeechToText>>,   // None for text input
-    pub tts: Option<Resolved<dyn TextToSpeech>>,   // None for text-only output
-    pub core: CorePlan,
-}
+Core { id: NodeId, core: ReasoningCore }
 
-pub struct CorePlan {
-    pub node: String,
-    pub llm: Arc<dyn LanguageModel>,
-    pub model: String,
+pub struct ReasoningCore {
+    pub model: ModelBinding,          // { provider, model: Option<String> }
     pub system: Option<String>,
-    pub tools: BTreeMap<String, ResolvedTool>,     // name -> provider + confirm
-    pub memory: Vec<ResolvedMemory>,
+    pub tools: Vec<ToolBinding>,      // { provider, confirm: ConfirmPolicy }
+    pub memory: Vec<MemoryBinding>,   // { provider, mode, scope, limit }
     pub max_rounds: usize,
 }
 ```
 
-Removals: `require_downstream` and its three call sites, `reject_duplicate`
-(single-core validation covers the model; multiple `stt`/`tts` on distinct
-branches becomes legal and is resolved per branch), and the `router` refusal.
+The per-node config from track A moves onto the core largely unchanged, which
+is why A comes first — the fields already exist and already have tests.
 
-Retained: `Error::UnknownProvider` on unregistered ids, and the tool-name
-collision check, which now reports the binding index rather than a node id.
+Expand, migrate, contract, as three commits:
 
-New refusal: a core with memory bindings resolves them, but if the runtime
-cannot yet execute a binding mode it must refuse rather than drop it — the same
-rule that made the router refusal correct.
+1. `Core` lands alongside the existing kinds; `Plan::resolve` produces a
+   `CorePlan` from either shape.
+2. Fixtures, guided setup, and the operator console move to `Core`.
+3. `Llm`, `Tool`, `Memory`, and `Router` variants are deleted, along with the
+   router refusal at [plan.rs:124-130](../../crates/conduit-runtime/src/plan.rs#L124-L130)
+   and `reject_duplicate`.
 
-Tests: `plan.rs` currently asserts the router refusal against a specific graph
-shape; replace with a multi-core refusal. Add a text-pipeline plan that resolves
-`stt: None`, and a per-pipeline model override that differs from the provider
-definition's first model.
+Validation gains `GraphError::NoCore` and `GraphError::MultipleCores(Vec<NodeId>)`.
+`ProviderComponentDescriptor::kind` moves from `NodeKind` to the existing
+`ProviderCapability`, which already distinguishes capabilities without
+conflating them with graph position.
 
-### B4. Turn execution — `conduit-runtime/src/turn.rs`
+Frontend: `pipelineGraphFlow` ([App.tsx:4450](../../frontend/src/App.tsx#L4450))
+partitions `tool`/`memory` nodes into `augmentNodeIds`, sorts the rest by
+`LINEAR_STAGE_ORDER` while discarding `graph.edges`, and defaults an augment's
+target to the literal `"llm"`. All three are deleted: the spine is `order` from
+`PipelineView`, and orbitals render from `core.tools` and `core.memory`.
+`OrbitPosition` and the drag handlers survive as presentation, keyed on binding
+index — dragging repositions an orbital, it does not rewire an edge.
+`addReasoningAugment` ([App.tsx:2344](../../frontend/src/App.tsx#L2344)) becomes
+`addCoreBinding`.
 
-The turn's input becomes an enum of `ChunkStream<AudioChunk>` or a text
-utterance; when `Plan::stt` is `None` the transcription stage is skipped and
-`SpeechFinal` is published directly from the supplied text so reconstruction
-still sees a turn opening.
+Acceptance: a graph with two core nodes is refused at validation, not at
+prepare; no source file contains a fallback to the literal node id `"llm"`.
 
-Output becomes an utterance stream fanned to the resolved sinks. Sentence
-segmentation in `sentences.rs` is already the natural boundary for both
-renderings and is unchanged; a text sink emits the same segments without
-synthesis. Barge-in, idle deadline, and stop handling are unchanged.
+## Track E — Multiple Sources And Sinks
 
-Memory bindings run inside the round loop: `Read`/`ReadWrite` retrieve before
-the first model call and inject as context; `Write`/`ReadWrite` store after the
-turn's final round. Tool confirmation publishes
-`Event::ToolConfirmationRequested` and awaits a decision before dispatch when
-`ConfirmPolicy::Always`.
+Validation requires every source to reach the core and the core to reach every
+sink (`GraphError::CoreNotReachable`, `GraphError::SinkNotFedByCore`) rather
+than assuming one of each. Runtime fans input in and output out.
 
-### B5. Events and reconstruction — `conduit-core/src/event.rs`, `conduit-api`
+Acceptance: a hybrid pipeline with an audio and a text source, and both sink
+kinds, validates and routes either input to the same core.
 
-`SpokenSegmentRole` and `Event::SpokenSegmentStarted` generalize to
-`UtteranceSegmentRole` and `Event::UtteranceSegmentStarted { modality, .. }`.
-Per ADR-0012 this is the ADR-0010 reconstruction vocabulary generalizing, not a
-new contract; `Stage::Synthesis` remains but is absent from text turns.
+## Track F — Memory Binding Execution
 
-`Event::contract_examples` must cover a text-modality segment, since it is the
-generation source for frontend fixtures.
+`Read`/`ReadWrite` bindings retrieve before the first model call and inject as
+context; `Write`/`ReadWrite` store after the final round. Until this lands,
+resolution refuses a binding mode it cannot execute rather than dropping it —
+the rule that made the router refusal correct.
 
-### B6. API — `conduit-api/src/pipelines.rs`
+Acceptance: a `read_write` binding retrieves before the first model call and
+stores after the final round, both visible on the event stream.
 
-`PipelineView { graph, order }` is unchanged in shape. `order` continues to
-report transport nodes only; core bindings have no execution order.
+## Track G — Tool Confirmation Enforcement
 
-`ProviderComponentDescriptor::kind` currently types a component by `NodeKind`.
-Tool and memory components no longer have a node kind, so this becomes the
-existing `ProviderCapability` from `conduit-provider::storage`, which already
-distinguishes the capabilities and does not conflate them with graph position.
+`ConfirmPolicy::Always` publishes `Event::ToolConfirmationRequested` — a variant
+that already exists and is currently unreachable — and awaits a decision before
+dispatch.
 
-The pipeline test turn (`PipelineTestRequest`) already takes an `utterance`
-string and feeds it to STT. For a text pipeline it feeds the core directly, and
-`PipelineTestResult.audio_bytes` / `reply_audio` become `None` with a new
-`reply_text` field.
+Acceptance: a tool binding with `confirm: always` does not dispatch until
+answered.
 
-Regenerate contracts:
+---
+
+## Cross-Cutting
+
+**Contracts.** Any track changing an API or event shape regenerates in the same
+commit; `npm run contract:check` must pass without hand-edited files under
+`frontend/src/contracts/`.
 
 ```sh
 CONDUIT_UPDATE_FRONTEND_CONTRACTS=1 cargo test -p conduit-api --test frontend_contract
 ```
 
----
+**Graph width.** The graph model stays deliberately wider than the runtime can
+execute. Refusing an expressible-but-unrunnable topology at prepare time,
+rather than accepting and silently ignoring it, remains the rule.
 
-## Frontend
-
-All in `frontend/src/App.tsx` unless noted. Types in `frontend/src/contracts/`
-are generated — do not hand-edit; regenerate via B6.
-
-### F1. Delete the workarounds
-
-`pipelineGraphFlow` (App.tsx:4450) partitions `tool`/`memory` nodes into
-`augmentNodeIds`, sorts the remainder by `LINEAR_STAGE_ORDER` while discarding
-`graph.edges`, and defaults an augment's target to the literal `"llm"`. All
-three go away:
-
-- The spine is `graph.order` from `PipelineView`, which the backend already
-  computes. Stop re-deriving it in the browser.
-- Orbitals render from `core.tools` and `core.memory` — arrays with a defined
-  order — so `spokesByTarget`, `orbitPositionForNode`, and the `?? "llm"`
-  fallback are replaced by indexing into the core's own bindings.
-- `LINEAR_STAGE_ORDER` is deleted rather than updated.
-
-`OrbitPosition`, `AugmentDragState`, and the drag handlers survive as
-presentation: dragging repositions a binding's orbital, it does not rewire an
-edge. Persisted orbit positions key on binding index instead of node id.
-
-### F2. Core inspector
-
-Selecting the core node opens an inspector with model binding (provider
-definition picker plus optional model override), system prompt, max rounds, and
-two binding lists. Each tool binding row has a provider picker and a confirm
-toggle; each memory binding row has a provider picker, mode, scope, and limit.
-`addReasoningAugment` (App.tsx:2344) becomes `addCoreBinding`, appending to the
-core's array rather than pushing a node and an edge.
-
-### F3. Node configuration
-
-Transport nodes gain inspector fields for their own variant: modality on source
-and sink, voice on TTS. This is the first per-node configuration in the editor;
-`ProviderEditorFields` (App.tsx:1392) is for provider definitions and is not
-reused — node config is a distinct form driven by the node variant, not by the
-component catalog schema.
-
-### F4. Modality in the canvas
-
-Edges are labelled or colour-coded by modality. An edge the operator draws
-between incompatible modalities is refused at draw time with the reason, rather
-than waiting for backend `Pipeline Validation`. Backend validation remains
-authoritative; this is a fast local echo of one rule.
-
-### F5. Pipeline shapes in guided setup
-
-`Guided Setup` gains a pipeline-shape choice ahead of `Provider-First Setup`:
-voice, text, or hybrid. Voice remains the default and produces today's
-`source(audio) -> stt -> core -> tts -> sink(audio)`. Text produces
-`source(text) -> core -> sink(text)` and asks for no speech providers, which
-makes the minimal working loop reachable with only a language model configured.
-
-### F6. Turn view
-
-Turn reconstruction rendering keys off segment modality (B5) so a text turn
-shows utterance segments without a synthesis stage or a playback control.
-
----
-
-## Acceptance Criteria
-
-1. A voice pipeline built in the editor validates, runs a `Pipeline Test Turn`,
-   and produces audio — unchanged operator-visible behavior.
-2. A text pipeline with no speech providers configured validates and runs a
-   test turn returning `reply_text`.
-3. A hybrid pipeline with an audio and a text source, and both sink kinds,
-   validates and routes either input to the same core.
-4. Two pipelines reference one language model provider definition with
-   different `model` overrides, and each test turn requests its own model.
-5. A graph wired `tts -> core -> stt` is refused with a modality mismatch naming
-   the offending edge, not a stage-order message.
-6. A graph with two core nodes is refused at validation, not at prepare.
-7. A tool binding with `confirm: always` publishes
-   `Event::ToolConfirmationRequested` and does not dispatch until answered.
-8. A core with a `read_write` memory binding retrieves before the first model
-   call and stores after the final round, both visible on the event stream.
-9. `npm run contract:check` passes without hand-edited files under
-   `frontend/src/contracts/`.
-10. No source file contains a fallback to the literal node id `"llm"`.
-
----
-
-## Phasing
-
-Each phase is a commit, TDD per `AGENTS.md`, quality gates green before the
-next.
-
-| # | Change | Surface |
-| --- | --- | --- |
-| 1 | Typed `Node` variants, `Modality`, `ReasoningCore` types | B1 |
-| 2 | Core-count, modality, and core-reachability validation | B2 |
-| 3 | `Plan`/`CorePlan` resolution; delete `require_downstream`, router refusal | B3 |
-| 4 | Optional STT/TTS; utterance output fan-out | B4 |
-| 5 | Utterance segment events and reconstruction | B5 |
-| 6 | API shapes, catalog capability, test-turn text reply; regenerate contracts | B6 |
-| 7 | Delete augment partitioning and `LINEAR_STAGE_ORDER`; render from `order` | F1 |
-| 8 | Core inspector and binding editing | F2 |
-| 9 | Node configuration fields; modality in canvas | F3, F4 |
-| 10 | Memory binding execution | B4 |
-| 11 | Tool confirmation enforcement | B4 |
-| 12 | Guided setup pipeline shapes; turn view modality | F5, F6 |
-
-Phases 10 and 11 are separated from phase 4 because each closes a gap listed in
-[README.md](../../README.md) and [IMPLEMENTATION_GAPS.md](../IMPLEMENTATION_GAPS.md)
-in its own right, and each is independently shippable once the core exists.
-
-## Documentation
-
-- `CONTEXT.md`: the five terms above.
-- `docs/architecture.md`: the Graphs section describes the two-tier model; the
-  Runtime Flow diagram shows the core with bindings rather than `llm -> tools`;
-  the Current Limits section drops router, memory, and tool confirmation as
-  those phases land.
-- `README.md` and `docs/IMPLEMENTATION_GAPS.md`: known gaps updated per phase.
+**Documentation.** Each track updates `docs/architecture.md`, and tracks C, F,
+and G update the known gaps in [README.md](../../README.md) and
+[docs/IMPLEMENTATION_GAPS.md](../IMPLEMENTATION_GAPS.md) as they close them.
