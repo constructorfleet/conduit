@@ -10,7 +10,9 @@
 //! keep building nodes and edges explicitly. Fixtures hide exactly the detail
 //! those tests exist to pin down.
 
-use crate::graph::{Edge, Modality, Node, PipelineGraph};
+use crate::graph::{
+    ConfirmPolicy, Edge, Modality, Node, PipelineGraph, ReasoningCore, ToolBinding,
+};
 
 /// Builds the voice pipeline shape and wires it in the canonical order.
 ///
@@ -21,8 +23,8 @@ pub struct VoiceGraph {
     name: String,
     source: Option<String>,
     stt: Option<String>,
-    llm: Option<String>,
-    tools: Vec<(String, String)>,
+    core: Option<String>,
+    tools: Vec<String>,
     tts: Option<String>,
     sink: Option<String>,
 }
@@ -37,7 +39,7 @@ pub fn voice_graph(name: impl Into<String>) -> VoiceGraph {
         name: name.into(),
         source: None,
         stt: None,
-        llm: None,
+        core: None,
         tools: Vec::new(),
         tts: None,
         sink: None,
@@ -59,21 +61,21 @@ impl VoiceGraph {
         self
     }
 
-    /// Adds an `llm` stage served by `provider`.
+    /// Adds a `core` stage reasoning with `provider`.
     #[must_use]
-    pub fn llm(mut self, provider: impl Into<String>) -> Self {
-        self.llm = Some(provider.into());
+    pub fn core(mut self, provider: impl Into<String>) -> Self {
+        self.core = Some(provider.into());
         self
     }
 
-    /// Adds a tool node hanging off the model.
+    /// Binds a tool to the core.
     ///
-    /// Tools fan out in parallel rather than chaining, because that is the
-    /// topology the runtime executes: tools requested in one model round run
-    /// together.
+    /// Nothing is wired: the model decides at runtime whether to call a tool,
+    /// so there is no edge that could say when it runs. A builder with tools
+    /// and no core has nowhere to put them, and drops them.
     #[must_use]
-    pub fn tool(mut self, id: impl Into<String>, provider: impl Into<String>) -> Self {
-        self.tools.push((id.into(), provider.into()));
+    pub fn tool(mut self, provider: impl Into<String>) -> Self {
+        self.tools.push(provider.into());
         self
     }
 
@@ -115,7 +117,7 @@ impl VoiceGraph {
                     .map(|provider| Node::source("mic", provider, Modality::Audio)),
             ),
             ("stt", self.stt.as_ref().map(|provider| Node::stt("stt", provider))),
-            ("llm", self.llm.as_ref().map(|provider| Node::llm("llm", provider))),
+            ("core", self.core.as_ref().map(|provider| core_node(provider, &self.tools))),
             ("tts", self.tts.as_ref().map(|provider| Node::tts("tts", provider))),
             (
                 "sink",
@@ -132,38 +134,25 @@ impl VoiceGraph {
             }
         }
 
-        for (id, provider) in &self.tools {
-            graph = graph.with_node(Node::tool(id.clone(), provider.clone()));
-        }
-
-        // The model's successor is where every tool branch rejoins. Finding it
-        // by position keeps the fan-out correct for a fixture that has no
-        // synthesizer, where tools rejoin at the sink instead.
-        let after_llm = spine
-            .iter()
-            .position(|&id| id == "llm")
-            .and_then(|llm| spine.get(llm + 1).copied());
-
         for pair in spine.windows(2) {
-            let (from, to) = (pair[0], pair[1]);
-            let branches_through_tools =
-                from == "llm" && !self.tools.is_empty() && Some(to) == after_llm;
-            if !branches_through_tools {
-                graph = graph.with_edge(Edge::new(from, to));
-            }
-        }
-
-        for (id, _) in &self.tools {
-            if self.llm.is_some() {
-                graph = graph.with_edge(Edge::new("llm", id.clone()));
-            }
-            if let Some(rejoin) = after_llm {
-                graph = graph.with_edge(Edge::new(id.clone(), rejoin));
-            }
+            graph = graph.with_edge(Edge::new(pair[0], pair[1]));
         }
 
         graph
     }
+}
+
+/// A `core` node reasoning with `provider` and offered `tools`.
+fn core_node(provider: &str, tools: &[String]) -> Node {
+    let mut core = ReasoningCore::new(provider);
+    core.tools = tools
+        .iter()
+        .map(|provider| ToolBinding {
+            provider: provider.clone(),
+            confirm: ConfirmPolicy::default(),
+        })
+        .collect();
+    Node::Core { id: "core".to_owned(), core }
 }
 
 #[cfg(test)]
@@ -178,13 +167,26 @@ mod tests {
         graph.edges.iter().map(|e| (e.from.as_str(), e.to.as_str())).collect()
     }
 
+    fn tool_providers(graph: &PipelineGraph) -> Vec<&str> {
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Core { core, .. } => Some(core),
+                _ => None,
+            })
+            .flat_map(|core| core.tools.iter())
+            .map(|binding| binding.provider.as_str())
+            .collect()
+    }
+
     #[test]
     fn a_named_stage_chain_wires_in_order() {
         let graph =
-            voice_graph("linear").stt("fake-stt").llm("fake-llm").tts("fake-tts").build();
+            voice_graph("linear").stt("fake-stt").core("fake-llm").tts("fake-tts").build();
 
-        assert_eq!(ids(&graph), ["stt", "llm", "tts"]);
-        assert_eq!(wiring(&graph), [("stt", "llm"), ("llm", "tts")]);
+        assert_eq!(ids(&graph), ["stt", "core", "tts"]);
+        assert_eq!(wiring(&graph), [("stt", "core"), ("core", "tts")]);
         graph.validate().expect("a complete chain is a valid pipeline");
     }
 
@@ -193,10 +195,10 @@ mod tests {
         // A fixture that names no recognizer must not acquire one, or a test
         // asserting the runtime rejects a pipeline with no `stt` would pass
         // for the wrong reason.
-        let graph = voice_graph("no stt").llm("fake-llm").tts("fake-tts").build();
+        let graph = voice_graph("no stt").core("fake-llm").tts("fake-tts").build();
 
-        assert_eq!(ids(&graph), ["llm", "tts"]);
-        assert_eq!(wiring(&graph), [("llm", "tts")]);
+        assert_eq!(ids(&graph), ["core", "tts"]);
+        assert_eq!(wiring(&graph), [("core", "tts")]);
     }
 
     #[test]
@@ -204,74 +206,66 @@ mod tests {
         let graph = voice_graph("captured")
             .source("test")
             .stt("fake-stt")
-            .llm("fake-llm")
+            .core("fake-llm")
             .tts("fake-tts")
             .sink("test")
             .build();
 
-        assert_eq!(ids(&graph), ["mic", "stt", "llm", "tts", "sink"]);
+        assert_eq!(ids(&graph), ["mic", "stt", "core", "tts", "sink"]);
         assert_eq!(
             wiring(&graph),
-            [("mic", "stt"), ("stt", "llm"), ("llm", "tts"), ("tts", "sink")]
+            [("mic", "stt"), ("stt", "core"), ("core", "tts"), ("tts", "sink")]
         );
         graph.validate().expect("valid");
     }
 
     #[test]
-    fn tools_fan_out_from_the_model_rather_than_chaining() {
-        // Chaining them would say the second tool runs after the first, which
-        // is not what the runtime does with one round's requests.
+    fn tools_are_bound_to_the_core_rather_than_wired_as_stages() {
+        // A tool is not a stage between the model and synthesis: the model
+        // decides at runtime whether to call it, so a topological position for
+        // it would state an ordering that does not exist.
         let graph = voice_graph("tools")
             .stt("fake-stt")
-            .llm("fake-llm")
-            .tool("search", "search")
-            .tool("clock", "clock")
+            .core("fake-llm")
+            .tool("search")
+            .tool("clock")
             .tts("fake-tts")
             .build();
 
-        assert_eq!(ids(&graph), ["stt", "llm", "tts", "search", "clock"]);
-        assert_eq!(
-            wiring(&graph),
-            [
-                ("stt", "llm"),
-                ("llm", "search"),
-                ("search", "tts"),
-                ("llm", "clock"),
-                ("clock", "tts"),
-            ]
-        );
+        assert_eq!(ids(&graph), ["stt", "core", "tts"]);
+        assert_eq!(wiring(&graph), [("stt", "core"), ("core", "tts")]);
+        assert_eq!(tool_providers(&graph), ["search", "clock"]);
         graph.validate().expect("valid");
     }
 
     #[test]
-    fn a_tool_graph_does_not_also_wire_the_model_straight_to_synthesis() {
-        // Leaving that edge in place would describe a pipeline that reaches
-        // synthesis without the tools, which is a different topology.
+    fn binding_a_tool_leaves_the_model_wired_straight_to_synthesis() {
+        // The edge the old tool fan-out removed. A pipeline's reply reaches
+        // synthesis whether or not the model reached for anything on the way.
         let graph = voice_graph("tools")
             .stt("fake-stt")
-            .llm("fake-llm")
-            .tool("search", "search")
+            .core("fake-llm")
+            .tool("search")
             .tts("fake-tts")
             .build();
 
-        assert!(!wiring(&graph).contains(&("llm", "tts")));
+        assert!(wiring(&graph).contains(&("core", "tts")));
     }
 
     #[test]
-    fn tools_rejoin_at_the_sink_when_there_is_no_synthesizer() {
-        let graph = voice_graph("headless")
-            .llm("fake-llm")
-            .tool("search", "search")
-            .sink("test")
-            .build();
+    fn tools_need_no_synthesizer_to_hang_off() {
+        let graph =
+            voice_graph("headless").core("fake-llm").tool("search").sink("test").build();
 
-        assert_eq!(wiring(&graph), [("llm", "search"), ("search", "sink")]);
+        assert_eq!(wiring(&graph), [("core", "sink")]);
+        assert_eq!(tool_providers(&graph), ["search"]);
     }
 
     #[test]
     fn stages_may_be_named_in_any_order() {
-        let ordered = voice_graph("x").stt("fake-stt").llm("fake-llm").tts("fake-tts").build();
-        let shuffled = voice_graph("x").tts("fake-tts").llm("fake-llm").stt("fake-stt").build();
+        let ordered = voice_graph("x").stt("fake-stt").core("fake-llm").tts("fake-tts").build();
+        let shuffled =
+            voice_graph("x").tts("fake-tts").core("fake-llm").stt("fake-stt").build();
 
         assert_eq!(ordered, shuffled);
     }

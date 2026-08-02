@@ -25,9 +25,9 @@ use conduit_runtime::{Providers, Runner, DEFAULT_IDLE_TIMEOUT};
 use fakes::{audio_of, FakeLlm, FakeStt, FakeTts, HangingTts, SilentLlm, SilentStt};
 use futures_util::StreamExt;
 
-/// stt -> llm -> tts, the shape the runtime can execute.
+/// stt -> core -> tts, the shape the runtime can execute.
 fn linear_graph() -> PipelineGraph {
-    voice_graph("deadline").stt("fake-stt").llm("fake-llm").tts("fake-tts").build()
+    voice_graph("deadline").stt("fake-stt").core("fake-llm").tts("fake-tts").build()
 }
 
 /// A deadline short enough that a stalled turn ends within a test's patience.

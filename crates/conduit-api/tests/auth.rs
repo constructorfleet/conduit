@@ -43,10 +43,10 @@ fn guarded() -> AppState {
 fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::stt("stt", "whisper"))
-        .with_node(Node::llm("llm", "ollama"))
+        .with_node(Node::core("core", "ollama"))
         .with_node(Node::tts("tts", "piper"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 /// Sends `request` to the service router.

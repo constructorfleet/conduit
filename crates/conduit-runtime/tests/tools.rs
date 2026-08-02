@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{Event, UtteranceSegmentRole};
-use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::graph::PipelineGraph;
 use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_core::testing::voice_graph;
 use conduit_provider::llm::Role;
@@ -25,12 +25,7 @@ use futures_util::StreamExt;
 
 /// A pipeline with one tool available to the model.
 fn graph_with_tool() -> PipelineGraph {
-    voice_graph("tools")
-        .stt("fake-stt")
-        .llm("fake-llm")
-        .tool("search", "search")
-        .tts("fake-tts")
-        .build()
+    voice_graph("tools").stt("fake-stt").core("fake-llm").tool("search").tts("fake-tts").build()
 }
 
 /// A model that speaks, calls `search`, then speaks again.
@@ -501,10 +496,13 @@ async fn tools_requested_together_run_together() {
     let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
 
-    let graph = graph_with_tool()
-        .with_node(Node::tool("clock", "clock"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("clock", "tts"));
+    let graph = voice_graph("tools")
+        .stt("fake-stt")
+        .core("fake-llm")
+        .tool("search")
+        .tool("clock")
+        .tts("fake-tts")
+        .build();
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
         .with_llm(FakeLlm::scripted(vec![
@@ -522,42 +520,6 @@ async fn tools_requested_together_run_together() {
 
     let runner =
         Runner::prepare(&graph, &providers, EventBus::default()).expect("graph is executable");
-    run_turn(&runner).await;
-
-    assert_eq!(search.invocations().len(), 1);
-    assert_eq!(clock.invocations().len(), 1);
-}
-
-#[tokio::test]
-async fn branched_tool_graphs_execute_without_linearizing_the_topology() {
-    let first = ToolCallId::new("call_one");
-    let second = ToolCallId::new("call_two");
-    let graph = voice_graph("branched")
-        .stt("fake-stt")
-        .llm("fake-llm")
-        .tool("search", "search")
-        .tool("clock", "clock")
-        .tts("fake-tts")
-        .build();
-    let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
-    let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
-    let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
-        .with_llm(FakeLlm::scripted(vec![
-            vec![
-                token("Checking. "),
-                tool_call(first.clone(), "search"),
-                tool_call(second.clone(), "clock"),
-                wants_tools(),
-            ],
-            vec![token("Sunny at noon."), stop()],
-        ]))
-        .with_tool(search.clone())
-        .with_tool(clock.clone())
-        .with_tts(FakeTts::new());
-
-    let runner = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect("branched tool graph is executable");
     run_turn(&runner).await;
 
     assert_eq!(search.invocations().len(), 1);
@@ -620,12 +582,7 @@ async fn a_model_that_never_stops_calling_tools_is_cut_off() {
 #[tokio::test]
 async fn a_pipeline_without_tools_offers_the_model_none() {
     let llm = FakeLlm::new(vec!["Hello."]);
-    let graph = PipelineGraph::new("plain")
-        .with_node(Node::stt("stt", "fake-stt"))
-        .with_node(Node::llm("llm", "fake-llm"))
-        .with_node(Node::tts("tts", "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
+    let graph = voice_graph("plain").stt("fake-stt").core("fake-llm").tts("fake-tts").build();
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
@@ -640,7 +597,7 @@ async fn a_pipeline_without_tools_offers_the_model_none() {
 }
 
 #[tokio::test]
-async fn tool_nodes_must_name_a_registered_tool() {
+async fn a_bound_tool_must_name_a_registered_tool() {
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
         .with_llm(FakeLlm::new(vec![]))

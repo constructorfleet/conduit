@@ -203,11 +203,11 @@ fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
         .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "echo-stt"))
-        .with_node(Node::llm("llm", "echo-llm"))
+        .with_node(Node::core("core", "echo-llm"))
         .with_node(Node::tts("tts", "echo-tts"))
         .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 fn provider_status_graph() -> PipelineGraph {

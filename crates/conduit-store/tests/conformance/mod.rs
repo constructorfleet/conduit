@@ -17,7 +17,7 @@ use conduit_provider::storage::{
 
 /// A small but complete pipeline, named `name`.
 pub fn graph(name: &str) -> PipelineGraph {
-    voice_graph(name).stt("whisper").llm("ollama").tts("piper").build()
+    voice_graph(name).stt("whisper").core("ollama").tts("piper").build()
 }
 
 /// Names no backend may accept, whatever it would do with them.

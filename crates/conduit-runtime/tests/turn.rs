@@ -19,9 +19,9 @@ use conduit_runtime::{Providers, Reply, Runner};
 use fakes::{audio_of, FailingStt, FakeLlm, FakeStt, FakeTts, HangingTts, SlowTts};
 use futures_util::StreamExt;
 
-/// mic -> stt -> llm -> tts, the shape the runtime can execute today.
+/// mic -> stt -> core -> tts, the shape the runtime can execute today.
 fn linear_graph() -> PipelineGraph {
-    voice_graph("test").source("test").stt("fake-stt").llm("fake-llm").tts("fake-tts").build()
+    voice_graph("test").source("test").stt("fake-stt").core("fake-llm").tts("fake-tts").build()
 }
 
 /// Reads events until the turn ends, so assertions see the whole sequence.
@@ -62,10 +62,10 @@ async fn speaks_the_model_response_for_a_typed_utterance() {
         Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
     let graph = PipelineGraph::new("typed")
         .with_node(Node::source("chat", "test", Modality::Text))
-        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::core("core", "fake-llm"))
         .with_node(Node::tts("tts", "fake-tts"))
-        .with_edge(Edge::new("chat", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"));
 
     let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
     let spoken: Vec<_> = runner.run_text("turn on the light").speech().collect().await;
@@ -106,10 +106,10 @@ async fn a_text_pipeline_writes_its_reply_down_with_no_speech_providers() {
     let providers = Providers::new().with_llm(FakeLlm::new(vec!["One. ", "Two."]));
     let graph = PipelineGraph::new("chat")
         .with_node(Node::source("in", "test", Modality::Text))
-        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::core("core", "fake-llm"))
         .with_node(Node::sink("out", "test", Modality::Text))
-        .with_edge(Edge::new("in", "llm"))
-        .with_edge(Edge::new("llm", "out"));
+        .with_edge(Edge::new("in", "core"))
+        .with_edge(Edge::new("core", "out"));
 
     let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
     let replies: Vec<_> = runner.run_text("hello").output.collect().await;
@@ -145,10 +145,10 @@ async fn audio_handed_to_a_text_pipeline_fails_the_turn_rather_than_panicking() 
         Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
     let graph = PipelineGraph::new("typed")
         .with_node(Node::source("chat", "test", Modality::Text))
-        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::core("core", "fake-llm"))
         .with_node(Node::tts("tts", "fake-tts"))
-        .with_edge(Edge::new("chat", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"));
 
     let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
     let spoken: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
@@ -527,17 +527,18 @@ async fn nothing_the_runtime_does_reports_barge_in() {
 }
 
 #[tokio::test]
-async fn tool_fan_out_is_executable() {
-    // Two tools hanging off the model, which is the fan-out the runtime does
-    // support: tools requested together run together. Routing them through a
-    // `router` node is what it does not — see `tests/plan.rs`.
-    let graph = linear_graph()
-        .with_node(Node::tool("search", "search"))
-        .with_node(Node::tool("clock", "clock"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("search", "tts"))
-        .with_edge(Edge::new("clock", "tts"));
+async fn several_tools_bound_to_one_core_are_executable() {
+    // Two tools on the model, which is the fan-out the runtime does support:
+    // tools requested together run together. Nothing is wired, because there
+    // is no order among them for an edge to state.
+    let graph = voice_graph("test")
+        .source("test")
+        .stt("fake-stt")
+        .core("fake-llm")
+        .tool("search")
+        .tool("clock")
+        .tts("fake-tts")
+        .build();
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -547,15 +548,24 @@ async fn tool_fan_out_is_executable() {
         .with_tts(FakeTts::new());
 
     Runner::prepare(&graph, &providers, EventBus::default())
-        .expect("tool fan-out is executable");
+        .expect("tools bound to a core are executable");
 }
 
 #[tokio::test]
 async fn rejects_stages_it_cannot_execute() {
-    let graph = linear_graph()
-        .with_node(Node::memory("memory", "builtin"))
-        .with_edge(Edge::new("llm", "memory"))
-        .with_edge(Edge::new("memory", "tts"));
+    // The graph model is deliberately wider than this runtime. A stage it
+    // cannot run is refused at prepare time rather than skipped, so nobody
+    // discovers the omission by speaking to a pipeline that ignores it.
+    let graph = PipelineGraph::new("identified")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::speaker_id("who", "builtin"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "who"))
+        .with_edge(Edge::new("who", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -563,8 +573,8 @@ async fn rejects_stages_it_cannot_execute() {
         .with_tts(FakeTts::new());
 
     let error = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect_err("memory is not executable yet");
-    assert!(matches!(error, Error::Config(message) if message.contains("memory")));
+        .expect_err("speaker identification is not executable yet");
+    assert!(matches!(error, Error::Config(message) if message.contains("speaker_id")));
 }
 
 #[tokio::test]

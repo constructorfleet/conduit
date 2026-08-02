@@ -18,11 +18,16 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 fn valid_graph() -> PipelineGraph {
-    voice_graph("kitchen").source("websocket").stt("whisper").llm("ollama").tts("piper").build()
+    voice_graph("kitchen")
+        .source("websocket")
+        .stt("whisper")
+        .core("ollama")
+        .tts("piper")
+        .build()
 }
 
 fn echo_graph() -> PipelineGraph {
-    voice_graph("echo").stt("echo-stt").llm("echo-llm").tts("echo-tts").build()
+    voice_graph("echo").stt("echo-stt").core("echo-llm").tts("echo-tts").build()
 }
 
 fn providers() -> Providers {
@@ -331,7 +336,7 @@ async fn storing_then_reading_a_pipeline_round_trips() {
 
     let (status, body) = call(&state, put(&valid_graph())).await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["order"], serde_json::json!(["mic", "stt", "llm", "tts"]));
+    assert_eq!(body["order"], serde_json::json!(["mic", "stt", "core", "tts"]));
 
     let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
