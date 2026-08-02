@@ -323,8 +323,21 @@ async fn affected_pipelines(
         |provider: &str| provider == provider_id || provider.starts_with(&qualified);
     let mut affected = Vec::new();
     for name in state.pipeline_names().await.map_err(store_failure)? {
-        let Some(graph) = state.pipeline(&name).await.map_err(store_failure)? else {
-            continue;
+        // A pipeline that will not parse is stepped over rather than failing
+        // the scan. It cannot be read, so it cannot be shown to reference
+        // anything — and refusing to delete a provider because some *other*
+        // pipeline is corrupt leaves an operator unable to fix either one.
+        let graph = match state.pipeline(&name).await {
+            Ok(Some(graph)) => graph,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    pipeline = %name,
+                    %error,
+                    "skipping unreadable pipeline while checking provider references"
+                );
+                continue;
+            }
         };
         if graph.nodes.iter().any(|node| node.provider_references().into_iter().any(references))
         {

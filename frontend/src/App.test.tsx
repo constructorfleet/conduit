@@ -1907,6 +1907,39 @@ describe("Pipelines graph editor", () => {
     ]);
   });
 
+  it("shows a pipeline the server cannot read, and offers to delete it", async () => {
+    // Stored graphs are not migrated across schema changes, so a name whose
+    // graph will not parse is a state an operator can land in. Before this,
+    // one of them hid every other pipeline and there was no way back.
+    const user = userEvent.setup();
+    const deleted: string[] = [];
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        initialUnreadablePipelines={[
+          { name: "broken", detail: "unknown variant `llm`" },
+        ]}
+        onPipelineDeleted={(name) => deleted.push(name)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+
+    // The readable pipeline is still there, which is the part that used to be
+    // lost entirely.
+    expect(screen.getByLabelText("Pipeline graph")).toBeInTheDocument();
+
+    expect(screen.getByText("unknown variant `llm`")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Delete pipeline broken" }),
+    );
+
+    expect(deleted).toEqual(["broken"]);
+    expect(
+      screen.queryByRole("button", { name: "Delete pipeline broken" }),
+    ).toBeNull();
+  });
+
   it("keeps graph editing read-only on small screens", async () => {
     const user = userEvent.setup();
     render(

@@ -36,7 +36,11 @@ import {
 import conduitLogo from "./assets/conduit-logo.png";
 import "./App.css";
 import { createSnapshotClient } from "./apiClient";
-import type { OperatorDataMode, SnapshotState } from "./apiClient";
+import type {
+  OperatorDataMode,
+  SnapshotState,
+  UnreadablePipeline,
+} from "./apiClient";
 import type {
   ComponentConfigProperty,
   Modality,
@@ -144,10 +148,12 @@ interface AppProps {
   initialEventPosture?: EventStreamPosture;
   initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
+  initialUnreadablePipelines?: readonly UnreadablePipeline[];
   initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen?: boolean;
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
+  onPipelineDeleted?: (name: string) => void;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
 }
@@ -158,10 +164,12 @@ function App({
   initialEventPosture,
   initialComponentCatalog,
   initialPipelineViews,
+  initialUnreadablePipelines,
   initialProviderDefinitions,
   initialSmallScreen = false,
   dataMode = defaultDataMode(),
   onPipelineSaved,
+  onPipelineDeleted,
   onPipelineValidate,
   onPipelineTest,
 }: AppProps = {}) {
@@ -182,11 +190,13 @@ function App({
       initialEventPosture={initialEventPosture}
       initialComponentCatalog={initialComponentCatalog}
       initialPipelineViews={initialPipelineViews}
+      initialUnreadablePipelines={initialUnreadablePipelines}
       initialProviderDefinitions={initialProviderDefinitions}
       initialSmallScreen={initialSmallScreen}
       initialSnapshot={initialSnapshot}
       dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
+      onPipelineDeleted={onPipelineDeleted}
       onPipelineValidate={onPipelineValidate}
       onPipelineTest={onPipelineTest}
       onSectionChange={setActiveSection}
@@ -279,11 +289,13 @@ function OperatorWorkspace({
   initialEventPosture,
   initialComponentCatalog,
   initialPipelineViews,
+  initialUnreadablePipelines,
   initialProviderDefinitions,
   initialSmallScreen,
   initialSnapshot,
   dataMode,
   onPipelineSaved,
+  onPipelineDeleted,
   onPipelineValidate,
   onPipelineTest,
   onSectionChange,
@@ -295,11 +307,13 @@ function OperatorWorkspace({
   initialEventPosture?: EventStreamPosture;
   initialComponentCatalog?: ProviderComponentCatalog;
   initialPipelineViews?: readonly PipelineView[];
+  initialUnreadablePipelines?: readonly UnreadablePipeline[];
   initialProviderDefinitions?: readonly ProviderDefinitionView[];
   initialSmallScreen: boolean;
   initialSnapshot?: OperatorStatusSnapshot;
   dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
+  onPipelineDeleted?: (name: string) => void;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
   onSectionChange: (section: SectionId) => void;
@@ -322,6 +336,28 @@ function OperatorWorkspace({
     snapshotClient.snapshot ? "live" : snapshotClient.state,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
+  /// Pipelines the server has a name for and cannot read. Kept beside the
+  /// readable ones rather than folded in: there is no graph to show, and the
+  /// only thing the console can offer is deleting them.
+  const [unreadablePipelines, setUnreadablePipelines] = useState<
+    readonly UnreadablePipeline[]
+  >(() => initialUnreadablePipelines ?? []);
+  /// Throws away a pipeline the console cannot repair.
+  ///
+  /// Deletion never parses the stored graph, so this reaches a pipeline
+  /// nothing else can — which is what makes it the way out of a corrupt one.
+  function discardPipeline(name: string) {
+    setUnreadablePipelines((current) =>
+      current.filter((pipeline) => pipeline.name !== name),
+    );
+    onPipelineDeleted?.(name);
+    void snapshotClient.deletePipeline(name).catch((error: unknown) => {
+      setLoadError(
+        error instanceof Error ? error.message : `could not delete ${name}`,
+      );
+    });
+  }
+
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
@@ -487,7 +523,10 @@ function OperatorWorkspace({
         ] = await Promise.all([
           snapshotClient.loadSnapshot(),
           initialPipelineViews
-            ? Promise.resolve([...initialPipelineViews])
+            ? Promise.resolve({
+                views: [...initialPipelineViews],
+                unreadable: [],
+              })
             : snapshotClient.loadPipelineViews(),
           initialComponentCatalog
             ? Promise.resolve(initialComponentCatalog)
@@ -513,7 +552,11 @@ function OperatorWorkspace({
           return;
         }
 
-        const basePipelineViews = initialPipelineViews ?? loadedPipelineViews;
+        const basePipelineViews =
+          initialPipelineViews ?? loadedPipelineViews.views;
+        if (!initialUnreadablePipelines) {
+          setUnreadablePipelines(loadedPipelineViews.unreadable);
+        }
         const baseComponentCatalog =
           initialComponentCatalog ?? loadedComponentCatalog;
         const loadedProviderDefinitions = loadProviderDefinitions(
@@ -591,6 +634,7 @@ function OperatorWorkspace({
     access.mode,
     initialEvents,
     initialComponentCatalog,
+    initialUnreadablePipelines,
     initialPipelineViews,
     initialProviderDefinitions,
     initialSnapshot,
@@ -696,6 +740,8 @@ function OperatorWorkspace({
           componentCatalog={componentCatalog}
           providerDefinitions={providerDefinitions}
           pipelineViews={pipelineViews}
+          unreadablePipelines={unreadablePipelines}
+          onPipelineDiscarded={discardPipeline}
           snapshot={snapshot}
           eventPosture={eventPlan.posture}
           initialSmallScreen={smallScreen}
@@ -730,12 +776,14 @@ function SectionPanel({
   componentCatalog,
   providerDefinitions,
   pipelineViews,
+  unreadablePipelines,
   snapshot,
   eventPosture,
   initialSmallScreen,
   loadError,
   onSectionChange,
   onPipelineStored,
+  onPipelineDiscarded,
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
@@ -748,6 +796,8 @@ function SectionPanel({
   componentCatalog: ProviderComponentCatalog;
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
+  unreadablePipelines: readonly UnreadablePipeline[];
+  onPipelineDiscarded: (name: string) => void;
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
   initialSmallScreen: boolean;
@@ -796,8 +846,10 @@ function SectionPanel({
       <PipelinesPanel
         providerDefinitions={providerDefinitions}
         pipelineViews={pipelineViews}
+        unreadablePipelines={unreadablePipelines}
         readOnly={initialSmallScreen}
         onPipelineStored={onPipelineStored}
+        onPipelineDiscarded={onPipelineDiscarded}
         onPipelineValidate={onPipelineValidate}
         onPipelineTest={onPipelineTest}
       />
@@ -2006,14 +2058,18 @@ function EventsPanel({
 function PipelinesPanel({
   providerDefinitions,
   pipelineViews,
+  unreadablePipelines,
   readOnly,
   onPipelineStored,
+  onPipelineDiscarded,
   onPipelineValidate,
   onPipelineTest,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
+  unreadablePipelines: readonly UnreadablePipeline[];
   readOnly: boolean;
+  onPipelineDiscarded: (name: string) => void;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
@@ -2923,6 +2979,46 @@ function PipelinesPanel({
 
   return (
     <div className="pipelines-stack">
+      {unreadablePipelines.length > 0 ? (
+        <section className="exception-band" aria-label="Unreadable pipelines">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Stored but unusable</p>
+              <h2>Unreadable Pipelines</h2>
+            </div>
+          </div>
+          <p className="hint">
+            These are stored under a name the server can list and cannot read,
+            so there is no graph to edit. Deleting one is the only repair from
+            here; its definition can then be recreated.
+          </p>
+          <div className="exception-list" role="list">
+            {unreadablePipelines.map((pipeline) => (
+              <div
+                className="exception-item"
+                role="listitem"
+                key={pipeline.name}
+              >
+                <div>
+                  <strong>{pipeline.name}</strong>
+                  <p className="node-provider-label">{pipeline.detail}</p>
+                </div>
+                <button
+                  className="secondary-action danger"
+                  type="button"
+                  disabled={readOnly}
+                  aria-label={`Delete pipeline ${pipeline.name}`}
+                  onClick={() => onPipelineDiscarded(pipeline.name)}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="pipeline-toolbar" aria-label="Stored pipelines">
         <div className="pipeline-toolbar-main">
           <div>

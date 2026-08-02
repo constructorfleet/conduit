@@ -120,6 +120,48 @@ async fn store_llm_provider_definition(state: &AppState, id: &str) {
     .await;
 }
 
+/// A store holding one pipeline that will not parse, alongside readable ones.
+///
+/// Stands in for a file someone hand-edited, a partial write, or a graph
+/// written by an older schema: the name is there and the contents are not
+/// readable.
+struct StoreWithACorruptPipeline {
+    readable: conduit_store::MemoryStore,
+    corrupt: &'static str,
+}
+
+#[async_trait::async_trait]
+impl PipelineStore for StoreWithACorruptPipeline {
+    async fn list(&self) -> Result<Vec<String>> {
+        let mut names = self.readable.list().await?;
+        names.push(self.corrupt.to_owned());
+        names.sort();
+        Ok(names)
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
+        if name == self.corrupt {
+            return Err(conduit_core::Error::Config(format!(
+                "`{name}` is not a valid pipeline: unknown variant `llm`"
+            )));
+        }
+        self.readable.get(name).await
+    }
+
+    async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
+        self.readable.put(name, graph).await
+    }
+
+    async fn remove(&self, name: &str) -> Result<bool> {
+        // Removal never reads the stored bytes, which is what makes deleting a
+        // corrupt pipeline the way out of one.
+        if name == self.corrupt {
+            return Ok(true);
+        }
+        self.readable.remove(name).await
+    }
+}
+
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
     let response = router(state.clone()).oneshot(request).await.expect("router responds");
     let status = response.status();
@@ -1215,6 +1257,52 @@ async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
 
     let (status, _) = call(&state, get("/v1/providers/piper-local")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_corrupt_pipeline_does_not_block_deleting_an_unrelated_provider() {
+    // The lockout this guards against: one unreadable pipeline made every
+    // provider deletion fail, and the pipeline could not be repaired either,
+    // so an operator had no way out of the state they were in.
+    let state = AppState::with_store(
+        EventBus::default(),
+        std::sync::Arc::new(StoreWithACorruptPipeline {
+            readable: conduit_store::MemoryStore::new(),
+            corrupt: "corrupt",
+        }),
+    );
+    store_llm_provider_definition(&state, "ollama").await;
+
+    let (status, body) = call(&state, delete("/v1/providers/ollama")).await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+#[tokio::test]
+async fn a_corrupt_pipeline_is_listed_and_can_be_deleted() {
+    // Listing reads names rather than contents, and removal never parses, so
+    // the pipeline an operator cannot open is still one they can throw away.
+    let state = AppState::with_store(
+        EventBus::default(),
+        std::sync::Arc::new(StoreWithACorruptPipeline {
+            readable: conduit_store::MemoryStore::new(),
+            corrupt: "corrupt",
+        }),
+    );
+
+    let (status, body) = call(&state, get("/v1/pipelines")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!(["corrupt"]));
+
+    let (status, body) = call(&state, get("/v1/pipelines/corrupt")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["detail"].as_str().is_some_and(|detail| detail.contains("not a valid pipeline")),
+        "the reason has to reach the operator: {body}"
+    );
+
+    let (status, _) = call(&state, delete("/v1/pipelines/corrupt")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
