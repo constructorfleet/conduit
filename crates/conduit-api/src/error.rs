@@ -141,6 +141,23 @@ struct Body<'a> {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Without this an operator watching the logs sees a clean server while
+        // the console shows a bare status code, and the detail explaining the
+        // refusal exists only in a response body nobody kept. Client mistakes
+        // are expected traffic, so they warn; a failure the server owns is a
+        // problem with the server.
+        //
+        // A 401 is logged without its detail. That detail is the fixed string
+        // naming the `Authorization` header, so it describes nothing about the
+        // request that `kind` does not — and `token_logging.rs` asserts the
+        // header is never named in anything shipped to a log collector, which
+        // is a line worth keeping bright rather than carving an exception into.
+        let detail = if self.status == StatusCode::UNAUTHORIZED { "" } else { &self.detail };
+        if self.status.is_server_error() {
+            tracing::error!(status = %self.status, kind = self.kind, detail, "request failed");
+        } else {
+            tracing::warn!(status = %self.status, kind = self.kind, detail, "request rejected");
+        }
         let body = Json(Body { error: self.kind, detail: &self.detail });
         if self.status == StatusCode::UNAUTHORIZED {
             // Standard HTTP tooling looks here to learn which scheme to use,
