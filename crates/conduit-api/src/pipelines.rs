@@ -480,7 +480,10 @@ fn openai_llm_schema() -> ComponentConfigSchema {
         properties: properties([
             ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
             ("api_key", string_property(None, None)),
-            ("model", string_property(None, Some("[a-z0-9.]+"))),
+            // Model names are the server's to define, not ours: an `ollama`
+            // tag carries `:` (`qwen3:8b`) and a Hugging Face repo carries `/`.
+            // A pattern narrower than that rejects names that work.
+            ("model", string_property(None, Some("[A-Za-z0-9._:/-]+"))),
             ("streaming", boolean_property()),
         ]),
         required: vec!["base_url", "model"],
