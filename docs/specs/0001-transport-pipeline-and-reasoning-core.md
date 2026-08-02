@@ -237,13 +237,16 @@ providers. Turn view keys off segment modality.
 Acceptance: a text pipeline with no speech providers configured validates and
 runs a test turn returning `reply_text`.
 
-**Partly landed.** `c94758a` made the recognizer optional and `8b3d6d2` the
-synthesizer, so the runtime runs a text pipeline end to end and
-`crates/conduit-runtime/tests/turn.rs` pins it. Still open: generalizing the
-spoken-segment events to utterance segments carrying a modality, `reply_text`
-on the API test turn, and the guided-setup pipeline-shape choice. Until the
-API work lands, a text pipeline is reachable from the runtime but not from the
-console.
+**Landed** as `c94758a`, `8b3d6d2`, `4fb11c9`, `43abca4`, and `0ab46f4`. An
+operator can pick the text shape in guided setup, save a pipeline whose only
+provider is a language model, and read the reply back from a test turn.
+
+Two things came out differently from this spec. Sentence segmentation needed no
+change at all — what a voice pipeline speaks a piece at a time is what a text
+pipeline writes a piece at a time, trimming included. And resolution gained a
+refusal the spec did not call for: a graph with neither a synthesizer nor a
+sink is rejected, because making `tts` optional would otherwise have accepted a
+pipeline that reasons and then discards the answer.
 
 ## Track D — Reasoning Core
 
