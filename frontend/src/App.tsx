@@ -2187,29 +2187,37 @@ function PipelinesPanel({
     setPendingPipelineName(null);
   }
 
-  /// Stores a copy of the selected pipeline under a new name.
+  /// Stores a new pipeline under `name`.
   ///
-  /// A copy rather than an empty graph, because a pipeline is only useful once
-  /// it names providers that exist, and the one on screen already does. A
-  /// second pipeline is usually a variant of the first — a different voice, a
-  /// different model — so the operator starts from something that runs and
-  /// edits it, instead of from something that cannot validate.
+  /// Copies the pipeline on screen when there is one, because a second
+  /// pipeline is usually a variant of the first and its providers already
+  /// exist. With nothing to copy it builds the smallest graph the configured
+  /// providers support — which is the case that matters, because an operator
+  /// who has deleted their last pipeline has no other way back: Guided Setup
+  /// runs on first launch and does not return.
   async function addPipeline(name: string) {
-    if (!selectedView || !canCreatePipeline(name)) {
+    if (!canCreatePipeline(name)) {
       return;
     }
-    const copy = { ...selectedView.graph, name };
-    await onPipelineStored(copy, [...selectedView.order]);
+    const graph = selectedView
+      ? { ...selectedView.graph, name }
+      : minimalGraphFor(name, providerDefinitions);
+    if (!graph) {
+      return;
+    }
+    await onPipelineStored(graph, selectedView ? [...selectedView.order] : []);
     setNewPipelineName(null);
     setSelectedName(name);
   }
 
   /// The name offered when the operator asks for a new pipeline.
   function suggestedPipelineName(): string {
-    return nextPipelineName(
-      selectedView?.graph.name ?? "pipeline",
-      pipelineViews.map((view) => view.graph.name),
-    );
+    return selectedView
+      ? nextPipelineName(
+          selectedView.graph.name,
+          pipelineViews.map((view) => view.graph.name),
+        )
+      : "pipeline";
   }
 
   /// Whether `name` could be stored: the server refuses names that mean
@@ -2888,11 +2896,106 @@ function PipelinesPanel({
     }
   }
 
-  if (!draft || !selectedView) {
+  /// The band listing pipelines the server cannot read.
+  function renderUnreadablePipelines() {
     return (
-      <div className="overview-empty" role="status">
-        <Workflow size={18} aria-hidden="true" />
-        <span>No stored pipeline graphs</span>
+      <section className="exception-band" aria-label="Unreadable pipelines">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Stored but unusable</p>
+            <h2>Unreadable Pipelines</h2>
+          </div>
+        </div>
+        <p className="hint">
+          These are stored under a name the server can list and cannot read, so
+          there is no graph to edit. Deleting one is the only repair from here;
+          its definition can then be recreated.
+        </p>
+        <div className="exception-list" role="list">
+          {unreadablePipelines.map((pipeline) => (
+            <div className="exception-item" role="listitem" key={pipeline.name}>
+              <div>
+                <strong>{pipeline.name}</strong>
+                <p className="node-provider-label">{pipeline.detail}</p>
+              </div>
+              <button
+                className="secondary-action danger"
+                type="button"
+                disabled={readOnly}
+                aria-label={`Delete pipeline ${pipeline.name}`}
+                onClick={() => onPipelineDiscarded(pipeline.name)}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  /// The add button, and the name field it opens.
+  function renderNewPipelineControls() {
+    if (newPipelineName === null) {
+      return (
+        <button
+          className="icon-action"
+          type="button"
+          aria-label="Add pipeline"
+          title="Add pipeline"
+          onClick={() => setNewPipelineName(suggestedPipelineName())}
+        >
+          <Plus size={16} aria-hidden="true" />
+        </button>
+      );
+    }
+
+    return (
+      <div className="new-pipeline">
+        <input
+          aria-label="New pipeline name"
+          value={newPipelineName}
+          onChange={(event) => setNewPipelineName(event.target.value)}
+        />
+        <button
+          type="button"
+          className="secondary-action"
+          disabled={!canCreatePipeline(newPipelineName)}
+          onClick={() => void addPipeline(newPipelineName)}
+        >
+          Create pipeline
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => setNewPipelineName(null)}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (!draft || !selectedView) {
+    const buildable = minimalGraphFor("probe", providerDefinitions) !== null;
+    return (
+      <div className="pipelines-stack">
+        {unreadablePipelines.length > 0 ? renderUnreadablePipelines() : null}
+        <section className="pipeline-toolbar" aria-label="Stored pipelines">
+          <div className="overview-empty" role="status">
+            <Workflow size={18} aria-hidden="true" />
+            <span>No stored pipeline graphs</span>
+          </div>
+          {readOnly ? null : buildable ? (
+            renderNewPipelineControls()
+          ) : (
+            <p className="hint">
+              Configure a language model provider before creating a pipeline: a
+              graph that names no provider cannot be saved.
+            </p>
+          )}
+        </section>
       </div>
     );
   }
@@ -3019,45 +3122,7 @@ function PipelinesPanel({
 
   return (
     <div className="pipelines-stack">
-      {unreadablePipelines.length > 0 ? (
-        <section className="exception-band" aria-label="Unreadable pipelines">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Stored but unusable</p>
-              <h2>Unreadable Pipelines</h2>
-            </div>
-          </div>
-          <p className="hint">
-            These are stored under a name the server can list and cannot read,
-            so there is no graph to edit. Deleting one is the only repair from
-            here; its definition can then be recreated.
-          </p>
-          <div className="exception-list" role="list">
-            {unreadablePipelines.map((pipeline) => (
-              <div
-                className="exception-item"
-                role="listitem"
-                key={pipeline.name}
-              >
-                <div>
-                  <strong>{pipeline.name}</strong>
-                  <p className="node-provider-label">{pipeline.detail}</p>
-                </div>
-                <button
-                  className="secondary-action danger"
-                  type="button"
-                  disabled={readOnly}
-                  aria-label={`Delete pipeline ${pipeline.name}`}
-                  onClick={() => onPipelineDiscarded(pipeline.name)}
-                >
-                  <Trash2 size={16} aria-hidden="true" />
-                  Delete
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
+      {unreadablePipelines.length > 0 ? renderUnreadablePipelines() : null}
 
       <section className="pipeline-toolbar" aria-label="Stored pipelines">
         <div className="pipeline-toolbar-main">
@@ -3081,41 +3146,7 @@ function PipelinesPanel({
                   {view.graph.name}
                 </button>
               ))}
-              {!readOnly && newPipelineName === null ? (
-                <button
-                  className="icon-action"
-                  type="button"
-                  aria-label="Add pipeline"
-                  title="Add pipeline"
-                  onClick={() => setNewPipelineName(suggestedPipelineName())}
-                >
-                  <Plus size={16} aria-hidden="true" />
-                </button>
-              ) : null}
-              {newPipelineName !== null ? (
-                <div className="new-pipeline">
-                  <input
-                    aria-label="New pipeline name"
-                    value={newPipelineName}
-                    onChange={(event) => setNewPipelineName(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    disabled={!canCreatePipeline(newPipelineName)}
-                    onClick={() => void addPipeline(newPipelineName)}
-                  >
-                    Create pipeline
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => setNewPipelineName(null)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : null}
+              {readOnly ? null : renderNewPipelineControls()}
             </div>
           </div>
         </div>
@@ -5052,6 +5083,38 @@ function sortLinearNodes(nodes: readonly PipelineNode[]): PipelineNode[] {
 /// Every node is on that chain now: a core's tools and memory are bindings, so
 /// there is nothing left that hangs off the pipeline rather than sitting in
 /// it, and every edge is a link between two stages.
+/// The smallest pipeline the configured providers can support, or `null` when
+/// they cannot support one.
+///
+/// Voice when speech providers exist and text otherwise, because a language
+/// model is the one thing no pipeline can do without. Built from providers
+/// that are actually registered so the result validates — a graph naming a
+/// provider nobody configured is refused on save, which is a poor way to
+/// learn that setup is incomplete.
+function minimalGraphFor(
+  name: string,
+  definitions: readonly ProviderDefinition[],
+): PipelineGraph | null {
+  const first = (kind: ProviderCapability) =>
+    definitions.find((definition) => definition.kind === kind)?.id;
+
+  const llm = first("llm");
+  if (!llm) {
+    return null;
+  }
+
+  const stt = first("stt");
+  const tts = first("tts");
+  return stt && tts
+    ? buildMinimalVoiceLoopGraph({
+        name,
+        sttProvider: stt,
+        llmProvider: llm,
+        ttsProvider: tts,
+      })
+    : buildMinimalTextLoopGraph({ name, llmProvider: llm });
+}
+
 /// A name for a copy of `base` that no stored pipeline already uses.
 ///
 /// Suffixed rather than prefixed so copies of one pipeline sort beside it, and

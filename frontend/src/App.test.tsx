@@ -1940,6 +1940,48 @@ describe("Pipelines graph editor", () => {
     ).toBeNull();
   });
 
+  it("creates a pipeline when none are stored", async () => {
+    // The trap this closes: delete your only pipeline, or have it stop
+    // parsing, and the section showed "No stored pipeline graphs" with no way
+    // to make another. Guided Setup does not come back, so that was permanent.
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[]}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "openai",
+            label: "OpenAI",
+            kind: "llm",
+            component: "openai.responses",
+            config: {},
+          }),
+        ]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    expect(screen.getByText("No stored pipeline graphs")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add pipeline" }));
+    await user.clear(screen.getByLabelText("New pipeline name"));
+    await user.type(screen.getByLabelText("New pipeline name"), "kitchen");
+    await user.click(screen.getByRole("button", { name: "Create pipeline" }));
+
+    expect(savedGraphs).toHaveLength(1);
+    expect(savedGraphs[0]?.name).toBe("kitchen");
+    // Built from a configured provider, so it is a pipeline that can validate
+    // rather than one naming a model nobody registered.
+    expect(
+      savedGraphs[0]?.nodes.some(
+        (node) => node.kind === "core" && node.core.model.provider === "openai",
+      ),
+    ).toBe(true);
+  });
+
   it("adds a second pipeline beside the first", async () => {
     // Guided Setup only runs on first launch, so without this an operator
     // with one pipeline could never make another.
