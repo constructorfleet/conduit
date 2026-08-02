@@ -147,14 +147,22 @@ impl SpeechToText for WyomingStt {
         let pump_writer = std::sync::Arc::clone(&writer);
         let provider = self.name.clone();
         let pump_provider = provider.clone();
+        // How much audio reached the recognizer, and how the send side ended,
+        // is the difference between "the device stopped talking" and "we
+        // stopped forwarding" — and neither is visible from the server's logs,
+        // which only ever see what arrived.
+        let started = std::time::Instant::now();
         tokio::spawn(async move {
             let mut guard = pump_writer.lock().await;
             let write_half = &mut *guard;
             let mut audio = audio;
+            let mut chunks = 0_u64;
+            let mut bytes = 0_usize;
             while let Some(chunk) = audio.next().await {
                 match chunk {
                     Ok(chunk) => {
                         let sequence = chunk.sequence;
+                        let len = chunk.data.len();
                         if let Err(error) = write_wyoming_event_with_payload(
                             write_half,
                             "audio-chunk",
@@ -166,15 +174,23 @@ impl SpeechToText for WyomingStt {
                             tracing::warn!(
                                 pump_provider,
                                 sequence,
+                                chunks,
+                                bytes,
+                                elapsed_ms = started.elapsed().as_millis() as u64,
                                 error = %error,
                                 "failed to forward audio chunk; closing Wyoming session"
                             );
                             return;
                         }
+                        chunks += 1;
+                        bytes += len;
                     }
                     Err(error) => {
                         tracing::warn!(
                             pump_provider,
+                            chunks,
+                            bytes,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
                             error = %error,
                             "audio input failed; closing Wyoming session"
                         );
@@ -182,8 +198,21 @@ impl SpeechToText for WyomingStt {
                     }
                 }
             }
-            if let Err(error) = write_wyoming_event(write_half, "audio-stop", json!({})).await {
-                tracing::warn!(pump_provider, error = %error, "failed to signal end of audio");
+            match write_wyoming_event(write_half, "audio-stop", json!({})).await {
+                Ok(()) => tracing::info!(
+                    pump_provider,
+                    chunks,
+                    bytes,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "sent audio-stop; waiting for the final transcript"
+                ),
+                Err(error) => tracing::warn!(
+                    pump_provider,
+                    chunks,
+                    bytes,
+                    error = %error,
+                    "failed to signal end of audio"
+                ),
             }
         });
 
@@ -199,6 +228,18 @@ impl SpeechToText for WyomingStt {
                                 || event.event_type == TRANSCRIPT_CHUNK =>
                         {
                             let (text, confidence, is_final) = transcript_from_event(&event);
+                            // At info because this is the one fact that
+                            // distinguishes "the server never answered" from
+                            // "the server answered and we did not accept it",
+                            // and the two look identical from outside. One
+                            // line per turn.
+                            tracing::info!(
+                                provider,
+                                event = %event.event_type,
+                                is_final,
+                                chars = text.len(),
+                                "received a Wyoming transcript"
+                            );
                             if is_final {
                                 saw_final = true;
                                 let transcript = Transcript {
@@ -220,11 +261,26 @@ impl SpeechToText for WyomingStt {
                                 ));
                             }
                         }
-                        Ok(Some(_)) => {}
+                        Ok(Some(event)) => {
+                            tracing::debug!(
+                                provider,
+                                event = %event.event_type,
+                                "ignoring a Wyoming event that is not a transcript"
+                            );
+                        }
                         Ok(None) => {
                             // A clean end of stream still owes us a final
                             // transcript; report it once, then finish.
                             if !saw_final {
+                                // A clean EOF here means the server closed
+                                // without answering. Recording it separately
+                                // from the error the turn reports says whether
+                                // the close arrived before the transcript was
+                                // written or after it was lost.
+                                tracing::warn!(
+                                    provider,
+                                    "Wyoming server closed the connection with no final transcript"
+                                );
                                 saw_final = true;
                                 return Some((
                                     Err(Error::provider(
@@ -492,7 +548,7 @@ mod tests {
         // Streaming servers send partials under their own event type; only
         // that type is non-final.
         let event = WyomingEvent {
-            event_type: TRANSCRIPT_CHUNK.to_owned(),
+            event_type: "transcript-chunk".to_owned(),
             data: json!({ "text": "what time" }),
             payload: Vec::new(),
         };
