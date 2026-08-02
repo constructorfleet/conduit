@@ -174,5 +174,4 @@ pipeline definition.
 
 ## Current Limits
 
-The runtime does not yet detect wake words, identify speakers, or run a core's
-memory bindings. These are documented as known gaps in [README.md](../README.md).
+The runtime does not yet detect wake words or identify speakers. These are documented as known gaps in [README.md](../README.md).

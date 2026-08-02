@@ -336,7 +336,13 @@ resolution refuses a binding mode it cannot execute rather than dropping it —
 the rule that made the router refusal correct.
 
 Acceptance: a `read_write` binding retrieves before the first model call and
-stores after the final round, both visible on the event stream.
+stores after the final round.
+
+**Landed** as `26b2514`. Retrieval and storage are asserted through the fake
+store rather than through events: the runtime publishes nothing for a memory
+read today, and inventing an event to assert against would have tested the
+test. A memory event vocabulary is worth adding when something needs to watch
+it, and that is a separate decision from executing the bindings.
 
 ## Track G — Tool Confirmation Enforcement
 
