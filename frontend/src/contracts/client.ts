@@ -11,6 +11,7 @@ export type NodeKind =
   | "stt"
   | "speaker_id"
   | "router"
+  | "core"
   | "llm"
   | "tool"
   | "memory"
@@ -24,6 +25,33 @@ export type Modality = "audio" | "text" | "utterance";
 export interface PipelineNodeBase {
   id: IdString;
   provider: string;
+}
+
+export type ConfirmPolicy = "never" | "always";
+
+export interface ModelBinding {
+  provider: string;
+  model?: string;
+}
+
+export interface ToolBinding {
+  provider: string;
+  confirm: ConfirmPolicy;
+}
+
+export interface MemoryBinding {
+  provider: string;
+  mode: MemoryMode;
+  scope?: MemoryScope;
+  limit: number;
+}
+
+export interface ReasoningCore {
+  model: ModelBinding;
+  system?: string;
+  tools?: ToolBinding[];
+  memory?: MemoryBinding[];
+  max_rounds: number;
 }
 
 export type PipelineNode =
@@ -46,7 +74,8 @@ export type PipelineNode =
       limit?: number;
     })
   | (PipelineNodeBase & { kind: "tts"; voice?: string })
-  | (PipelineNodeBase & { kind: "sink"; modality?: Modality });
+  | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
+  | { kind: "core"; id: IdString; core: ReasoningCore };
 
 export interface PipelineEdge {
   from: IdString;

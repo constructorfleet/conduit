@@ -90,6 +90,7 @@ const LINEAR_STAGE_ORDER: NodeKind[] = [
   "stt",
   "speaker_id",
   "router",
+  "core",
   "llm",
   "tts",
   "sink",
@@ -895,7 +896,7 @@ function ProvidersPanel({
   const referencedProviderCount = new Set(
     pipelineViews.flatMap((view) =>
       view.graph.nodes
-        .map((node) => node.provider)
+        .map(nodeProvider)
         .filter((provider) => providerIds.has(provider)),
     ),
   ).size;
@@ -2352,10 +2353,10 @@ function PipelinesPanel({
     provider,
   }: {
     id: string;
-    kind: NodeKind;
+    kind: Exclude<NodeKind, "core">;
     provider: string;
   }) {
-    applyDraftEdit((graph) => {
+    applyDraftEdit((graph): PipelineGraph => {
       if (graph.nodes.some((node) => node.id === id)) {
         return graph;
       }
@@ -2395,10 +2396,18 @@ function PipelinesPanel({
         if (node.id !== nodeId) {
           return node;
         }
-        return {
-          ...node,
-          provider: providerId,
-        };
+        // A core's provider is its model binding's, so the same control has
+        // to reach one level in rather than setting a field a core has not
+        // got.
+        return node.kind === "core"
+          ? {
+              ...node,
+              core: {
+                ...node.core,
+                model: { ...node.core.model, provider: providerId },
+              },
+            }
+          : { ...node, provider: providerId };
       }),
     }));
   }
@@ -2854,8 +2863,8 @@ function PipelinesPanel({
         <strong className="node-label" title={node.id}>
           {node.id}
         </strong>
-        <p className="node-provider-label" title={node.provider}>
-          {node.provider}
+        <p className="node-provider-label" title={nodeProvider(node)}>
+          {nodeProvider(node)}
         </p>
         {editingNodeId === node.id ? (
           <>
@@ -2863,7 +2872,7 @@ function PipelinesPanel({
               <span>Provider</span>
               <select
                 aria-label={`Provider for ${node.id}`}
-                value={node.provider}
+                value={nodeProvider(node)}
                 onChange={(event) =>
                   updateNodeProvider(node.id, event.target.value)
                 }
@@ -3391,13 +3400,13 @@ function componentForNode(
 ): ProviderComponentDescriptor | null {
   const exact = catalog.components.find(
     (component) =>
-      component.id === node.provider && component.kind === node.kind,
+      component.id === nodeProvider(node) && component.kind === node.kind,
   );
   if (exact) {
     return exact;
   }
 
-  if (node.provider === "openai") {
+  if (nodeProvider(node) === "openai") {
     const openAiResponses = catalog.components.find(
       (component) =>
         component.id === "openai.responses" && component.kind === node.kind,
@@ -3428,7 +3437,7 @@ function componentForNode(
   return (
     catalog.components.find(
       (component) =>
-        component.id === node.provider && component.kind === node.kind,
+        component.id === nodeProvider(node) && component.kind === node.kind,
     ) ?? null
   );
 }
@@ -3442,7 +3451,7 @@ function componentForProviderStatus(
     id: provider.id,
     kind: nodeKind,
     provider: provider.id,
-  });
+  } as PipelineNode);
 }
 
 function componentForProviderDefinition(
@@ -3477,17 +3486,17 @@ function providerDefinitionsForNode(
   const matching = definitions.filter(
     (provider) => provider.kind === node.kind,
   );
-  if (matching.some((provider) => provider.id === node.provider)) {
+  if (matching.some((provider) => provider.id === nodeProvider(node))) {
     return matching;
   }
 
   return [
     ...matching,
     {
-      id: node.provider,
-      label: node.provider,
+      id: nodeProvider(node),
+      label: nodeProvider(node),
       kind: node.kind,
-      component: node.provider,
+      component: nodeProvider(node),
       config: {},
       source: "inferred",
     },
@@ -3783,10 +3792,10 @@ function defaultProviderDefinitions(
       const component = componentForNode(catalog, node);
       return [
         {
-          id: node.provider,
-          label: node.provider,
+          id: nodeProvider(node),
+          label: nodeProvider(node),
           kind: node.kind,
-          component: component?.id ?? node.provider,
+          component: component?.id ?? nodeProvider(node),
           config: {},
           source: "inferred",
         },
@@ -4543,16 +4552,38 @@ function buildMinimalVoiceLoopGraph({
     nodes: [
       { id: "mic", kind: "source", provider: "websocket" },
       { id: "stt", kind: "stt", provider: sttProvider },
-      { id: "llm", kind: "llm", provider: llmProvider },
+      coreNode(llmProvider),
       { id: "tts", kind: "tts", provider: ttsProvider },
       { id: "speaker", kind: "sink", provider: "websocket" },
     ],
     edges: [
       { from: "mic", to: "stt" },
-      { from: "stt", to: "llm" },
-      { from: "llm", to: "tts" },
+      { from: "stt", to: "core" },
+      { from: "core", to: "tts" },
       { from: "tts", to: "speaker" },
     ],
+  };
+}
+
+/// The provider a node shows and is edited through.
+///
+/// A core has no single provider — it binds a model plus any number of tools
+/// and stores — so it answers with its model's. Everything a node card offers
+/// today is about that one binding; its tools and memory are edited as
+/// bindings rather than as a provider field.
+function nodeProvider(node: PipelineNode): string {
+  return node.kind === "core" ? node.core.model.provider : node.provider;
+}
+
+/// A reasoning core bound to one model and nothing else.
+///
+/// Guided setup binds no tools and no memory: the point is the smallest
+/// pipeline that works, and bindings are what the graph editor is for.
+function coreNode(llmProvider: string): PipelineNode {
+  return {
+    id: "core",
+    kind: "core",
+    core: { model: { provider: llmProvider }, max_rounds: 4 },
   };
 }
 
@@ -4571,12 +4602,12 @@ function buildMinimalTextLoopGraph({
     name,
     nodes: [
       { id: "in", kind: "source", provider: "websocket", modality: "text" },
-      { id: "llm", kind: "llm", provider: llmProvider },
+      coreNode(llmProvider),
       { id: "out", kind: "sink", provider: "websocket", modality: "text" },
     ],
     edges: [
-      { from: "in", to: "llm" },
-      { from: "llm", to: "out" },
+      { from: "in", to: "core" },
+      { from: "core", to: "out" },
     ],
   };
 }

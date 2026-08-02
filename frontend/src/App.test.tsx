@@ -463,14 +463,18 @@ describe("First-Run Guided Setup", () => {
         nodes: [
           { id: "mic", kind: "source", provider: "websocket" },
           { id: "stt", kind: "stt", provider: "whisper" },
-          { id: "llm", kind: "llm", provider: "openai" },
+          {
+            id: "core",
+            kind: "core",
+            core: { model: { provider: "openai" }, max_rounds: 4 },
+          },
           { id: "tts", kind: "tts", provider: "piper" },
           { id: "speaker", kind: "sink", provider: "websocket" },
         ],
         edges: [
           { from: "mic", to: "stt" },
-          { from: "stt", to: "llm" },
-          { from: "llm", to: "tts" },
+          { from: "stt", to: "core" },
+          { from: "core", to: "tts" },
           { from: "tts", to: "speaker" },
         ],
       },
@@ -522,7 +526,11 @@ describe("First-Run Guided Setup", () => {
         name: "chat",
         nodes: [
           { id: "in", kind: "source", provider: "websocket", modality: "text" },
-          { id: "llm", kind: "llm", provider: "openai" },
+          {
+            id: "core",
+            kind: "core",
+            core: { model: { provider: "openai" }, max_rounds: 4 },
+          },
           {
             id: "out",
             kind: "sink",
@@ -531,8 +539,8 @@ describe("First-Run Guided Setup", () => {
           },
         ],
         edges: [
-          { from: "in", to: "llm" },
-          { from: "llm", to: "out" },
+          { from: "in", to: "core" },
+          { from: "core", to: "out" },
         ],
       },
     ]);
@@ -905,9 +913,8 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(
-      savedGraphs[0]?.nodes.find((node) => node.id === "llm")?.provider,
-    ).toBe("openai");
+    const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
+    expect(llm).toMatchObject({ kind: "llm", provider: "openai" });
   });
 
   it("asks one pipeline's model of a provider definition shared with another", async () => {
