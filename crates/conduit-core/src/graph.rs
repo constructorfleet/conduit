@@ -10,15 +10,29 @@ use std::collections::{HashMap, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::error::GraphError;
+use crate::memory::Scope;
 
 /// A node's identifier within its graph. Unique per graph, chosen by the
 /// author rather than generated, so graphs stay diffable.
 pub type NodeId = String;
 
+/// How many times a model may be called in one turn before the runtime stops.
+///
+/// A model that keeps requesting tools would otherwise loop forever while the
+/// person who asked the question waits.
+pub const DEFAULT_MAX_ROUNDS: usize = 4;
+
+/// How many records a memory node retrieves when the graph does not say.
+///
+/// Retrieved records are spent as prompt context, so the default is small
+/// enough that turning memory on cannot quietly crowd out the conversation.
+pub const DEFAULT_MEMORY_LIMIT: usize = 5;
+
 /// What a node does in the pipeline.
 ///
-/// The kind determines the shape of a node's inputs and outputs; the
-/// `provider` field on [`Node`] determines who implements it.
+/// The kind determines the shape of a node's inputs and outputs; the node's
+/// provider determines who implements it. This is the discriminant of [`Node`],
+/// which is where a node's configuration lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -45,23 +59,295 @@ pub enum NodeKind {
     Sink,
 }
 
-/// One stage in a pipeline.
+impl NodeKind {
+    /// The word this kind is written as in a graph.
+    ///
+    /// The same spelling serde uses, so an error message and the JSON an
+    /// operator is looking at name the node the same way.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::WakeWord => "wake_word",
+            Self::Stt => "stt",
+            Self::SpeakerId => "speaker_id",
+            Self::Router => "router",
+            Self::Llm => "llm",
+            Self::Tool => "tool",
+            Self::Memory => "memory",
+            Self::Tts => "tts",
+            Self::Sink => "sink",
+        }
+    }
+}
+
+/// What a memory node does with the conversation it is attached to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryMode {
+    /// Retrieve before the model runs, store nothing.
+    ///
+    /// The default because it is the only mode that cannot surprise an
+    /// operator by writing down what was said.
+    #[default]
+    Read,
+    /// Store after the model runs, retrieve nothing.
+    Write,
+    /// Retrieve before and store after.
+    ReadWrite,
+}
+
+/// One stage in a pipeline, with the settings that belong to it here.
+///
+/// A node names a provider *definition* by id, and definitions are shared: two
+/// pipelines can point at one language model provider and still request
+/// different models, because which model to request is a property of this
+/// pipeline rather than of the definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Node {
-    /// Author-chosen identifier, unique within the graph.
-    pub id: NodeId,
-    /// What this node does.
-    pub kind: NodeKind,
-    /// Registered provider name, e.g. `"whisper"` or `"piper"`.
-    pub provider: String,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Node {
+    /// Audio ingress from a device.
+    Source {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"websocket"`.
+        provider: String,
+    },
+    /// Wake word detection.
+    WakeWord {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"openwakeword"`.
+        provider: String,
+    },
+    /// Speech-to-text.
+    Stt {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"whisper"`.
+        provider: String,
+    },
+    /// Speaker identification.
+    SpeakerId {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id.
+        provider: String,
+    },
+    /// Conditional fan-out to one of several downstream branches.
+    Router {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id.
+        provider: String,
+    },
+    /// Language model inference.
+    Llm {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"ollama"`.
+        provider: String,
+        /// Model to request, or `None` for whichever model the provider
+        /// definition serves first.
+        ///
+        /// Naming one here is what lets two pipelines share a provider
+        /// definition and still reason with different models.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        /// System prompt for this pipeline, prepended to the definition's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system: Option<String>,
+        /// Cap on model calls in one turn.
+        #[serde(default = "default_max_rounds")]
+        max_rounds: usize,
+    },
+    /// Tool execution.
+    Tool {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, or a qualified tool id such as
+        /// `"weather-tools.forecast"`.
+        provider: String,
+    },
+    /// Memory read/write.
+    Memory {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id.
+        provider: String,
+        /// Whether this node retrieves, stores, or both.
+        #[serde(default)]
+        mode: MemoryMode,
+        /// Scope to confine retrieval and storage to, or `None` for all of
+        /// them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<Scope>,
+        /// Most records to retrieve in one turn.
+        #[serde(default = "default_memory_limit")]
+        limit: usize,
+    },
+    /// Text-to-speech.
+    Tts {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"piper"`.
+        provider: String,
+        /// Voice to request, or `None` for the provider's own default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voice: Option<String>,
+    },
+    /// Audio egress to a device.
+    Sink {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"websocket"`.
+        provider: String,
+    },
+}
+
+/// The default [`Node::Llm::max_rounds`], as a serde default.
+const fn default_max_rounds() -> usize {
+    DEFAULT_MAX_ROUNDS
+}
+
+/// The default [`Node::Memory::limit`], as a serde default.
+const fn default_memory_limit() -> usize {
+    DEFAULT_MEMORY_LIMIT
 }
 
 impl Node {
-    /// Creates a graph node that selects a registered provider by id.
+    /// Creates a `source` node.
     #[must_use]
-    pub fn new(id: impl Into<NodeId>, kind: NodeKind, provider: impl Into<String>) -> Self {
-        Self { id: id.into(), kind, provider: provider.into() }
+    pub fn source(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Source { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates a `wake_word` node.
+    #[must_use]
+    pub fn wake_word(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::WakeWord { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates an `stt` node.
+    #[must_use]
+    pub fn stt(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Stt { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates a `speaker_id` node.
+    #[must_use]
+    pub fn speaker_id(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::SpeakerId { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates a `router` node.
+    #[must_use]
+    pub fn router(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Router { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates an `llm` node configured as the provider definition sees fit.
+    ///
+    /// A pipeline that wants a particular model, prompt, or round cap builds
+    /// [`Node::Llm`] directly; those fields are the point of the variant, and
+    /// a constructor taking all of them would read as five positional
+    /// arguments at every call site that wants none of them.
+    #[must_use]
+    pub fn llm(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Llm {
+            id: id.into(),
+            provider: provider.into(),
+            model: None,
+            system: None,
+            max_rounds: DEFAULT_MAX_ROUNDS,
+        }
+    }
+
+    /// Creates a `tool` node.
+    #[must_use]
+    pub fn tool(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Tool { id: id.into(), provider: provider.into() }
+    }
+
+    /// Creates a `memory` node that retrieves from every scope.
+    #[must_use]
+    pub fn memory(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Memory {
+            id: id.into(),
+            provider: provider.into(),
+            mode: MemoryMode::Read,
+            scope: None,
+            limit: DEFAULT_MEMORY_LIMIT,
+        }
+    }
+
+    /// Creates a `tts` node using the provider's default voice.
+    #[must_use]
+    pub fn tts(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Tts { id: id.into(), provider: provider.into(), voice: None }
+    }
+
+    /// Creates a `sink` node.
+    #[must_use]
+    pub fn sink(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Sink { id: id.into(), provider: provider.into() }
+    }
+
+    /// This node's identifier within its graph.
+    #[must_use]
+    pub fn id(&self) -> &NodeId {
+        match self {
+            Self::Source { id, .. }
+            | Self::WakeWord { id, .. }
+            | Self::Stt { id, .. }
+            | Self::SpeakerId { id, .. }
+            | Self::Router { id, .. }
+            | Self::Llm { id, .. }
+            | Self::Tool { id, .. }
+            | Self::Memory { id, .. }
+            | Self::Tts { id, .. }
+            | Self::Sink { id, .. } => id,
+        }
+    }
+
+    /// The provider definition this node selects.
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        match self {
+            Self::Source { provider, .. }
+            | Self::WakeWord { provider, .. }
+            | Self::Stt { provider, .. }
+            | Self::SpeakerId { provider, .. }
+            | Self::Router { provider, .. }
+            | Self::Llm { provider, .. }
+            | Self::Tool { provider, .. }
+            | Self::Memory { provider, .. }
+            | Self::Tts { provider, .. }
+            | Self::Sink { provider, .. } => provider,
+        }
+    }
+
+    /// What this node does.
+    #[must_use]
+    pub const fn kind(&self) -> NodeKind {
+        match self {
+            Self::Source { .. } => NodeKind::Source,
+            Self::WakeWord { .. } => NodeKind::WakeWord,
+            Self::Stt { .. } => NodeKind::Stt,
+            Self::SpeakerId { .. } => NodeKind::SpeakerId,
+            Self::Router { .. } => NodeKind::Router,
+            Self::Llm { .. } => NodeKind::Llm,
+            Self::Tool { .. } => NodeKind::Tool,
+            Self::Memory { .. } => NodeKind::Memory,
+            Self::Tts { .. } => NodeKind::Tts,
+            Self::Sink { .. } => NodeKind::Sink,
+        }
+    }
+
+    /// The word this node's kind is written as in a graph.
+    #[must_use]
+    pub const fn kind_name(&self) -> &'static str {
+        self.kind().name()
     }
 }
 
@@ -135,7 +421,7 @@ impl PipelineGraph {
     /// Looks up a node by id.
     #[must_use]
     pub fn node(&self, id: &str) -> Option<&Node> {
-        self.nodes.iter().find(|node| node.id == id)
+        self.nodes.iter().find(|node| node.id() == id)
     }
 
     /// Checks that the graph is executable.
@@ -285,7 +571,7 @@ impl PipelineGraph {
 
         (0..self.nodes.len())
             .filter(|&node| !reached[node])
-            .map(|node| self.nodes[node].id.clone())
+            .map(|node| self.nodes[node].id().clone())
             .collect()
     }
 
@@ -325,7 +611,7 @@ impl PipelineGraph {
 
         (0..self.nodes.len())
             .filter(|&node| !removed[node])
-            .map(|node| self.nodes[node].id.clone())
+            .map(|node| self.nodes[node].id().clone())
             .collect()
     }
 
@@ -333,8 +619,8 @@ impl PipelineGraph {
     fn index_nodes(&self) -> Result<HashMap<&str, usize>, GraphError> {
         let mut index = HashMap::with_capacity(self.nodes.len());
         for (position, node) in self.nodes.iter().enumerate() {
-            if index.insert(node.id.as_str(), position).is_some() {
-                return Err(GraphError::DuplicateNode(node.id.clone()));
+            if index.insert(node.id().as_str(), position).is_some() {
+                return Err(GraphError::DuplicateNode(node.id().clone()));
             }
         }
         Ok(index)
@@ -348,11 +634,11 @@ mod tests {
     /// mic -> wake -> stt -> llm -> tts
     fn linear() -> PipelineGraph {
         PipelineGraph::new("linear")
-            .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-            .with_node(Node::new("wake", NodeKind::WakeWord, "openwakeword"))
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+            .with_node(Node::source("mic", "websocket"))
+            .with_node(Node::wake_word("wake", "openwakeword"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("mic", "wake"))
             .with_edge(Edge::new("wake", "stt"))
             .with_edge(Edge::new("stt", "llm"))
@@ -363,7 +649,7 @@ mod tests {
     fn linear_graph_orders_by_dependency() {
         let graph = linear();
         let order: Vec<&str> =
-            graph.topological_order().expect("valid").iter().map(|n| n.id.as_str()).collect();
+            graph.topological_order().expect("valid").iter().map(|n| n.id().as_str()).collect();
         assert_eq!(order, ["mic", "wake", "stt", "llm", "tts"]);
     }
 
@@ -377,11 +663,11 @@ mod tests {
     /// this exact shape.
     fn router_fan_out() -> PipelineGraph {
         PipelineGraph::new("router")
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("router", NodeKind::Router, "builtin"))
-            .with_node(Node::new("local", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("cloud", NodeKind::Llm, "anthropic"))
-            .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::router("router", "builtin"))
+            .with_node(Node::llm("local", "ollama"))
+            .with_node(Node::llm("cloud", "anthropic"))
+            .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("stt", "router"))
             .with_edge(Edge::from_port("router", "local", "local"))
             .with_edge(Edge::from_port("router", "cloud", "cloud"))
@@ -393,7 +679,7 @@ mod tests {
     fn router_fan_out_joins_before_the_sink() {
         let graph = router_fan_out();
         let order: Vec<&str> =
-            graph.topological_order().expect("valid").iter().map(|n| n.id.as_str()).collect();
+            graph.topological_order().expect("valid").iter().map(|n| n.id().as_str()).collect();
         assert_eq!(order, ["stt", "router", "local", "cloud", "tts"]);
     }
 
@@ -403,9 +689,9 @@ mod tests {
         // outgoing edge, so the sink check passes too. Without a connectivity
         // check this shape validated while saying nothing about order.
         let graph = PipelineGraph::new("unwired")
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("tts", NodeKind::Tts, "piper"));
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::tts("tts", "piper"));
 
         let Err(GraphError::Disconnected(nodes)) = graph.validate() else {
             panic!("an unwired graph must not validate");
@@ -421,7 +707,7 @@ mod tests {
     fn an_unreachable_node_is_rejected_rather_than_ignored() {
         // A node nothing feeds and that feeds nothing would never run, and a
         // graph that accepts it tells its author the opposite.
-        let graph = linear().with_node(Node::new("orphan", NodeKind::Tool, "builtin"));
+        let graph = linear().with_node(Node::tool("orphan", "builtin"));
 
         assert_eq!(graph.validate(), Err(GraphError::Disconnected(vec!["orphan".to_owned()])));
     }
@@ -429,10 +715,10 @@ mod tests {
     #[test]
     fn two_separate_pipelines_in_one_graph_are_rejected() {
         let graph = PipelineGraph::new("two")
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("other-stt", NodeKind::Stt, "vosk"))
-            .with_node(Node::new("other-llm", NodeKind::Llm, "vllm"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::stt("other-stt", "vosk"))
+            .with_node(Node::llm("other-llm", "vllm"))
             .with_edge(Edge::new("stt", "llm"))
             .with_edge(Edge::new("other-stt", "other-llm"));
 
@@ -447,7 +733,7 @@ mod tests {
         // Connectivity ignores direction: a tool hanging off the model is part
         // of the pipeline whichever way the edge points.
         linear()
-            .with_node(Node::new("clock", NodeKind::Tool, "builtin"))
+            .with_node(Node::tool("clock", "builtin"))
             .with_edge(Edge::new("clock", "llm"))
             .validate()
             .expect("an upstream branch is still one pipeline");
@@ -485,8 +771,8 @@ mod tests {
         // Cyclic graphs do not validate, but `reaches` is callable on any
         // graph and must not spin.
         let graph = PipelineGraph::new("cyclic")
-            .with_node(Node::new("a", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("b", NodeKind::Tool, "builtin"))
+            .with_node(Node::llm("a", "ollama"))
+            .with_node(Node::tool("b", "builtin"))
             .with_edge(Edge::new("a", "b"))
             .with_edge(Edge::new("b", "a"));
 
@@ -497,16 +783,16 @@ mod tests {
     #[test]
     fn duplicate_ids_are_rejected() {
         let graph = PipelineGraph::new("dupe")
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("stt", NodeKind::Stt, "vosk"));
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::stt("stt", "vosk"));
         assert_eq!(graph.validate(), Err(GraphError::DuplicateNode("stt".into())));
     }
 
     #[test]
     fn dangling_edges_are_rejected() {
         let graph = PipelineGraph::new("dangling")
-            .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-            .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("stt", "nope"));
         assert_eq!(graph.validate(), Err(GraphError::UnknownNode("nope".into())));
     }
@@ -514,10 +800,10 @@ mod tests {
     #[test]
     fn cycles_are_rejected_and_name_the_participants() {
         let graph = PipelineGraph::new("cyclic")
-            .with_node(Node::new("source", NodeKind::Source, "websocket"))
-            .with_node(Node::new("a", NodeKind::Llm, "ollama"))
-            .with_node(Node::new("b", NodeKind::Tool, "builtin"))
-            .with_node(Node::new("sink", NodeKind::Sink, "websocket"))
+            .with_node(Node::source("source", "websocket"))
+            .with_node(Node::llm("a", "ollama"))
+            .with_node(Node::tool("b", "builtin"))
+            .with_node(Node::sink("sink", "websocket"))
             .with_edge(Edge::new("source", "a"))
             .with_edge(Edge::new("a", "b"))
             .with_edge(Edge::new("b", "a"))
@@ -541,8 +827,8 @@ mod tests {
         // caught by NoSource first, so use a node that points at itself plus
         // a reachable head.
         let graph = PipelineGraph::new("no sink")
-            .with_node(Node::new("head", NodeKind::Source, "websocket"))
-            .with_node(Node::new("loop", NodeKind::Llm, "ollama"))
+            .with_node(Node::source("head", "websocket"))
+            .with_node(Node::llm("loop", "ollama"))
             .with_edge(Edge::new("head", "loop"))
             .with_edge(Edge::new("loop", "loop"));
         assert_eq!(graph.validate(), Err(GraphError::NoSink));
@@ -555,5 +841,108 @@ mod tests {
         let decoded: PipelineGraph = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, graph);
         decoded.validate().expect("still valid");
+    }
+
+    #[test]
+    fn a_node_is_tagged_by_its_kind_and_carries_its_own_settings() {
+        // The tag is what makes a node's configuration readable: `kind` says
+        // which fields the rest of the object is allowed to have.
+        let node = Node::Llm {
+            id: "llm".to_owned(),
+            provider: "ollama".to_owned(),
+            model: Some("qwen3:8b".to_owned()),
+            system: Some("Be brief.".to_owned()),
+            max_rounds: 2,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&node).expect("serialize"),
+            serde_json::json!({
+                "kind": "llm",
+                "id": "llm",
+                "provider": "ollama",
+                "model": "qwen3:8b",
+                "system": "Be brief.",
+                "max_rounds": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn unset_node_settings_are_left_out_rather_than_written_as_null() {
+        // A graph an operator reads should only mention what that pipeline
+        // decided, so an unnamed model is absent rather than an explicit null.
+        assert_eq!(
+            serde_json::to_value(Node::tts("tts", "piper")).expect("serialize"),
+            serde_json::json!({ "kind": "tts", "id": "tts", "provider": "piper" })
+        );
+    }
+
+    #[test]
+    fn omitted_node_settings_fall_back_to_the_documented_defaults() {
+        let node: Node = serde_json::from_value(
+            serde_json::json!({ "kind": "llm", "id": "llm", "provider": "ollama" }),
+        )
+        .expect("deserialize");
+
+        assert_eq!(node, Node::llm("llm", "ollama"));
+        let Node::Llm { model, system, max_rounds, .. } = node else {
+            panic!("an `llm` tag deserializes to an `llm` node");
+        };
+        assert_eq!(model, None, "no model named means the provider's first");
+        assert_eq!(system, None);
+        assert_eq!(max_rounds, DEFAULT_MAX_ROUNDS);
+    }
+
+    #[test]
+    fn a_setting_from_the_wrong_kind_of_node_is_rejected() {
+        // Accepting `voice` on a model node would let an operator configure
+        // something that could never take effect, and nothing would say so.
+        let error = serde_json::from_value::<Node>(serde_json::json!({
+            "kind": "llm",
+            "id": "llm",
+            "provider": "ollama",
+            "voice": "alba",
+        }))
+        .expect_err("`voice` is not a language model setting");
+
+        assert!(error.to_string().contains("voice"), "{error}");
+    }
+
+    #[test]
+    fn a_memory_node_defaults_to_retrieving_from_every_scope() {
+        let Node::Memory { mode, scope, limit, .. } = Node::memory("memory", "builtin") else {
+            panic!("the constructor builds a memory node");
+        };
+
+        assert_eq!(mode, MemoryMode::Read);
+        assert_eq!(scope, None, "unset means every scope, as in a memory query");
+        assert_eq!(limit, DEFAULT_MEMORY_LIMIT);
+    }
+
+    #[test]
+    fn a_kinds_name_is_the_word_it_is_written_as_on_the_wire() {
+        // Error messages name a node kind and so does the JSON beside them;
+        // two spellings of `wake_word` would send an operator looking for a
+        // node that is not there.
+        for node in [
+            Node::source("a", "p"),
+            Node::wake_word("b", "p"),
+            Node::stt("c", "p"),
+            Node::speaker_id("d", "p"),
+            Node::router("e", "p"),
+            Node::llm("f", "p"),
+            Node::tool("g", "p"),
+            Node::memory("h", "p"),
+            Node::tts("i", "p"),
+            Node::sink("j", "p"),
+        ] {
+            let tag = serde_json::to_value(&node).expect("serialize")["kind"]
+                .as_str()
+                .expect("the tag is a string")
+                .to_owned();
+            assert_eq!(node.kind_name(), tag);
+            assert_eq!(node.kind().name(), tag);
+        }
     }
 }

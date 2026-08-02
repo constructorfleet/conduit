@@ -294,7 +294,7 @@ fn view(graph: PipelineGraph) -> Result<PipelineView, ApiError> {
         .topological_order()
         .map_err(|error| ApiError::unprocessable(error.to_string()))?
         .iter()
-        .map(|node| node.id.clone())
+        .map(|node| node.id().clone())
         .collect();
     Ok(PipelineView { graph, order })
 }
@@ -306,35 +306,36 @@ async fn validate_provider_references(
     for node in
         graph.topological_order().map_err(|error| ApiError::unprocessable(error.to_string()))?
     {
-        let Some(expected) = provider_capability_for_node(node.kind) else {
+        let Some(expected) = provider_capability_for_node(node.kind()) else {
             continue;
         };
         // A qualified id such as `weather-tools.forecast` names one tool
         // discovered from an MCP definition, not a stored definition, so it is
         // resolved against the runtime snapshot instead of the store — which
         // would reject the string as an unusable key.
-        let definition = if validate_name(&node.provider).is_ok() {
-            state.provider_definition(&node.provider).await.map_err(store_failure)?
+        let definition = if validate_name(node.provider()).is_ok() {
+            state.provider_definition(node.provider()).await.map_err(store_failure)?
         } else {
             None
         };
         let actual = if let Some(definition) = definition {
             Some(definition.capability())
         } else {
-            runtime_provider_capability(state.providers().as_deref(), &node.provider)
+            runtime_provider_capability(state.providers().as_deref(), node.provider())
         };
         let Some(actual) = actual else {
             return Err(ApiError::unprocessable(format!(
                 "provider definition `{}` is referenced by node `{}` but does not exist",
-                node.provider, node.id
+                node.provider(),
+                node.id()
             )));
         };
         if actual != expected {
             return Err(ApiError::unprocessable(format!(
                 "provider definition `{}` is {} but node `{}` requires {}",
-                node.provider,
+                node.provider(),
                 provider_capability_label(actual),
-                node.id,
+                node.id(),
                 provider_capability_label(expected)
             )));
         }

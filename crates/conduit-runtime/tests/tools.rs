@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{Event, SpokenSegmentRole};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_core::testing::voice_graph;
 use conduit_provider::llm::Role;
@@ -502,7 +502,7 @@ async fn tools_requested_together_run_together() {
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
 
     let graph = graph_with_tool()
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
+        .with_node(Node::tool("clock", "clock"))
         .with_edge(Edge::new("llm", "clock"))
         .with_edge(Edge::new("clock", "tts"));
     let providers = Providers::new()
@@ -621,9 +621,9 @@ async fn a_model_that_never_stops_calling_tools_is_cut_off() {
 async fn a_pipeline_without_tools_offers_the_model_none() {
     let llm = FakeLlm::new(vec!["Hello."]);
     let graph = PipelineGraph::new("plain")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"));
 

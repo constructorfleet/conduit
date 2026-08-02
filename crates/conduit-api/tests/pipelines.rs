@@ -8,7 +8,7 @@ use axum::routing::get as axum_get;
 use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_core::testing::voice_graph;
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
@@ -375,7 +375,7 @@ async fn replacing_a_pipeline_refuses_node_configuration_fields() {
     assert!(body["detail"].as_str().expect("detail").contains("config"));
     let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider);
+    assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider());
 }
 
 #[tokio::test]
@@ -395,11 +395,7 @@ async fn invalid_graphs_are_rejected_and_not_stored() {
 #[tokio::test]
 async fn storing_a_pipeline_rejects_missing_provider_definitions_and_does_not_store() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "missing-openai",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "missing-openai"));
 
     let (status, body) = call(&state, put(&graph)).await;
 
@@ -425,11 +421,7 @@ async fn storing_a_pipeline_rejects_provider_definition_kind_mismatches_and_does
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "tts",
-        NodeKind::Tts,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::tts("tts", "openai-primary"));
 
     let (status, body) = call(&state, put(&graph)).await;
 
@@ -497,11 +489,7 @@ async fn validate_checks_without_storing() {
 #[tokio::test]
 async fn validate_rejects_missing_provider_definitions() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "missing-openai",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "missing-openai"));
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -531,11 +519,7 @@ async fn validate_rejects_provider_definition_kind_mismatches() {
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "tts",
-        NodeKind::Tts,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::tts("tts", "openai-primary"));
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -1098,8 +1082,8 @@ async fn saving_an_mcp_definition_registers_its_discovered_tool() {
     // A graph node may now reference the definition id as a tool provider.
     store_llm_provider_definition(&state, "ollama").await;
     let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("weather", NodeKind::Tool, "weather-tools"))
+        .with_node(Node::llm("llm", "ollama"))
+        .with_node(Node::tool("weather", "weather-tools"))
         .with_edge(Edge::new("llm", "weather"));
 
     let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
@@ -1123,9 +1107,9 @@ async fn a_multi_tool_mcp_definition_registers_each_tool_under_its_own_id() {
 
     store_llm_provider_definition(&state, "ollama").await;
     let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
-        .with_node(Node::new("history", NodeKind::Tool, "weather-tools.history"))
+        .with_node(Node::llm("llm", "ollama"))
+        .with_node(Node::tool("forecast", "weather-tools.forecast"))
+        .with_node(Node::tool("history", "weather-tools.history"))
         .with_edge(Edge::new("llm", "forecast"))
         .with_edge(Edge::new("llm", "history"));
 
@@ -1193,8 +1177,8 @@ async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
     store_llm_provider_definition(&state, "ollama").await;
     let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
+        .with_node(Node::llm("llm", "ollama"))
+        .with_node(Node::tool("forecast", "weather-tools.forecast"))
         .with_edge(Edge::new("llm", "forecast"));
     let (status, body) = call(&state, put(&graph)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -1218,11 +1202,7 @@ async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::llm("llm", "openai-primary"));
     call(&state, put(&graph)).await;
 
     let (status, body) = call(&state, delete("/v1/providers/openai-primary")).await;

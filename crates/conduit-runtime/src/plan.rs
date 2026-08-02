@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use conduit_core::graph::{Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Node, PipelineGraph};
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{LanguageModel, ToolSpec};
 use conduit_provider::stt::SpeechToText;
@@ -11,12 +11,6 @@ use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
 
 use crate::Providers;
-
-/// How many times a model may be called in one turn before the runtime stops.
-///
-/// A model that keeps requesting tools would otherwise loop forever while the
-/// person who asked the question waits.
-const DEFAULT_MAX_TOOL_ROUNDS: usize = 4;
 
 /// The resolved providers and settings for one pipeline.
 ///
@@ -35,13 +29,13 @@ pub struct Plan {
     pub llm_node: String,
     /// Model identifier to request.
     pub model: String,
-    /// System prompt attached by provider registry configuration, when present.
+    /// System prompt this pipeline's model node asks for, when present.
     pub system: Option<String>,
     /// Synthesizer.
     pub tts: Arc<dyn TextToSpeech>,
     /// Node id of the synthesizer.
     pub tts_node: String,
-    /// Voice to request from provider registry configuration, when present.
+    /// Voice this pipeline's synthesis node asks for, when present.
     pub voice: Option<String>,
     /// Tools offered to the model, keyed by the name it calls them by.
     ///
@@ -75,64 +69,52 @@ impl Plan {
         let mut tool_nodes = Vec::new();
 
         for node in graph.topological_order()? {
-            match node.kind {
+            match node {
                 // Endpoints describe where audio enters and leaves; the
                 // caller supplies both, so there is nothing to resolve.
-                NodeKind::Source | NodeKind::Sink => {}
-                NodeKind::Stt => {
+                Node::Source { .. } | Node::Sink { .. } => {}
+                Node::Stt { id, provider } => {
                     reject_duplicate(&stt, node)?;
-                    stt = Some((providers.stt().require(&node.provider)?, node.id.clone()));
+                    stt = Some((providers.stt().require(provider)?, id.clone()));
                 }
-                NodeKind::Llm => {
+                Node::Llm { id, provider, model, system, max_rounds } => {
                     reject_duplicate(&llm, node)?;
-                    let provider = providers.llm().require(&node.provider)?;
-                    // A node names a provider *definition*, and which model to
-                    // request is one of that definition's fields — not the id
-                    // it is filed under. The id is only a fallback for a
-                    // provider that declares no models and so passes any name
-                    // through, because definition ids cannot spell a tag like
-                    // `qwen3:8b` in the first place.
-                    let model = provider
-                        .models()
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| node.provider.clone());
+                    let language_model = providers.llm().require(provider)?;
+                    let model = resolve_model(language_model.as_ref(), node, model.as_deref())?;
                     llm =
-                        Some((provider, node.id.clone(), model, None, DEFAULT_MAX_TOOL_ROUNDS));
+                        Some((language_model, id.clone(), model, system.clone(), *max_rounds));
                 }
-                NodeKind::Tool => {
-                    let tool = providers.tools().require(&node.provider)?;
+                Node::Tool { id, provider } => {
+                    let tool = providers.tools().require(provider)?;
                     let name = tool.spec().name;
                     if tools.insert(name.clone(), tool).is_some() {
                         return Err(Error::Config(format!(
                             "two tools are both called `{name}`; the model could not \
-                             tell them apart (node `{}`)",
-                            node.id
+                             tell them apart (node `{id}`)"
                         )));
                     }
-                    tool_nodes.push(node.id.clone());
+                    tool_nodes.push(id.clone());
                 }
-                NodeKind::Tts => {
+                Node::Tts { id, provider, voice } => {
                     reject_duplicate(&tts, node)?;
-                    let provider = providers.tts().require(&node.provider)?;
-                    tts = Some((provider, node.id.clone(), None));
+                    let provider = providers.tts().require(provider)?;
+                    tts = Some((provider, id.clone(), voice.clone()));
                 }
                 // Explicitly refused rather than skipped. A router that is
                 // accepted and then ignored turns "send hard questions to the
                 // cloud model" into "send everything to whichever model
                 // resolved", which is worse than refusing to run the graph.
-                NodeKind::Router => {
+                Node::Router { id, .. } => {
                     return Err(Error::Config(format!(
                         "`router` nodes are not executable yet, and running this graph \
-                         would ignore the routing it describes (node `{}`)",
-                        node.id
+                         would ignore the routing it describes (node `{id}`)"
                     )))
                 }
-                kind => {
+                other => {
                     return Err(Error::Config(format!(
                         "`{}` nodes are not executable yet (node `{}`)",
-                        kind_name(kind),
-                        node.id
+                        other.kind_name(),
+                        other.id()
                     )))
                 }
             }
@@ -162,10 +144,6 @@ impl Plan {
                 tools.len()
             )));
         }
-        // No allowlist check belongs here any more: the model *is* the
-        // provider's own first served model, or — when it serves none — a name
-        // it has already said it passes through. There is nothing left that
-        // could disagree.
 
         Ok(Self {
             pipeline: graph.name.clone(),
@@ -184,6 +162,46 @@ impl Plan {
     }
 }
 
+/// The model a language model node asks for.
+///
+/// A node names a provider *definition*, and a definition is shared: two
+/// pipelines pointing at one provider must be able to reason with different
+/// models, so the model belongs to the node. A node that names none keeps the
+/// old behavior as an explicit choice — whichever model the provider serves
+/// first, or, for a provider that serves none and therefore passes any name
+/// through, the definition id itself, because definition ids cannot spell a tag
+/// like `qwen3:8b` in the first place.
+fn resolve_model(
+    provider: &dyn LanguageModel,
+    node: &Node,
+    requested: Option<&str>,
+) -> Result<String> {
+    let Some(requested) = requested else {
+        return Ok(provider
+            .models()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| node.provider().to_owned()));
+    };
+
+    // An empty list means the provider passes any name through, so there is
+    // nothing to check it against. A non-empty one is what the provider says
+    // it can serve, and asking for anything else fails at the first token —
+    // long after the operator stopped looking at the graph they just saved.
+    let served = provider.models();
+    if served.is_empty() || served.iter().any(|model| model == requested) {
+        return Ok(requested.to_owned());
+    }
+
+    Err(Error::Config(format!(
+        "node `{}` asks provider `{}` for model `{requested}`, which it does not serve; \
+         it serves {}",
+        node.id(),
+        node.provider(),
+        served.join(", ")
+    )))
+}
+
 /// Rejects a second node of a kind the runtime can only run once.
 ///
 /// Tool branches can fan out, but capture, reasoning, and synthesis are still
@@ -193,8 +211,8 @@ fn reject_duplicate<T>(existing: &Option<T>, node: &Node) -> Result<()> {
         return Err(Error::Config(format!(
             "more than one `{}` node; this runtime executes only one per turn \
              (node `{}`)",
-            kind_name(node.kind),
-            node.id
+            node.kind_name(),
+            node.id()
         )));
     }
     Ok(())
@@ -214,14 +232,6 @@ fn require_downstream(graph: &PipelineGraph, upstream: &str, downstream: &str) -
         "node `{downstream}` is not downstream of `{upstream}`, but this runtime would \
          run it as though it were; add the edges the pipeline needs"
     )))
-}
-
-/// The name a node kind is written as in a graph.
-fn kind_name(kind: NodeKind) -> String {
-    serde_json::to_value(kind)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// Error for a pipeline missing a stage the runtime requires.

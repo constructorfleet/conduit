@@ -11,7 +11,7 @@ use std::time::Duration;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
@@ -425,8 +425,8 @@ async fn tool_fan_out_is_executable() {
     // support: tools requested together run together. Routing them through a
     // `router` node is what it does not — see `tests/plan.rs`.
     let graph = linear_graph()
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
+        .with_node(Node::tool("search", "search"))
+        .with_node(Node::tool("clock", "clock"))
         .with_edge(Edge::new("llm", "search"))
         .with_edge(Edge::new("llm", "clock"))
         .with_edge(Edge::new("search", "tts"))
@@ -446,7 +446,7 @@ async fn tool_fan_out_is_executable() {
 #[tokio::test]
 async fn rejects_stages_it_cannot_execute() {
     let graph = linear_graph()
-        .with_node(Node::new("memory", NodeKind::Memory, "builtin"))
+        .with_node(Node::memory("memory", "builtin"))
         .with_edge(Edge::new("llm", "memory"))
         .with_edge(Edge::new("memory", "tts"));
 

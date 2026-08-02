@@ -17,11 +17,35 @@ export type NodeKind =
   | "tts"
   | "sink";
 
-export interface PipelineNode {
+export type MemoryMode = "read" | "write" | "read_write";
+export type MemoryScope = "conversation" | "speaker" | "global";
+
+export interface PipelineNodeBase {
   id: IdString;
-  kind: NodeKind;
   provider: string;
 }
+
+export type PipelineNode =
+  | (PipelineNodeBase & { kind: "source" })
+  | (PipelineNodeBase & { kind: "wake_word" })
+  | (PipelineNodeBase & { kind: "stt" })
+  | (PipelineNodeBase & { kind: "speaker_id" })
+  | (PipelineNodeBase & { kind: "router" })
+  | (PipelineNodeBase & {
+      kind: "llm";
+      model?: string;
+      system?: string;
+      max_rounds?: number;
+    })
+  | (PipelineNodeBase & { kind: "tool" })
+  | (PipelineNodeBase & {
+      kind: "memory";
+      mode?: MemoryMode;
+      scope?: MemoryScope;
+      limit?: number;
+    })
+  | (PipelineNodeBase & { kind: "tts"; voice?: string })
+  | (PipelineNodeBase & { kind: "sink" });
 
 export interface PipelineEdge {
   from: IdString;
@@ -436,28 +460,30 @@ export const pipelineViewFixture = {
     "name": "kitchen",
     "nodes": [
       {
-        "id": "mic",
         "kind": "source",
+        "id": "mic",
         "provider": "websocket"
       },
       {
-        "id": "stt",
         "kind": "stt",
+        "id": "stt",
         "provider": "whisper"
       },
       {
-        "id": "llm",
         "kind": "llm",
-        "provider": "openai"
+        "id": "llm",
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "max_rounds": 4
       },
       {
-        "id": "tts",
         "kind": "tts",
+        "id": "tts",
         "provider": "piper-local"
       },
       {
-        "id": "speaker",
         "kind": "sink",
+        "id": "speaker",
         "provider": "websocket"
       }
     ],

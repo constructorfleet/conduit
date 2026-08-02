@@ -10,7 +10,7 @@
 //! keep building nodes and edges explicitly. Fixtures hide exactly the detail
 //! those tests exist to pin down.
 
-use crate::graph::{Edge, Node, NodeKind, PipelineGraph};
+use crate::graph::{Edge, Node, PipelineGraph};
 
 /// Builds the voice pipeline shape and wires it in the canonical order.
 ///
@@ -100,21 +100,26 @@ impl VoiceGraph {
         let mut graph = PipelineGraph::new(self.name);
         let mut spine: Vec<&str> = Vec::new();
 
-        for (id, kind, provider) in [
-            ("mic", NodeKind::Source, self.source.as_ref()),
-            ("stt", NodeKind::Stt, self.stt.as_ref()),
-            ("llm", NodeKind::Llm, self.llm.as_ref()),
-            ("tts", NodeKind::Tts, self.tts.as_ref()),
-            ("sink", NodeKind::Sink, self.sink.as_ref()),
-        ] {
-            if let Some(provider) = provider {
-                graph = graph.with_node(Node::new(id, kind, provider));
+        // Stages are built through their own constructors rather than from a
+        // node kind, because a typed node carries settings a fixture has no
+        // opinion about and the constructors are where those defaults live.
+        let stages = [
+            ("mic", self.source.as_ref().map(|provider| Node::source("mic", provider))),
+            ("stt", self.stt.as_ref().map(|provider| Node::stt("stt", provider))),
+            ("llm", self.llm.as_ref().map(|provider| Node::llm("llm", provider))),
+            ("tts", self.tts.as_ref().map(|provider| Node::tts("tts", provider))),
+            ("sink", self.sink.as_ref().map(|provider| Node::sink("sink", provider))),
+        ];
+
+        for (id, stage) in stages {
+            if let Some(stage) = stage {
+                graph = graph.with_node(stage);
                 spine.push(id);
             }
         }
 
         for (id, provider) in &self.tools {
-            graph = graph.with_node(Node::new(id.clone(), NodeKind::Tool, provider.clone()));
+            graph = graph.with_node(Node::tool(id.clone(), provider.clone()));
         }
 
         // The model's successor is where every tool branch rejoins. Finding it
@@ -152,7 +157,7 @@ mod tests {
     use super::*;
 
     fn ids(graph: &PipelineGraph) -> Vec<&str> {
-        graph.nodes.iter().map(|node| node.id.as_str()).collect()
+        graph.nodes.iter().map(|node| node.id().as_str()).collect()
     }
 
     fn wiring(graph: &PipelineGraph) -> Vec<(&str, &str)> {

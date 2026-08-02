@@ -13,7 +13,7 @@ use std::time::Duration;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Filter, Subscription};
 use conduit_core::event::{Event, Stage};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Runner};
 use fakes::{audio_failing_after, audio_of, audio_of_size, FakeLlm, FakeStt, FakeTts};
@@ -22,9 +22,9 @@ use futures_util::StreamExt;
 /// stt -> llm -> tts, the shape the runtime can execute.
 fn linear_graph() -> PipelineGraph {
     PipelineGraph::new("capture")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::llm("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
 }

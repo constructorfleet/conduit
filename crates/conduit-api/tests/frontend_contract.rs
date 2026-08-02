@@ -19,7 +19,7 @@ use conduit_api::status::{
     SnapshotEventBinding, SnapshotResource, StaleState,
 };
 use conduit_core::event::{Envelope, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph, DEFAULT_MAX_ROUNDS};
 use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
 use uuid::Uuid;
 
@@ -262,11 +262,19 @@ fn event_fixtures() -> Vec<Envelope> {
 
 fn pipeline_fixture() -> PipelineView {
     let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "openai"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper-local"))
-        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
+        .with_node(Node::source("mic", "websocket"))
+        .with_node(Node::stt("stt", "whisper"))
+        .with_node(Node::Llm {
+            id: "llm".to_owned(),
+            provider: "openai".to_owned(),
+            // The fixture names a model because that is the point of a typed
+            // node: the frontend has to render a field the wire may omit.
+            model: Some("gpt-4o-mini".to_owned()),
+            system: None,
+            max_rounds: DEFAULT_MAX_ROUNDS,
+        })
+        .with_node(Node::tts("tts", "piper-local"))
+        .with_node(Node::sink("speaker", "websocket"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -276,7 +284,7 @@ fn pipeline_fixture() -> PipelineView {
         .topological_order()
         .expect("fixture graph is valid")
         .iter()
-        .map(|node| node.id.clone())
+        .map(|node| node.id().clone())
         .collect();
 
     PipelineView { graph, order }
@@ -352,11 +360,35 @@ export type NodeKind =
   | "tts"
   | "sink";
 
-export interface PipelineNode {{
+export type MemoryMode = "read" | "write" | "read_write";
+export type MemoryScope = "conversation" | "speaker" | "global";
+
+export interface PipelineNodeBase {{
   id: IdString;
-  kind: NodeKind;
   provider: string;
 }}
+
+export type PipelineNode =
+  | (PipelineNodeBase & {{ kind: "source" }})
+  | (PipelineNodeBase & {{ kind: "wake_word" }})
+  | (PipelineNodeBase & {{ kind: "stt" }})
+  | (PipelineNodeBase & {{ kind: "speaker_id" }})
+  | (PipelineNodeBase & {{ kind: "router" }})
+  | (PipelineNodeBase & {{
+      kind: "llm";
+      model?: string;
+      system?: string;
+      max_rounds?: number;
+    }})
+  | (PipelineNodeBase & {{ kind: "tool" }})
+  | (PipelineNodeBase & {{
+      kind: "memory";
+      mode?: MemoryMode;
+      scope?: MemoryScope;
+      limit?: number;
+    }})
+  | (PipelineNodeBase & {{ kind: "tts"; voice?: string }})
+  | (PipelineNodeBase & {{ kind: "sink" }});
 
 export interface PipelineEdge {{
   from: IdString;

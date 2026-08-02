@@ -307,6 +307,7 @@ impl LanguageModel for FakeLlm {
 #[derive(Clone)]
 pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
+    voices: Arc<Mutex<Vec<Option<String>>>>,
     spoke: Arc<Notify>,
     encodings: Vec<Encoding>,
     /// Rate this synthesizer speaks at, when it is not the requested one.
@@ -317,6 +318,7 @@ impl FakeTts {
     pub fn new() -> Self {
         Self {
             spoken: Arc::new(Mutex::new(Vec::new())),
+            voices: Arc::new(Mutex::new(Vec::new())),
             spoke: Arc::new(Notify::new()),
             encodings: Vec::new(),
             native_rate: None,
@@ -338,6 +340,11 @@ impl FakeTts {
     /// The text of every synthesis request, in order.
     pub fn spoken(&self) -> Vec<String> {
         self.spoken.lock().expect("lock").clone()
+    }
+
+    /// The voice asked for on every synthesis request, in order.
+    pub fn voices_requested(&self) -> Vec<Option<String>> {
+        self.voices.lock().expect("lock").clone()
     }
 
     /// Notified the first time anything is synthesized.

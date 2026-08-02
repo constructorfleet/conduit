@@ -10,22 +10,22 @@
 mod fakes;
 
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_core::{Error, GraphError};
 use conduit_runtime::{Providers, Runner};
 use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
 
-/// A model node whose provider id is the model selector.
+/// A model node that names no model, so the provider chooses.
 fn llm_node(id: &str, provider: &str) -> Node {
-    Node::new(id, NodeKind::Llm, provider)
+    Node::llm(id, provider)
 }
 
 /// stt -> llm -> tts, correctly wired.
 fn wired() -> PipelineGraph {
     PipelineGraph::new("wired")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
 }
@@ -63,9 +63,9 @@ fn a_pipeline_wired_backwards_is_refused() {
     // The defect this test exists for: `tts -> llm -> stt` used to resolve
     // identically to a correct graph, because resolution read only node kinds.
     let backwards = PipelineGraph::new("backwards")
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_edge(Edge::new("tts", "llm"))
         .with_edge(Edge::new("llm", "stt"));
 
@@ -78,9 +78,9 @@ fn a_pipeline_wired_backwards_is_refused() {
 #[test]
 fn a_graph_with_no_edges_is_refused_by_validation() {
     let unwired = PipelineGraph::new("unwired")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"));
+        .with_node(Node::tts("tts", "fake-tts"));
 
     let error = refusal(&unwired, &providers());
     assert!(
@@ -94,9 +94,9 @@ fn synthesis_that_does_not_follow_the_model_is_refused() {
     // Both stages exist and both are wired to something, so only the *order*
     // is wrong — which is exactly the case node-kind matching could not see.
     let sideways = PipelineGraph::new("sideways")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("stt", "tts"));
 
@@ -109,11 +109,11 @@ fn a_stage_between_two_others_does_not_break_the_wiring() {
     // The check is reachability, not a direct edge, so a graph may grow a node
     // between two stages without being rewired.
     let through_a_source = PipelineGraph::new("through")
-        .with_node(Node::new("mic", NodeKind::Source, "test"))
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::source("mic", "test"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("sink", NodeKind::Sink, "test"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::sink("sink", "test"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "sink"))
@@ -126,10 +126,10 @@ fn a_stage_between_two_others_does_not_break_the_wiring() {
 #[test]
 fn a_tool_the_model_does_not_reach_is_refused() {
     let dangling_tool = PipelineGraph::new("dangling tool")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tool("search", "search"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
         // The tool hangs off the recognizer, so the graph says the model never
@@ -144,7 +144,7 @@ fn a_tool_the_model_does_not_reach_is_refused() {
 #[test]
 fn a_tool_downstream_of_the_model_resolves() {
     let graph = wired()
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
+        .with_node(Node::tool("search", "search"))
         .with_edge(Edge::new("llm", "search"))
         .with_edge(Edge::new("search", "tts"));
 
@@ -157,7 +157,7 @@ fn a_router_node_is_refused_rather_than_ignored() {
     // Accepting a router and then ignoring it turns "ask the cloud model the
     // hard questions" into "ask whichever model resolved", silently.
     let graph = wired()
-        .with_node(Node::new("route", NodeKind::Router, "builtin"))
+        .with_node(Node::router("route", "builtin"))
         .with_edge(Edge::new("llm", "route"))
         .with_edge(Edge::new("route", "tts"));
 
@@ -175,11 +175,11 @@ fn a_router_node_is_refused_rather_than_ignored() {
 #[test]
 fn the_router_fan_out_a_valid_graph_describes_is_not_executable() {
     let graph = PipelineGraph::new("router")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("router", NodeKind::Router, "builtin"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::router("router", "builtin"))
         .with_node(llm_node("local", "fake-llm"))
         .with_node(llm_node("cloud", "other-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "router"))
         .with_edge(Edge::from_port("router", "local", "local"))
         .with_edge(Edge::from_port("router", "cloud", "cloud"))
@@ -196,10 +196,10 @@ fn the_router_fan_out_a_valid_graph_describes_is_not_executable() {
 #[test]
 fn a_second_model_is_still_refused_as_a_duplicate() {
     let graph = PipelineGraph::new("two models")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("local", "fake-llm"))
         .with_node(llm_node("cloud", "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
+        .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "local"))
         .with_edge(Edge::new("stt", "cloud"))
         .with_edge(Edge::new("local", "tts"))
@@ -212,7 +212,7 @@ fn a_second_model_is_still_refused_as_a_duplicate() {
 #[test]
 fn a_missing_stage_is_named() {
     let no_synthesis = PipelineGraph::new("mute")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
         .with_edge(Edge::new("stt", "llm"));
 
@@ -226,7 +226,7 @@ fn a_missing_stage_is_reported_before_a_wiring_complaint() {
     // does not exist is not downstream of one that does would send its author
     // looking for the wrong problem.
     let no_synthesis = PipelineGraph::new("mute")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
+        .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
         .with_edge(Edge::new("stt", "llm"));
 

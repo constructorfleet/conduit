@@ -326,7 +326,7 @@ async fn affected_pipelines(
         let Some(graph) = state.pipeline(&name).await.map_err(store_failure)? else {
             continue;
         };
-        if graph.nodes.iter().any(|node| references(&node.provider)) {
+        if graph.nodes.iter().any(|node| references(node.provider())) {
             affected.push(name);
         }
     }

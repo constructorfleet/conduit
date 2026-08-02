@@ -897,11 +897,11 @@ fn provider_references(
     let mut references = HashMap::<ProviderKey, BTreeSet<String>>::new();
     for (pipeline, graph) in graphs {
         for node in graph.topological_order().unwrap_or_default() {
-            let Some(kind) = provider_kind_for_node(node.kind) else {
+            let Some(kind) = provider_kind_for_node(node.kind()) else {
                 continue;
             };
             references
-                .entry(ProviderKey { kind, id: node.provider.clone() })
+                .entry(ProviderKey { kind, id: node.provider().to_owned() })
                 .or_default()
                 .insert(pipeline.clone());
         }
@@ -922,10 +922,10 @@ fn proven_providers(
             continue;
         };
         for node in graph.topological_order().unwrap_or_default() {
-            let Some(component) = component_for_node_kind(node.kind) else {
+            let Some(component) = component_for_node_kind(node.kind()) else {
                 continue;
             };
-            let Some(kind) = provider_kind_for_node(node.kind) else {
+            let Some(kind) = provider_kind_for_node(node.kind()) else {
                 continue;
             };
             let Some(recorded) = runtime.components.get(&component) else {
@@ -934,7 +934,10 @@ fn proven_providers(
             if recorded.state == ComponentHealthState::Healthy
                 && recorded.last_turn == Some(successful_turn)
             {
-                proven.insert(ProviderKey { kind, id: node.provider.clone() }, successful_turn);
+                proven.insert(
+                    ProviderKey { kind, id: node.provider().to_owned() },
+                    successful_turn,
+                );
             }
         }
     }
@@ -946,8 +949,8 @@ fn pipeline_provider_ids(graph: &PipelineGraph) -> Vec<String> {
         .topological_order()
         .unwrap_or_default()
         .into_iter()
-        .filter(|node| provider_kind_for_node(node.kind).is_some())
-        .map(|node| node.provider.clone())
+        .filter(|node| provider_kind_for_node(node.kind()).is_some())
+        .map(|node| node.provider().to_owned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -1010,7 +1013,7 @@ fn project_components(
         .unwrap_or_default()
         .into_iter()
         .filter_map(|node| {
-            let kind = component_for_node_kind(node.kind)?;
+            let kind = component_for_node_kind(node.kind())?;
             let recorded = runtime.and_then(|runtime| runtime.components.get(&kind));
             let state = recorded.map_or(
                 if usable {
@@ -1022,7 +1025,7 @@ fn project_components(
             );
             Some(ComponentHealth {
                 kind,
-                provider: Some(node.provider.clone()),
+                provider: Some(node.provider().to_owned()),
                 state,
                 detail: recorded.and_then(|component| component.detail.clone()),
                 last_turn: recorded.and_then(|component| component.last_turn),
