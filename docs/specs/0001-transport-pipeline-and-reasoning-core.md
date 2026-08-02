@@ -294,6 +294,35 @@ index — dragging repositions an orbital, it does not rewire an edge.
 Acceptance: a graph with two core nodes is refused at validation, not at
 prepare; no source file contains a fallback to the literal node id `"llm"`.
 
+**Backend landed** as `10dde09`, `4767d0e`, `8e242d0`, `9f6a3bb`, and `bf2c5fa`.
+The `llm`, `tool`, `memory`, and `router` node kinds are gone; a pipeline binds
+a model, tools, and stores to one core.
+
+**The console has not caught up, and `bf2c5fa` leaves `npm run contract:check`
+failing.** That commit should have carried the frontend with it. Remaining, all
+in `frontend/src/`:
+
+- `LINEAR_STAGE_ORDER` still lists `router` and `llm`; it should end at
+  `core`.
+- `pipelineGraphFlow` still partitions `tool`/`memory` nodes into
+  `augmentNodeIds` and defaults a spoke's target to the literal id `"llm"`.
+  Orbitals should render from `core.tools` and `core.memory` instead, keyed by
+  binding index rather than node id.
+- `renderNodeConfigFields` still has `llm` and `memory` cases; they become one
+  `core` case writing through to `core.model`, `core.system`, and
+  `core.max_rounds`.
+- `addReasoningAugment` and `addToolProviderNode` add a tool *node*; they
+  should append a `ToolBinding` to the core.
+- The local `ProviderDefinition.kind` is typed `NodeKind` and must become
+  `ProviderCapability`, with `providerKindForNodeKind` following.
+- `App.test.tsx` fixtures still build `llm`, `tool`, and `memory` nodes.
+
+Two gaps the deletion exposed, both fixed in `bf2c5fa` and worth knowing about:
+`Node::provider_references` exists because a core names a provider per binding
+and `Node::provider` answers with the model alone, so the delete refusal and
+provider validation were both blind to bindings; and provider validation now
+checks a core binding by binding, since no single capability describes one.
+
 ## Track E — Multiple Sources And Sinks
 
 Validation requires every source to reach the core and the core to reach every
