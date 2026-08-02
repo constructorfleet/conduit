@@ -237,6 +237,14 @@ providers. Turn view keys off segment modality.
 Acceptance: a text pipeline with no speech providers configured validates and
 runs a test turn returning `reply_text`.
 
+**Partly landed.** `c94758a` made the recognizer optional and `8b3d6d2` the
+synthesizer, so the runtime runs a text pipeline end to end and
+`crates/conduit-runtime/tests/turn.rs` pins it. Still open: generalizing the
+spoken-segment events to utterance segments carrying a modality, `reply_text`
+on the API test turn, and the guided-setup pipeline-shape choice. Until the
+API work lands, a text pipeline is reachable from the runtime but not from the
+console.
+
 ## Track D — Reasoning Core
 
 Collapse `Llm`, `Tool`, `Memory`, and `Router` into one variant:

@@ -93,10 +93,19 @@ model with a transport pipeline plus a reasoning core;
 [docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks
 that work.
 
-Today the runtime executes one recognizer, one language model, one synthesizer,
-and any number of tool branches downstream of the model. `router`, `wake_word`,
-`speaker_id`, and `memory` nodes exist in the graph vocabulary but are not
-runnable runtime stages yet.
+Today the runtime executes at most one recognizer, one language model, at most
+one synthesizer, and any number of tool branches downstream of the model.
+`router`, `wake_word`, `speaker_id`, and `memory` nodes exist in the graph
+vocabulary but are not runnable runtime stages yet.
+
+Recognition and synthesis are both optional. A turn starts from audio or from
+words a client typed, and delivers a `Reply` that is either synthesized speech
+or a written segment, so `source(text) -> llm -> sink(text)` runs on a
+deployment where the only configured provider is a language model. Absence is
+what selects the modality: a graph carrying audio to a model without
+transcribing it fails modality validation long before resolution. Sentence
+segmentation is shared — what a voice pipeline speaks a piece at a time is what
+a text pipeline writes a piece at a time.
 
 ## Providers
 
