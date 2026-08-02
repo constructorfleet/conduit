@@ -8,7 +8,7 @@ use axum::routing::get as axum_get;
 use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::testing::voice_graph;
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
@@ -564,6 +564,41 @@ async fn test_turn_runs_the_stored_pipeline_through_real_providers() {
         .expect("valid base64");
     assert_eq!(&decoded[..4], b"RIFF", "the reply must be a playable container");
     assert_eq!(&decoded[8..12], b"WAVE");
+}
+
+#[tokio::test]
+async fn test_turn_on_a_text_pipeline_returns_the_reply_as_writing() {
+    // The acceptance case for text pipelines: no recognizer and no synthesizer
+    // are configured, and the operator still gets the reply back.
+    let state =
+        AppState::new(EventBus::default()).with_providers(Providers::new().with_llm(EchoLlm));
+    let graph = PipelineGraph::new("chat")
+        .with_node(Node::source("in", "websocket", Modality::Text))
+        .with_node(Node::llm("llm", "echo-llm"))
+        .with_node(Node::sink("out", "websocket", Modality::Text))
+        .with_edge(Edge::new("in", "llm"))
+        .with_edge(Edge::new("llm", "out"));
+    let (status, _) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/chat/test-turn")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"utterance":"hello conduit"}"#))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+    assert!(
+        body["reply_text"].as_str().is_some_and(|text| text.contains("hello conduit")),
+        "the operator must be able to read the reply: {body}"
+    );
+    // Nothing was synthesized, so nothing is offered for playback. A player
+    // control over an empty file would look like a broken synthesizer.
+    assert_eq!(body["audio_bytes"], 0);
+    assert!(body.get("reply_audio").is_none(), "{body}");
 }
 
 #[tokio::test]

@@ -287,6 +287,15 @@ impl Runner {
         self
     }
 
+    /// Whether this pipeline's turns start from audio.
+    ///
+    /// A caller that produces input has to know which kind to produce, and the
+    /// answer is a property of the resolved graph rather than of the request.
+    #[must_use]
+    pub fn expects_audio(&self) -> bool {
+        self.plan.stt.is_some()
+    }
+
     /// Sets the audio format used for capture and synthesis.
     pub fn with_format(mut self, format: AudioFormat) -> Result<Self> {
         // A pipeline fed by text has no recognizer to ask, and the format

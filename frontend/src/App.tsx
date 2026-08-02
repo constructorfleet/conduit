@@ -390,8 +390,12 @@ function OperatorWorkspace({
       utterance: "conduit test",
     });
     await refreshSnapshotFromApi();
+    // A text pipeline reports what it wrote. Reporting "0 audio bytes" for a
+    // pipeline that was never meant to speak reads as a failure.
     return {
-      message: `Test turn completed for ${result.pipeline}: ${result.audio_bytes} audio bytes`,
+      message: result.reply_text
+        ? `Test turn completed for ${result.pipeline}: ${result.reply_text}`
+        : `Test turn completed for ${result.pipeline}: ${result.audio_bytes} audio bytes`,
       replyAudio: result.reply_audio
         ? `data:audio/wav;base64,${result.reply_audio}`
         : null,

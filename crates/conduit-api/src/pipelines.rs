@@ -14,7 +14,7 @@ use conduit_core::id::ConversationId;
 use conduit_provider::storage::{validate_name, ProviderCapability};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
-use conduit_runtime::Runner;
+use conduit_runtime::{Reply, Runner};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +116,10 @@ pub struct PipelineTestResult {
     pub status: &'static str,
     /// Number of synthesized audio bytes returned by the TTS stage.
     pub audio_bytes: usize,
+    /// The reply as written text, for a pipeline that writes rather than
+    /// speaks. `None` when the turn synthesized its reply instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_text: Option<String>,
     /// The reply as a playable WAV file, base64-encoded, or `None` when the
     /// turn produced no audio.
     ///
@@ -250,14 +254,29 @@ pub async fn test_turn(
         .with_format(request.format)
         .map_err(|error| ApiError::unprocessable(error.to_string()))?
         .with_idle_timeout(state.turn_idle_timeout());
-    let conversation = runner.run(test_audio(request.utterance));
+    // Which input a test turn produces is the pipeline's choice, not the
+    // operator's: the same typed utterance is spoken at a voice pipeline and
+    // handed straight to a text one.
+    let conversation = if runner.expects_audio() {
+        runner.run(test_audio(request.utterance))
+    } else {
+        runner.run_text(request.utterance)
+    };
     let conversation_id = conversation.id;
-    let mut audio = conversation.speech();
+    let mut replies = conversation.output;
     let mut output = Vec::new();
+    let mut written = String::new();
 
-    while let Some(chunk) = audio.next().await {
-        let chunk = chunk.map_err(|error| ApiError::unavailable(error.to_string()))?;
-        output.extend_from_slice(&chunk.data);
+    while let Some(reply) = replies.next().await {
+        match reply.map_err(|error| ApiError::unavailable(error.to_string()))? {
+            Reply::Speech(chunk) => output.extend_from_slice(&chunk.data),
+            Reply::Text(segment) => {
+                if !written.is_empty() {
+                    written.push(' ');
+                }
+                written.push_str(&segment);
+            }
+        }
     }
 
     let reply_audio = if output.is_empty() {
@@ -273,6 +292,7 @@ pub async fn test_turn(
         conversation: conversation_id,
         status: "completed",
         audio_bytes: output.len(),
+        reply_text: (!written.is_empty()).then_some(written),
         reply_audio,
     }))
 }
