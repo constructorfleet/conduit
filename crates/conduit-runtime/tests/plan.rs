@@ -10,7 +10,7 @@
 mod fakes;
 
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::{Error, GraphError};
 use conduit_runtime::{Providers, Runner};
 use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
@@ -59,9 +59,11 @@ fn a_correctly_wired_pipeline_resolves() {
 }
 
 #[test]
-fn a_pipeline_wired_backwards_is_refused() {
+fn a_pipeline_wired_backwards_is_refused_structurally() {
     // The defect this test exists for: `tts -> llm -> stt` used to resolve
     // identically to a correct graph, because resolution read only node kinds.
+    // The refusal has since moved down into the graph, where it belongs — the
+    // wiring is wrong on its own terms, not merely wrong for this runtime.
     let backwards = PipelineGraph::new("backwards")
         .with_node(Node::tts("tts", "fake-tts"))
         .with_node(llm_node("llm", "fake-llm"))
@@ -70,9 +72,10 @@ fn a_pipeline_wired_backwards_is_refused() {
         .with_edge(Edge::new("llm", "stt"));
 
     let error = refusal(&backwards, &providers());
-    let message = config_message(&error);
-    assert!(message.contains("stt"), "the message must name the stages: {message}");
-    assert!(message.contains("llm"), "{message}");
+    let Error::InvalidGraph(GraphError::ModalityMismatch { from, to, .. }) = &error else {
+        panic!("a backwards pipeline is an invalid graph, not a runtime limitation: {error}");
+    };
+    assert_eq!((from.as_str(), to.as_str()), ("tts", "llm"));
 }
 
 #[test]
@@ -89,37 +92,67 @@ fn a_graph_with_no_edges_is_refused_by_validation() {
     );
 }
 
-#[test]
-fn synthesis_that_does_not_follow_the_model_is_refused() {
-    // Both stages exist and both are wired to something, so only the *order*
-    // is wrong — which is exactly the case node-kind matching could not see.
-    let sideways = PipelineGraph::new("sideways")
+/// Recognition feeding the model and synthesis in parallel.
+///
+/// Every edge here is modality-compatible — synthesis renders written words as
+/// readily as an utterance — so the graph itself is sound. What is wrong is
+/// that the model's answer reaches nothing, while this runtime would speak it
+/// anyway. Modality typing is a property of each edge; this is a property of a
+/// path, so no per-edge rule can see it.
+fn branches_past_the_model() -> PipelineGraph {
+    PipelineGraph::new("sideways")
         .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
         .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("stt", "tts"));
+        .with_edge(Edge::new("stt", "tts"))
+}
 
-    let message = config_message(&refusal(&sideways, &providers())).to_owned();
+#[test]
+fn synthesis_that_does_not_follow_the_model_is_refused() {
+    // Both stages exist and both are wired to something, so only the *order*
+    // is wrong — which is exactly the case node-kind matching could not see.
+    let message = config_message(&refusal(&branches_past_the_model(), &providers())).to_owned();
     assert!(message.contains("tts"), "{message}");
+}
+
+#[test]
+fn a_graph_whose_every_edge_is_modality_compatible_can_still_branch_past_the_model() {
+    // Pinned because the reachability check above looks redundant beside
+    // modality typing and is not. Deleting it would make this shape run: the
+    // person speaking would hear their own words read back, synthesized from
+    // the transcript, with the model's answer discarded in silence.
+    //
+    // The rule that does subsume it is core reachability — every source
+    // reaches the core, the core reaches every sink — which needs a graph to
+    // have exactly one core to be stated at all. That arrives with the
+    // reasoning core; until then the runtime keeps asking.
+    branches_past_the_model()
+        .validate()
+        .expect("every edge carries something its far end reads");
 }
 
 #[test]
 fn a_stage_between_two_others_does_not_break_the_wiring() {
     // The check is reachability, not a direct edge, so a graph may grow a node
-    // between two stages without being rewired.
-    let through_a_source = PipelineGraph::new("through")
-        .with_node(Node::source("mic", "test"))
+    // between two stages without being rewired. Only a kind that is not a
+    // modality transform can sit between the model and synthesis: anything
+    // that consumed the utterance would have to say what it produced.
+    let through_a_tool = PipelineGraph::new("through")
+        .with_node(Node::source("mic", "test", Modality::Audio))
         .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("llm", "fake-llm"))
-        .with_node(Node::sink("sink", "test"))
+        .with_node(Node::tool("search", "search"))
         .with_node(Node::tts("tts", "fake-tts"))
+        .with_node(Node::sink("speaker", "test", Modality::Audio))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "sink"))
-        .with_edge(Edge::new("sink", "tts"));
+        .with_edge(Edge::new("llm", "search"))
+        .with_edge(Edge::new("search", "tts"))
+        .with_edge(Edge::new("tts", "speaker"));
 
-    Runner::prepare(&through_a_source, &providers(), EventBus::default())
+    let providers = providers().with_tool(FakeTool::new("search", serde_json::json!({})));
+    Runner::prepare(&through_a_tool, &providers, EventBus::default())
         .expect("an intervening node is not a break in the chain");
 }
 

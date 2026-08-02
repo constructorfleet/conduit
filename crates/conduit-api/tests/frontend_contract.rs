@@ -19,7 +19,7 @@ use conduit_api::status::{
     SnapshotEventBinding, SnapshotResource, StaleState,
 };
 use conduit_core::event::{Envelope, Event};
-use conduit_core::graph::{Edge, Node, PipelineGraph, DEFAULT_MAX_ROUNDS};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph, DEFAULT_MAX_ROUNDS};
 use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
 use uuid::Uuid;
 
@@ -262,7 +262,7 @@ fn event_fixtures() -> Vec<Envelope> {
 
 fn pipeline_fixture() -> PipelineView {
     let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::source("mic", "websocket"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "whisper"))
         .with_node(Node::Llm {
             id: "llm".to_owned(),
@@ -274,7 +274,7 @@ fn pipeline_fixture() -> PipelineView {
             max_rounds: DEFAULT_MAX_ROUNDS,
         })
         .with_node(Node::tts("tts", "piper-local"))
-        .with_node(Node::sink("speaker", "websocket"))
+        .with_node(Node::sink("speaker", "websocket", Modality::Audio))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -362,6 +362,7 @@ export type NodeKind =
 
 export type MemoryMode = "read" | "write" | "read_write";
 export type MemoryScope = "conversation" | "speaker" | "global";
+export type Modality = "audio" | "text" | "utterance";
 
 export interface PipelineNodeBase {{
   id: IdString;
@@ -369,7 +370,7 @@ export interface PipelineNodeBase {{
 }}
 
 export type PipelineNode =
-  | (PipelineNodeBase & {{ kind: "source" }})
+  | (PipelineNodeBase & {{ kind: "source"; modality?: Modality }})
   | (PipelineNodeBase & {{ kind: "wake_word" }})
   | (PipelineNodeBase & {{ kind: "stt" }})
   | (PipelineNodeBase & {{ kind: "speaker_id" }})
@@ -388,7 +389,7 @@ export type PipelineNode =
       limit?: number;
     }})
   | (PipelineNodeBase & {{ kind: "tts"; voice?: string }})
-  | (PipelineNodeBase & {{ kind: "sink" }});
+  | (PipelineNodeBase & {{ kind: "sink"; modality?: Modality }});
 
 export interface PipelineEdge {{
   from: IdString;

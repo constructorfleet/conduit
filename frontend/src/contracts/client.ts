@@ -19,6 +19,7 @@ export type NodeKind =
 
 export type MemoryMode = "read" | "write" | "read_write";
 export type MemoryScope = "conversation" | "speaker" | "global";
+export type Modality = "audio" | "text" | "utterance";
 
 export interface PipelineNodeBase {
   id: IdString;
@@ -26,7 +27,7 @@ export interface PipelineNodeBase {
 }
 
 export type PipelineNode =
-  | (PipelineNodeBase & { kind: "source" })
+  | (PipelineNodeBase & { kind: "source"; modality?: Modality })
   | (PipelineNodeBase & { kind: "wake_word" })
   | (PipelineNodeBase & { kind: "stt" })
   | (PipelineNodeBase & { kind: "speaker_id" })
@@ -45,7 +46,7 @@ export type PipelineNode =
       limit?: number;
     })
   | (PipelineNodeBase & { kind: "tts"; voice?: string })
-  | (PipelineNodeBase & { kind: "sink" });
+  | (PipelineNodeBase & { kind: "sink"; modality?: Modality });
 
 export interface PipelineEdge {
   from: IdString;
@@ -462,7 +463,8 @@ export const pipelineViewFixture = {
       {
         "kind": "source",
         "id": "mic",
-        "provider": "websocket"
+        "provider": "websocket",
+        "modality": "audio"
       },
       {
         "kind": "stt",
@@ -484,7 +486,8 @@ export const pipelineViewFixture = {
       {
         "kind": "sink",
         "id": "speaker",
-        "provider": "websocket"
+        "provider": "websocket",
+        "modality": "audio"
       }
     ],
     "edges": [

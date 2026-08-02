@@ -49,10 +49,34 @@ over the event bus instead of the socket audio path.
 ## Graphs
 
 `PipelineGraph` is a serializable list of nodes and edges. Validation catches
-duplicate node ids, dangling edges, cycles, missing source or sink nodes, and
-disconnected subgraphs. The graph model can describe more than the runtime can
-execute; `Runner::prepare` refuses unsupported node kinds and topologies rather
-than accepting and ignoring them.
+duplicate node ids, dangling edges, cycles, missing source or sink nodes,
+disconnected subgraphs, and edges whose two ends disagree about what they
+carry. The graph model can describe more than the runtime can execute;
+`Runner::prepare` refuses unsupported node kinds and topologies rather than
+accepting and ignoring them.
+
+Edges are typed by modality — `audio`, `text`, or `utterance`. A `source` and a
+`sink` declare theirs, because nothing about a websocket says whether it carries
+microphone samples or typed words; every other kind derives one from what it
+does. Recognition reads audio and writes text, a model reads text and produces
+an utterance, synthesis speaks an utterance or plain text, and a text sink
+writes an utterance down. An utterance is what a model said before anything
+decided how to render it, which is what keeps a model unaware of whether it will
+be heard or read. A graph wired `tts -> llm -> stt` therefore fails validation
+naming the offending edge, rather than failing a stage-order assertion in the
+runtime.
+
+`tool`, `memory`, and `router` nodes are not modality transforms — they are the
+visible half of a call-and-return arc — so edges touching them are not checked.
+[ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) removes those
+kinds rather than inventing modalities for them.
+
+Modality compatibility is a property of a single edge, so it does not say
+anything about paths. A graph wiring `stt -> llm` beside `stt -> tts` has two
+compatible edges and still drops the model's answer on the floor, which is why
+`Plan::resolve` still asks whether each stage is reachable from the one before
+it. Core reachability replaces that check once a graph has exactly one core to
+state the rule about.
 
 A node is a typed variant rather than a generic record, tagged by `kind`, and
 carries the configuration belonging to that kind: an `llm` node names its

@@ -5,7 +5,8 @@
       {
         "kind": "source",
         "id": "mic",
-        "provider": "websocket"
+        "provider": "websocket",
+        "modality": "audio"
       },
       {
         "kind": "stt",
@@ -27,7 +28,8 @@
       {
         "kind": "sink",
         "id": "speaker",
-        "provider": "websocket"
+        "provider": "websocket",
+        "modality": "audio"
       }
     ],
     "edges": [

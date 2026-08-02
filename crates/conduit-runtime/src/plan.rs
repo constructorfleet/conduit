@@ -127,9 +127,14 @@ impl Plan {
 
         // This runtime executes recognition, then reasoning, then synthesis,
         // in that order. A graph is only a description of *this* pipeline if
-        // its edges say the same thing — otherwise a graph wired
-        // `tts -> llm -> stt` would run identically to a correct one, and its
-        // author would have no way to find out.
+        // its edges say the same thing.
+        //
+        // Modality typing catches the backwards graph, `tts -> llm -> stt`,
+        // structurally now. It cannot catch a graph that branches past the
+        // model — `stt -> llm` beside `stt -> tts` — because every edge there
+        // carries something its far end reads, and the defect is a missing
+        // path rather than a bad edge. Reachability still has to be asked
+        // about; `crates/conduit-runtime/tests/plan.rs` pins that shape.
         require_downstream(graph, &stt_node, &llm_node)?;
         require_downstream(graph, &llm_node, &tts_node)?;
         for tool_node in &tool_nodes {

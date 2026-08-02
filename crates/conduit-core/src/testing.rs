@@ -10,7 +10,7 @@
 //! keep building nodes and edges explicitly. Fixtures hide exactly the detail
 //! those tests exist to pin down.
 
-use crate::graph::{Edge, Node, PipelineGraph};
+use crate::graph::{Edge, Modality, Node, PipelineGraph};
 
 /// Builds the voice pipeline shape and wires it in the canonical order.
 ///
@@ -103,12 +103,26 @@ impl VoiceGraph {
         // Stages are built through their own constructors rather than from a
         // node kind, because a typed node carries settings a fixture has no
         // opinion about and the constructors are where those defaults live.
+        //
+        // The endpoints are audio because this is a *voice* pipeline: the
+        // builder's name is the declaration. A fixture for a text pipeline is
+        // a different shape and will say so.
         let stages = [
-            ("mic", self.source.as_ref().map(|provider| Node::source("mic", provider))),
+            (
+                "mic",
+                self.source
+                    .as_ref()
+                    .map(|provider| Node::source("mic", provider, Modality::Audio)),
+            ),
             ("stt", self.stt.as_ref().map(|provider| Node::stt("stt", provider))),
             ("llm", self.llm.as_ref().map(|provider| Node::llm("llm", provider))),
             ("tts", self.tts.as_ref().map(|provider| Node::tts("tts", provider))),
-            ("sink", self.sink.as_ref().map(|provider| Node::sink("sink", provider))),
+            (
+                "sink",
+                self.sink
+                    .as_ref()
+                    .map(|provider| Node::sink("sink", provider, Modality::Audio)),
+            ),
         ];
 
         for (id, stage) in stages {

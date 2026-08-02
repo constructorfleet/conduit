@@ -10,7 +10,7 @@ use conduit_api::status::StatusCollector;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Envelope, Event, FinishReason};
-use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
 use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
@@ -201,7 +201,7 @@ impl TextToSpeech for StatusTts {
 
 fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
-        .with_node(Node::source("mic", "websocket"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "echo-stt"))
         .with_node(Node::llm("llm", "echo-llm"))
         .with_node(Node::tts("tts", "echo-tts"))
@@ -212,7 +212,7 @@ fn valid_graph() -> PipelineGraph {
 
 fn provider_status_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
-        .with_node(Node::source("mic", "websocket"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
         .with_node(Node::stt("stt", "configured-stt"))
         .with_node(Node::llm("llm", "configured-llm"))
         .with_node(Node::tts("tts", "configured-tts"))

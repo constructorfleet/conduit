@@ -37,7 +37,7 @@ pub const DEFAULT_MEMORY_LIMIT: usize = 5;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum NodeKind {
-    /// Audio ingress from a device.
+    /// Ingress from a device.
     Source,
     /// Wake word detection.
     WakeWord,
@@ -55,7 +55,7 @@ pub enum NodeKind {
     Memory,
     /// Text-to-speech.
     Tts,
-    /// Audio egress to a device.
+    /// Egress to a device.
     Sink,
 }
 
@@ -78,6 +78,48 @@ impl NodeKind {
             Self::Tts => "tts",
             Self::Sink => "sink",
         }
+    }
+}
+
+/// What an edge carries.
+///
+/// A source and a sink declare theirs, because only their author knows whether
+/// a pipeline is fed by a microphone or by a chat box. Every other kind derives
+/// its own from what it does, so a miswired graph is a validation error rather
+/// than a runtime surprise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    /// Sampled speech.
+    Audio,
+    /// Written words.
+    Text,
+    /// What a model said, before anything decided how to render it.
+    ///
+    /// Distinct from text so that a model stays unaware of how it will be
+    /// heard: synthesis renders an utterance as speech and a text sink renders
+    /// the same utterance as writing, and neither reopens the model.
+    Utterance,
+}
+
+impl Modality {
+    /// The word this modality is written as in a graph.
+    ///
+    /// The same spelling serde uses, so an error message and the JSON beside
+    /// it describe an edge the same way.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::Text => "text",
+            Self::Utterance => "utterance",
+        }
+    }
+}
+
+impl std::fmt::Display for Modality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -106,12 +148,18 @@ pub enum MemoryMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Node {
-    /// Audio ingress from a device.
+    /// Ingress from a device.
     Source {
         /// Author-chosen identifier, unique within the graph.
         id: NodeId,
         /// Provider definition id, e.g. `"websocket"`.
         provider: String,
+        /// What this source produces.
+        ///
+        /// Declared rather than derived: nothing about a websocket says
+        /// whether it carries microphone samples or typed words.
+        #[serde(default = "default_modality")]
+        modality: Modality,
     },
     /// Wake word detection.
     WakeWord {
@@ -196,12 +244,18 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         voice: Option<String>,
     },
-    /// Audio egress to a device.
+    /// Egress to a device.
     Sink {
         /// Author-chosen identifier, unique within the graph.
         id: NodeId,
         /// Provider definition id, e.g. `"websocket"`.
         provider: String,
+        /// What this sink renders.
+        ///
+        /// Declared for the same reason a source declares one, and it is the
+        /// declaration that decides how an utterance is delivered.
+        #[serde(default = "default_modality")]
+        modality: Modality,
     },
 }
 
@@ -210,16 +264,29 @@ const fn default_max_rounds() -> usize {
     DEFAULT_MAX_ROUNDS
 }
 
+/// The modality of a source or sink that does not declare one.
+///
+/// Every graph written before modalities existed was a voice pipeline, so
+/// audio is what those graphs meant. Reading them as anything else would
+/// silently rewire pipelines the editor can still open and fix.
+const fn default_modality() -> Modality {
+    Modality::Audio
+}
+
 /// The default [`Node::Memory::limit`], as a serde default.
 const fn default_memory_limit() -> usize {
     DEFAULT_MEMORY_LIMIT
 }
 
 impl Node {
-    /// Creates a `source` node.
+    /// Creates a `source` node producing `modality`.
     #[must_use]
-    pub fn source(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Source { id: id.into(), provider: provider.into() }
+    pub fn source(
+        id: impl Into<NodeId>,
+        provider: impl Into<String>,
+        modality: Modality,
+    ) -> Self {
+        Self::Source { id: id.into(), provider: provider.into(), modality }
     }
 
     /// Creates a `wake_word` node.
@@ -287,10 +354,14 @@ impl Node {
         Self::Tts { id: id.into(), provider: provider.into(), voice: None }
     }
 
-    /// Creates a `sink` node.
+    /// Creates a `sink` node rendering `modality`.
     #[must_use]
-    pub fn sink(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Sink { id: id.into(), provider: provider.into() }
+    pub fn sink(
+        id: impl Into<NodeId>,
+        provider: impl Into<String>,
+        modality: Modality,
+    ) -> Self {
+        Self::Sink { id: id.into(), provider: provider.into(), modality }
     }
 
     /// This node's identifier within its graph.
@@ -348,6 +419,59 @@ impl Node {
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
         self.kind().name()
+    }
+
+    /// What this node puts on its outgoing edges, or `None` when nothing does.
+    ///
+    /// A `sink` terminates the pipeline, so nothing leaves it. A `tool`,
+    /// `memory`, or `router` node is not a modality transform at all — it is
+    /// the visible half of a call-and-return arc, which is why
+    /// [ADR-0012](https://github.com/Teagan42/conduit/blob/main/docs/adr/0012-transport-pipeline-and-reasoning-core.md)
+    /// moves tools and memory onto a reasoning core — so there is nothing
+    /// truthful to say about what it emits, and its edges go unchecked.
+    #[must_use]
+    pub const fn output_modality(&self) -> Option<Modality> {
+        match self {
+            Self::Source { modality, .. } => Some(*modality),
+            Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Tts { .. } => {
+                Some(Modality::Audio)
+            }
+            Self::Stt { .. } => Some(Modality::Text),
+            Self::Llm { .. } => Some(Modality::Utterance),
+            Self::Sink { .. }
+            | Self::Router { .. }
+            | Self::Tool { .. }
+            | Self::Memory { .. } => None,
+        }
+    }
+
+    /// What this node can read from its incoming edges, or `None` when the kind
+    /// is not a modality transform and its edges therefore go unchecked.
+    ///
+    /// An empty slice is a node that reads nothing: a `source` originates its
+    /// stream, so an edge into one delivers something nothing will consume.
+    #[must_use]
+    pub const fn accepted_modalities(&self) -> Option<&'static [Modality]> {
+        match self {
+            Self::Source { .. } => Some(&[]),
+            Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Stt { .. } => {
+                Some(&[Modality::Audio])
+            }
+            Self::Llm { .. } => Some(&[Modality::Text]),
+            // Speech is one rendering of an utterance, and plain text is an
+            // utterance nothing had to decide about, so synthesis speaks both.
+            Self::Tts { .. } => Some(&[Modality::Utterance, Modality::Text]),
+            Self::Sink { modality, .. } => Some(match modality {
+                Modality::Audio => &[Modality::Audio],
+                // The other rendering of an utterance. A text sink writing one
+                // down is what lets a model stay unaware of how it is
+                // delivered, which is the whole reason an utterance is not
+                // speech.
+                Modality::Text => &[Modality::Text, Modality::Utterance],
+                Modality::Utterance => &[Modality::Utterance],
+            }),
+            Self::Router { .. } | Self::Tool { .. } | Self::Memory { .. } => None,
+        }
     }
 }
 
@@ -429,8 +553,8 @@ impl PipelineGraph {
     /// # Errors
     ///
     /// Returns [`GraphError`] if node ids collide, an edge dangles, the graph
-    /// is cyclic, it lacks an entry or exit point, or it is not one connected
-    /// pipeline.
+    /// is cyclic, it lacks an entry or exit point, it is not one connected
+    /// pipeline, or an edge connects two nodes whose modalities do not line up.
     pub fn validate(&self) -> Result<(), GraphError> {
         self.topological_order().map(|_| ())
     }
@@ -537,7 +661,41 @@ impl PipelineGraph {
             return Err(GraphError::Cycle(self.cycle_members(&placed, &outgoing, &incoming)));
         }
 
+        // Checked last, once the graph is known to be a pipeline at all.
+        // Telling someone their microphone does not fit their model, when the
+        // real problem is that two nodes point at each other, sends them to
+        // the wrong node with the wrong question.
+        self.check_modalities()?;
+
         Ok(ordered)
+    }
+
+    /// Checks that every edge delivers something its far end can read.
+    ///
+    /// The first mismatch is reported rather than all of them: a graph is
+    /// usually miswired in one place, and a list of consequences reads as a
+    /// worse problem than the one an operator has.
+    fn check_modalities(&self) -> Result<(), GraphError> {
+        for (position, edge) in self.edges.iter().enumerate() {
+            let (Some(from), Some(to)) = (self.node(&edge.from), self.node(&edge.to)) else {
+                continue;
+            };
+            let (Some(produced), Some(expected)) =
+                (from.output_modality(), to.accepted_modalities())
+            else {
+                continue;
+            };
+            if !expected.contains(&produced) {
+                return Err(GraphError::ModalityMismatch {
+                    edge: position,
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    produced,
+                    expected: expected.to_vec(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The nodes not connected to the pipeline the first node belongs to.
@@ -634,7 +792,7 @@ mod tests {
     /// mic -> wake -> stt -> llm -> tts
     fn linear() -> PipelineGraph {
         PipelineGraph::new("linear")
-            .with_node(Node::source("mic", "websocket"))
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
             .with_node(Node::wake_word("wake", "openwakeword"))
             .with_node(Node::stt("stt", "whisper"))
             .with_node(Node::llm("llm", "ollama"))
@@ -800,10 +958,10 @@ mod tests {
     #[test]
     fn cycles_are_rejected_and_name_the_participants() {
         let graph = PipelineGraph::new("cyclic")
-            .with_node(Node::source("source", "websocket"))
+            .with_node(Node::source("source", "websocket", Modality::Audio))
             .with_node(Node::llm("a", "ollama"))
             .with_node(Node::tool("b", "builtin"))
-            .with_node(Node::sink("sink", "websocket"))
+            .with_node(Node::sink("sink", "websocket", Modality::Audio))
             .with_edge(Edge::new("source", "a"))
             .with_edge(Edge::new("a", "b"))
             .with_edge(Edge::new("b", "a"))
@@ -827,7 +985,7 @@ mod tests {
         // caught by NoSource first, so use a node that points at itself plus
         // a reachable head.
         let graph = PipelineGraph::new("no sink")
-            .with_node(Node::source("head", "websocket"))
+            .with_node(Node::source("head", "websocket", Modality::Audio))
             .with_node(Node::llm("loop", "ollama"))
             .with_edge(Edge::new("head", "loop"))
             .with_edge(Edge::new("loop", "loop"));
@@ -921,12 +1079,202 @@ mod tests {
     }
 
     #[test]
+    fn a_pipeline_wired_backwards_names_the_edge_that_cannot_carry_its_load() {
+        // The defect modalities exist for: `tts -> llm -> stt` used to be a
+        // structurally perfect graph, and only the runtime's hand-written
+        // expectation that recognition precedes reasoning caught it.
+        let graph = PipelineGraph::new("backwards")
+            .with_node(Node::tts("tts", "piper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_edge(Edge::new("tts", "llm"))
+            .with_edge(Edge::new("llm", "stt"));
+
+        assert_eq!(
+            graph.validate(),
+            Err(GraphError::ModalityMismatch {
+                edge: 0,
+                from: "tts".to_owned(),
+                to: "llm".to_owned(),
+                produced: Modality::Audio,
+                expected: vec![Modality::Text],
+            })
+        );
+    }
+
+    #[test]
+    fn a_modality_mismatch_reads_as_a_sentence_about_one_edge() {
+        let graph = PipelineGraph::new("backwards")
+            .with_node(Node::tts("tts", "piper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_edge(Edge::new("tts", "llm"))
+            .with_edge(Edge::new("llm", "stt"));
+
+        assert_eq!(
+            graph.validate().unwrap_err().to_string(),
+            "edge `tts` -> `llm` carries audio, but `llm` accepts text"
+        );
+    }
+
+    #[test]
+    fn a_source_declares_what_it_produces_and_the_stage_after_it_must_read_it() {
+        let graph = PipelineGraph::new("typed at a microphone")
+            .with_node(Node::source("keyboard", "websocket", Modality::Text))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_edge(Edge::new("keyboard", "stt"));
+
+        let Err(GraphError::ModalityMismatch { produced, expected, .. }) = graph.validate()
+        else {
+            panic!("recognition has nothing to recognize in written words");
+        };
+        assert_eq!(produced, Modality::Text);
+        assert_eq!(expected, [Modality::Audio]);
+    }
+
+    #[test]
+    fn a_text_sink_renders_the_utterance_a_model_produced() {
+        // Nothing has to stand between the model and a text sink, because text
+        // is a rendering of an utterance rather than a different thing.
+        PipelineGraph::new("text out")
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::sink("reply", "websocket", Modality::Text))
+            .with_edge(Edge::new("chat", "llm"))
+            .with_edge(Edge::new("llm", "reply"))
+            .validate()
+            .expect("a text sink writes down what the model said");
+    }
+
+    #[test]
+    fn an_audio_sink_cannot_render_an_utterance_itself() {
+        // Speech is a rendering an utterance needs a synthesizer for, so a
+        // graph that skips synthesis is missing a stage rather than being
+        // wired loosely.
+        let graph = PipelineGraph::new("silent")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_node(Node::sink("speaker", "websocket", Modality::Audio))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "llm"))
+            .with_edge(Edge::new("llm", "speaker"));
+
+        let Err(GraphError::ModalityMismatch { from, to, produced, .. }) = graph.validate()
+        else {
+            panic!("an utterance is not audio until something speaks it");
+        };
+        assert_eq!((from.as_str(), to.as_str()), ("llm", "speaker"));
+        assert_eq!(produced, Modality::Utterance);
+    }
+
+    #[test]
+    fn synthesis_speaks_both_an_utterance_and_plain_text() {
+        for produced in [Node::llm("upstream", "ollama"), Node::stt("upstream", "whisper")] {
+            PipelineGraph::new("spoken")
+                .with_node(produced)
+                .with_node(Node::tts("tts", "piper"))
+                .with_edge(Edge::new("upstream", "tts"))
+                .validate()
+                .expect("synthesis renders written words as readily as an utterance");
+        }
+    }
+
+    #[test]
+    fn an_edge_into_a_source_is_rejected_because_nothing_there_reads_it() {
+        let graph = PipelineGraph::new("backwards at the edge")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::llm("llm", "ollama"))
+            .with_edge(Edge::new("stt", "mic"))
+            .with_edge(Edge::new("stt", "llm"));
+
+        let error = graph.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "edge `stt` -> `mic` carries text, but `mic` accepts nothing"
+        );
+    }
+
+    #[test]
+    fn a_kind_that_is_not_a_modality_transform_leaves_its_edges_unchecked() {
+        // A tool node is half of a call-and-return arc rather than a stage
+        // that consumes one stream and produces another, so there is nothing
+        // truthful to check it against until ADR-0012 moves tools onto a core.
+        linear()
+            .with_node(Node::tool("clock", "builtin"))
+            .with_edge(Edge::new("llm", "clock"))
+            .with_edge(Edge::new("clock", "tts"))
+            .validate()
+            .expect("a tool branch is not a modality transform");
+    }
+
+    #[test]
+    fn a_graph_that_is_not_a_pipeline_is_described_as_such_before_its_modalities() {
+        // This graph is wired backwards *and* cyclic. "These two nodes point at
+        // each other" is the problem to fix; the modality complaint is a
+        // consequence of it and names a different node.
+        let graph = PipelineGraph::new("both wrong")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::llm("a", "ollama"))
+            .with_node(Node::llm("b", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("mic", "a"))
+            .with_edge(Edge::new("a", "b"))
+            .with_edge(Edge::new("b", "a"))
+            .with_edge(Edge::new("b", "tts"));
+
+        assert_eq!(
+            graph.validate(),
+            Err(GraphError::Cycle(vec!["a".to_owned(), "b".to_owned()]))
+        );
+    }
+
+    #[test]
+    fn a_source_that_declares_no_modality_is_read_as_audio() {
+        // Every graph written before modalities existed was a voice pipeline.
+        // Refusing to load them, or loading them as something else, would
+        // strand pipelines the editor can still open.
+        let node: Node = serde_json::from_value(
+            serde_json::json!({ "kind": "source", "id": "mic", "provider": "websocket" }),
+        )
+        .expect("deserialize");
+
+        assert_eq!(node, Node::source("mic", "websocket", Modality::Audio));
+    }
+
+    #[test]
+    fn a_declared_modality_is_always_written_down() {
+        // Unlike the optional per-node settings, a modality is never absent
+        // from what a pipeline saved: it decides what the graph means.
+        assert_eq!(
+            serde_json::to_value(Node::sink("reply", "websocket", Modality::Text))
+                .expect("serialize"),
+            serde_json::json!({
+                "kind": "sink",
+                "id": "reply",
+                "provider": "websocket",
+                "modality": "text",
+            })
+        );
+    }
+
+    #[test]
+    fn a_modalitys_name_is_the_word_it_is_written_as_on_the_wire() {
+        for modality in [Modality::Audio, Modality::Text, Modality::Utterance] {
+            let written = serde_json::to_value(modality).expect("serialize");
+            assert_eq!(written, serde_json::Value::String(modality.name().to_owned()));
+            assert_eq!(modality.to_string(), modality.name());
+        }
+    }
+
+    #[test]
     fn a_kinds_name_is_the_word_it_is_written_as_on_the_wire() {
         // Error messages name a node kind and so does the JSON beside them;
         // two spellings of `wake_word` would send an operator looking for a
         // node that is not there.
         for node in [
-            Node::source("a", "p"),
+            Node::source("a", "p", Modality::Audio),
             Node::wake_word("b", "p"),
             Node::stt("c", "p"),
             Node::speaker_id("d", "p"),
@@ -935,7 +1283,7 @@ mod tests {
             Node::tool("g", "p"),
             Node::memory("h", "p"),
             Node::tts("i", "p"),
-            Node::sink("j", "p"),
+            Node::sink("j", "p", Modality::Audio),
         ] {
             let tag = serde_json::to_value(&node).expect("serialize")["kind"]
                 .as_str()
