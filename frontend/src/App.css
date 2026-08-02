@@ -1239,6 +1239,22 @@ button {
   font-size: 12px;
 }
 
+.node-config-field {
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.node-config-field span {
+  font-size: 11px;
+}
+
+.node-config-field input,
+.node-config-field select {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .component-config-fields {
   display: grid;
   gap: 10px;

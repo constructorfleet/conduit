@@ -2398,6 +2398,145 @@ function PipelinesPanel({
     }));
   }
 
+  /// Sets one configuration field on a node, or removes it when the operator
+  /// empties the input.
+  ///
+  /// Every config field is optional, and absent carries a meaning of its own —
+  /// an absent model means whichever model the provider serves first. Writing
+  /// an empty string instead would ask the provider for a model named nothing.
+  function updateNodeConfig(
+    nodeId: string,
+    field: string,
+    value: string | number | undefined,
+  ) {
+    applyDraftEdit((graph) => ({
+      ...graph,
+      nodes: graph.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const next = { ...node } as PipelineNode & Record<string, unknown>;
+        if (value === undefined || value === "") {
+          delete next[field];
+        } else {
+          next[field] = value;
+        }
+        return next;
+      }),
+    }));
+  }
+
+  /// The configuration a node kind accepts, beyond which provider serves it.
+  ///
+  /// Only the kinds that carry configuration render anything, so a source or a
+  /// sink still shows just its provider.
+  function renderNodeConfigFields(node: PipelineNode) {
+    function textField(
+      field: string,
+      label: string,
+      value: string | undefined,
+      placeholder?: string,
+    ) {
+      return (
+        <label className="field node-config-field">
+          <span>{label}</span>
+          <input
+            aria-label={`${label} for ${node.id}`}
+            type="text"
+            value={value ?? ""}
+            placeholder={placeholder}
+            onChange={(event) =>
+              updateNodeConfig(node.id, field, event.target.value)
+            }
+          />
+        </label>
+      );
+    }
+
+    function numberField(
+      field: string,
+      label: string,
+      value: number | undefined,
+    ) {
+      return (
+        <label className="field node-config-field">
+          <span>{label}</span>
+          <input
+            aria-label={`${label} for ${node.id}`}
+            type="number"
+            min={1}
+            value={value ?? ""}
+            onChange={(event) =>
+              updateNodeConfig(
+                node.id,
+                field,
+                event.target.value === ""
+                  ? undefined
+                  : Number(event.target.value),
+              )
+            }
+          />
+        </label>
+      );
+    }
+
+    switch (node.kind) {
+      case "llm":
+        return (
+          <>
+            {textField(
+              "model",
+              "Model",
+              node.model,
+              "Provider's first served model",
+            )}
+            {textField("system", "System prompt", node.system)}
+            {numberField("max_rounds", "Max rounds", node.max_rounds)}
+          </>
+        );
+      case "tts":
+        return textField("voice", "Voice", node.voice, "Provider default");
+      case "memory":
+        return (
+          <>
+            <label className="field node-config-field">
+              <span>Mode</span>
+              <select
+                aria-label={`Mode for ${node.id}`}
+                value={node.mode ?? ""}
+                onChange={(event) =>
+                  updateNodeConfig(node.id, "mode", event.target.value)
+                }
+              >
+                <option value="">Provider default</option>
+                <option value="read">read</option>
+                <option value="write">write</option>
+                <option value="read_write">read_write</option>
+              </select>
+            </label>
+            <label className="field node-config-field">
+              <span>Scope</span>
+              <select
+                aria-label={`Scope for ${node.id}`}
+                value={node.scope ?? ""}
+                onChange={(event) =>
+                  updateNodeConfig(node.id, "scope", event.target.value)
+                }
+              >
+                <option value="">All scopes</option>
+                <option value="conversation">conversation</option>
+                <option value="speaker">speaker</option>
+                <option value="global">global</option>
+              </select>
+            </label>
+            {numberField("limit", "Limit", node.limit)}
+          </>
+        );
+      default:
+        return null;
+    }
+  }
+
   function deleteNode(nodeId: string) {
     applyDraftEdit((graph) => {
       const target = graph.nodes.find((node) => node.id === nodeId);
@@ -2687,22 +2826,25 @@ function PipelinesPanel({
           {node.provider}
         </p>
         {editingNodeId === node.id ? (
-          <label className="field node-provider-select">
-            <span>Provider</span>
-            <select
-              aria-label={`Provider for ${node.id}`}
-              value={node.provider}
-              onChange={(event) =>
-                updateNodeProvider(node.id, event.target.value)
-              }
-            >
-              {providerChoices.map((provider) => (
-                <option value={provider.id} key={provider.id}>
-                  {provider.label} ({provider.id})
-                </option>
-              ))}
-            </select>
-          </label>
+          <>
+            <label className="field node-provider-select">
+              <span>Provider</span>
+              <select
+                aria-label={`Provider for ${node.id}`}
+                value={node.provider}
+                onChange={(event) =>
+                  updateNodeProvider(node.id, event.target.value)
+                }
+              >
+                {providerChoices.map((provider) => (
+                  <option value={provider.id} key={provider.id}>
+                    {provider.label} ({provider.id})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {renderNodeConfigFields(node)}
+          </>
         ) : null}
       </article>
     );

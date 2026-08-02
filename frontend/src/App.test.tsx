@@ -855,6 +855,80 @@ describe("Pipelines graph editor", () => {
     ).toBe("openai");
   });
 
+  it("asks one pipeline's model of a provider definition shared with another", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for llm" }),
+    );
+    await user.type(screen.getByLabelText("Model for llm"), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
+    expect(llm).toMatchObject({ kind: "llm", model: "qwen3:8b" });
+  });
+
+  it("carries a voice on the synthesis node", async () => {
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for tts" }),
+    );
+    await user.type(screen.getByLabelText("Voice for tts"), "en_GB-alba");
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const tts = savedGraphs[0]?.nodes.find((node) => node.id === "tts");
+    expect(tts).toMatchObject({ kind: "tts", voice: "en_GB-alba" });
+  });
+
+  it("clears an emptied model rather than asking for a model named nothing", async () => {
+    // The graph field is optional, and absent means "whichever model the
+    // provider serves first". An empty string would instead ask the provider
+    // for a model with no name.
+    const user = userEvent.setup();
+    const savedGraphs: PipelineGraph[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for llm" }),
+    );
+    const model = screen.getByLabelText("Model for llm");
+    await user.type(model, "gpt-4o");
+    await user.clear(model);
+    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+
+    const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
+    expect(llm).not.toHaveProperty("model");
+  });
+
   it("uses providers configured on the Providers page as pipeline choices", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];

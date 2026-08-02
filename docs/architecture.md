@@ -54,6 +54,21 @@ disconnected subgraphs. The graph model can describe more than the runtime can
 execute; `Runner::prepare` refuses unsupported node kinds and topologies rather
 than accepting and ignoring them.
 
+A node is a typed variant rather than a generic record, tagged by `kind`, and
+carries the configuration belonging to that kind: an `llm` node names its
+model, system prompt, and round cap; a `tts` node its voice; a `memory` node its
+mode, scope, and limit. A node still selects a provider definition by stable id
+only. Settings that belong to one pipeline live on the node, so two pipelines
+may share a provider definition and request different models from it; settings
+that belong to the provider live in its definition. An absent `model` means
+whichever model the provider serves first, so a node that expresses no
+preference behaves as it did before nodes could express one.
+
+[ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) replaces this flat
+model with a transport pipeline plus a reasoning core;
+[docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks
+that work.
+
 Today the runtime executes one recognizer, one language model, one synthesizer,
 and any number of tool branches downstream of the model. `router`, `wake_word`,
 `speaker_id`, and `memory` nodes exist in the graph vocabulary but are not
