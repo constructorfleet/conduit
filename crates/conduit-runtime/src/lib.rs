@@ -43,6 +43,7 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::id::{ConversationId, DeviceId, SpeakerId};
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
+use conduit_provider::memory::Memory;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
@@ -71,6 +72,7 @@ pub struct Providers {
     llm: Registry<dyn LanguageModel>,
     tts: Registry<dyn TextToSpeech>,
     tools: Registry<dyn Tool>,
+    memory: Registry<dyn Memory>,
 }
 
 impl Providers {
@@ -117,6 +119,14 @@ impl Providers {
         self
     }
 
+    /// Registers a memory store under its own name.
+    #[must_use]
+    pub fn with_memory<P: Memory>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.memory.insert(name, Arc::new(provider));
+        self
+    }
+
     /// The registered recognizers.
     #[must_use]
     pub const fn stt(&self) -> &Registry<dyn SpeechToText> {
@@ -140,6 +150,12 @@ impl Providers {
     pub const fn tools(&self) -> &Registry<dyn Tool> {
         &self.tools
     }
+
+    /// The registered memory stores.
+    #[must_use]
+    pub const fn memory(&self) -> &Registry<dyn Memory> {
+        &self.memory
+    }
 }
 
 /// Written by hand because the registries hold trait objects, which are not
@@ -151,6 +167,7 @@ impl std::fmt::Debug for Providers {
             .field("llm", &self.llm.names().collect::<Vec<_>>())
             .field("tts", &self.tts.names().collect::<Vec<_>>())
             .field("tools", &self.tools.names().collect::<Vec<_>>())
+            .field("memory", &self.memory.names().collect::<Vec<_>>())
             .finish()
     }
 }

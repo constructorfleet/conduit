@@ -14,9 +14,11 @@ use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Event, FinishReason, Stage, UtteranceSegmentRole};
 use conduit_core::graph::Modality;
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
+use conduit_core::memory::Scope;
 use conduit_core::resample::Resampler;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
+use conduit_provider::memory::{Query, Record};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest};
 use conduit_provider::ChunkStream;
@@ -321,7 +323,12 @@ impl Turn {
         if let Some(system) = &self.plan.core.system {
             messages.push(Message::system(system.clone()));
         }
-        messages.push(Message::user(transcript));
+        // Retrieved before the first call and not again: what the model is
+        // reminded of should not change under it between rounds of one turn.
+        if let Some(recalled) = self.recall(&transcript).await {
+            messages.push(Message::system(recalled));
+        }
+        messages.push(Message::user(transcript.clone()));
 
         for round_number in 0..self.plan.core.max_rounds {
             let round = self.ask(&messages).await?;
@@ -334,6 +341,7 @@ impl Turn {
                 {
                     return None;
                 }
+                self.remember(&transcript, &round.text).await;
                 return Some(());
             }
 
@@ -468,6 +476,71 @@ impl Turn {
         }
 
         Some(round)
+    }
+
+    /// What this core's memory has to say about the question, if anything.
+    ///
+    /// Returns `None` when nothing is bound for reading or nothing matched, so
+    /// a turn with no memory builds exactly the messages it built before.
+    ///
+    /// A store that fails is reported and stepped over rather than ending the
+    /// turn: answering without what was remembered is worse than answering
+    /// well, and much better than not answering.
+    async fn recall(&mut self, question: &str) -> Option<String> {
+        let mut recalled = Vec::new();
+        for store in &self.plan.core.memory {
+            if !store.mode.reads() {
+                continue;
+            }
+            let query = Query {
+                text: question.to_owned(),
+                limit: store.limit,
+                scope: store.scope,
+                conversation: Some(self.emitter.conversation()),
+                speaker: self.speaker,
+            };
+            match store.provider.search(query).await {
+                Ok(matches) => {
+                    recalled.extend(matches.into_iter().map(|found| found.record.content));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %store.provider.name(),
+                        %error,
+                        "memory retrieval failed; answering without it"
+                    );
+                }
+            }
+        }
+
+        (!recalled.is_empty()).then(|| format!("You remember:\n{}", recalled.join("\n")))
+    }
+
+    /// Stores what was asked and what was answered.
+    ///
+    /// After the reply rather than before it, so a turn that is interrupted or
+    /// times out does not leave a memory of an exchange that never finished.
+    async fn remember(&mut self, question: &str, answer: &str) {
+        let content = format!("Asked: {question}\nAnswered: {answer}");
+        for store in &self.plan.core.memory {
+            if !store.mode.writes() {
+                continue;
+            }
+            let record = Record {
+                content: content.clone(),
+                scope: store.scope.unwrap_or(Scope::Conversation),
+                conversation: Some(self.emitter.conversation()),
+                speaker: self.speaker,
+                metadata: serde_json::Value::Null,
+            };
+            if let Err(error) = store.provider.store(record).await {
+                tracing::warn!(
+                    provider = %store.provider.name(),
+                    %error,
+                    "memory write failed; the turn stands"
+                );
+            }
+        }
     }
 
     /// Renders one sentence and forwards it, as speech or as text.

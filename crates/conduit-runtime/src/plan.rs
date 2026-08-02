@@ -6,8 +6,10 @@ use std::sync::Arc;
 use conduit_core::graph::{
     ConfirmPolicy, MemoryBinding, MemoryMode, Modality, Node, PipelineGraph, ToolBinding,
 };
+use conduit_core::memory::Scope;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{LanguageModel, ToolSpec};
+use conduit_provider::memory::Memory;
 use conduit_provider::stt::SpeechToText;
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
@@ -65,7 +67,7 @@ pub struct CorePlan {
     /// binding it would not run, so nothing reaches this field until track F
     /// executes memory. It is here because the alternative — dropping the
     /// binding at resolution — is what the refusal exists to avoid.
-    pub memory: Vec<MemoryBinding>,
+    pub memory: Vec<ResolvedMemory>,
     /// Cap on model calls in one turn.
     pub max_rounds: usize,
 }
@@ -146,7 +148,7 @@ impl Plan {
                         offer_tool(&mut tools, providers, binding, id)?;
                     }
                     for binding in &core.memory {
-                        memory.push(resolve_memory(binding, id)?);
+                        memory.push(resolve_memory(binding, providers)?);
                     }
                     reasoning = Some(Reasoning {
                         node: id.clone(),
@@ -215,6 +217,18 @@ impl Plan {
     }
 }
 
+/// A memory store a core uses, and how it uses it.
+pub struct ResolvedMemory {
+    /// The store itself.
+    pub provider: Arc<dyn Memory>,
+    /// Whether this pipeline reads from it, writes to it, or both.
+    pub mode: MemoryMode,
+    /// Which scope to search, or every scope when `None`.
+    pub scope: Option<Scope>,
+    /// How many records one retrieval may return.
+    pub limit: usize,
+}
+
 /// A tool a core offers, and whether to ask before running it.
 ///
 /// The policy travels with the tool because the question is asked at dispatch,
@@ -260,24 +274,14 @@ fn offer_tool(
     Ok(())
 }
 
-/// Resolves a memory binding, or explains why it cannot run yet.
-///
-/// Every mode is refused today, because retrieval and storage are track F. The
-/// refusal is per mode rather than blanket so that track F can turn them on one
-/// at a time — and it is a refusal rather than a silent drop for the reason the
-/// router refusal is: a pipeline told to remember what was said, which answers
-/// as though nothing was, has nothing to show that it ignored the instruction.
-fn resolve_memory(binding: &MemoryBinding, node: &str) -> Result<MemoryBinding> {
-    let asked = match binding.mode {
-        MemoryMode::Read => "retrieve what was said before",
-        MemoryMode::Write => "store what is said now",
-        MemoryMode::ReadWrite => "retrieve what was said before and store what is said now",
-    };
-    Err(Error::Config(format!(
-        "memory `{}` on node `{node}` asks to {asked}, and this runtime cannot execute \
-         memory yet; the pipeline would answer as though it had none",
-        binding.provider
-    )))
+/// Resolves one memory binding against the registered stores.
+fn resolve_memory(binding: &MemoryBinding, providers: &Providers) -> Result<ResolvedMemory> {
+    Ok(ResolvedMemory {
+        provider: providers.memory().require(&binding.provider)?,
+        mode: binding.mode,
+        scope: binding.scope,
+        limit: binding.limit,
+    })
 }
 
 /// The model a language model node asks for.

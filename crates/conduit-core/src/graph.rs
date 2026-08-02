@@ -130,6 +130,20 @@ pub enum MemoryMode {
     ReadWrite,
 }
 
+impl MemoryMode {
+    /// Whether this mode retrieves what was said before.
+    #[must_use]
+    pub const fn reads(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite)
+    }
+
+    /// Whether this mode stores what is said now.
+    #[must_use]
+    pub const fn writes(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+}
+
 /// Whether a tool may run without being asked about first.
 ///
 /// A tool that changes something in the world is a different proposition from

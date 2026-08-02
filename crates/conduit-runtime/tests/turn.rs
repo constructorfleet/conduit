@@ -11,7 +11,9 @@ use std::time::Duration;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
+use conduit_core::graph::{
+    Edge, MemoryBinding, MemoryMode, Modality, Node, PipelineGraph, ReasoningCore,
+};
 use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
@@ -134,6 +136,108 @@ async fn a_text_pipeline_writes_its_reply_down_with_no_speech_providers() {
         published.contains(&"UtteranceSegmentStarted".to_owned()),
         "a written segment is still a segment: {published:?}"
     );
+}
+
+/// A pipeline whose core is bound to one memory store.
+fn remembering_graph(mode: MemoryMode) -> PipelineGraph {
+    let core = ReasoningCore {
+        memory: vec![MemoryBinding {
+            provider: "fake-memory".to_owned(),
+            mode,
+            scope: None,
+            limit: 5,
+        }],
+        ..ReasoningCore::new("fake-llm")
+    };
+    PipelineGraph::new("remembering")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "core".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
+}
+
+#[tokio::test]
+async fn a_core_is_reminded_before_it_answers_and_stores_after() {
+    let memory = fakes::FakeMemory::recalling("the oven is in the kitchen");
+    let llm = FakeLlm::new(vec!["It is in the kitchen."]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("where is the oven")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner = Runner::prepare(
+        &remembering_graph(MemoryMode::ReadWrite),
+        &providers,
+        EventBus::default(),
+    )
+    .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    let searched = memory.searched();
+    assert_eq!(searched.len(), 1, "retrieved once, before the first model call");
+    assert_eq!(searched[0].text, "where is the oven");
+    assert_eq!(searched[0].limit, 5, "the binding's limit is what is asked for");
+
+    // What was recalled has to actually reach the model, or retrieval is
+    // theatre: the store was read and the answer was given without it.
+    let prompt = llm.requests()[0]
+        .messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(prompt.contains("the oven is in the kitchen"), "{prompt}");
+
+    let stored = memory.stored();
+    assert_eq!(stored.len(), 1, "and the exchange is stored once, after the reply");
+    assert!(stored[0].content.contains("where is the oven"), "{:?}", stored[0]);
+    assert!(stored[0].content.contains("It is in the kitchen."), "{:?}", stored[0]);
+}
+
+#[tokio::test]
+async fn a_read_only_binding_never_writes() {
+    let memory = fakes::FakeMemory::recalling("something");
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner =
+        Runner::prepare(&remembering_graph(MemoryMode::Read), &providers, EventBus::default())
+            .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert_eq!(memory.searched().len(), 1);
+    assert!(memory.stored().is_empty(), "a read binding must not write");
+}
+
+#[tokio::test]
+async fn a_write_only_binding_never_reads() {
+    let memory = fakes::FakeMemory::recalling("something the model must not see");
+    let llm = FakeLlm::new(vec!["Hello."]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner =
+        Runner::prepare(&remembering_graph(MemoryMode::Write), &providers, EventBus::default())
+            .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert!(memory.searched().is_empty(), "a write binding must not read");
+    assert_eq!(memory.stored().len(), 1);
+    let prompt = llm.requests()[0]
+        .messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!prompt.contains("must not see"), "{prompt}");
 }
 
 /// Two ways in and two ways out, around one core.

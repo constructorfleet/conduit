@@ -322,13 +322,13 @@ fn a_core_names_the_model_it_asks_for_rather_than_taking_the_providers_first() {
 }
 
 #[test]
-fn a_memory_binding_is_refused_rather_than_quietly_dropped() {
-    // Accepting a binding and then not running it turns "remember what I told
-    // you" into "answer as though nothing was said", with nothing to show for
-    // it. Executing memory is track F; until then the pipeline is refused.
+fn a_memory_binding_resolves_against_the_registered_store() {
+    // This used to refuse: accepting a binding and not running it turns
+    // "remember what I told you" into "answer as though nothing was said".
+    // The runtime runs them now, so the binding resolves.
     let core = ReasoningCore {
         memory: vec![MemoryBinding {
-            provider: "recall".to_owned(),
+            provider: "fake-memory".to_owned(),
             mode: MemoryMode::ReadWrite,
             scope: None,
             limit: 5,
@@ -342,10 +342,33 @@ fn a_memory_binding_is_refused_rather_than_quietly_dropped() {
         .with_edge(Edge::new("stt", "brain"))
         .with_edge(Edge::new("brain", "tts"));
 
-    let message = config_message(&refusal(&graph, &providers())).to_owned();
-    assert!(message.contains("recall"), "the binding refused: {message}");
-    assert!(message.contains("brain"), "the node carrying it: {message}");
-    assert!(message.contains("memory"), "and what it is: {message}");
+    let providers = providers().with_memory(fakes::FakeMemory::new());
+    Runner::prepare(&graph, &providers, EventBus::default())
+        .expect("a bound memory store is executable");
+}
+
+#[test]
+fn a_memory_binding_naming_no_registered_store_is_refused() {
+    let core = ReasoningCore {
+        memory: vec![MemoryBinding {
+            provider: "missing".to_owned(),
+            mode: MemoryMode::Read,
+            scope: None,
+            limit: 5,
+        }],
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("remembering")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "brain".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "brain"))
+        .with_edge(Edge::new("brain", "tts"));
+
+    assert!(matches!(
+        refusal(&graph, &providers()),
+        Error::UnknownProvider(name) if name == "missing"
+    ));
 }
 
 #[test]
