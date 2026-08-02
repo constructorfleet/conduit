@@ -321,6 +321,13 @@ Delete it here, once core reachability states the same rule structurally.
 Acceptance: a hybrid pipeline with an audio and a text source, and both sink
 kinds, validates and routes either input to the same core.
 
+**Landed** as `8f33f61` and `f6687c3`. `require_downstream` is deleted.
+
+Core reachability turned out to be about where a node sits rather than what
+kind it is: a pipeline may end at a `tts` with no `sink` written down, and that
+stage is still where the reply comes out, so the rule asks about origins and
+terminals rather than about `source` and `sink` nodes.
+
 ## Track F — Memory Binding Execution
 
 `Read`/`ReadWrite` bindings retrieve before the first model call and inject as

@@ -111,6 +111,12 @@ one synthesizer, and any number of tool branches downstream of the model.
 `router`, `wake_word`, `speaker_id`, and `memory` nodes exist in the graph
 vocabulary but are not runnable runtime stages yet.
 
+Validation requires every origin to reach the core and the core to reach every
+terminal, so a graph cannot branch past the model and deliver something the
+model never saw. A pipeline may have several sources and several sinks: one
+core can be fed from a microphone and a chat box and deliver to a speaker and
+a transcript, and the same segment is then spoken and written.
+
 Recognition and synthesis are both optional. A turn starts from audio or from
 words a client typed, and delivers a `Reply` that is either synthesized speech
 or a written segment, so `source(text) -> llm -> sink(text)` runs on a
