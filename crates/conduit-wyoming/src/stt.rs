@@ -2,8 +2,9 @@
 //!
 //! Wyoming STT servers (e.g. faster-whisper) accept an `audio-start` event
 //! describing the stream, followed by `audio-chunk` events carrying raw
-//! samples and an `audio-stop` event. They answer with `transcript` events —
-//! partials first, then a final whose `data` carries a `result` object.
+//! samples and an `audio-stop` event. They answer with a `transcript` event
+//! carrying the final text, preceded on a streaming server by any number of
+//! `transcript-chunk` partials.
 
 use conduit_core::audio::Encoding;
 use conduit_core::{Error, Result};
@@ -65,29 +66,31 @@ impl WyomingStt {
     }
 }
 
-/// Splits a `transcript` event into text, confidence, and finality.
+/// Event type carrying a partial transcript on a streaming server.
+const TRANSCRIPT_CHUNK: &str = "transcript-chunk";
+
+/// Splits a transcript event into text, confidence, and finality.
 ///
-/// A transcript is final when the event data carries a `result` object; its
-/// text comes from `result.text` (falling back to the top-level `text`) and
-/// its confidence from `result.confidence`. Anything else is a partial.
+/// Finality comes from the *event type*, not the payload: a `transcript` event
+/// is the final transcript — that is the whole of what `Transcript(text=...)`
+/// serializes to — and only a streaming server's [`TRANSCRIPT_CHUNK`] is a
+/// partial. A `result` object is not part of the protocol; it is read when
+/// present, because a server that adds one has better text and a confidence to
+/// offer, but requiring it meant never accepting a transcript at all.
 fn transcript_from_event(event: &WyomingEvent) -> (String, Option<f32>, bool) {
-    match event.data.get("result").and_then(Value::as_object) {
-        Some(result) => {
-            let text = result
-                .get("text")
-                .and_then(Value::as_str)
-                .or_else(|| event.data.get("text").and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_owned();
-            let confidence = result.get("confidence").and_then(Value::as_f64).map(|c| c as f32);
-            (text, confidence, true)
-        }
-        None => {
-            let text =
-                event.data.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
-            (text, None, false)
-        }
-    }
+    let is_final = event.event_type != TRANSCRIPT_CHUNK;
+    let result = event.data.get("result").and_then(Value::as_object);
+    let text = result
+        .and_then(|result| result.get("text"))
+        .and_then(Value::as_str)
+        .or_else(|| event.data.get("text").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let confidence = result
+        .and_then(|result| result.get("confidence"))
+        .and_then(Value::as_f64)
+        .map(|confidence| confidence as f32);
+    (text, confidence, is_final)
 }
 
 #[async_trait::async_trait]
@@ -182,7 +185,10 @@ impl SpeechToText for WyomingStt {
             |(mut reader, provider, emit_partials, mut saw_final)| async move {
                 loop {
                     match read_wyoming_event(&mut reader).await {
-                        Ok(Some(event)) if event.event_type == "transcript" => {
+                        Ok(Some(event))
+                            if event.event_type == "transcript"
+                                || event.event_type == TRANSCRIPT_CHUNK =>
+                        {
                             let (text, confidence, is_final) = transcript_from_event(&event);
                             if is_final {
                                 saw_final = true;
@@ -351,15 +357,33 @@ mod tests {
     }
 
     #[test]
-    fn transcript_event_without_result_is_partial() {
+    fn a_bare_transcript_event_is_final() {
+        // What faster-whisper actually sends: `Transcript(text=...)`, whose
+        // data is just `{"text": ...}`. Treating the absence of a `result`
+        // object as "this is only a partial" left every real transcript
+        // discarded and the turn waiting until the idle timeout fired.
         let event = WyomingEvent {
             event_type: "transcript".to_owned(),
-            data: json!({ "text": "partial text" }),
+            data: json!({ "text": "what time is it" }),
             payload: Vec::new(),
         };
         let (text, confidence, is_final) = transcript_from_event(&event);
-        assert_eq!(text, "partial text");
+        assert_eq!(text, "what time is it");
         assert_eq!(confidence, None);
+        assert!(is_final, "a `transcript` event is the final transcript");
+    }
+
+    #[test]
+    fn a_transcript_chunk_is_a_partial() {
+        // Streaming servers send partials under their own event type; only
+        // that type is non-final.
+        let event = WyomingEvent {
+            event_type: TRANSCRIPT_CHUNK.to_owned(),
+            data: json!({ "text": "what time" }),
+            payload: Vec::new(),
+        };
+        let (text, _, is_final) = transcript_from_event(&event);
+        assert_eq!(text, "what time");
         assert!(!is_final);
     }
 }
