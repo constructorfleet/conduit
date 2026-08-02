@@ -845,7 +845,10 @@ describe("Pipelines graph editor", () => {
         initialPipelineViews={[pipelineView()]}
         onPipelineSaved={(graph) => savedGraphs.push(graph)}
         onPipelineValidate={(graph) =>
-          graph.nodes.some((node) => node.id === "confirm")
+          graph.nodes.some(
+            (node) =>
+              node.kind === "core" && (node.core.tools?.length ?? 0) > 0,
+          )
             ? { ok: true, order: graph.nodes.map((node) => node.id) }
             : { ok: false, message: "graph is disconnected" }
         }
@@ -863,10 +866,12 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
     expect(screen.getByText("Validation passed")).toBeInTheDocument();
-    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toContain("confirm");
-    expect(savedGraphs[0]?.edges).toContainEqual({
-      from: "confirm",
-      to: "llm",
+    // Binding a tool adds no node and no edge: the graph it validated is the
+    // graph it had, with one more thing bound to the core.
+    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
+    expect(core?.kind === "core" ? core.core.tools : []).toContainEqual({
+      provider: "builtin.confirm",
+      confirm: "never",
     });
   });
 
@@ -914,7 +919,10 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
-    expect(llm).toMatchObject({ kind: "llm", provider: "openai" });
+    expect(llm).toMatchObject({
+      kind: "core",
+      core: { model: { provider: "openai" } },
+    });
   });
 
   it("asks one pipeline's model of a provider definition shared with another", async () => {
@@ -937,7 +945,10 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
-    expect(llm).toMatchObject({ kind: "llm", model: "qwen3:8b" });
+    expect(llm).toMatchObject({
+      kind: "core",
+      core: { model: { model: "qwen3:8b" } },
+    });
   });
 
   it("carries a voice on the synthesis node", async () => {
@@ -988,7 +999,10 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
-    expect(llm).not.toHaveProperty("model");
+    expect(llm).toMatchObject({ kind: "core" });
+    expect(
+      llm?.kind === "core" ? llm.core.model.model : "unset",
+    ).toBeUndefined();
   });
 
   it("marks each pipeline link with the modality it carries", async () => {
@@ -1092,10 +1106,11 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(savedGraphs[0]?.nodes.find((node) => node.id === "llm")).toEqual({
-      id: "llm",
-      kind: "llm",
-      provider: "openai-fast",
+    expect(
+      savedGraphs[0]?.nodes.find((node) => node.id === "llm"),
+    ).toMatchObject({
+      kind: "core",
+      core: { model: { provider: "openai-fast" } },
     });
   });
 
@@ -1127,7 +1142,15 @@ describe("Pipelines graph editor", () => {
             graph: {
               ...pipelineView().graph,
               nodes: pipelineView().graph.nodes.map((node) =>
-                node.id === "llm" ? { ...node, provider: "openai-fast" } : node,
+                node.kind === "core"
+                  ? {
+                      ...node,
+                      core: {
+                        ...node.core,
+                        model: { provider: "openai-fast" },
+                      },
+                    }
+                  : node,
               ),
             },
           },
@@ -1140,10 +1163,11 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(savedGraphs[0]?.nodes.find((node) => node.id === "llm")).toEqual({
-      id: "llm",
-      kind: "llm",
-      provider: "openai-fast",
+    expect(
+      savedGraphs[0]?.nodes.find((node) => node.id === "llm"),
+    ).toMatchObject({
+      kind: "core",
+      core: { model: { provider: "openai-fast" } },
     });
   });
 
@@ -1551,8 +1575,12 @@ describe("Pipelines graph editor", () => {
             graph: {
               ...pipelineView().graph,
               nodes: pipelineView().graph.nodes.map((node) =>
-                node.id === "llm"
-                  ? { ...node, id: longId, provider: longProvider }
+                node.kind === "core"
+                  ? {
+                      ...node,
+                      id: longId,
+                      core: { ...node.core, model: { provider: longProvider } },
+                    }
                   : node,
               ),
               edges: pipelineView().graph.edges.map((edge) => ({
@@ -1589,7 +1617,7 @@ describe("Pipelines graph editor", () => {
 
     await enterPipelinesSection(user);
     await user.click(screen.getByRole("button", { name: "Add memory node" }));
-    expect(screen.getByText("memory")).toBeInTheDocument();
+    expect(screen.getByText("builtin.memory")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "garage" }));
     expect(
@@ -1603,14 +1631,14 @@ describe("Pipelines graph editor", () => {
     );
 
     expect(screen.getByText("garage_mic")).toBeInTheDocument();
-    expect(screen.queryByText("memory")).not.toBeInTheDocument();
+    expect(screen.queryByText("builtin.memory")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "kitchen" }));
-    expect(screen.getByText("memory")).toBeInTheDocument();
+    expect(screen.getByText("builtin.memory")).toBeInTheDocument();
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
   });
 
-  it("inserts tool nodes as reasoning augments instead of after the selected sink", async () => {
+  it("binds a tool to the core rather than inserting it after the selected node", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
     render(
@@ -1627,14 +1655,14 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(savedGraphs[0]?.edges).toContainEqual({
-      from: "confirm",
-      to: "llm",
+    // Selecting a node used to decide where a tool was inserted. A binding
+    // has nowhere to be inserted, so the selection cannot misplace it.
+    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
+    expect(core?.kind === "core" ? core.core.tools : []).toContainEqual({
+      provider: "builtin.confirm",
+      confirm: "never",
     });
-    expect(savedGraphs[0]?.edges).not.toContainEqual({
-      from: "speaker",
-      to: "confirm",
-    });
+    expect(savedGraphs[0]?.edges).toEqual(pipelineView().graph.edges);
   });
 
   it("adds separate tool augments for distinct configured tool provider ids", async () => {
@@ -1672,30 +1700,22 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    const toolNodes =
-      savedGraphs[0]?.nodes.filter((node) => node.kind === "tool") ?? [];
-    expect(toolNodes).toEqual([
-      expect.objectContaining({
-        id: "tool_calendar_tool",
-        provider: "calendar-tool",
-      }),
-      expect.objectContaining({
-        id: "tool_lights_tool",
-        provider: "lights-tool",
-      }),
+    // Two bindings on the one core, and no new nodes or edges: a tool is
+    // configuration rather than a stage the reply passes through.
+    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
+    expect(core?.kind === "core" ? core.core.tools : []).toEqual([
+      { provider: "calendar-tool", confirm: "never" },
+      { provider: "lights-tool", confirm: "never" },
     ]);
-    expect(savedGraphs[0]?.edges).toEqual(
-      expect.arrayContaining([
-        { from: "tool_calendar_tool", to: "llm" },
-        { from: "tool_lights_tool", to: "llm" },
-      ]),
-    );
+    expect(
+      savedGraphs[0]?.nodes.filter((node) => node.kind === "core"),
+    ).toHaveLength(1);
     expect(
       screen.getByText("No unused configured tool providers"),
     ).toBeInTheDocument();
   });
 
-  it("adds separate memory augments with unique graph node ids", async () => {
+  it("binds each memory store separately to the core", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
     render(
@@ -1711,24 +1731,12 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    const memoryNodes =
-      savedGraphs[0]?.nodes.filter((node) => node.kind === "memory") ?? [];
-    expect(memoryNodes).toEqual([
-      expect.objectContaining({
-        id: "memory",
-        provider: "builtin.memory",
-      }),
-      expect.objectContaining({
-        id: "memory_2",
-        provider: "builtin.memory",
-      }),
-    ]);
-    expect(savedGraphs[0]?.edges).toEqual(
-      expect.arrayContaining([
-        { from: "memory", to: "llm" },
-        { from: "memory_2", to: "llm" },
-      ]),
-    );
+    // Two bindings, not two nodes with invented unique ids. A binding is
+    // identified by its position on the core, so nothing has to be made
+    // unique for it to be told apart from its neighbour.
+    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
+    expect(core?.kind === "core" ? core.core.memory : []).toHaveLength(2);
+    expect(savedGraphs[0]?.edges).toEqual(pipelineView().graph.edges);
   });
 
   it("persists saved graph edits across reloads", async () => {
@@ -1752,8 +1760,10 @@ describe("Pipelines graph editor", () => {
     render(<App />);
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
-    expect(await screen.findByText("confirm")).toBeInTheDocument();
-    expect(screen.getByLabelText("Move confirm augment")).toBeInTheDocument();
+    expect(await screen.findByText("builtin.confirm")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Move builtin.confirm binding"),
+    ).toBeInTheDocument();
   });
 
   it("supports undo, test run, and frontend-only augment actions", async () => {
@@ -1763,12 +1773,14 @@ describe("Pipelines graph editor", () => {
     await enterPipelinesSection(user);
     await user.click(screen.getByRole("button", { name: "Add memory node" }));
 
-    expect(screen.getByText("memory")).toBeInTheDocument();
-    expect(screen.getByLabelText("Move memory augment")).toBeInTheDocument();
+    expect(screen.getByText("builtin.memory")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Move builtin.memory binding"),
+    ).toBeInTheDocument();
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo last edit" }));
-    expect(screen.queryByText("memory")).not.toBeInTheDocument();
+    expect(screen.queryByText("builtin.memory")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
     expect(
@@ -1818,11 +1830,16 @@ describe("Pipelines graph editor", () => {
         "Test turn completed for kitchen: validated draft.",
       ),
     ).toBeInTheDocument();
-    expect(savedGraphs[0]?.nodes.map((node) => node.id)).toContain("memory");
+    const savedCore = savedGraphs[0]?.nodes.find(
+      (node) => node.kind === "core",
+    );
+    expect(
+      savedCore?.kind === "core" ? savedCore.core.memory : [],
+    ).toHaveLength(1);
     expect(testedPipelines).toEqual(["kitchen"]);
   });
 
-  it("places and drags LLM augments without stacking new components", async () => {
+  it("places and drags core bindings without stacking new components", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
     render(
@@ -1837,9 +1854,15 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Add tool node" }));
 
     const graph = screen.getByLabelText("Pipeline graph");
-    const memoryOrbital = within(graph).getByLabelText("Move memory augment");
-    const toolOrbital = within(graph).getByLabelText("Move confirm augment");
-    expect(memoryOrbital).toHaveStyle({
+    const memoryOrbital = within(graph).getByLabelText(
+      "Move builtin.memory binding",
+    );
+    const toolOrbital = within(graph).getByLabelText(
+      "Move builtin.confirm binding",
+    );
+    // Tools are listed before memory on a core, so the tool takes the first
+    // orbital slot however the two were added.
+    expect(toolOrbital).toHaveStyle({
       "--orbit-x": "0px",
       "--orbit-y": "-175px",
       "--orbit-start-x": "0px",
@@ -1875,11 +1898,13 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Validate Graph" }));
     await user.click(screen.getByRole("button", { name: "Save Graph" }));
 
-    expect(savedGraphs[0]?.nodes.find((node) => node.id === "memory")).toEqual({
-      id: "memory",
-      kind: "memory",
-      provider: "builtin.memory",
-    });
+    // Dragging an orbital moves it on screen. It is presentation only: the
+    // binding it stands for is unchanged, and there is no node for a drag to
+    // have created.
+    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
+    expect(core?.kind === "core" ? core.core.memory : []).toEqual([
+      { provider: "builtin.memory", mode: "read_write", limit: 8 },
+    ]);
   });
 
   it("keeps graph editing read-only on small screens", async () => {
@@ -2393,13 +2418,23 @@ async function enterSettingsSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Settings" }));
 }
 
+/// The model a graph's core binds, for the status fixtures.
+function coreProvider(graph: PipelineGraph): string | null {
+  const core = graph.nodes.find((node) => node.kind === "core");
+  return core?.kind === "core" ? core.core.model.provider : null;
+}
+
 function pipelineView(): PipelineView {
   const graph: PipelineGraph = {
     name: "kitchen",
     nodes: [
       { id: "mic", kind: "source", provider: "websocket" },
       { id: "stt", kind: "stt", provider: "whisper" },
-      { id: "llm", kind: "llm", provider: "openai" },
+      {
+        id: "llm",
+        kind: "core",
+        core: { model: { provider: "openai" }, max_rounds: 4 },
+      },
       { id: "tts", kind: "tts", provider: "piper-local" },
       { id: "speaker", kind: "sink", provider: "websocket" },
     ],
@@ -2552,7 +2587,11 @@ function liveApiPipelineView(): PipelineView {
     nodes: [
       { id: "garage_mic", kind: "source", provider: "websocket" },
       { id: "garage_stt", kind: "stt", provider: "garage-whisper" },
-      { id: "garage_llm", kind: "llm", provider: "garage-openai" },
+      {
+        id: "garage_llm",
+        kind: "core",
+        core: { model: { provider: "garage-openai" }, max_rounds: 4 },
+      },
       { id: "garage_tts", kind: "tts", provider: "garage-tts" },
       { id: "garage_speaker", kind: "sink", provider: "websocket" },
     ],
@@ -2919,21 +2958,18 @@ function snapshotWithStoredPipeline(
           },
           {
             kind: "reasoning",
-            provider:
-              graph.nodes.find((node) => node.kind === "llm")?.provider ?? null,
+            provider: coreProvider(graph),
             state: "unproven",
             detail: "pipeline saved",
             last_turn: null,
           },
           {
             kind: "tools",
-            provider:
-              graph.nodes.find((node) => node.kind === "tool")?.provider ??
-              null,
-            state: graph.nodes.some((node) => node.kind === "tool")
+            provider: coreProvider(graph),
+            state: graph.nodes.some((node) => node.kind === "core")
               ? "unproven"
               : "unused",
-            detail: graph.nodes.some((node) => node.kind === "tool")
+            detail: graph.nodes.some((node) => node.kind === "core")
               ? "pipeline saved"
               : null,
             last_turn: null,

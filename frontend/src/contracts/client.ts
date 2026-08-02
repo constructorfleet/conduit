@@ -115,7 +115,7 @@ export interface ComponentConfigSchema {
 export interface ProviderComponentDescriptor {
   id: string;
   label: string;
-  kind: NodeKind;
+  kind: ProviderCapability;
   definition_variant: ProviderDefinitionVariantType;
   schema: ComponentConfigSchema;
 }

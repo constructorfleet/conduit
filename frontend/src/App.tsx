@@ -44,6 +44,8 @@ import type {
   ProviderComponentCatalog,
   ProviderComponentDescriptor,
   PipelineEdge,
+  ReasoningCore,
+  ProviderCapability,
   PipelineGraph,
   PipelineNode,
   PipelineView,
@@ -84,14 +86,16 @@ const sections = [
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 
+/// Defaults the graph model applies when a core omits them.
+const DEFAULT_MAX_ROUNDS = 4;
+const DEFAULT_MEMORY_LIMIT = 8;
+
 const LINEAR_STAGE_ORDER: NodeKind[] = [
   "source",
   "wake_word",
   "stt",
   "speaker_id",
-  "router",
   "core",
-  "llm",
   "tts",
   "sink",
 ];
@@ -837,7 +841,9 @@ type ProviderFilter = "all" | ProviderKind;
 interface ProviderDefinition {
   id: string;
   label: string;
-  kind: NodeKind;
+  /// What the provider can do, not where it sits. Tools and memory are core
+  /// bindings rather than graph stages, so they have no node kind.
+  kind: ProviderCapability;
   component: string;
   config: Record<string, unknown>;
   source: "local" | "inferred";
@@ -913,15 +919,12 @@ function ProvidersPanel({
   const selectedKindComponents = selectedProviderKind
     ? componentCatalog.components.filter(
         (component) =>
-          component.kind === nodeKindForProviderKind(selectedProviderKind),
+          component.kind === capabilityForProviderKind(selectedProviderKind),
       )
     : [];
 
   function startNewProvider(component: ProviderComponentDescriptor) {
-    const kind = providerKindForNodeKind(component.kind);
-    if (!kind) {
-      return;
-    }
+    const kind = providerKindForCapability(component.kind);
 
     setDraftProvider({
       id: `${kind}-${providerDefinitions.length + 1}`,
@@ -947,7 +950,7 @@ function ProvidersPanel({
     setDraftProvider({
       id: card.id,
       label: card.label,
-      kind: nodeKindForProviderKind(card.kind),
+      kind: capabilityForProviderKind(card.kind),
       component: card.component ?? card.id,
       config: {},
       source: "local",
@@ -2086,7 +2089,9 @@ function PipelinesPanel({
     ? configuredToolProviders.filter(
         (provider) =>
           !draft.nodes.some(
-            (node) => node.kind === "tool" && node.provider === provider.id,
+            (node) =>
+              node.kind === "core" &&
+              node.core.tools?.some((tool) => tool.provider === provider.id),
           ),
       )
     : [];
@@ -2347,33 +2352,45 @@ function PipelinesPanel({
     };
   }, [draggingAugment, selectedName]);
 
-  function addReasoningAugment({
-    id,
-    kind,
-    provider,
-  }: {
-    id: string;
-    kind: Exclude<NodeKind, "core">;
-    provider: string;
-  }) {
-    applyDraftEdit((graph): PipelineGraph => {
-      if (graph.nodes.some((node) => node.id === id)) {
-        return graph;
-      }
+  /// Rewrites the draft's reasoning core.
+  ///
+  /// Every core edit goes through here so that a graph with no core — which
+  /// the editor can hold mid-edit — changes nothing rather than inventing one.
+  function updateCore(
+    nodeId: string,
+    change: (core: ReasoningCore) => ReasoningCore,
+  ) {
+    applyDraftEdit((graph) => ({
+      ...graph,
+      nodes: graph.nodes.map((node) =>
+        node.id === nodeId && node.kind === "core"
+          ? { ...node, core: change(node.core) }
+          : node,
+      ),
+    }));
+  }
 
-      return {
-        ...graph,
-        nodes: [
-          ...graph.nodes,
-          {
-            id,
-            kind,
-            provider,
+  /// Offers a tool to the core, if it is not already offered.
+  ///
+  /// A binding rather than a node: there is no id to make unique and no edge
+  /// to draw, because a tool is configuration on the core rather than a stage
+  /// the reply passes through.
+  function bindToolToCore(providerId: string) {
+    const core = draft?.nodes.find((node) => node.kind === "core");
+    if (!core) {
+      return;
+    }
+    updateCore(core.id, (current) =>
+      current.tools?.some((tool) => tool.provider === providerId)
+        ? current
+        : {
+            ...current,
+            tools: [
+              ...(current.tools ?? []),
+              { provider: providerId, confirm: "never" },
+            ],
           },
-        ],
-        edges: [...graph.edges, { from: id, to: "llm" }],
-      };
-    });
+    );
   }
 
   function addToolProviderNode(provider: ProviderDefinition) {
@@ -2381,11 +2398,7 @@ function PipelinesPanel({
       return;
     }
 
-    addReasoningAugment({
-      id: uniqueNodeId(draft, toolNodeIdBase(provider.id)),
-      kind: "tool",
-      provider: provider.id,
-    });
+    bindToolToCore(provider.id);
     setToolProviderMenuOpen(false);
   }
 
@@ -2446,10 +2459,10 @@ function PipelinesPanel({
   /// sink still shows just its provider.
   function renderNodeConfigFields(node: PipelineNode) {
     function textField(
-      field: string,
       label: string,
       value: string | undefined,
-      placeholder?: string,
+      placeholder: string | undefined,
+      set: (value: string | undefined) => void,
     ) {
       return (
         <label className="field node-config-field">
@@ -2460,7 +2473,7 @@ function PipelinesPanel({
             value={value ?? ""}
             placeholder={placeholder}
             onChange={(event) =>
-              updateNodeConfig(node.id, field, event.target.value)
+              set(event.target.value === "" ? undefined : event.target.value)
             }
           />
         </label>
@@ -2468,9 +2481,9 @@ function PipelinesPanel({
     }
 
     function numberField(
-      field: string,
       label: string,
       value: number | undefined,
+      set: (value: number | undefined) => void,
     ) {
       return (
         <label className="field node-config-field">
@@ -2481,9 +2494,7 @@ function PipelinesPanel({
             min={1}
             value={value ?? ""}
             onChange={(event) =>
-              updateNodeConfig(
-                node.id,
-                field,
+              set(
                 event.target.value === ""
                   ? undefined
                   : Number(event.target.value),
@@ -2522,56 +2533,33 @@ function PipelinesPanel({
       case "source":
       case "sink":
         return modalityField();
-      case "llm":
+      case "core":
         return (
           <>
             {textField(
-              "model",
               "Model",
-              node.model,
+              node.core.model.model,
               "Provider's first served model",
+              (value) =>
+                updateCore(node.id, (core) => ({
+                  ...core,
+                  model: { ...core.model, model: value },
+                })),
             )}
-            {textField("system", "System prompt", node.system)}
-            {numberField("max_rounds", "Max rounds", node.max_rounds)}
+            {textField("System prompt", node.core.system, undefined, (value) =>
+              updateCore(node.id, (core) => ({ ...core, system: value })),
+            )}
+            {numberField("Max rounds", node.core.max_rounds, (value) =>
+              updateCore(node.id, (core) => ({
+                ...core,
+                max_rounds: value ?? DEFAULT_MAX_ROUNDS,
+              })),
+            )}
           </>
         );
       case "tts":
-        return textField("voice", "Voice", node.voice, "Provider default");
-      case "memory":
-        return (
-          <>
-            <label className="field node-config-field">
-              <span>Mode</span>
-              <select
-                aria-label={`Mode for ${node.id}`}
-                value={node.mode ?? ""}
-                onChange={(event) =>
-                  updateNodeConfig(node.id, "mode", event.target.value)
-                }
-              >
-                <option value="">Provider default</option>
-                <option value="read">read</option>
-                <option value="write">write</option>
-                <option value="read_write">read_write</option>
-              </select>
-            </label>
-            <label className="field node-config-field">
-              <span>Scope</span>
-              <select
-                aria-label={`Scope for ${node.id}`}
-                value={node.scope ?? ""}
-                onChange={(event) =>
-                  updateNodeConfig(node.id, "scope", event.target.value)
-                }
-              >
-                <option value="">All scopes</option>
-                <option value="conversation">conversation</option>
-                <option value="speaker">speaker</option>
-                <option value="global">global</option>
-              </select>
-            </label>
-            {numberField("limit", "Limit", node.limit)}
-          </>
+        return textField("Voice", node.voice, "Provider default", (value) =>
+          updateNodeConfig(node.id, "voice", value),
         );
       default:
         return null;
@@ -2644,11 +2632,7 @@ function PipelinesPanel({
       return;
     }
 
-    addReasoningAugment({
-      id: "confirm",
-      kind: "tool",
-      provider: "builtin.confirm",
-    });
+    bindToolToCore("builtin.confirm");
   }
 
   function addMemoryNode() {
@@ -2656,14 +2640,24 @@ function PipelinesPanel({
       return;
     }
 
-    addReasoningAugment({
-      id: uniqueNodeId(draft, "memory"),
-      kind: "memory",
-      provider: "builtin.memory",
-    });
+    const core = draft.nodes.find((node) => node.kind === "core");
+    if (!core) {
+      return;
+    }
+    updateCore(core.id, (current) => ({
+      ...current,
+      memory: [
+        ...(current.memory ?? []),
+        {
+          provider: "builtin.memory",
+          mode: "read_write",
+          limit: DEFAULT_MEMORY_LIMIT,
+        },
+      ],
+    }));
   }
 
-  function providerForCoreStage(kind: "stt" | "llm" | "tts"): string {
+  function providerForCoreStage(kind: "stt" | "core" | "tts"): string {
     const configured = providerDefinitions.find(
       (provider) => provider.kind === kind,
     );
@@ -2679,20 +2673,22 @@ function PipelinesPanel({
     return "openai";
   }
 
-  function addCoreStageNode(kind: "stt" | "llm" | "tts") {
+  function addCoreStageNode(kind: "stt" | "core" | "tts") {
     if (!draft) {
       return;
     }
 
     const id = uniqueNodeId(draft, kind);
     const provider = providerForCoreStage(kind);
-    applyDraftEdit((graph) =>
-      insertLinearStageNode(graph, {
-        id,
-        kind,
-        provider,
-      }),
-    );
+    const node: PipelineNode =
+      kind === "core"
+        ? {
+            id,
+            kind: "core",
+            core: { model: { provider }, max_rounds: DEFAULT_MAX_ROUNDS },
+          }
+        : { id, kind, provider };
+    applyDraftEdit((graph) => insertLinearStageNode(graph, node));
   }
 
   function addConfiguredToolProvider(providerId: string) {
@@ -2823,7 +2819,7 @@ function PipelinesPanel({
       <article
         aria-label={`${node.id} ${componentKind}`}
         className={`graph-node kind-${node.kind} ${compact ? "compact" : ""} ${
-          !compact && node.kind !== "llm" ? "linear" : ""
+          !compact && node.kind !== "core" ? "linear" : ""
         } ${selectedNode?.id === node.id ? "selected" : ""}`}
         role="group"
         onClick={() => setSelectedNodeId(node.id)}
@@ -2897,13 +2893,13 @@ function PipelinesPanel({
   const missingCoreStages = (
     [
       { kind: "stt", label: "STT" },
-      { kind: "llm", label: "LLM" },
+      { kind: "core", label: "Core" },
       { kind: "tts", label: "TTS" },
     ] as const
   ).filter((stage) => !draft.nodes.some((node) => node.kind === stage.kind));
 
   function attachesFlowLinkToTarget(edge: PipelineEdge) {
-    return atomNodeById.get(edge.from)?.kind === "llm";
+    return atomNodeById.get(edge.from)?.kind === "core";
   }
 
   function renderAtomFlowLink(edge: PipelineEdge, attachedToTarget = false) {
@@ -3174,7 +3170,7 @@ function PipelinesPanel({
                   <Fragment key={node.id}>
                     <div
                       className={`atom-flow-item ${
-                        node.kind === "llm" ? "core-flow-item" : ""
+                        node.kind === "core" ? "core-flow-item" : ""
                       }`}
                     >
                       {incomingAttachedEdges.map((edge) =>
@@ -3182,10 +3178,10 @@ function PipelinesPanel({
                       )}
                       <div
                         className={
-                          node.kind === "llm" ? "atom-core-wrap" : "atom-stage"
+                          node.kind === "core" ? "atom-core-wrap" : "atom-stage"
                         }
                       >
-                        {node.kind === "llm" ? (
+                        {node.kind === "core" ? (
                           <>
                             <div
                               className="atom-orbit-ring"
@@ -3199,19 +3195,19 @@ function PipelinesPanel({
                             >
                               {spokes.map((spoke, spokeIndex) => {
                                 const position =
-                                  dragPreviewPositions[spoke.node.id] ??
-                                  orbitPositionForNode(spoke.node, spokeIndex);
+                                  dragPreviewPositions[spoke.key] ??
+                                  defaultAugmentOrbitPosition(spokeIndex);
                                 const slot = spokeIndex + 1;
                                 return (
                                   <div
-                                    aria-label={`Move ${spoke.node.id} augment`}
+                                    aria-label={`Move ${spoke.label} binding`}
                                     className="atom-orbital"
                                     data-orbit-slot={slot.toString()}
                                     draggable={false}
-                                    key={spoke.node.id}
+                                    key={spoke.key}
                                     onPointerDown={(event) =>
                                       startAugmentDrag(
-                                        spoke.node.id,
+                                        spoke.key,
                                         position,
                                         event,
                                       )
@@ -3225,10 +3221,21 @@ function PipelinesPanel({
                                       } as CSSProperties
                                     }
                                   >
-                                    {renderNodeCard({
-                                      node: spoke.node,
-                                      compact: true,
-                                    })}
+                                    <article
+                                      aria-label={`${spoke.label} ${spoke.kind}`}
+                                      className={`graph-node kind-${spoke.kind} compact`}
+                                      role="group"
+                                    >
+                                      <strong
+                                        className="node-label"
+                                        title={spoke.label}
+                                      >
+                                        {spoke.label}
+                                      </strong>
+                                      <p className="node-provider-label">
+                                        {spoke.kind}
+                                      </p>
+                                    </article>
                                   </div>
                                 );
                               })}
@@ -3245,7 +3252,7 @@ function PipelinesPanel({
                         ) : null}
                         <div
                           className={
-                            node.kind === "llm" ? "reasoning-atom" : ""
+                            node.kind === "core" ? "reasoning-atom" : ""
                           }
                         >
                           {renderNodeCard({ node })}
@@ -3446,7 +3453,7 @@ function componentForProviderStatus(
   catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
 ): ProviderComponentDescriptor | null {
-  const nodeKind = nodeKindForProviderKind(provider.kind);
+  const nodeKind = capabilityForProviderKind(provider.kind);
   return componentForNode(catalog, {
     id: provider.id,
     kind: nodeKind,
@@ -3483,8 +3490,11 @@ function providerDefinitionsForNode(
   definitions: readonly ProviderDefinition[],
   node: PipelineNode,
 ): ProviderDefinition[] {
+  // Matched on capability, not node kind: a core's provider select offers
+  // language models, because what it edits is the core's model binding.
+  const capability = capabilityForNodeKind(node.kind);
   const matching = definitions.filter(
-    (provider) => provider.kind === node.kind,
+    (provider) => provider.kind === capability,
   );
   if (matching.some((provider) => provider.id === nodeProvider(node))) {
     return matching;
@@ -3495,7 +3505,7 @@ function providerDefinitionsForNode(
     {
       id: nodeProvider(node),
       label: nodeProvider(node),
-      kind: node.kind,
+      kind: capability ?? "llm",
       component: nodeProvider(node),
       config: {},
       source: "inferred",
@@ -3510,10 +3520,7 @@ function providerCardViews(
   const cards = new Map<string, ProviderCardView>();
 
   for (const definition of definitions) {
-    const kind = providerKindForNodeKind(definition.kind);
-    if (!kind) {
-      continue;
-    }
+    const kind = providerKindForCapability(definition.kind);
 
     cards.set(definition.id, {
       id: definition.id,
@@ -3584,7 +3591,7 @@ function fromApiProviderDefinition(
   return {
     id: definition.id,
     label: definition.label,
-    kind: nodeKindForProviderKind(definition.kind),
+    kind: capabilityForProviderKind(definition.kind),
     component: component?.id ?? definition.variant.type,
     config: configFromProviderVariant(definition.variant),
     source: "local",
@@ -3595,7 +3602,7 @@ function componentForApiProviderDefinition(
   catalog: ProviderComponentCatalog,
   definition: Pick<ProviderDefinitionView, "kind" | "variant">,
 ): ProviderComponentDescriptor | null {
-  const kind = nodeKindForProviderKind(definition.kind);
+  const kind = capabilityForProviderKind(definition.kind);
   if (definition.variant.type === "mcp_tool") {
     const transport = definition.variant.transport.type;
     const componentId =
@@ -3785,7 +3792,8 @@ function defaultProviderDefinitions(
 ): ProviderDefinition[] {
   const fromGraphs: ProviderDefinition[] = pipelineViews.flatMap((view) =>
     view.graph.nodes.flatMap((node) => {
-      if (!providerKindForNodeKind(node.kind)) {
+      const capability = capabilityForNodeKind(node.kind);
+      if (!capability) {
         return [];
       }
 
@@ -3794,7 +3802,7 @@ function defaultProviderDefinitions(
         {
           id: nodeProvider(node),
           label: nodeProvider(node),
-          kind: node.kind,
+          kind: capability,
           component: component?.id ?? nodeProvider(node),
           config: {},
           source: "inferred",
@@ -3806,7 +3814,7 @@ function defaultProviderDefinitions(
     snapshot?.providers.map((provider) => ({
       id: provider.id,
       label: provider.id,
-      kind: nodeKindForProviderKind(provider.kind),
+      kind: capabilityForProviderKind(provider.kind),
       component:
         componentForProviderStatus(catalog, provider)?.id ?? provider.id,
       config: {},
@@ -3895,33 +3903,33 @@ function pruneEmptyConfig(
   );
 }
 
-function nodeKindForProviderKind(kind: ProviderKind): NodeKind {
-  if (kind === "stt") {
-    return "stt";
-  }
-  if (kind === "tts") {
-    return "tts";
-  }
-  if (kind === "tool") {
-    return "tool";
-  }
-  return "llm";
+/// A provider kind and a capability are the same vocabulary; the conversion
+/// exists so call sites read as the thing they are asking for.
+function capabilityForProviderKind(kind: ProviderKind): ProviderCapability {
+  return kind;
 }
 
-function providerKindForNodeKind(kind: NodeKind): ProviderKind | null {
+/// What a node's provider has to be able to do, when the node names one.
+///
+/// A core answers `llm` for its model; its tools and memory are bindings with
+/// capabilities of their own rather than properties of the node.
+function capabilityForNodeKind(kind: NodeKind): ProviderCapability | null {
   if (kind === "stt") {
     return "stt";
   }
   if (kind === "tts") {
     return "tts";
   }
-  if (kind === "tool") {
-    return "tool";
-  }
-  if (kind === "llm") {
+  if (kind === "core") {
     return "llm";
   }
   return null;
+}
+
+/// A capability and a provider kind are the same vocabulary, seen from the
+/// catalog and from the status snapshot.
+function providerKindForCapability(kind: ProviderCapability): ProviderKind {
+  return kind;
 }
 
 function EventStaleBanner() {
@@ -4668,7 +4676,11 @@ function defaultPipelineViews(
     nodes: [
       { id: "mic", kind: "source", provider: "websocket" },
       { id: "stt", kind: "stt", provider: "whisper" },
-      { id: "llm", kind: "llm", provider: "openai" },
+      {
+        id: "core",
+        kind: "core",
+        core: { model: { provider: "openai" }, max_rounds: DEFAULT_MAX_ROUNDS },
+      },
       {
         id: "tts",
         kind: "tts",
@@ -4700,11 +4712,8 @@ function componentKindForNode(node: PipelineNode): ComponentKind {
   if (node.kind === "stt") {
     return "transcription";
   }
-  if (node.kind === "llm") {
+  if (node.kind === "core") {
     return "reasoning";
-  }
-  if (node.kind === "tool") {
-    return "tools";
   }
   if (node.kind === "tts") {
     return "synthesis";
@@ -4728,58 +4737,61 @@ function outputModality(node: PipelineNode | undefined): Modality | undefined {
       return "audio";
     case "stt":
       return "text";
-    case "llm":
+    case "core":
       return "utterance";
     default:
       return undefined;
   }
 }
 
+/// One thing bound to a core, drawn orbiting it.
+interface CoreSpoke {
+  /// Identifies the orbital across renders and drags. A binding has no id of
+  /// its own, so it is identified by the core it hangs off and its position in
+  /// that core's list.
+  key: string;
+  label: string;
+  kind: "tool" | "memory";
+}
+
 interface PipelineGraphFlow {
   mainNodes: PipelineNode[];
   mainEdges: PipelineGraph["edges"];
-  spokesByTarget: Map<string, { node: PipelineNode; index: number }[]>;
+  spokesByTarget: Map<string, CoreSpoke[]>;
 }
 
+/// Splits a graph into the transport pipeline and each core's bindings.
+///
+/// Every node is on the spine now, because every node *is* a stage: a core's
+/// tools and memory are configuration on it rather than nodes beside it. This
+/// used to partition tool and memory nodes out and recover their target from
+/// an edge, defaulting to the literal id `llm` when there was none.
 function pipelineGraphFlow(graph: PipelineGraph): PipelineGraphFlow {
-  const augmentNodeIds = new Set(
-    graph.nodes
-      .filter((node) => node.kind === "tool" || node.kind === "memory")
-      .map((node) => node.id),
-  );
-  const mainNodes = sortLinearNodes(
-    graph.nodes.filter((node) => !augmentNodeIds.has(node.id)),
-  );
-  const mainNodeIds = new Set(mainNodes.map((node) => node.id));
-  const mainEdges = graph.edges.filter(
-    (edge) => mainNodeIds.has(edge.from) && mainNodeIds.has(edge.to),
-  );
-  const spokesByTarget = new Map<
-    string,
-    { node: PipelineNode; index: number }[]
-  >();
+  const mainNodes = sortLinearNodes(graph.nodes);
+  const spokesByTarget = new Map<string, CoreSpoke[]>();
 
-  graph.nodes.forEach((node, index) => {
-    if (!augmentNodeIds.has(node.id)) {
-      return;
+  for (const node of graph.nodes) {
+    if (node.kind !== "core") {
+      continue;
     }
+    const spokes: CoreSpoke[] = [
+      ...(node.core.tools ?? []).map((tool, index) => ({
+        key: `${node.id}-tool-${index}`,
+        label: tool.provider,
+        kind: "tool" as const,
+      })),
+      ...(node.core.memory ?? []).map((store, index) => ({
+        key: `${node.id}-memory-${index}`,
+        label: store.provider,
+        kind: "memory" as const,
+      })),
+    ];
+    if (spokes.length > 0) {
+      spokesByTarget.set(node.id, spokes);
+    }
+  }
 
-    const target =
-      graph.edges.find((edge) => edge.from === node.id)?.to ?? "llm";
-    spokesByTarget.set(target, [
-      ...(spokesByTarget.get(target) ?? []),
-      { node, index },
-    ]);
-  });
-
-  return { mainNodes, mainEdges, spokesByTarget };
-}
-
-function orbitPositionForNode(
-  _node: PipelineNode,
-  fallbackIndex: number,
-): OrbitPosition {
-  return defaultAugmentOrbitPosition(fallbackIndex);
+  return { mainNodes, mainEdges: graph.edges, spokesByTarget };
 }
 
 function defaultAugmentOrbitPosition(index: number): OrbitPosition {
@@ -4835,15 +4847,6 @@ function upsertPipelineView(
   return views.map((view, index) => (index === existing ? next : view));
 }
 
-function toolNodeIdBase(providerId: string): string {
-  const normalized = providerId
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return `tool_${normalized || "provider"}`;
-}
-
 function uniqueNodeId(graph: PipelineGraph, base: string): string {
   const existing = new Set(graph.nodes.map((node) => node.id));
   if (!existing.has(base)) {
@@ -4873,27 +4876,22 @@ function sortLinearNodes(nodes: readonly PipelineNode[]): PipelineNode[] {
   });
 }
 
+/// Rewires a draft into one chain in stage order.
+///
+/// Every node is on that chain now: a core's tools and memory are bindings, so
+/// there is nothing left that hangs off the pipeline rather than sitting in
+/// it, and every edge is a link between two stages.
 function normalizePipelineGraph(graph: PipelineGraph): PipelineGraph {
-  const augmentKinds = new Set<NodeKind>(["tool", "memory"]);
-  const linearNodes = sortLinearNodes(
-    graph.nodes.filter((node) => !augmentKinds.has(node.kind)),
-  );
-  const linearNodeIds = new Set(linearNodes.map((node) => node.id));
-  const augmentNodes = graph.nodes.filter((node) =>
-    augmentKinds.has(node.kind),
-  );
+  const linearNodes = sortLinearNodes(graph.nodes);
   const linearEdges = linearNodes.slice(0, -1).map((node, index) => ({
     from: node.id,
     to: linearNodes[index + 1].id,
   }));
-  const nonLinearEdges = graph.edges.filter(
-    (edge) => !(linearNodeIds.has(edge.from) && linearNodeIds.has(edge.to)),
-  );
 
   return {
     ...graph,
-    nodes: [...linearNodes, ...augmentNodes],
-    edges: [...linearEdges, ...dedupeEdges(nonLinearEdges)],
+    nodes: linearNodes,
+    edges: dedupeEdges(linearEdges),
   };
 }
 
