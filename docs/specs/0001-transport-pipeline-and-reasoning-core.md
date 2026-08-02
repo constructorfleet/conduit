@@ -191,12 +191,25 @@ Removes `require_downstream` and its three call sites from `plan.rs`: a graph
 wired `tts -> llm -> stt` now fails structurally rather than on a runtime
 stage-order assertion.
 
-Frontend: edges labelled by modality; an edge drawn between incompatible
-modalities is refused at draw time with the reason. Backend validation stays
-authoritative; this is a local echo of one rule.
+Frontend: links marked with the modality their upstream node writes, and a
+source or sink can declare what it carries. Backend validation stays
+authoritative; the console mirrors `Node::output_modality` so it can say what a
+link carries without a round trip.
+
+There is no draw-time refusal, because there is no draw-time: the editor derives
+edges from the stage chain and from tool attachment, so an operator never draws
+an edge. Declaring modality on the endpoints is where the same mistake is
+actually made, and changing an endpoint re-marks every link downstream of it.
 
 Acceptance: `tts -> llm -> stt` is refused with a modality mismatch naming the
 offending edge.
+
+**Landed** as `a08601b` and `2bb3ff5`. `require_downstream` was kept, not
+deleted: modality compatibility is a property of one edge, and branching past
+the model is a property of a path — `stt -> llm` beside `stt -> tts` has two
+compatible edges and still discards the model's answer. Track E's core
+reachability is what subsumes it. Pinned by a regression test in
+`crates/conduit-runtime/tests/plan.rs`.
 
 ## Track C — Optional Recognition And Synthesis
 
@@ -275,6 +288,10 @@ prepare; no source file contains a fallback to the literal node id `"llm"`.
 Validation requires every source to reach the core and the core to reach every
 sink (`GraphError::CoreNotReachable`, `GraphError::SinkNotFedByCore`) rather
 than assuming one of each. Runtime fans input in and output out.
+
+This is also what finally replaces `require_downstream` in `plan.rs`, which
+Track B kept because no per-edge rule can see a path branching past the model.
+Delete it here, once core reachability states the same rule structurally.
 
 Acceptance: a hybrid pipeline with an audio and a text source, and both sink
 kinds, validates and routes either input to the same core.
