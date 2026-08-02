@@ -1,14 +1,13 @@
 substitutions:
   name: conduit-sat1
   friendly_name: Conduit Satellite1
-  conduit_server: 192.168.1.10:8080
-  conduit_pipeline: kitchen
+  conduit_server: 10.0.12.72:8080
+  conduit_pipeline: default
   conduit_scheme: ws
   conduit_max_utterance_ms: "8000"
   wake_debug_assistant_id: ${conduit_pipeline}
-  wake_debug_udp_host: ""
+  wake_debug_udp_host: "10.0.12.11"
   wake_debug_udp_port: "6056"
-  wake_debug_event_url: ""
   # Official board firmware source: https://github.com/futureproofhomes/satellite1-esphome
   satellite1_ref: 592a9687206709046f475b5464941702beacb093
 
@@ -39,6 +38,15 @@ esphome:
   platformio_options:
     board_build.flash_mode: dio
     board_upload.maximum_size: 16777216
+  on_boot:
+    priority: -100
+    then:
+      - if:
+          condition:
+            switch.is_off: master_mute_switch
+          then:
+            - micro_wake_word.start:
+
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -235,10 +243,12 @@ binary_sensor:
 micro_wake_word:
   id: mww
   models:
-    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
-      id: hey_jarvis
-    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
-      id: okay_nabu
+    # - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
+    #   id: hey_jarvis
+    # - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
+    #   id: okay_nabu
+    - model: https://automation.home.prettybaked.com/local/hey_eddie/hey_eddie.json
+      id: hey_eddie
     - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json
       id: stop
       internal: true
@@ -269,6 +279,8 @@ conduit_voice:
   debug_assistant_id: ${wake_debug_assistant_id}
   debug_udp_host: ${wake_debug_udp_host}
   debug_udp_port: ${wake_debug_udp_port}
-  debug_wake_event_url: ${wake_debug_event_url}
+  # From secrets.yaml, not a substitution: the URL carries a webhook token,
+  # and substitutions are committed.
+  debug_wake_event_url: !secret wake_debug_event_url
   microphone: sat1_mics
   speaker: announcement_resampling_speaker
