@@ -483,6 +483,61 @@ describe("First-Run Guided Setup", () => {
     ).toBeInTheDocument();
   });
 
+  it("builds a text pipeline that asks for no speech providers", async () => {
+    // The minimal working loop for a text assistant needs a language model and
+    // nothing else, so guided setup must not demand speech providers that
+    // would never run.
+    const user = userEvent.setup();
+    const savedGraphs: unknown[] = [];
+    render(
+      <App
+        initialSnapshot={firstRunSnapshot()}
+        onPipelineSaved={(graph) => savedGraphs.push(graph)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Use anonymous mode" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Pipeline shape"), "text");
+
+    // Opened deliberately: the fields must be absent because the shape needs
+    // no speech providers, not merely because the panel is closed.
+    await user.click(
+      screen.getByRole("button", { name: "Configure Providers" }),
+    );
+    expect(
+      screen.getByLabelText("Language model provider"),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Speech-to-text provider")).toBeNull();
+    expect(screen.queryByLabelText("Text-to-speech provider")).toBeNull();
+
+    await user.clear(screen.getByLabelText("Pipeline name"));
+    await user.type(screen.getByLabelText("Pipeline name"), "chat");
+    await user.click(screen.getByRole("button", { name: "Skip tool setup" }));
+    await user.click(screen.getByRole("button", { name: "Validate and Save" }));
+
+    expect(savedGraphs).toEqual([
+      {
+        name: "chat",
+        nodes: [
+          { id: "in", kind: "source", provider: "websocket", modality: "text" },
+          { id: "llm", kind: "llm", provider: "openai" },
+          {
+            id: "out",
+            kind: "sink",
+            provider: "websocket",
+            modality: "text",
+          },
+        ],
+        edges: [
+          { from: "in", to: "llm" },
+          { from: "llm", to: "out" },
+        ],
+      },
+    ]);
+  });
+
   it("persists Guided Setup pipeline saves across reloads", async () => {
     const user = userEvent.setup();
     mockOperatorApi({ snapshot: firstRunSnapshot(), pipelineViews: [] });

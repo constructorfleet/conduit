@@ -4273,6 +4273,7 @@ function GuidedSetupPanel({
   ) => Promise<void>;
 }) {
   const [pipelineName, setPipelineName] = useState("default");
+  const [shape, setShape] = useState<"voice" | "text">("voice");
   const [sttProvider, setSttProvider] = useState("whisper");
   const [llmProvider, setLlmProvider] = useState("openai");
   const [ttsProvider, setTtsProvider] = useState("piper");
@@ -4288,7 +4289,11 @@ function GuidedSetupPanel({
       setError("Pipeline name is required");
       return;
     }
-    if (!sttProvider.trim() || !llmProvider.trim() || !ttsProvider.trim()) {
+    const speech = shape === "voice";
+    if (
+      !llmProvider.trim() ||
+      (speech && (!sttProvider.trim() || !ttsProvider.trim()))
+    ) {
       setError("Provider settings are required");
       return;
     }
@@ -4302,8 +4307,15 @@ function GuidedSetupPanel({
         ttsProvider: ttsProvider.trim(),
       };
       await onPipelineSaved(
-        buildMinimalVoiceLoopGraph({ name, ...providerIds }),
-        guidedSetupProviderDefinitions(providerIds),
+        speech
+          ? buildMinimalVoiceLoopGraph({ name, ...providerIds })
+          : buildMinimalTextLoopGraph({
+              name,
+              llmProvider: providerIds.llmProvider,
+            }),
+        guidedSetupProviderDefinitions(providerIds).filter(
+          (definition) => speech || definition.id === providerIds.llmProvider,
+        ),
       );
     } catch (caught) {
       setError(
@@ -4358,15 +4370,30 @@ function GuidedSetupPanel({
           </div>
         </div>
 
+        <label className="field">
+          <span>Pipeline shape</span>
+          <select
+            value={shape}
+            onChange={(event) =>
+              setShape(event.target.value === "text" ? "text" : "voice")
+            }
+          >
+            <option value="voice">Voice — speak and listen</option>
+            <option value="text">Text — type and read</option>
+          </select>
+        </label>
+
         {providerSettingsOpen ? (
           <div className="provider-settings" aria-label="Provider Settings">
-            <label className="field">
-              <span>Speech-to-text provider</span>
-              <input
-                value={sttProvider}
-                onChange={(event) => setSttProvider(event.target.value)}
-              />
-            </label>
+            {shape === "voice" ? (
+              <label className="field">
+                <span>Speech-to-text provider</span>
+                <input
+                  value={sttProvider}
+                  onChange={(event) => setSttProvider(event.target.value)}
+                />
+              </label>
+            ) : null}
             <label className="field">
               <span>Language model provider</span>
               <input
@@ -4374,13 +4401,15 @@ function GuidedSetupPanel({
                 onChange={(event) => setLlmProvider(event.target.value)}
               />
             </label>
-            <label className="field">
-              <span>Text-to-speech provider</span>
-              <input
-                value={ttsProvider}
-                onChange={(event) => setTtsProvider(event.target.value)}
-              />
-            </label>
+            {shape === "voice" ? (
+              <label className="field">
+                <span>Text-to-speech provider</span>
+                <input
+                  value={ttsProvider}
+                  onChange={(event) => setTtsProvider(event.target.value)}
+                />
+              </label>
+            ) : null}
           </div>
         ) : null}
 
@@ -4523,6 +4552,31 @@ function buildMinimalVoiceLoopGraph({
       { from: "stt", to: "llm" },
       { from: "llm", to: "tts" },
       { from: "tts", to: "speaker" },
+    ],
+  };
+}
+
+/// The minimal loop for a text assistant: typed in, written out.
+///
+/// No recognizer and no synthesizer, so this runs on a deployment where a
+/// language model is the only configured provider.
+function buildMinimalTextLoopGraph({
+  name,
+  llmProvider,
+}: {
+  name: string;
+  llmProvider: string;
+}): PipelineGraph {
+  return {
+    name,
+    nodes: [
+      { id: "in", kind: "source", provider: "websocket", modality: "text" },
+      { id: "llm", kind: "llm", provider: llmProvider },
+      { id: "out", kind: "sink", provider: "websocket", modality: "text" },
+    ],
+    edges: [
+      { from: "in", to: "llm" },
+      { from: "llm", to: "out" },
     ],
   };
 }
