@@ -47,6 +47,8 @@ pub enum NodeKind {
     SpeakerId,
     /// Conditional fan-out to one of several downstream branches.
     Router,
+    /// A language model with its tool and memory bindings.
+    Core,
     /// Language model inference.
     Llm,
     /// Tool execution.
@@ -72,6 +74,7 @@ impl NodeKind {
             Self::Stt => "stt",
             Self::SpeakerId => "speaker_id",
             Self::Router => "router",
+            Self::Core => "core",
             Self::Llm => "llm",
             Self::Tool => "tool",
             Self::Memory => "memory",
@@ -139,6 +142,120 @@ pub enum MemoryMode {
     ReadWrite,
 }
 
+/// Whether a tool may run without being asked about first.
+///
+/// A tool that changes something in the world is a different proposition from
+/// one that answers a question, and the difference is not visible in the tool's
+/// schema. The graph is where an operator says which is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmPolicy {
+    /// Dispatch as soon as the model asks for it.
+    ///
+    /// The default because it is what every tool does today, and a default of
+    /// `always` would stall every existing pipeline on the first tool call.
+    #[default]
+    Never,
+    /// Ask before dispatching, every time.
+    Always,
+}
+
+/// Which language model a reasoning core reasons with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelBinding {
+    /// Provider definition id, e.g. `"ollama"`.
+    pub provider: String,
+    /// Model to request, or `None` for whichever model the provider definition
+    /// serves first.
+    ///
+    /// Naming one here is what lets two pipelines share a provider definition
+    /// and still reason with different models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// A tool a reasoning core may call.
+///
+/// A binding is configuration on the core rather than an edge in the transport
+/// pipeline: the model decides at runtime whether to call it, so there is no
+/// static position for it to occupy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolBinding {
+    /// Provider definition id, or a qualified tool id such as
+    /// `"weather-tools.forecast"`.
+    pub provider: String,
+    /// Whether this pipeline wants to be asked before the tool runs.
+    #[serde(default)]
+    pub confirm: ConfirmPolicy,
+}
+
+/// A memory store a reasoning core retrieves from, writes to, or both.
+///
+/// Retrieval is an inflow and storage is an outflow on the same store, which is
+/// why this is a binding and not two edges: a graph cannot say both without
+/// describing a cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryBinding {
+    /// Provider definition id.
+    pub provider: String,
+    /// Whether this binding retrieves, stores, or both.
+    #[serde(default)]
+    pub mode: MemoryMode,
+    /// Scope to confine retrieval and storage to, or `None` for all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// Most records to retrieve in one turn.
+    #[serde(default = "default_memory_limit")]
+    pub limit: usize,
+}
+
+/// A language model together with the tools and memory it may reach for.
+///
+/// The bindings have no execution order, because the model decides at runtime
+/// what to call and how often. That is the whole reason they are configuration
+/// on one node rather than stages in the transport pipeline: a topological
+/// position for a tool would state an ordering that does not exist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReasoningCore {
+    /// The model that does the reasoning.
+    pub model: ModelBinding,
+    /// System prompt for this pipeline, prepended to the definition's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// Tools offered to the model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolBinding>,
+    /// Memory the model retrieves from and stores to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory: Vec<MemoryBinding>,
+    /// Cap on model calls in one turn.
+    #[serde(default = "default_max_rounds")]
+    pub max_rounds: usize,
+}
+
+impl ReasoningCore {
+    /// A core reasoning with whichever model `provider` serves first, bound to
+    /// no tools and no memory.
+    ///
+    /// Anything else is set on the returned value: the fields are the point of
+    /// the type, and a constructor taking all five would read as five
+    /// positional arguments at every call site that wants none of them.
+    #[must_use]
+    pub fn new(provider: impl Into<String>) -> Self {
+        Self {
+            model: ModelBinding { provider: provider.into(), model: None },
+            system: None,
+            tools: Vec::new(),
+            memory: Vec::new(),
+            max_rounds: DEFAULT_MAX_ROUNDS,
+        }
+    }
+}
+
 /// One stage in a pipeline, with the settings that belong to it here.
 ///
 /// A node names a provider *definition* by id, and definitions are shared: two
@@ -188,6 +305,13 @@ pub enum Node {
         id: NodeId,
         /// Provider definition id.
         provider: String,
+    },
+    /// A language model with its tool and memory bindings.
+    Core {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// The model, and what it may reach for.
+        core: ReasoningCore,
     },
     /// Language model inference.
     Llm {
@@ -330,6 +454,16 @@ impl Node {
         }
     }
 
+    /// Creates a `core` node reasoning with whichever model `provider` serves
+    /// first, bound to no tools and no memory.
+    ///
+    /// A core with bindings is built through [`ReasoningCore`] and
+    /// [`Node::Core`], for the same reason [`Node::llm`] takes no settings.
+    #[must_use]
+    pub fn core(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Core { id: id.into(), core: ReasoningCore::new(provider) }
+    }
+
     /// Creates a `tool` node.
     #[must_use]
     pub fn tool(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
@@ -373,6 +507,7 @@ impl Node {
             | Self::Stt { id, .. }
             | Self::SpeakerId { id, .. }
             | Self::Router { id, .. }
+            | Self::Core { id, .. }
             | Self::Llm { id, .. }
             | Self::Tool { id, .. }
             | Self::Memory { id, .. }
@@ -382,9 +517,14 @@ impl Node {
     }
 
     /// The provider definition this node selects.
+    ///
+    /// A `core` answers with the model it reasons with. Its tool and memory
+    /// bindings name providers too, but they are attachments rather than the
+    /// thing the node is, and a single answer is what every caller here wants.
     #[must_use]
     pub fn provider(&self) -> &str {
         match self {
+            Self::Core { core, .. } => &core.model.provider,
             Self::Source { provider, .. }
             | Self::WakeWord { provider, .. }
             | Self::Stt { provider, .. }
@@ -407,6 +547,7 @@ impl Node {
             Self::Stt { .. } => NodeKind::Stt,
             Self::SpeakerId { .. } => NodeKind::SpeakerId,
             Self::Router { .. } => NodeKind::Router,
+            Self::Core { .. } => NodeKind::Core,
             Self::Llm { .. } => NodeKind::Llm,
             Self::Tool { .. } => NodeKind::Tool,
             Self::Memory { .. } => NodeKind::Memory,
@@ -437,7 +578,7 @@ impl Node {
                 Some(Modality::Audio)
             }
             Self::Stt { .. } => Some(Modality::Text),
-            Self::Llm { .. } => Some(Modality::Utterance),
+            Self::Core { .. } | Self::Llm { .. } => Some(Modality::Utterance),
             Self::Sink { .. }
             | Self::Router { .. }
             | Self::Tool { .. }
@@ -457,7 +598,7 @@ impl Node {
             Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Stt { .. } => {
                 Some(&[Modality::Audio])
             }
-            Self::Llm { .. } => Some(&[Modality::Text]),
+            Self::Core { .. } | Self::Llm { .. } => Some(&[Modality::Text]),
             // Speech is one rendering of an utterance, and plain text is an
             // utterance nothing had to decide about, so synthesis speaks both.
             Self::Tts { .. } => Some(&[Modality::Utterance, Modality::Text]),
@@ -472,6 +613,18 @@ impl Node {
             }),
             Self::Router { .. } | Self::Tool { .. } | Self::Memory { .. } => None,
         }
+    }
+
+    /// Whether this node is where a model reasons.
+    ///
+    /// A `core` and an `llm` both are: the first carries its tool and memory
+    /// bindings and the second leaves them lying beside it in the graph, but
+    /// each is one model deciding what to say. Validation counts them together
+    /// because two models in one pipeline is the thing being refused, however
+    /// the graph spells it.
+    #[must_use]
+    pub const fn is_reasoning(&self) -> bool {
+        matches!(self, Self::Core { .. } | Self::Llm { .. })
     }
 }
 
@@ -665,9 +818,33 @@ impl PipelineGraph {
         // Telling someone their microphone does not fit their model, when the
         // real problem is that two nodes point at each other, sends them to
         // the wrong node with the wrong question.
+        //
+        // A second model comes before the edge check for the same reason: what
+        // its edges carry is a consequence of its being there, and the node to
+        // delete is the answer either way.
+        self.check_single_core()?;
         self.check_modalities()?;
 
         Ok(ordered)
+    }
+
+    /// Checks that the graph reasons in exactly one place, at most.
+    ///
+    /// Every reasoning node is named rather than only the surplus ones,
+    /// because which of them the operator meant to keep is not something the
+    /// graph knows.
+    fn check_single_core(&self) -> Result<(), GraphError> {
+        let reasoning: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|node| node.is_reasoning())
+            .map(|node| node.id().clone())
+            .collect();
+
+        if reasoning.len() > 1 {
+            return Err(GraphError::MultipleCores(reasoning));
+        }
+        Ok(())
     }
 
     /// Checks that every edge delivers something its far end can read.
@@ -811,20 +988,25 @@ mod tests {
         assert_eq!(order, ["mic", "wake", "stt", "llm", "tts"]);
     }
 
-    /// A router choosing between two models.
+    /// A router choosing between two branches.
     ///
     /// This is a valid *graph* and not an executable *pipeline*: the runtime
-    /// refuses both the router node and the second `llm`. The graph model is
-    /// deliberately the wider of the two — a shape has to be expressible
-    /// before it can be implemented — but the two must not disagree silently,
-    /// so `crates/conduit-runtime/tests/plan.rs` asserts the refusal against
-    /// this exact shape.
+    /// refuses the router node. The graph model is deliberately the wider of
+    /// the two — a shape has to be expressible before it can be implemented —
+    /// but the two must not disagree silently, so
+    /// `crates/conduit-runtime/tests/plan.rs` asserts the refusal against this
+    /// exact shape.
+    ///
+    /// The branches are tools rather than the two models a router would
+    /// really choose between, because a graph reasoning in two places is now
+    /// refused outright; what is being asserted here is the ordering of a
+    /// fan-out that rejoins.
     fn router_fan_out() -> PipelineGraph {
         PipelineGraph::new("router")
             .with_node(Node::stt("stt", "whisper"))
             .with_node(Node::router("router", "builtin"))
-            .with_node(Node::llm("local", "ollama"))
-            .with_node(Node::llm("cloud", "anthropic"))
+            .with_node(Node::tool("local", "builtin"))
+            .with_node(Node::tool("cloud", "remote"))
             .with_node(Node::tts("tts", "piper"))
             .with_edge(Edge::new("stt", "router"))
             .with_edge(Edge::from_port("router", "local", "local"))
@@ -1269,6 +1451,172 @@ mod tests {
     }
 
     #[test]
+    fn a_core_reads_words_and_produces_an_utterance_exactly_as_a_model_node_does() {
+        // A core is the same stage in the transport pipeline as the `llm` it
+        // replaces; what changed is where its tools and memory live. If the
+        // two differed here, moving a pipeline onto a core would rewire it.
+        let core = Node::core("core", "ollama");
+        let llm = Node::llm("llm", "ollama");
+
+        assert_eq!(core.output_modality(), llm.output_modality());
+        assert_eq!(core.accepted_modalities(), llm.accepted_modalities());
+
+        PipelineGraph::new("cored")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(core)
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("core", "tts"))
+            .validate()
+            .expect("a core sits where a model node sat");
+    }
+
+    #[test]
+    fn two_reasoning_nodes_are_refused_however_the_graph_spells_them() {
+        // The refusal is about a pipeline having two models, so it cannot be
+        // dodged by writing one of them the old way.
+        for (left, right) in [
+            (Node::core("first", "ollama"), Node::core("second", "anthropic")),
+            (Node::core("first", "ollama"), Node::llm("second", "anthropic")),
+            (Node::llm("first", "ollama"), Node::llm("second", "anthropic")),
+        ] {
+            let graph = PipelineGraph::new("two minds")
+                .with_node(Node::stt("stt", "whisper"))
+                .with_node(left)
+                .with_node(right)
+                .with_node(Node::tts("tts", "piper"))
+                .with_edge(Edge::new("stt", "first"))
+                .with_edge(Edge::new("stt", "second"))
+                .with_edge(Edge::new("first", "tts"))
+                .with_edge(Edge::new("second", "tts"));
+
+            assert_eq!(
+                graph.validate(),
+                Err(GraphError::MultipleCores(vec!["first".to_owned(), "second".to_owned()]))
+            );
+        }
+    }
+
+    #[test]
+    fn two_reasoning_nodes_read_as_a_sentence_naming_both() {
+        let graph = PipelineGraph::new("two minds")
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::core("local", "ollama"))
+            .with_node(Node::core("cloud", "anthropic"))
+            .with_edge(Edge::new("stt", "local"))
+            .with_edge(Edge::new("stt", "cloud"));
+
+        assert_eq!(
+            graph.validate().unwrap_err().to_string(),
+            "graph has more than one reasoning node: local, cloud"
+        );
+    }
+
+    #[test]
+    fn a_core_carries_its_tools_and_memory_rather_than_wiring_them() {
+        let core = ReasoningCore {
+            model: ModelBinding {
+                provider: "ollama".to_owned(),
+                model: Some("qwen3:8b".to_owned()),
+            },
+            system: Some("Be brief.".to_owned()),
+            tools: vec![ToolBinding {
+                provider: "lights".to_owned(),
+                confirm: ConfirmPolicy::Always,
+            }],
+            memory: vec![MemoryBinding {
+                provider: "recall".to_owned(),
+                mode: MemoryMode::ReadWrite,
+                scope: Some(Scope::Speaker),
+                limit: 3,
+            }],
+            max_rounds: 2,
+        };
+
+        assert_eq!(
+            serde_json::to_value(Node::Core { id: "core".to_owned(), core })
+                .expect("serialize"),
+            serde_json::json!({
+                "kind": "core",
+                "id": "core",
+                "core": {
+                    "model": { "provider": "ollama", "model": "qwen3:8b" },
+                    "system": "Be brief.",
+                    "tools": [{ "provider": "lights", "confirm": "always" }],
+                    "memory": [{
+                        "provider": "recall",
+                        "mode": "read_write",
+                        "scope": "speaker",
+                        "limit": 3,
+                    }],
+                    "max_rounds": 2,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_core_with_nothing_bound_to_it_is_written_as_just_its_model() {
+        // An operator reading a saved pipeline should see what it decided, so
+        // a core with no tools is silent about tools rather than listing none.
+        assert_eq!(
+            serde_json::to_value(Node::core("core", "ollama")).expect("serialize"),
+            serde_json::json!({
+                "kind": "core",
+                "id": "core",
+                "core": { "model": { "provider": "ollama" }, "max_rounds": DEFAULT_MAX_ROUNDS },
+            })
+        );
+    }
+
+    #[test]
+    fn omitted_core_settings_fall_back_to_the_documented_defaults() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "kind": "core",
+            "id": "core",
+            "core": {
+                "model": { "provider": "ollama" },
+                "tools": [{ "provider": "lights" }],
+                "memory": [{ "provider": "recall" }],
+            },
+        }))
+        .expect("deserialize");
+
+        let Node::Core { core, .. } = node else {
+            panic!("a `core` tag deserializes to a `core` node");
+        };
+        assert_eq!(core.model.model, None, "no model named means the provider's first");
+        assert_eq!(core.max_rounds, DEFAULT_MAX_ROUNDS);
+        assert_eq!(
+            core.tools[0].confirm,
+            ConfirmPolicy::Never,
+            "a tool nobody said to ask about runs when the model asks"
+        );
+        assert_eq!(core.memory[0].mode, MemoryMode::Read);
+        assert_eq!(core.memory[0].scope, None, "unset means every scope");
+        assert_eq!(core.memory[0].limit, DEFAULT_MEMORY_LIMIT);
+    }
+
+    #[test]
+    fn a_setting_from_the_wrong_kind_of_binding_is_rejected() {
+        // The same rule the node variants follow: a setting that could never
+        // take effect is a mistake nothing else would report.
+        let error = serde_json::from_value::<Node>(serde_json::json!({
+            "kind": "core",
+            "id": "core",
+            "core": {
+                "model": { "provider": "ollama" },
+                "tools": [{ "provider": "lights", "limit": 3 }],
+            },
+        }))
+        .expect_err("`limit` is a memory setting, not a tool one");
+
+        assert!(error.to_string().contains("limit"), "{error}");
+    }
+
+    #[test]
     fn a_kinds_name_is_the_word_it_is_written_as_on_the_wire() {
         // Error messages name a node kind and so does the JSON beside them;
         // two spellings of `wake_word` would send an operator looking for a
@@ -1279,6 +1627,7 @@ mod tests {
             Node::stt("c", "p"),
             Node::speaker_id("d", "p"),
             Node::router("e", "p"),
+            Node::core("e2", "p"),
             Node::llm("f", "p"),
             Node::tool("g", "p"),
             Node::memory("h", "p"),

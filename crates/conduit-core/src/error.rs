@@ -106,6 +106,15 @@ pub enum GraphError {
     #[error("nodes are not connected to the rest of the pipeline: {}", .0.join(", "))]
     Disconnected(Vec<String>),
 
+    /// The graph reasons in more than one place.
+    ///
+    /// A pipeline has one reasoning core, so a graph with two describes two
+    /// pipelines' worth of reasoning and says nothing about which of them
+    /// answers. Counted across `core` and `llm` nodes alike: the refusal is
+    /// about there being two models, not about how they are spelled.
+    #[error("graph has more than one reasoning node: {}", .0.join(", "))]
+    MultipleCores(Vec<String>),
+
     /// An edge delivers something the node at its far end cannot read.
     ///
     /// This is the structural form of a mistake that used to be found — when

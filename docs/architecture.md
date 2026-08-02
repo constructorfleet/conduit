@@ -93,6 +93,19 @@ model with a transport pipeline plus a reasoning core;
 [docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks
 that work.
 
+A `core` node is that replacement, and it currently stands beside the kinds it
+replaces rather than instead of them. It holds a model binding together with
+its tool and memory bindings, so what the model may reach for is configuration
+on one node instead of edges describing half of a call-and-return arc. A core
+occupies the same place in the transport pipeline as an `llm`: it reads text and
+produces an utterance. A tool binding also says whether this pipeline wants to
+be asked before that tool runs, which is not visible in the tool's own schema.
+
+A graph reasons in one place. Validation refuses a second reasoning node,
+counting `core` and `llm` nodes together, because a pipeline that reasons twice
+says nothing about which answer is the reply — and the refusal is about there
+being two models rather than about how the graph spells them.
+
 Today the runtime executes at most one recognizer, one language model, at most
 one synthesizer, and any number of tool branches downstream of the model.
 `router`, `wake_word`, `speaker_id`, and `memory` nodes exist in the graph

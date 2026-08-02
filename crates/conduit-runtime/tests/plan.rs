@@ -248,8 +248,8 @@ fn the_router_fan_out_a_valid_graph_describes_is_not_executable() {
     let graph = PipelineGraph::new("router")
         .with_node(Node::stt("stt", "fake-stt"))
         .with_node(Node::router("router", "builtin"))
-        .with_node(llm_node("local", "fake-llm"))
-        .with_node(llm_node("cloud", "other-llm"))
+        .with_node(Node::tool("local", "search"))
+        .with_node(Node::tool("cloud", "search"))
         .with_node(Node::tts("tts", "fake-tts"))
         .with_edge(Edge::new("stt", "router"))
         .with_edge(Edge::from_port("router", "local", "local"))
@@ -265,7 +265,11 @@ fn the_router_fan_out_a_valid_graph_describes_is_not_executable() {
 }
 
 #[test]
-fn a_second_model_is_still_refused_as_a_duplicate() {
+fn a_second_model_is_refused_by_validation_rather_than_by_this_runtime() {
+    // This used to be a runtime limitation — "one `llm` per turn" — which said
+    // the graph was fine and Conduit was not up to it. A pipeline that reasons
+    // twice says nothing about which answer is the reply, so it is the graph
+    // that is wrong, and the refusal belongs where every consumer sees it.
     let graph = PipelineGraph::new("two models")
         .with_node(Node::stt("stt", "fake-stt"))
         .with_node(llm_node("local", "fake-llm"))
@@ -276,8 +280,11 @@ fn a_second_model_is_still_refused_as_a_duplicate() {
         .with_edge(Edge::new("local", "tts"))
         .with_edge(Edge::new("cloud", "tts"));
 
-    let message = config_message(&refusal(&graph, &providers())).to_owned();
-    assert!(message.contains("one per turn"), "{message}");
+    let error = refusal(&graph, &providers());
+    let Error::InvalidGraph(GraphError::MultipleCores(nodes)) = &error else {
+        panic!("two models is an invalid graph, not a runtime limitation: {error}");
+    };
+    assert_eq!(nodes, &["local".to_owned(), "cloud".to_owned()]);
 }
 
 #[test]
