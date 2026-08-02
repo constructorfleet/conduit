@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use conduit_core::graph::{
-    ConfirmPolicy, MemoryBinding, MemoryMode, Node, PipelineGraph, ToolBinding,
+    ConfirmPolicy, MemoryBinding, MemoryMode, Modality, Node, PipelineGraph, ToolBinding,
 };
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{LanguageModel, ToolSpec};
@@ -94,6 +94,13 @@ pub struct Plan {
     pub stt: Option<Recognizer>,
     /// The model that answers, and everything it may reach for.
     pub core: CorePlan,
+    /// Whether the graph writes the reply down as well as, or instead of,
+    /// speaking it.
+    ///
+    /// A pipeline may do both: a hybrid graph feeds one core from a microphone
+    /// and a chat box and delivers to a speaker and a transcript, so the same
+    /// segment is spoken and written.
+    pub writes_text: bool,
     /// Synthesizer, and the node that selected it.
     ///
     /// `None` for a pipeline that writes its reply down instead of speaking
@@ -197,6 +204,13 @@ impl Plan {
             stt,
             core: CorePlan { node, llm, model, system, tools, memory, max_rounds },
             tts,
+            // Validation has already established that every sink is fed by the
+            // core, so a text sink existing is enough to know the reply is
+            // written down.
+            writes_text: graph
+                .nodes
+                .iter()
+                .any(|node| matches!(node, Node::Sink { modality: Modality::Text, .. })),
         })
     }
 }

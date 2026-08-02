@@ -136,6 +136,71 @@ async fn a_text_pipeline_writes_its_reply_down_with_no_speech_providers() {
     );
 }
 
+/// Two ways in and two ways out, around one core.
+fn hybrid_graph() -> PipelineGraph {
+    PipelineGraph::new("hybrid")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_node(Node::sink("speaker", "test", Modality::Audio))
+        .with_node(Node::sink("transcript", "test", Modality::Text))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"))
+        .with_edge(Edge::new("tts", "speaker"))
+        .with_edge(Edge::new("core", "transcript"))
+}
+
+#[tokio::test]
+async fn a_hybrid_pipeline_both_speaks_and_writes_its_reply() {
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["One. ", "Two."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&hybrid_graph(), &providers, EventBus::default()).expect("executable");
+    let replies: Vec<_> = runner.run(audio_of(&["a"])).output.collect().await;
+
+    let mut spoken = Vec::new();
+    let mut written = Vec::new();
+    for reply in replies {
+        match reply.expect("reply") {
+            Reply::Speech(chunk) => spoken.extend_from_slice(&chunk.data),
+            Reply::Text(text) => written.push(text),
+        }
+    }
+
+    assert_eq!(written, ["One.", "Two."], "the transcript sink gets the words");
+    assert_eq!(
+        String::from_utf8(spoken).expect("utf-8"),
+        "One.Two.",
+        "and the speaker gets the audio for the same sentences"
+    );
+}
+
+#[tokio::test]
+async fn a_hybrid_pipeline_takes_either_kind_of_input() {
+    // One core, reached from a microphone or from a chat box. Which one a turn
+    // used is the caller's choice, not the graph's.
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Done."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&hybrid_graph(), &providers, EventBus::default()).expect("executable");
+    let typed: Vec<_> = runner.run_text("hi").output.collect().await;
+
+    assert!(
+        typed.iter().any(|reply| matches!(reply, Ok(Reply::Text(_)))),
+        "a typed question is answered by the same pipeline"
+    );
+}
+
 #[tokio::test]
 async fn audio_handed_to_a_text_pipeline_fails_the_turn_rather_than_panicking() {
     // The mismatch is a caller's, not an operator's, but it happens inside a

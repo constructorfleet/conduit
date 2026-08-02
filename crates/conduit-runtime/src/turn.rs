@@ -469,18 +469,28 @@ impl Turn {
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
     async fn speak(&mut self, sentence: String, role: UtteranceSegmentRole) -> bool {
+        // A graph may ask for both renderings. The segment is one fact
+        // whichever way it is delivered, so it is announced once, named by
+        // the rendering the pipeline leads with.
+        if self.plan.writes_text {
+            if self.plan.tts.is_none() {
+                self.spoken_segments = self.spoken_segments.saturating_add(1);
+                self.emitter.emit(Event::UtteranceSegmentStarted {
+                    segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
+                    role,
+                    modality: Modality::Text,
+                    text: sentence.clone(),
+                });
+            }
+            if self.output.send(Ok(Reply::Text(sentence.clone()))).await.is_err() {
+                return false;
+            }
+        }
+
         let Some(synthesizer) = self.plan.tts.as_ref() else {
-            // Written down rather than spoken. The segment event is published
-            // either way, because what the model said in one piece is the same
-            // fact however it is rendered.
-            self.spoken_segments = self.spoken_segments.saturating_add(1);
-            self.emitter.emit(Event::UtteranceSegmentStarted {
-                segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
-                role,
-                modality: Modality::Text,
-                text: sentence.clone(),
-            });
-            return self.output.send(Ok(Reply::Text(sentence))).await.is_ok();
+            // Nothing synthesizes, so the written segment above was the whole
+            // delivery. A pipeline with neither is refused at resolution.
+            return true;
         };
         let (provider, node, voice) = (
             Arc::clone(&synthesizer.provider),
