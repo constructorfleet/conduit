@@ -929,6 +929,58 @@ describe("Pipelines graph editor", () => {
     expect(llm).not.toHaveProperty("model");
   });
 
+  it("marks each pipeline link with the modality it carries", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+
+    const graph = screen.getByLabelText("Pipeline graph");
+    // Recognition turns audio into text and the model answers with an
+    // utterance, so three consecutive links carry three different things.
+    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
+      "audio",
+    );
+    expect(within(graph).getByLabelText("stt to llm").dataset.modality).toBe(
+      "text",
+    );
+    expect(within(graph).getByLabelText("llm to tts").dataset.modality).toBe(
+      "utterance",
+    );
+  });
+
+  it("declares whether a source carries speech or written words", async () => {
+    // Changing what an endpoint carries changes what every link downstream of
+    // it carries, which is how an operator sees a miswiring before saving it.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    const graph = screen.getByLabelText("Pipeline graph");
+    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
+      "audio",
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Edit provider for mic" }),
+    );
+    await user.selectOptions(screen.getByLabelText("Modality for mic"), "text");
+
+    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
+      "text",
+    );
+  });
+
   it("uses providers configured on the Providers page as pipeline choices", async () => {
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];

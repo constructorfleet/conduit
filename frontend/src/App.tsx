@@ -39,6 +39,7 @@ import { createSnapshotClient } from "./apiClient";
 import type { OperatorDataMode, SnapshotState } from "./apiClient";
 import type {
   ComponentConfigProperty,
+  Modality,
   NodeKind,
   ProviderComponentCatalog,
   ProviderComponentDescriptor,
@@ -2480,7 +2481,34 @@ function PipelinesPanel({
       );
     }
 
+    function modalityField() {
+      return (
+        <label className="field node-config-field">
+          <span>Modality</span>
+          <select
+            aria-label={`Modality for ${node.id}`}
+            value={
+              (node.kind === "source" || node.kind === "sink"
+                ? node.modality
+                : undefined) ?? "audio"
+            }
+            onChange={(event) =>
+              updateNodeConfig(node.id, "modality", event.target.value)
+            }
+          >
+            <option value="audio">audio</option>
+            <option value="text">text</option>
+          </select>
+        </label>
+      );
+    }
+
     switch (node.kind) {
+      // Only their author knows whether a pipeline is fed by a microphone or a
+      // chat box, so an endpoint declares what it carries.
+      case "source":
+      case "sink":
+        return modalityField();
       case "llm":
         return (
           <>
@@ -2866,12 +2894,17 @@ function PipelinesPanel({
   }
 
   function renderAtomFlowLink(edge: PipelineEdge, attachedToTarget = false) {
+    const modality = outputModality(
+      draft?.nodes.find((node) => node.id === edge.from),
+    );
     return (
       <span
         className={`atom-flow-link ${
           attachedToTarget ? "attached-to-target" : ""
         }`}
         aria-label={`${edge.from} to ${edge.to}`}
+        title={modality ? `carries ${modality}` : undefined}
+        data-modality={modality}
         key={`${edge.from}-${edge.to}-${edge.port ?? "default"}`}
       >
         <ArrowRight size={18} aria-hidden="true" />
@@ -4581,6 +4614,29 @@ function componentKindForNode(node: PipelineNode): ComponentKind {
     return "synthesis";
   }
   return "capture";
+}
+
+/// What a node writes to its outgoing edges, or `undefined` when the kind is
+/// not a modality transform and its edges therefore carry nothing named.
+///
+/// Mirrors `Node::output_modality` in `conduit-core`. The backend remains the
+/// authority — this exists so the editor can show an operator what a link
+/// carries without a round trip.
+function outputModality(node: PipelineNode | undefined): Modality | undefined {
+  switch (node?.kind) {
+    case "source":
+      return node.modality ?? "audio";
+    case "wake_word":
+    case "speaker_id":
+    case "tts":
+      return "audio";
+    case "stt":
+      return "text";
+    case "llm":
+      return "utterance";
+    default:
+      return undefined;
+  }
 }
 
 interface PipelineGraphFlow {

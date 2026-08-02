@@ -1239,6 +1239,21 @@ button {
   font-size: 12px;
 }
 
+/* What a link carries, so a miswiring reads as a colour change rather than
+   only as a validation error. Colour is never the only signal: every link also
+   carries a title naming its modality. */
+.atom-flow-link[data-modality="audio"] {
+  color: var(--accent);
+}
+
+.atom-flow-link[data-modality="text"] {
+  color: var(--success);
+}
+
+.atom-flow-link[data-modality="utterance"] {
+  color: var(--warning-text);
+}
+
 .node-config-field {
   gap: 5px;
   margin-top: 8px;
