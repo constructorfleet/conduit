@@ -13,6 +13,7 @@ use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Event, FinishReason, SpokenSegmentRole, Stage};
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
+use conduit_core::resample::Resampler;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
@@ -433,6 +434,12 @@ impl Turn {
             }
         };
 
+        // A synthesizer speaks at whatever rate its voice was trained at, and
+        // the listener asked for a particular one. Sending the other rate's
+        // samples is not an error anyone hears as an error: it plays at the
+        // wrong speed, which sounds like the voice slowed down and pitched low.
+        let mut resampler: Option<Resampler> = None;
+
         while let Some(item) = chunks.next().await {
             let mut chunk = match item {
                 Ok(chunk) => chunk,
@@ -441,6 +448,41 @@ impl Turn {
                     return false;
                 }
             };
+
+            if chunk.format != self.format {
+                let converter = match resampler.as_mut() {
+                    Some(converter) => converter,
+                    None => match Resampler::new(chunk.format, self.format) {
+                        Ok(converter) => {
+                            tracing::info!(
+                                node = %self.plan.tts_node,
+                                from = chunk.format.sample_rate,
+                                to = self.format.sample_rate,
+                                "resampling synthesized audio to the requested format"
+                            );
+                            resampler.insert(converter)
+                        }
+                        Err(error) => {
+                            self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                            return false;
+                        }
+                    },
+                };
+                match converter.push(&chunk.data) {
+                    // A block-based converter has nothing to emit until it has
+                    // a whole block, so an empty result is normal rather than
+                    // an end of speech.
+                    Ok(data) if data.is_empty() => continue,
+                    Ok(data) => {
+                        chunk.data = data.into();
+                        chunk.format = self.format;
+                    }
+                    Err(error) => {
+                        self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                        return false;
+                    }
+                }
+            }
 
             chunk.sequence = self.sequence;
             self.sequence += 1;
@@ -456,6 +498,36 @@ impl Turn {
                 tracing::debug!("output closed; abandoning turn");
                 self.cancel(CancelReason::Disconnected);
                 return false;
+            }
+        }
+
+        // Whatever the converter still holds is the end of this sentence, and
+        // it only comes out when asked for.
+        if let Some(converter) = resampler.as_mut() {
+            let tail = match converter.flush() {
+                Ok(tail) => tail,
+                Err(error) => {
+                    self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                    return false;
+                }
+            };
+            if !tail.is_empty() {
+                let chunk = SpeechChunk {
+                    sequence: self.sequence,
+                    format: self.format,
+                    data: tail.into(),
+                };
+                self.sequence += 1;
+                self.spoken_ms += chunk.format.duration_ms(chunk.data.len()).unwrap_or(0);
+                self.emitter.emit(Event::AudioStreaming {
+                    sequence: chunk.sequence,
+                    bytes: chunk.data.len(),
+                });
+                if self.output.send(Ok(chunk)).await.is_err() {
+                    tracing::debug!("output closed; abandoning turn");
+                    self.cancel(CancelReason::Disconnected);
+                    return false;
+                }
             }
         }
 

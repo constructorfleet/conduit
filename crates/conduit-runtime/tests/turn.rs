@@ -134,6 +134,35 @@ async fn speech_starts_before_the_model_finishes() {
 }
 
 #[tokio::test]
+async fn synthesized_audio_is_converted_to_the_requested_rate() {
+    // A voice trained at 22.05 kHz played at 16 kHz is not an error anyone
+    // hears as an error: it plays 1.38x too slow and about four semitones low,
+    // which sounds like the assistant slowed way down.
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hello")]))
+        .with_llm(FakeLlm::new(vec!["ok"]))
+        .with_tts(FakeTts::new().speaking_at(22_050));
+
+    let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let spoken: usize = conversation
+        .audio
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(|chunk| chunk.expect("chunk").data.len())
+        .sum();
+
+    // One second in at 22.05 kHz has to be one second out at 16 kHz.
+    let frames = spoken / 2;
+    assert!(
+        (frames as i64 - 16_000).abs() < 320,
+        "expected about 16000 frames at the requested rate, got {frames}"
+    );
+}
+
+#[tokio::test]
 async fn passes_the_transcript_to_the_model() {
     let llm = FakeLlm::new(vec!["ok"]);
     let providers = Providers::new()
