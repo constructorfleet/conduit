@@ -7,7 +7,8 @@
         "00000000-0000-0000-0000-00000000012d"
       ],
       "id": "assistant-preamble-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_preamble",
       "sequence": 2,
       "started_at": "2026-08-01T01:02:00Z",
@@ -42,7 +43,8 @@
         "00000000-0000-0000-0000-000000000131"
       ],
       "id": "assistant-response-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_response",
       "sequence": 4,
       "started_at": "2026-08-01T01:02:01Z",

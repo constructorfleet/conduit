@@ -66,9 +66,10 @@ async fn lists_and_fetches_reconstructed_turns_without_sensitive_tool_payloads()
         &state,
         trace,
         conversation,
-        Event::SpokenSegmentStarted {
+        Event::UtteranceSegmentStarted {
             segment: "assistant-preamble-1".into(),
-            role: conduit_core::event::SpokenSegmentRole::AssistantPreamble,
+            role: conduit_core::event::UtteranceSegmentRole::AssistantPreamble,
+            modality: conduit_core::graph::Modality::Audio,
             text: "I'll check.".into(),
         },
     );
@@ -108,7 +109,7 @@ async fn lists_and_fetches_reconstructed_turns_without_sensitive_tool_payloads()
 
     let (_, snapshot) = call(&state, &format!("/v1/turns/{turn}")).await;
     assert_eq!(snapshot["turn_id"], turn.to_string());
-    assert_eq!(snapshot["items"][0]["kind"], "spoken_segment");
+    assert_eq!(snapshot["items"][0]["kind"], "utterance_segment");
     assert_eq!(snapshot["items"][0]["role"], "assistant_preamble");
     assert_eq!(snapshot["items"][1]["kind"], "tool_batch");
     assert_eq!(snapshot["items"][1]["calls"][0]["name"], "weather.get");

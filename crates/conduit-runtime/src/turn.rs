@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
-use conduit_core::event::{CancelReason, Event, FinishReason, SpokenSegmentRole, Stage};
+use conduit_core::event::{CancelReason, Event, FinishReason, Stage, UtteranceSegmentRole};
+use conduit_core::graph::Modality;
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
 use conduit_core::resample::Resampler;
 use conduit_core::{Error, Result};
@@ -324,7 +325,7 @@ impl Turn {
                 // Nothing left to do but finish saying it.
                 let remainder = round.pending.trim().to_owned();
                 if !remainder.is_empty()
-                    && !self.speak(remainder, SpokenSegmentRole::AssistantResponse).await
+                    && !self.speak(remainder, UtteranceSegmentRole::AssistantResponse).await
                 {
                     return None;
                 }
@@ -383,7 +384,7 @@ impl Turn {
             if preamble.is_empty() {
                 true
             } else {
-                self.speak(preamble, SpokenSegmentRole::AssistantPreamble).await
+                self.speak(preamble, UtteranceSegmentRole::AssistantPreamble).await
             }
         };
 
@@ -393,7 +394,7 @@ impl Turn {
         }
 
         for spoken in outcomes.iter().filter_map(|outcome| outcome.spoken.as_ref()) {
-            if !self.speak(spoken.trim().to_owned(), SpokenSegmentRole::ToolOutput).await {
+            if !self.speak(spoken.trim().to_owned(), UtteranceSegmentRole::ToolOutput).await {
                 return None;
             }
         }
@@ -429,7 +430,8 @@ impl Turn {
                     round.text.push_str(&delta);
                     round.pending.push_str(&delta);
                     for sentence in sentences::take_complete(&mut round.pending) {
-                        if !self.speak(sentence, SpokenSegmentRole::AssistantResponse).await {
+                        if !self.speak(sentence, UtteranceSegmentRole::AssistantResponse).await
+                        {
                             return None;
                         }
                     }
@@ -466,15 +468,16 @@ impl Turn {
     ///
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
-    async fn speak(&mut self, sentence: String, role: SpokenSegmentRole) -> bool {
+    async fn speak(&mut self, sentence: String, role: UtteranceSegmentRole) -> bool {
         let Some(synthesizer) = self.plan.tts.as_ref() else {
             // Written down rather than spoken. The segment event is published
             // either way, because what the model said in one piece is the same
             // fact however it is rendered.
             self.spoken_segments = self.spoken_segments.saturating_add(1);
-            self.emitter.emit(Event::SpokenSegmentStarted {
-                segment: format!("{}-spoken-{}", self.turn, self.spoken_segments),
+            self.emitter.emit(Event::UtteranceSegmentStarted {
+                segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
                 role,
+                modality: Modality::Text,
                 text: sentence.clone(),
             });
             return self.output.send(Ok(Reply::Text(sentence))).await.is_ok();
@@ -492,9 +495,10 @@ impl Turn {
             self.speaking = true;
         }
         self.spoken_segments = self.spoken_segments.saturating_add(1);
-        self.emitter.emit(Event::SpokenSegmentStarted {
-            segment: format!("{}-spoken-{}", self.turn, self.spoken_segments),
+        self.emitter.emit(Event::UtteranceSegmentStarted {
+            segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
             role,
+            modality: Modality::Audio,
             text: sentence.clone(),
         });
 

@@ -131,7 +131,7 @@ async fn a_text_pipeline_writes_its_reply_down_with_no_speech_providers() {
     let published = names(&drain(&mut subscription).await);
     assert!(!published.contains(&"TtsStarted".to_owned()), "{published:?}");
     assert!(
-        published.contains(&"SpokenSegmentStarted".to_owned()),
+        published.contains(&"UtteranceSegmentStarted".to_owned()),
         "a written segment is still a segment: {published:?}"
     );
 }
@@ -206,7 +206,7 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
             "LlmToken",
             "LlmFinished",
             "TtsStarted",
-            "SpokenSegmentStarted",
+            "UtteranceSegmentStarted",
             "AudioStreaming",
             "TtsFinished",
             "ConversationCompleted",

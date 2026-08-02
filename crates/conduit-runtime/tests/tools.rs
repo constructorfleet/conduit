@@ -9,7 +9,7 @@ mod fakes;
 use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
-use conduit_core::event::{Event, SpokenSegmentRole};
+use conduit_core::event::{Event, UtteranceSegmentRole};
 use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_core::id::{SpeakerId, ToolCallId};
 use conduit_core::testing::voice_graph;
@@ -153,8 +153,8 @@ async fn tool_turns_emit_reconstruction_boundary_events() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            Event::SpokenSegmentStarted {
-                role: SpokenSegmentRole::AssistantPreamble,
+            Event::UtteranceSegmentStarted {
+                role: UtteranceSegmentRole::AssistantPreamble,
                 text,
                 ..
             } if text == "Let me check"
@@ -165,8 +165,8 @@ async fn tool_turns_emit_reconstruction_boundary_events() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            Event::SpokenSegmentStarted {
-                role: SpokenSegmentRole::AssistantResponse,
+            Event::UtteranceSegmentStarted {
+                role: UtteranceSegmentRole::AssistantResponse,
                 text,
                 ..
             } if text == "It is sunny"

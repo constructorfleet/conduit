@@ -301,10 +301,11 @@ fn turn_snapshot_fixture() -> serde_json::Value {
         "sequence": 5,
         "items": [
             {
-                "kind": "spoken_segment",
+                "kind": "utterance_segment",
                 "id": "assistant-preamble-1",
                 "sequence": 2,
                 "role": "assistant_preamble",
+                "modality": "audio",
                 "text": "I will check the lights.",
                 "started_at": "2026-08-01T01:02:00Z",
                 "evidence": [event_id(301)]
@@ -328,10 +329,11 @@ fn turn_snapshot_fixture() -> serde_json::Value {
                 "evidence": [event_id(300)]
             },
             {
-                "kind": "spoken_segment",
+                "kind": "utterance_segment",
                 "id": "assistant-response-1",
                 "sequence": 4,
                 "role": "assistant_response",
+                "modality": "audio",
                 "text": "The lights are on.",
                 "started_at": "2026-08-01T01:02:01Z",
                 "evidence": [event_id(305)]
@@ -528,7 +530,7 @@ export interface ProviderDefinitionView {{
 }}
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
   | "requested"
   | "running"
@@ -563,13 +565,14 @@ export interface TurnSnapshot {{
   items: ReconstructionItem[];
 }}
 
-export type ReconstructionItem = SpokenSegmentItem | ToolBatchItem;
+export type ReconstructionItem = UtteranceSegmentItem | ToolBatchItem;
 
-export interface SpokenSegmentItem {{
-  kind: "spoken_segment";
+export interface UtteranceSegmentItem {{
+  kind: "utterance_segment";
   id: string;
   sequence: number;
-  role: SpokenSegmentRole;
+  role: UtteranceSegmentRole;
+  modality: Modality;
   text: string;
   started_at: DateTimeString;
   evidence: IdString[];
@@ -955,10 +958,11 @@ export type CancelReason =
   | "error"
   | "shutdown";
 export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
-export type SpokenSegmentRole =
+export type UtteranceSegmentRole =
   | "assistant_preamble"
   | "tool_output"
   | "assistant_response";
+export type Modality = "audio" | "text" | "utterance";
 
 export interface AudioFormat {{
   encoding: AudioEncoding;
@@ -1004,7 +1008,13 @@ export type Event =
   | {{ type: "ToolCompleted"; call: ToolCallId; duration_ms: number }}
   | {{ type: "ToolFailed"; call: ToolCallId; error: string }}
   | {{ type: "TtsStarted"; voice: string }}
-  | {{ type: "SpokenSegmentStarted"; segment: string; role: SpokenSegmentRole; text: string }}
+  | {{
+      type: "UtteranceSegmentStarted";
+      segment: string;
+      role: UtteranceSegmentRole;
+      modality: Modality;
+      text: string;
+    }}
   | {{ type: "AudioStreaming"; sequence: number; bytes: number }}
   | {{ type: "TtsFinished"; duration_ms: number }}
   | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }};

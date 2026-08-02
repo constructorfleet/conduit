@@ -185,7 +185,7 @@ export interface ProviderDefinitionView {
 }
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
   | "requested"
   | "running"
@@ -220,13 +220,14 @@ export interface TurnSnapshot {
   items: ReconstructionItem[];
 }
 
-export type ReconstructionItem = SpokenSegmentItem | ToolBatchItem;
+export type ReconstructionItem = UtteranceSegmentItem | ToolBatchItem;
 
-export interface SpokenSegmentItem {
-  kind: "spoken_segment";
+export interface UtteranceSegmentItem {
+  kind: "utterance_segment";
   id: string;
   sequence: number;
-  role: SpokenSegmentRole;
+  role: UtteranceSegmentRole;
+  modality: Modality;
   text: string;
   started_at: DateTimeString;
   evidence: IdString[];
@@ -526,7 +527,8 @@ export const turnSnapshotFixture = {
         "00000000-0000-0000-0000-00000000012d"
       ],
       "id": "assistant-preamble-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_preamble",
       "sequence": 2,
       "started_at": "2026-08-01T01:02:00Z",
@@ -561,7 +563,8 @@ export const turnSnapshotFixture = {
         "00000000-0000-0000-0000-000000000131"
       ],
       "id": "assistant-response-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_response",
       "sequence": 4,
       "started_at": "2026-08-01T01:02:01Z",

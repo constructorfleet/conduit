@@ -3952,7 +3952,8 @@ interface ReconstructedStep {
 
 function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
   const steps = snapshot.items.flatMap((item): ReconstructedStep[] => {
-    if (item.kind === "spoken_segment") {
+    if (item.kind === "utterance_segment") {
+      const spoken = item.modality === "audio";
       return [
         {
           id: item.id,
@@ -3961,9 +3962,14 @@ function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
             item.role === "assistant_preamble"
               ? "Assistant Preamble"
               : item.role === "tool_output"
-                ? "Tool Spoken Output"
+                ? spoken
+                  ? "Tool Spoken Output"
+                  : "Tool Output"
                 : "Assistant Response",
-          component: "synthesis",
+          // A text pipeline never ran synthesis, so attributing its segments
+          // to that component would send an operator to a stage that did not
+          // execute.
+          component: spoken ? "synthesis" : "reasoning",
           detail: item.text,
           error: false,
         },
@@ -4114,7 +4120,8 @@ function isErrorEvent(event: Event): boolean {
 
 function isReconstructionBoundaryEvent(event: Event): boolean {
   return (
-    event.type === "SpokenSegmentStarted" || event.type === "ToolBatchStarted"
+    event.type === "UtteranceSegmentStarted" ||
+    event.type === "ToolBatchStarted"
   );
 }
 
@@ -4164,7 +4171,7 @@ function eventComponent(event: Event): string {
     case "ToolFailed":
       return "tools";
     case "TtsStarted":
-    case "SpokenSegmentStarted":
+    case "UtteranceSegmentStarted":
     case "AudioStreaming":
     case "TtsFinished":
       return "synthesis";
@@ -4213,7 +4220,7 @@ function eventDetail(event: Event): string | null {
     case "ToolFailed":
     case "StageFailed":
       return event.error;
-    case "SpokenSegmentStarted":
+    case "UtteranceSegmentStarted":
       return event.text;
     case "ConversationStarted":
     case "ConversationCompleted":
