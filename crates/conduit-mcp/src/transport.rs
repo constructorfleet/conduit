@@ -526,9 +526,16 @@ impl Transport for StreamableHttpTransport {
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
         let notification = Notification::new(method, params);
+        // Declared on notifications too, not just requests. A notification is
+        // answered with 202 and no body, so what the client accepts looks
+        // irrelevant — but the spec asks for the header on every POST, and a
+        // server that enforces it refuses the `notifications/initialized` that
+        // has to follow `initialize`, failing the handshake one step from the
+        // end.
         let response = self
             .with_session(self.client.post(&self.url))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
             .json(&notification)
             .send()
             .await
@@ -703,6 +710,55 @@ mod tests {
             ],
             answer.to_string(),
         )
+    }
+
+    /// A server that requires the Accept header the spec asks for.
+    ///
+    /// The Python MCP SDK answers 406 without it, which is what a real server
+    /// did to notifications while requests went through.
+    async fn mock_strict_accept_mcp(
+        headers: axum::http::HeaderMap,
+        body: String,
+    ) -> impl axum::response::IntoResponse {
+        let accept = headers
+            .get(axum::http::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !accept.contains("application/json") || !accept.contains("text/event-stream") {
+            return (
+                axum::http::StatusCode::NOT_ACCEPTABLE,
+                [(axum::http::header::CONTENT_TYPE, "text/plain")],
+                String::new(),
+            );
+        }
+
+        let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let answer = json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            answer.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn streamable_http_notifications_accept_both_reply_shapes() {
+        // Requests declared what they would accept and notifications did not,
+        // so a strict server took the initialize but rejected the
+        // `notifications/initialized` that has to follow it — failing the
+        // handshake one step from the end.
+        let (url, server) = spawn_mock(axum::routing::post(mock_strict_accept_mcp)).await;
+        let mut transport = StreamableHttpTransport::new(url);
+        transport.connect().await.expect("connect");
+
+        transport
+            .notify("notifications/initialized", json!({}))
+            .await
+            .expect("a notification declares what it accepts too");
+
+        transport.close().await;
+        server.abort();
     }
 
     #[tokio::test]
