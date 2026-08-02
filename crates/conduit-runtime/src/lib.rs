@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+pub mod confirm;
 pub mod deadline;
 mod emit;
 pub mod plan;
@@ -42,16 +43,21 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::id::{ConversationId, DeviceId, SpeakerId};
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
+use conduit_provider::memory::Memory;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::{ChunkStream, Registry};
+use futures_util::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+pub use confirm::{ConfirmationListener, Confirmations};
 pub use deadline::DEFAULT_IDLE_TIMEOUT;
 pub use plan::Plan;
 pub use stop::Stop;
+pub use turn::Reply;
+pub use turn::TurnInput;
 
 /// How many synthesized chunks may be queued before synthesis waits.
 ///
@@ -66,6 +72,7 @@ pub struct Providers {
     llm: Registry<dyn LanguageModel>,
     tts: Registry<dyn TextToSpeech>,
     tools: Registry<dyn Tool>,
+    memory: Registry<dyn Memory>,
 }
 
 impl Providers {
@@ -112,6 +119,14 @@ impl Providers {
         self
     }
 
+    /// Registers a memory store under its own name.
+    #[must_use]
+    pub fn with_memory<P: Memory>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.memory.insert(name, Arc::new(provider));
+        self
+    }
+
     /// The registered recognizers.
     #[must_use]
     pub const fn stt(&self) -> &Registry<dyn SpeechToText> {
@@ -135,6 +150,12 @@ impl Providers {
     pub const fn tools(&self) -> &Registry<dyn Tool> {
         &self.tools
     }
+
+    /// The registered memory stores.
+    #[must_use]
+    pub const fn memory(&self) -> &Registry<dyn Memory> {
+        &self.memory
+    }
 }
 
 /// Written by hand because the registries hold trait objects, which are not
@@ -146,6 +167,7 @@ impl std::fmt::Debug for Providers {
             .field("llm", &self.llm.names().collect::<Vec<_>>())
             .field("tts", &self.tts.names().collect::<Vec<_>>())
             .field("tools", &self.tools.names().collect::<Vec<_>>())
+            .field("memory", &self.memory.names().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -154,8 +176,25 @@ impl std::fmt::Debug for Providers {
 pub struct Conversation {
     /// The conversation every event from this turn carries.
     pub id: ConversationId,
-    /// Synthesized audio, as it is produced.
-    pub audio: ChunkStream<SpeechChunk>,
+    /// The reply, as it is produced.
+    ///
+    /// A voice pipeline yields speech and a text pipeline yields written
+    /// segments. [`Conversation::speech`] narrows this to audio for a caller
+    /// that only knows how to play it.
+    pub output: ChunkStream<Reply>,
+    /// Answers this turn's confirmation requests.
+    ///
+    /// A turn refuses a tool that needs confirming unless something is
+    /// listening through [`Confirmations::listen`], so a deployment with no
+    /// way to ask still refuses rather than waiting for an answer that is not
+    /// coming.
+    ///
+    /// Call [`Confirmations::listen`] before reading [`Conversation::output`].
+    /// The turn is already running by the time this is returned, and a
+    /// listener registered after it reaches a gated tool arrives too late —
+    /// the call is refused rather than waited on, because at the moment it
+    /// asked there was nothing to ask.
+    pub confirmations: Confirmations,
     /// Asks this turn to stop talking.
     ///
     /// Distinct from dropping [`Conversation::audio`], which also ends the turn
@@ -179,6 +218,22 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// The reply as audio, dropping any written segments.
+    ///
+    /// For callers on an audio transport, which have nothing to do with a text
+    /// segment. Failures are preserved: a turn that fails still reports it
+    /// here, because a caller that hears nothing must be able to tell silence
+    /// from a broken pipeline.
+    pub fn speech(self) -> ChunkStream<SpeechChunk> {
+        Box::pin(self.output.filter_map(|item| async move {
+            match item {
+                Ok(Reply::Speech(chunk)) => Some(Ok(chunk)),
+                Ok(Reply::Text(_)) => None,
+                Err(error) => Some(Err(error)),
+            }
+        }))
+    }
+
     /// Waits for the turn to finish.
     ///
     /// Resolves once the turn has published its outcome. A turn always ends by
@@ -264,23 +319,39 @@ impl Runner {
         self
     }
 
+    /// Whether this pipeline's turns start from audio.
+    ///
+    /// A caller that produces input has to know which kind to produce, and the
+    /// answer is a property of the resolved graph rather than of the request.
+    #[must_use]
+    pub fn expects_audio(&self) -> bool {
+        self.plan.stt.is_some()
+    }
+
     /// Sets the audio format used for capture and synthesis.
     pub fn with_format(mut self, format: AudioFormat) -> Result<Self> {
-        if !self.plan.stt.supports_encoding(format.encoding) {
-            return Err(conduit_core::Error::Config(format!(
-                "node `{}` uses provider `{}`, which cannot accept {:?} audio",
-                self.plan.stt_node,
-                self.plan.stt.name(),
-                format.encoding
-            )));
+        // A pipeline fed by text has no recognizer to ask, and the format
+        // still describes the audio it produces.
+        if let Some(stt) = &self.plan.stt {
+            if !stt.provider.supports_encoding(format.encoding) {
+                return Err(conduit_core::Error::Config(format!(
+                    "node `{}` uses provider `{}`, which cannot accept {:?} audio",
+                    stt.node,
+                    stt.provider.name(),
+                    format.encoding
+                )));
+            }
         }
-        if !self.plan.tts.supports_encoding(format.encoding) {
-            return Err(conduit_core::Error::Config(format!(
-                "node `{}` uses provider `{}`, which cannot produce {:?} audio",
-                self.plan.tts_node,
-                self.plan.tts.name(),
-                format.encoding
-            )));
+        // A pipeline that writes its reply down has no synthesizer to ask.
+        if let Some(tts) = &self.plan.tts {
+            if !tts.provider.supports_encoding(format.encoding) {
+                return Err(conduit_core::Error::Config(format!(
+                    "node `{}` uses provider `{}`, which cannot produce {:?} audio",
+                    tts.node,
+                    tts.provider.name(),
+                    format.encoding
+                )));
+            }
         }
         self.format = format;
         Ok(self)
@@ -300,7 +371,16 @@ impl Runner {
     /// Failures arrive as error items on the stream and as `StageFailed`
     /// events on the bus.
     pub fn run(&self, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, None, None)
+        self.start(TurnInput::Audio(audio), None, None)
+    }
+
+    /// Runs one turn from words a client already typed.
+    ///
+    /// The reply is delivered the same way a spoken turn's is, so a pipeline
+    /// that types its question and hears its answer is one graph rather than a
+    /// special case.
+    pub fn run_text(&self, text: impl Into<String>) -> Conversation {
+        self.start(TurnInput::Text(text.into()), None, None)
     }
 
     /// Runs one turn on behalf of an identified device.
@@ -318,7 +398,7 @@ impl Runner {
         device: DeviceId,
         audio: ChunkStream<AudioChunk>,
     ) -> Conversation {
-        self.start(audio, None, Some(device))
+        self.start(TurnInput::Audio(audio), None, Some(device))
     }
 
     /// Runs one turn attributed to an identified speaker.
@@ -333,24 +413,26 @@ impl Runner {
     /// or a pipeline name in this argument would make every per-speaker policy
     /// silently wrong rather than merely unenforced.
     pub fn run_as(&self, speaker: SpeakerId, audio: ChunkStream<AudioChunk>) -> Conversation {
-        self.start(audio, Some(speaker), None)
+        self.start(TurnInput::Audio(audio), Some(speaker), None)
     }
 
     /// Spawns a turn, which is all the `run*` methods differ in.
     fn start(
         &self,
-        audio: ChunkStream<AudioChunk>,
+        input: TurnInput,
         speaker: Option<SpeakerId>,
         device: Option<DeviceId>,
     ) -> Conversation {
         let (sender, receiver) = tokio::sync::mpsc::channel(OUTPUT_BUFFER);
         let stop = Stop::new();
+        let confirmations = Confirmations::new();
         let mut turn = turn::Turn::new(
             Arc::clone(&self.plan),
             self.bus.clone(),
             self.format,
             sender,
             stop.clone(),
+            confirmations.clone(),
             self.idle,
         );
         if let Some(speaker) = speaker {
@@ -361,7 +443,13 @@ impl Runner {
         }
         let id = turn.conversation();
         let span = tracing::info_span!("conduit.turn", conversation = %id);
-        let running = tokio::spawn(turn.run(audio).instrument(span));
-        Conversation { id, audio: Box::pin(ReceiverStream::new(receiver)), stop, turn: running }
+        let running = tokio::spawn(turn.run(input).instrument(span));
+        Conversation {
+            id,
+            output: Box::pin(ReceiverStream::new(receiver)),
+            confirmations,
+            stop,
+            turn: running,
+        }
     }
 }

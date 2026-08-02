@@ -67,6 +67,7 @@ fn operator_status_snapshot_serializes_the_contract_shape() {
             proven_by_turn: None,
             message: Some("no successful reachability check yet".to_owned()),
             affects_pipelines: vec!["kitchen".to_owned()],
+            offers_tools: Vec::new(),
         }],
         satellites: SatelliteStatus {
             connected: vec![],

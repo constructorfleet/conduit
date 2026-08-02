@@ -8,7 +8,10 @@ use axum::routing::get as axum_get;
 use axum::{Json, Router};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{
+    ConfirmPolicy, Edge, Modality, Node, PipelineGraph, ReasoningCore, ToolBinding,
+};
+use conduit_core::testing::voice_graph;
 use conduit_core::Result;
 use conduit_provider::storage::PipelineStore;
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
@@ -17,23 +20,29 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 fn valid_graph() -> PipelineGraph {
-    PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("kitchen")
+        .source("websocket")
+        .stt("whisper")
+        .core("ollama")
+        .tts("piper")
+        .build()
 }
 
 fn echo_graph() -> PipelineGraph {
-    PipelineGraph::new("echo")
-        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("echo").stt("echo-stt").core("echo-llm").tts("echo-tts").build()
+}
+
+/// A core bound to `provider` for reasoning and to `tools` for doing.
+///
+/// Tools are configuration on the core, so a pipeline that offers one has one
+/// node rather than a node and an edge.
+fn core_with_tools(id: &str, provider: &str, tools: &[&str]) -> Node {
+    let mut core = ReasoningCore::new(provider);
+    core.tools = tools
+        .iter()
+        .map(|tool| ToolBinding { provider: (*tool).to_owned(), confirm: ConfirmPolicy::Never })
+        .collect();
+    Node::Core { id: id.to_owned(), core }
 }
 
 fn providers() -> Providers {
@@ -109,6 +118,48 @@ async fn store_llm_provider_definition(state: &AppState, id: &str) {
         ),
     )
     .await;
+}
+
+/// A store holding one pipeline that will not parse, alongside readable ones.
+///
+/// Stands in for a file someone hand-edited, a partial write, or a graph
+/// written by an older schema: the name is there and the contents are not
+/// readable.
+struct StoreWithACorruptPipeline {
+    readable: conduit_store::MemoryStore,
+    corrupt: &'static str,
+}
+
+#[async_trait::async_trait]
+impl PipelineStore for StoreWithACorruptPipeline {
+    async fn list(&self) -> Result<Vec<String>> {
+        let mut names = self.readable.list().await?;
+        names.push(self.corrupt.to_owned());
+        names.sort();
+        Ok(names)
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
+        if name == self.corrupt {
+            return Err(conduit_core::Error::Config(format!(
+                "`{name}` is not a valid pipeline: unknown variant `llm`"
+            )));
+        }
+        self.readable.get(name).await
+    }
+
+    async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
+        self.readable.put(name, graph).await
+    }
+
+    async fn remove(&self, name: &str) -> Result<bool> {
+        // Removal never reads the stored bytes, which is what makes deleting a
+        // corrupt pipeline the way out of one.
+        if name == self.corrupt {
+            return Ok(true);
+        }
+        self.readable.remove(name).await
+    }
 }
 
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -342,7 +393,7 @@ async fn storing_then_reading_a_pipeline_round_trips() {
 
     let (status, body) = call(&state, put(&valid_graph())).await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["order"], serde_json::json!(["mic", "stt", "llm", "tts"]));
+    assert_eq!(body["order"], serde_json::json!(["mic", "stt", "core", "tts"]));
 
     let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
@@ -386,7 +437,7 @@ async fn replacing_a_pipeline_refuses_node_configuration_fields() {
     assert!(body["detail"].as_str().expect("detail").contains("config"));
     let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider);
+    assert_eq!(body["graph"]["nodes"][1]["provider"], original.nodes[1].provider());
 }
 
 #[tokio::test]
@@ -406,11 +457,7 @@ async fn invalid_graphs_are_rejected_and_not_stored() {
 #[tokio::test]
 async fn storing_a_pipeline_rejects_missing_provider_definitions_and_does_not_store() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "missing-openai",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "missing-openai"));
 
     let (status, body) = call(&state, put(&graph)).await;
 
@@ -436,11 +483,7 @@ async fn storing_a_pipeline_rejects_provider_definition_kind_mismatches_and_does
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "tts",
-        NodeKind::Tts,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::tts("tts", "openai-primary"));
 
     let (status, body) = call(&state, put(&graph)).await;
 
@@ -508,11 +551,7 @@ async fn validate_checks_without_storing() {
 #[tokio::test]
 async fn validate_rejects_missing_provider_definitions() {
     let state = AppState::new(EventBus::default());
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "missing-openai",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "missing-openai"));
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -542,11 +581,7 @@ async fn validate_rejects_provider_definition_kind_mismatches() {
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "tts",
-        NodeKind::Tts,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::tts("tts", "openai-primary"));
     let request = Request::builder()
         .method("POST")
         .uri("/v1/pipelines/validate")
@@ -591,6 +626,41 @@ async fn test_turn_runs_the_stored_pipeline_through_real_providers() {
         .expect("valid base64");
     assert_eq!(&decoded[..4], b"RIFF", "the reply must be a playable container");
     assert_eq!(&decoded[8..12], b"WAVE");
+}
+
+#[tokio::test]
+async fn test_turn_on_a_text_pipeline_returns_the_reply_as_writing() {
+    // The acceptance case for text pipelines: no recognizer and no synthesizer
+    // are configured, and the operator still gets the reply back.
+    let state =
+        AppState::new(EventBus::default()).with_providers(Providers::new().with_llm(EchoLlm));
+    let graph = PipelineGraph::new("chat")
+        .with_node(Node::source("in", "websocket", Modality::Text))
+        .with_node(Node::core("llm", "echo-llm"))
+        .with_node(Node::sink("out", "websocket", Modality::Text))
+        .with_edge(Edge::new("in", "llm"))
+        .with_edge(Edge::new("llm", "out"));
+    let (status, _) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/chat/test-turn")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"utterance":"hello conduit"}"#))
+        .expect("request");
+
+    let (status, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "completed");
+    assert!(
+        body["reply_text"].as_str().is_some_and(|text| text.contains("hello conduit")),
+        "the operator must be able to read the reply: {body}"
+    );
+    // Nothing was synthesized, so nothing is offered for playback. A player
+    // control over an empty file would look like a broken synthesizer.
+    assert_eq!(body["audio_bytes"], 0);
+    assert!(body.get("reply_audio").is_none(), "{body}");
 }
 
 #[tokio::test]
@@ -1108,10 +1178,11 @@ async fn saving_an_mcp_definition_registers_its_discovered_tool() {
 
     // A graph node may now reference the definition id as a tool provider.
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("weather", NodeKind::Tool, "weather-tools"))
-        .with_edge(Edge::new("llm", "weather"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools"],
+    ));
 
     let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
 
@@ -1133,12 +1204,11 @@ async fn a_multi_tool_mcp_definition_registers_each_tool_under_its_own_id() {
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
 
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
-        .with_node(Node::new("history", NodeKind::Tool, "weather-tools.history"))
-        .with_edge(Edge::new("llm", "forecast"))
-        .with_edge(Edge::new("llm", "history"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools.forecast", "weather-tools.history"],
+    ));
 
     let (status, body) = call(&state, post_json("/v1/pipelines/validate", &graph)).await;
 
@@ -1190,6 +1260,52 @@ async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
 }
 
 #[tokio::test]
+async fn a_corrupt_pipeline_does_not_block_deleting_an_unrelated_provider() {
+    // The lockout this guards against: one unreadable pipeline made every
+    // provider deletion fail, and the pipeline could not be repaired either,
+    // so an operator had no way out of the state they were in.
+    let state = AppState::with_store(
+        EventBus::default(),
+        std::sync::Arc::new(StoreWithACorruptPipeline {
+            readable: conduit_store::MemoryStore::new(),
+            corrupt: "corrupt",
+        }),
+    );
+    store_llm_provider_definition(&state, "ollama").await;
+
+    let (status, body) = call(&state, delete("/v1/providers/ollama")).await;
+
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+#[tokio::test]
+async fn a_corrupt_pipeline_is_listed_and_can_be_deleted() {
+    // Listing reads names rather than contents, and removal never parses, so
+    // the pipeline an operator cannot open is still one they can throw away.
+    let state = AppState::with_store(
+        EventBus::default(),
+        std::sync::Arc::new(StoreWithACorruptPipeline {
+            readable: conduit_store::MemoryStore::new(),
+            corrupt: "corrupt",
+        }),
+    );
+
+    let (status, body) = call(&state, get("/v1/pipelines")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!(["corrupt"]));
+
+    let (status, body) = call(&state, get("/v1/pipelines/corrupt")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["detail"].as_str().is_some_and(|detail| detail.contains("not a valid pipeline")),
+        "the reason has to reach the operator: {body}"
+    );
+
+    let (status, _) = call(&state, delete("/v1/pipelines/corrupt")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_tools() {
     let server = MockMcpServer::exposing(&["forecast", "history"]).await;
     let state = AppState::new(EventBus::default());
@@ -1203,10 +1319,11 @@ async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_
     });
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
     store_llm_provider_definition(&state, "ollama").await;
-    let graph = PipelineGraph::new("tools")
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("forecast", NodeKind::Tool, "weather-tools.forecast"))
-        .with_edge(Edge::new("llm", "forecast"));
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools.forecast"],
+    ));
     let (status, body) = call(&state, put(&graph)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
@@ -1229,11 +1346,7 @@ async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
-    let graph = PipelineGraph::new("kitchen").with_node(Node::new(
-        "llm",
-        NodeKind::Llm,
-        "openai-primary",
-    ));
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "openai-primary"));
     call(&state, put(&graph)).await;
 
     let (status, body) = call(&state, delete("/v1/providers/openai-primary")).await;

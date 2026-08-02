@@ -1,5 +1,6 @@
 //! Error types shared across the platform.
 
+use crate::graph::Modality;
 use crate::id::ConversationId;
 
 /// The result type used throughout Conduit.
@@ -104,4 +105,58 @@ pub enum GraphError {
     /// pipeline whatsoever.
     #[error("nodes are not connected to the rest of the pipeline: {}", .0.join(", "))]
     Disconnected(Vec<String>),
+
+    /// The graph reasons in more than one place.
+    ///
+    /// A pipeline has one reasoning core, so a graph with two describes two
+    /// pipelines' worth of reasoning and says nothing about which of them
+    /// answers. Counted across `core` and `llm` nodes alike: the refusal is
+    /// about there being two models, not about how they are spelled.
+    #[error("graph has more than one reasoning node: {}", .0.join(", "))]
+    MultipleCores(Vec<String>),
+
+    /// A source's stream never reaches the core, so nothing would reason about
+    /// what it captured.
+    #[error("source `{0}` does not reach the core")]
+    SourceMissesCore(String),
+
+    /// The core's answer never reaches a sink, so nothing would deliver it.
+    #[error("sink `{0}` is not fed by the core")]
+    SinkMissesCore(String),
+
+    /// An edge delivers something the node at its far end cannot read.
+    ///
+    /// This is the structural form of a mistake that used to be found — when
+    /// it was found at all — by the runtime asserting that recognition came
+    /// before reasoning came before synthesis. A graph says what each stage
+    /// consumes and produces, so a graph wired backwards is wrong on its own
+    /// terms rather than wrong relative to one runtime's expectations.
+    #[error(
+        "edge `{from}` -> `{to}` carries {produced}, but `{to}` accepts {}",
+        describe_modalities(.expected)
+    )]
+    ModalityMismatch {
+        /// Position of the edge in the graph's edge list.
+        ///
+        /// `from` and `to` do not identify an edge on their own — two nodes
+        /// may be joined more than once, on different ports — so an editor
+        /// highlighting the offending connection needs this.
+        edge: usize,
+        /// Id of the upstream node.
+        from: String,
+        /// Id of the downstream node.
+        to: String,
+        /// What the upstream node emits.
+        produced: Modality,
+        /// What the downstream node can read. Empty when it reads nothing.
+        expected: Vec<Modality>,
+    },
+}
+
+/// Names the modalities a node accepts, for an operator reading the error.
+fn describe_modalities(modalities: &[Modality]) -> String {
+    if modalities.is_empty() {
+        return "nothing".to_owned();
+    }
+    modalities.iter().map(|modality| modality.name()).collect::<Vec<_>>().join(" or ")
 }

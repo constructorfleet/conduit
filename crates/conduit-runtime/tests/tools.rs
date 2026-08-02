@@ -9,9 +9,10 @@ mod fakes;
 use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
-use conduit_core::event::{Event, SpokenSegmentRole};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::event::{Event, UtteranceSegmentRole};
+use conduit_core::graph::PipelineGraph;
 use conduit_core::id::{SpeakerId, ToolCallId};
+use conduit_core::testing::voice_graph;
 use conduit_provider::llm::Role;
 use conduit_provider::stt::Transcript;
 use conduit_provider::tool::Permission;
@@ -24,14 +25,7 @@ use futures_util::StreamExt;
 
 /// A pipeline with one tool available to the model.
 fn graph_with_tool() -> PipelineGraph {
-    PipelineGraph::new("tools")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("search", "tts"))
+    voice_graph("tools").stt("fake-stt").core("fake-llm").tool("search").tts("fake-tts").build()
 }
 
 /// A model that speaks, calls `search`, then speaks again.
@@ -75,7 +69,7 @@ fn names(events: &[Event]) -> Vec<String> {
 /// Runs one turn to completion, failing fast rather than hanging.
 async fn run_turn(runner: &Runner) {
     let turn = async {
-        let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+        let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     };
     tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
 }
@@ -154,8 +148,8 @@ async fn tool_turns_emit_reconstruction_boundary_events() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            Event::SpokenSegmentStarted {
-                role: SpokenSegmentRole::AssistantPreamble,
+            Event::UtteranceSegmentStarted {
+                role: UtteranceSegmentRole::AssistantPreamble,
                 text,
                 ..
             } if text == "Let me check"
@@ -166,8 +160,8 @@ async fn tool_turns_emit_reconstruction_boundary_events() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            Event::SpokenSegmentStarted {
-                role: SpokenSegmentRole::AssistantResponse,
+            Event::UtteranceSegmentStarted {
+                role: UtteranceSegmentRole::AssistantResponse,
                 text,
                 ..
             } if text == "It is sunny"
@@ -235,10 +229,79 @@ fn tool_result(llm: &FakeLlm, round: usize) -> String {
 }
 
 #[tokio::test]
-async fn a_tool_needing_confirmation_is_refused_rather_than_reported_done() {
+async fn a_confirmed_tool_runs() {
+    // The point of track G: a deployment that can ask gets to answer, and a
+    // yes means the tool actually runs.
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, true);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    assert_eq!(tool.invocations().len(), 1, "a confirmed tool runs");
+}
+
+#[tokio::test]
+async fn a_refused_tool_does_not_run_and_the_model_is_told_so() {
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, false);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    assert!(tool.invocations().is_empty(), "a refused tool must not run");
+    let result = tool_result(&llm, 1);
+    assert!(result.contains("NOT run"), "the refusal must be unmissable: {result}");
+    assert!(result.contains("refused"), "and say who refused it: {result}");
+}
+
+#[tokio::test]
+async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
     // The dangerous failure this guards against: a model told something
     // ambiguous about a lock or a purchase, deciding it succeeded, and saying
     // so. The result must read as a refusal to anything reading it.
+    //
+    // Nothing calls `Confirmations::listen` here, which is what a deployment
+    // with no way to ask looks like. Waiting for an answer nobody will send
+    // would leave the person who spoke in silence until the idle deadline.
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
     let call = ToolCallId::new("call_abc123");
@@ -322,7 +385,7 @@ async fn the_identified_speaker_reaches_the_tool() {
     let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
         .expect("graph is executable");
     let turn = async {
-        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).audio.collect().await;
+        let _: Vec<_> = runner.run_as(speaker, audio_of(&["a"])).speech().collect().await;
     };
     tokio::time::timeout(Duration::from_secs(5), turn).await.expect("turn completes");
 
@@ -502,10 +565,13 @@ async fn tools_requested_together_run_together() {
     let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
     let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
 
-    let graph = graph_with_tool()
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("clock", "tts"));
+    let graph = voice_graph("tools")
+        .stt("fake-stt")
+        .core("fake-llm")
+        .tool("search")
+        .tool("clock")
+        .tts("fake-tts")
+        .build();
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
         .with_llm(FakeLlm::scripted(vec![
@@ -523,46 +589,6 @@ async fn tools_requested_together_run_together() {
 
     let runner =
         Runner::prepare(&graph, &providers, EventBus::default()).expect("graph is executable");
-    run_turn(&runner).await;
-
-    assert_eq!(search.invocations().len(), 1);
-    assert_eq!(clock.invocations().len(), 1);
-}
-
-#[tokio::test]
-async fn branched_tool_graphs_execute_without_linearizing_the_topology() {
-    let first = ToolCallId::new("call_one");
-    let second = ToolCallId::new("call_two");
-    let graph = PipelineGraph::new("branched")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("search", "tts"))
-        .with_edge(Edge::new("clock", "tts"));
-    let search = FakeTool::new("search", serde_json::json!({ "forecast": "sunny" }));
-    let clock = FakeTool::new("clock", serde_json::json!({ "time": "noon" }));
-    let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![Transcript::final_text("weather and time")]))
-        .with_llm(FakeLlm::scripted(vec![
-            vec![
-                token("Checking. "),
-                tool_call(first.clone(), "search"),
-                tool_call(second.clone(), "clock"),
-                wants_tools(),
-            ],
-            vec![token("Sunny at noon."), stop()],
-        ]))
-        .with_tool(search.clone())
-        .with_tool(clock.clone())
-        .with_tts(FakeTts::new());
-
-    let runner = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect("branched tool graph is executable");
     run_turn(&runner).await;
 
     assert_eq!(search.invocations().len(), 1);
@@ -625,12 +651,7 @@ async fn a_model_that_never_stops_calling_tools_is_cut_off() {
 #[tokio::test]
 async fn a_pipeline_without_tools_offers_the_model_none() {
     let llm = FakeLlm::new(vec!["Hello."]);
-    let graph = PipelineGraph::new("plain")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"));
+    let graph = voice_graph("plain").stt("fake-stt").core("fake-llm").tts("fake-tts").build();
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
@@ -645,7 +666,7 @@ async fn a_pipeline_without_tools_offers_the_model_none() {
 }
 
 #[tokio::test]
-async fn tool_nodes_must_name_a_registered_tool() {
+async fn a_bound_tool_must_name_a_registered_tool() {
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
         .with_llm(FakeLlm::new(vec![]))
@@ -673,7 +694,7 @@ async fn authenticating_a_device_does_not_identify_a_speaker() {
         .expect("graph is executable");
     let _: Vec<_> = runner
         .run_for_device(conduit_core::id::DeviceId::new(), audio_of(&["a"]))
-        .audio
+        .speech()
         .collect()
         .await;
 

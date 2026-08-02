@@ -7,6 +7,7 @@
 //! that lives in the session layer — so [`Transport::connect`] only opens the
 //! underlying channel.
 
+use reqwest::header::HeaderValue;
 use std::io::ErrorKind;
 
 use conduit_core::{Error, Result};
@@ -383,26 +384,64 @@ impl Transport for SseTransport {
     }
 }
 
+/// The header a server assigns a session with, and expects back on every
+/// request after.
+const MCP_SESSION_HEADER: &str = "mcp-session-id";
+
 /// Talks to a remote MCP server over the streamable HTTP transport.
 ///
 /// Requests are POSTed to the endpoint. The server answers either with a
 /// single JSON body (for immediate results) or with an SSE stream carrying
 /// `message` events (for long-running or streaming results).
+///
+/// A session lives as long as one transport: the server may assign one at
+/// `initialize`, every request after carries it, and closing releases it.
 pub struct StreamableHttpTransport {
     /// The endpoint URL.
     url: String,
+    /// One client for the whole session, so connections are reused rather than
+    /// dialled again per request.
+    client: reqwest::Client,
+    /// The session the server assigned at `initialize`, when it assigned one.
+    ///
+    /// Streamable HTTP is only stateless until a server says otherwise: a
+    /// server that answers `initialize` with `Mcp-Session-Id` expects it back
+    /// on everything after, and a request without it is not recognised. Some
+    /// servers say so with a status; others answer with a stream that closes
+    /// without a reply, which reads as a working connection that never
+    /// answers.
+    session: Option<HeaderValue>,
 }
 
 impl StreamableHttpTransport {
     /// A transport that POSTs to `url`.
     #[must_use]
     pub fn new(url: String) -> Self {
-        Self { url }
+        Self { url, client: reqwest::Client::new(), session: None }
+    }
+
+    /// Adds the session header, once the server has given one.
+    fn with_session(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.session {
+            Some(session) => request.header(MCP_SESSION_HEADER, session.clone()),
+            None => request,
+        }
+    }
+
+    /// Remembers the session a response carries.
+    ///
+    /// Read from every response rather than only from `initialize`: the spec
+    /// lets a server assign one whenever it likes, and a client that only
+    /// looked once would miss it.
+    fn remember_session(&mut self, response: &reqwest::Response) {
+        if let Some(session) = response.headers().get(MCP_SESSION_HEADER) {
+            self.session = Some(session.clone());
+        }
     }
 }
 
 /// Reads an SSE response stream, returning the response matching `id`.
-async fn stream_response(response: reqwest::Response, id: u64) -> Result<Value> {
+async fn stream_response(response: reqwest::Response, id: u64, method: &str) -> Result<Value> {
     let mut stream = response.bytes_stream();
     let mut decoder = Decoder::new();
     while let Some(chunk) = stream.next().await {
@@ -425,9 +464,18 @@ async fn stream_response(response: reqwest::Response, id: u64) -> Result<Value> 
             return response_result(response, id);
         }
     }
+    // Naming the request matters: this is what a server does when it does not
+    // recognise the session, so "the stream closed" alone sends an operator
+    // looking at the network rather than at the handshake.
     Err(Error::provider(
         "mcp",
-        std::io::Error::new(ErrorKind::UnexpectedEof, "streamable HTTP stream closed"),
+        std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            format!(
+                "streamable HTTP stream closed before answering `{method}` (id {id}); \
+                 the server may not have recognised the session"
+            ),
+        ),
     ))
 }
 
@@ -440,15 +488,15 @@ impl Transport for StreamableHttpTransport {
 
     async fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
         let request = Request::new(id, method, params);
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&self.url)
+        let response = self
+            .with_session(self.client.post(&self.url))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
             .json(&request)
             .send()
             .await
             .map_err(|error| Error::provider("mcp", error))?;
+        self.remember_session(&response);
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -465,7 +513,7 @@ impl Transport for StreamableHttpTransport {
             .unwrap_or_default();
 
         if content_type.contains("text/event-stream") {
-            stream_response(response, id).await
+            stream_response(response, id, method).await
         } else {
             let value: Value =
                 response.json().await.map_err(|error| Error::provider("mcp", error))?;
@@ -478,14 +526,21 @@ impl Transport for StreamableHttpTransport {
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
         let notification = Notification::new(method, params);
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&self.url)
+        // Declared on notifications too, not just requests. A notification is
+        // answered with 202 and no body, so what the client accepts looks
+        // irrelevant — but the spec asks for the header on every POST, and a
+        // server that enforces it refuses the `notifications/initialized` that
+        // has to follow `initialize`, failing the handshake one step from the
+        // end.
+        let response = self
+            .with_session(self.client.post(&self.url))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
             .json(&notification)
             .send()
             .await
             .map_err(|error| Error::provider("mcp", error))?;
+        self.remember_session(&response);
         let status = response.status();
         if !status.is_success() {
             return Err(provider_msg(format!("MCP POST to {} returned {status}", self.url)));
@@ -493,7 +548,22 @@ impl Transport for StreamableHttpTransport {
         Ok(())
     }
 
-    async fn close(&mut self) {}
+    /// Releases the session, if the server gave one.
+    ///
+    /// A session is opened per request by `McpClient`, so a server that keeps
+    /// them would accumulate one for every tool listing and every call.
+    /// Best-effort: the session is being abandoned either way, and a failure
+    /// here is not something the caller can act on.
+    async fn close(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let released =
+            self.client.delete(&self.url).header(MCP_SESSION_HEADER, session).send().await;
+        if let Err(error) = released {
+            tracing::debug!(url = %self.url, %error, "could not release MCP session");
+        }
+    }
 }
 
 /// Resolves an endpoint URL against the URL of the stream it came from.
@@ -594,6 +664,119 @@ mod tests {
         let payload =
             format!("event: message\ndata: {stale}\n\nevent: message\ndata: {answer}\n\n");
         ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], payload)
+    }
+
+    /// A server that assigns a session at `initialize` and requires it after.
+    ///
+    /// This is what the Streamable HTTP spec describes and what real servers
+    /// do. A request arriving without the session id gets a stream that closes
+    /// without answering, which is how the failure looks from the client: the
+    /// connection is fine and the reply never comes.
+    async fn mock_session_mcp(
+        headers: axum::http::HeaderMap,
+        body: String,
+    ) -> impl axum::response::IntoResponse {
+        let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let method = request.get("method").and_then(Value::as_str).unwrap_or_default();
+
+        if method == "initialize" {
+            let answer = json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } });
+            return (
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json"),
+                    (axum::http::HeaderName::from_static("mcp-session-id"), "session-abc"),
+                ],
+                answer.to_string(),
+            );
+        }
+
+        let session = headers.get("mcp-session-id").and_then(|value| value.to_str().ok());
+        if session != Some("session-abc") {
+            return (
+                [
+                    (axum::http::header::CONTENT_TYPE, "text/event-stream"),
+                    (axum::http::HeaderName::from_static("mcp-session-id"), "session-abc"),
+                ],
+                String::new(),
+            );
+        }
+
+        let answer = json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } });
+        (
+            [
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+                (axum::http::HeaderName::from_static("mcp-session-id"), "session-abc"),
+            ],
+            answer.to_string(),
+        )
+    }
+
+    /// A server that requires the Accept header the spec asks for.
+    ///
+    /// The Python MCP SDK answers 406 without it, which is what a real server
+    /// did to notifications while requests went through.
+    async fn mock_strict_accept_mcp(
+        headers: axum::http::HeaderMap,
+        body: String,
+    ) -> impl axum::response::IntoResponse {
+        let accept = headers
+            .get(axum::http::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !accept.contains("application/json") || !accept.contains("text/event-stream") {
+            return (
+                axum::http::StatusCode::NOT_ACCEPTABLE,
+                [(axum::http::header::CONTENT_TYPE, "text/plain")],
+                String::new(),
+            );
+        }
+
+        let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let answer = json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            answer.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn streamable_http_notifications_accept_both_reply_shapes() {
+        // Requests declared what they would accept and notifications did not,
+        // so a strict server took the initialize but rejected the
+        // `notifications/initialized` that has to follow it — failing the
+        // handshake one step from the end.
+        let (url, server) = spawn_mock(axum::routing::post(mock_strict_accept_mcp)).await;
+        let mut transport = StreamableHttpTransport::new(url);
+        transport.connect().await.expect("connect");
+
+        transport
+            .notify("notifications/initialized", json!({}))
+            .await
+            .expect("a notification declares what it accepts too");
+
+        transport.close().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn streamable_http_carries_the_session_it_was_given() {
+        // The bug this pins: initialize succeeded, the session id it returned
+        // was dropped, and every request after it reached a server that did
+        // not recognise the session. The stream closed without answering, so
+        // a working server looked unreachable.
+        let (url, server) = spawn_mock(axum::routing::post(mock_session_mcp)).await;
+        let mut transport = StreamableHttpTransport::new(url);
+        transport.connect().await.expect("connect");
+        transport.request(0, "initialize", json!({})).await.expect("initialize");
+
+        let result = transport.request(1, "tools/list", json!({})).await.expect("request");
+
+        assert_eq!(result, json!({ "ok": true }));
+        transport.close().await;
+        server.abort();
     }
 
     #[tokio::test]

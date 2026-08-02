@@ -1239,6 +1239,52 @@ button {
   font-size: 12px;
 }
 
+/* What a link carries, so a miswiring reads as a colour change rather than
+   only as a validation error. Colour is never the only signal: every link also
+   carries a title naming its modality. */
+.atom-flow-link[data-modality="audio"] {
+  color: var(--accent);
+}
+
+.atom-flow-link[data-modality="text"] {
+  color: var(--success);
+}
+
+.atom-flow-link[data-modality="utterance"] {
+  color: var(--warning-text);
+}
+
+/* Naming a new pipeline, inline in the picker rather than in a dialog: it is
+   one field, and the pipeline it copies is the one still on screen behind it. */
+.new-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-pipeline input {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  max-width: 160px;
+}
+
+.node-config-field {
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.node-config-field span {
+  font-size: 11px;
+}
+
+.node-config-field input,
+.node-config-field select {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .component-config-fields {
   display: grid;
   gap: 10px;

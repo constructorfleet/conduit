@@ -13,10 +13,11 @@ export type CancelReason =
   | "error"
   | "shutdown";
 export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
-export type SpokenSegmentRole =
+export type UtteranceSegmentRole =
   | "assistant_preamble"
   | "tool_output"
   | "assistant_response";
+export type Modality = "audio" | "text" | "utterance";
 
 export interface AudioFormat {
   encoding: AudioEncoding;
@@ -62,7 +63,13 @@ export type Event =
   | { type: "ToolCompleted"; call: ToolCallId; duration_ms: number }
   | { type: "ToolFailed"; call: ToolCallId; error: string }
   | { type: "TtsStarted"; voice: string }
-  | { type: "SpokenSegmentStarted"; segment: string; role: SpokenSegmentRole; text: string }
+  | {
+      type: "UtteranceSegmentStarted";
+      segment: string;
+      role: UtteranceSegmentRole;
+      modality: Modality;
+      text: string;
+    }
   | { type: "AudioStreaming"; sequence: number; bytes: number }
   | { type: "TtsFinished"; duration_ms: number }
   | { type: "StageFailed"; node: string; error: string; recovered: boolean };
@@ -360,9 +367,10 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "SpokenSegmentStarted",
+      "type": "UtteranceSegmentStarted",
       "segment": "assistant-response-1",
       "role": "assistant_response",
+      "modality": "audio",
       "text": "The lights are on."
     }
   },
@@ -374,9 +382,11 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "AudioStreaming",
-      "sequence": 2,
-      "bytes": 6400
+      "type": "UtteranceSegmentStarted",
+      "segment": "assistant-response-2",
+      "role": "assistant_response",
+      "modality": "text",
+      "text": "The lights are on."
     }
   },
   {
@@ -387,14 +397,27 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "TtsFinished",
-      "duration_ms": 900
+      "type": "AudioStreaming",
+      "sequence": 2,
+      "bytes": 6400
     }
   },
   {
     "id": "00000000-0000-0000-0000-00000000007d",
     "trace": "00000000-0000-0000-0000-0000000000c8",
     "at": "2026-08-01T02:00:25Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "TtsFinished",
+      "duration_ms": 900
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-00000000007e",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:26Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",

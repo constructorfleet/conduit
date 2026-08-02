@@ -9,7 +9,8 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use conduit_core::bus::EventBus;
-use conduit_core::event::{CancelReason, Envelope, Event, SpokenSegmentRole};
+use conduit_core::event::{CancelReason, Envelope, Event, UtteranceSegmentRole};
+use conduit_core::graph::Modality;
 use conduit_core::id::{ConversationId, EventId, ToolCallId, TurnId};
 use futures_util::stream::{Stream, StreamExt};
 use serde::Serialize;
@@ -282,11 +283,12 @@ impl TurnSnapshot {
 
     fn observe(&mut self, envelope: Envelope) {
         match &envelope.event {
-            Event::SpokenSegmentStarted { segment, role, text } => {
-                self.items.push(ReconstructionItem::SpokenSegment(SpokenSegment {
+            Event::UtteranceSegmentStarted { segment, role, modality, text } => {
+                self.items.push(ReconstructionItem::UtteranceSegment(UtteranceSegment {
                     id: segment.clone(),
                     sequence: self.sequence + 1,
                     role: *role,
+                    modality: *modality,
                     text: text.clone(),
                     started_at: envelope.at,
                     evidence: vec![envelope.id],
@@ -385,7 +387,7 @@ impl TurnSnapshot {
                 };
                 &mut batch.calls[call_index]
             }
-            ReconstructionItem::SpokenSegment(_) => unreachable!("selected a tool batch"),
+            ReconstructionItem::UtteranceSegment(_) => unreachable!("selected a tool batch"),
         }
     }
 
@@ -428,7 +430,7 @@ impl TurnStatus {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReconstructionItem {
     /// Text that was intentionally sent to speech synthesis.
-    SpokenSegment(SpokenSegment),
+    UtteranceSegment(UtteranceSegment),
     /// Tool calls requested by one model round.
     ToolBatch(ToolBatch),
 }
@@ -439,16 +441,20 @@ impl ReconstructionItem {
     }
 }
 
-/// Text intentionally sent to speech synthesis.
+/// Text a turn intentionally emitted as one piece.
 #[derive(Debug, Clone, Serialize)]
-pub struct SpokenSegment {
+pub struct UtteranceSegment {
     /// Stable reconstruction item id.
     pub id: String,
     /// Canonical sequence within the turn.
     pub sequence: u64,
-    /// Why this text was spoken.
-    pub role: SpokenSegmentRole,
-    /// Text handed to synthesis.
+    /// Why this text was emitted.
+    pub role: UtteranceSegmentRole,
+    /// How it was rendered. A text pipeline's segments were never spoken, and
+    /// a reader showing a playback control for one would be describing audio
+    /// that does not exist.
+    pub modality: Modality,
+    /// The text of the span.
     pub text: String,
     /// When the segment started.
     pub started_at: DateTime<Utc>,

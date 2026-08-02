@@ -11,16 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::Provider;
 
 /// How long a record should be kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Scope {
-    /// Lives only as long as the conversation.
-    Conversation,
-    /// Persists across conversations for one speaker.
-    Speaker,
-    /// Persists for everyone.
-    Global,
-}
+///
+/// Defined in [`conduit_core::memory`] because a pipeline graph names a scope
+/// too, and `conduit-core` is the crate both sides can see.
+pub use conduit_core::memory::Scope;
 
 /// Something worth remembering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

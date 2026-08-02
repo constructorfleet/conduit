@@ -22,6 +22,22 @@ import type { OperatorAccess } from "./operatorAccess";
 export type SnapshotState = "idle" | "loading" | "live" | "stale" | "error";
 export type OperatorDataMode = "live" | "mock";
 
+/// A pipeline the server has a name for and cannot read.
+///
+/// Stored graphs are not migrated across schema changes, and a file can be
+/// hand-edited or half-written, so a name without a readable graph behind it
+/// is a state the console has to be able to show rather than choke on.
+export interface UnreadablePipeline {
+  name: string;
+  detail: string;
+}
+
+/// What one load of the pipelines section found.
+export interface PipelineLoad {
+  views: PipelineView[];
+  unreadable: UnreadablePipeline[];
+}
+
 export interface SnapshotClientConfig {
   baseUrl: string;
   access: OperatorAccess;
@@ -35,7 +51,8 @@ export interface SnapshotClient {
   readonly state: SnapshotState;
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
-  loadPipelineViews: () => Promise<PipelineView[]>;
+  loadPipelineViews: () => Promise<PipelineLoad>;
+  deletePipeline: (name: string) => Promise<void>;
   loadComponentCatalog: () => Promise<ProviderComponentCatalog>;
   loadProviderDefinitions: () => Promise<ProviderDefinitionView[]>;
   loadTurns: () => Promise<TurnList>;
@@ -79,8 +96,31 @@ export function createSnapshotClient(
     loadSnapshot: () => client.status(),
     loadPipelineViews: async () => {
       const names = await client.listPipelines();
-      return Promise.all(names.map((name) => client.getPipeline(name)));
+      // Settled rather than all: a pipeline the server cannot read must not
+      // hide the ones it can. An operator who has one corrupt graph still has
+      // to be able to see, edit, and run the others — and to delete the one
+      // that is broken, which is the only repair the console can offer.
+      const loaded = await Promise.allSettled(
+        names.map((name) => client.getPipeline(name)),
+      );
+      const views: PipelineView[] = [];
+      const unreadable: UnreadablePipeline[] = [];
+      loaded.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          views.push(result.value);
+        } else {
+          unreadable.push({
+            name: names[index],
+            detail:
+              result.reason instanceof Error
+                ? result.reason.message
+                : String(result.reason),
+          });
+        }
+      });
+      return { views, unreadable };
     },
+    deletePipeline: (name) => client.deletePipeline(name),
     loadComponentCatalog: () => client.listProviderComponents(),
     loadProviderDefinitions: async () => {
       const ids = await client.listProviderDefinitions();
@@ -113,7 +153,11 @@ function createMockSnapshotClient(
           : "loading",
     snapshot: config.access.mode === "none" ? null : (config.snapshot ?? null),
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
-    loadPipelineViews: async () => [pipelineViewFixture],
+    loadPipelineViews: async () => ({
+      views: [pipelineViewFixture],
+      unreadable: [],
+    }),
+    deletePipeline: async () => {},
     loadComponentCatalog: async () => ({ components: [] }),
     loadProviderDefinitions: async () => [],
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),

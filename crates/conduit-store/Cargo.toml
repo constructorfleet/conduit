@@ -30,6 +30,7 @@ default = []
 postgres = ["dep:sqlx"]
 
 [dev-dependencies]
+conduit-core = { workspace = true, features = ["testing"] }
 conduit-store = { workspace = true, features = ["postgres"] }
 sqlx = { version = "0.9", default-features = false, features = [
     "postgres",

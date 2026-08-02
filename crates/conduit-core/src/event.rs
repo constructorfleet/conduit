@@ -8,18 +8,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::audio::AudioFormat;
+use crate::graph::Modality;
 use crate::id::{ConversationId, DeviceId, EventId, SpeakerId, ToolCallId, TraceId, TurnId};
 
-/// Why a span of text was intentionally sent to speech synthesis.
+/// Why a span of text was intentionally emitted as one piece.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-pub enum SpokenSegmentRole {
-    /// Assistant text spoken before requested tools have completed.
+pub enum UtteranceSegmentRole {
+    /// Assistant text emitted before requested tools have completed.
     AssistantPreamble,
-    /// Text returned by a tool and spoken directly by the runtime.
+    /// Text returned by a tool and emitted directly by the runtime.
     ToolOutput,
-    /// Assistant text spoken as the final answer for a turn.
+    /// Assistant text emitted as the final answer for a turn.
     AssistantResponse,
 }
 
@@ -248,13 +249,19 @@ pub enum Event {
         /// Selected voice identifier.
         voice: String,
     },
-    /// A text span was intentionally handed to speech synthesis.
-    SpokenSegmentStarted {
+    /// A text span was intentionally emitted as one piece of the reply.
+    ///
+    /// Published whichever way the pipeline renders it. A voice pipeline
+    /// follows this with audio and a text pipeline does not, so `modality` is
+    /// what tells a reader which happened rather than the event's absence.
+    UtteranceSegmentStarted {
         /// Stable segment identity for reconstruction.
         segment: String,
-        /// Why this span is being spoken.
-        role: SpokenSegmentRole,
-        /// Text sent to synthesis.
+        /// Why this span is being emitted.
+        role: UtteranceSegmentRole,
+        /// How this span is rendered.
+        modality: Modality,
+        /// The text of the span.
         text: String,
     },
     /// Synthesized audio is being streamed to the device.
@@ -334,9 +341,18 @@ impl Event {
                 error: "permission denied".to_owned(),
             },
             Self::TtsStarted { voice: "alloy".to_owned() },
-            Self::SpokenSegmentStarted {
+            Self::UtteranceSegmentStarted {
                 segment: "assistant-response-1".to_owned(),
-                role: SpokenSegmentRole::AssistantResponse,
+                role: UtteranceSegmentRole::AssistantResponse,
+                modality: Modality::Audio,
+                text: "The lights are on.".to_owned(),
+            },
+            // The same fact from a text pipeline. Both renderings are in the
+            // contract so a client cannot be written against speech alone.
+            Self::UtteranceSegmentStarted {
+                segment: "assistant-response-2".to_owned(),
+                role: UtteranceSegmentRole::AssistantResponse,
+                modality: Modality::Text,
                 text: "The lights are on.".to_owned(),
             },
             Self::AudioStreaming { sequence: 2, bytes: 6400 },
@@ -375,7 +391,7 @@ impl Event {
             Self::ToolCompleted { .. } => "ToolCompleted",
             Self::ToolFailed { .. } => "ToolFailed",
             Self::TtsStarted { .. } => "TtsStarted",
-            Self::SpokenSegmentStarted { .. } => "SpokenSegmentStarted",
+            Self::UtteranceSegmentStarted { .. } => "UtteranceSegmentStarted",
             Self::AudioStreaming { .. } => "AudioStreaming",
             Self::TtsFinished { .. } => "TtsFinished",
             Self::StageFailed { .. } => "StageFailed",
@@ -408,7 +424,7 @@ impl Event {
             | Self::ToolCompleted { .. }
             | Self::ToolFailed { .. } => Stage::Tools,
             Self::TtsStarted { .. }
-            | Self::SpokenSegmentStarted { .. }
+            | Self::UtteranceSegmentStarted { .. }
             | Self::AudioStreaming { .. }
             | Self::TtsFinished { .. } => Stage::Synthesis,
             Self::StageFailed { .. } => Stage::Diagnostics,

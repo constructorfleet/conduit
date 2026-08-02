@@ -188,6 +188,15 @@ pub struct ProviderStatus {
     pub message: Option<String>,
     /// Pipelines that currently reference or depend on this provider.
     pub affects_pipelines: Vec<String>,
+    /// Tools this provider offers, for a definition that offers several.
+    ///
+    /// An MCP definition describes a server, and a server advertises any
+    /// number of tools. They belong to the definition the way models belong to
+    /// a language model provider — listed here rather than reported as
+    /// providers of their own, which would put a dozen entries on the
+    /// operator's Providers page for one thing they configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offers_tools: Vec<String>,
 }
 
 /// Provider capability kind.
@@ -638,6 +647,7 @@ async fn project_provider_statuses(
     for definition in definitions {
         push_definition_status(
             definition,
+            discovered_tools(providers, &definition.id),
             reachability.get(&definition.id),
             &references,
             &proven,
@@ -784,14 +794,56 @@ async fn collect_tool_statuses(
         if definitions.contains(&key) {
             continue;
         }
+        // A tool discovered from a definition is that definition's, not a
+        // provider beside it. Reporting each one separately listed a dozen
+        // entries for one configured server — and health-checked every one of
+        // them, which for MCP is a full session per tool per snapshot.
+        if owning_definition(&name, definitions).is_some() {
+            continue;
+        }
         let provider = providers.tools().require(&name).expect("listed provider exists");
         let health = provider.health().await;
         push_registered_status(key, health, references, proven, statuses, seen);
     }
 }
 
+/// The definition a qualified tool id belongs to, if any.
+///
+/// Tools discovered from an MCP definition are registered as
+/// `<definition id>.<tool name>`, and a definition id cannot contain a dot, so
+/// the prefix before the first one names the definition.
+fn owning_definition<'a>(name: &'a str, definitions: &HashSet<ProviderKey>) -> Option<&'a str> {
+    let (prefix, _) = name.split_once('.')?;
+    definitions
+        .contains(&ProviderKey { kind: ProviderKind::Tool, id: prefix.to_owned() })
+        .then_some(prefix)
+}
+
+/// The tools registered from `definition`, by their qualified ids.
+///
+/// Read from the runtime registry rather than by asking the server: discovery
+/// already happened when the definition was registered, and asking again per
+/// snapshot is what made a status poll cost one MCP session per tool.
+fn discovered_tools(
+    providers: Option<&conduit_runtime::Providers>,
+    definition: &str,
+) -> Vec<String> {
+    let prefix = format!("{definition}.");
+    providers
+        .map(|providers| {
+            providers
+                .tools()
+                .names()
+                .filter(|name| name.starts_with(&prefix))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn push_definition_status(
     definition: &ProviderDefinition,
+    offers_tools: Vec<String>,
     health: Option<&Health>,
     references: &HashMap<ProviderKey, BTreeSet<String>>,
     proven: &HashMap<ProviderKey, TurnId>,
@@ -831,6 +883,7 @@ fn push_definition_status(
             .get(&key)
             .map(|pipelines| pipelines.iter().cloned().collect())
             .unwrap_or_default(),
+        offers_tools,
     });
 }
 
@@ -871,6 +924,7 @@ fn push_registered_status(
             .get(&key)
             .map(|pipelines| pipelines.iter().cloned().collect())
             .unwrap_or_default(),
+        offers_tools: Vec::new(),
     });
 }
 
@@ -888,6 +942,7 @@ fn unavailable_provider(
         proven_by_turn: None,
         message: Some(message.into()),
         affects_pipelines: pipelines.into_iter().collect(),
+        offers_tools: Vec::new(),
     }
 }
 
@@ -897,11 +952,11 @@ fn provider_references(
     let mut references = HashMap::<ProviderKey, BTreeSet<String>>::new();
     for (pipeline, graph) in graphs {
         for node in graph.topological_order().unwrap_or_default() {
-            let Some(kind) = provider_kind_for_node(node.kind) else {
+            let Some(kind) = provider_kind_for_node(node.kind()) else {
                 continue;
             };
             references
-                .entry(ProviderKey { kind, id: node.provider.clone() })
+                .entry(ProviderKey { kind, id: node.provider().to_owned() })
                 .or_default()
                 .insert(pipeline.clone());
         }
@@ -922,10 +977,10 @@ fn proven_providers(
             continue;
         };
         for node in graph.topological_order().unwrap_or_default() {
-            let Some(component) = component_for_node_kind(node.kind) else {
+            let Some(component) = component_for_node_kind(node.kind()) else {
                 continue;
             };
-            let Some(kind) = provider_kind_for_node(node.kind) else {
+            let Some(kind) = provider_kind_for_node(node.kind()) else {
                 continue;
             };
             let Some(recorded) = runtime.components.get(&component) else {
@@ -934,7 +989,10 @@ fn proven_providers(
             if recorded.state == ComponentHealthState::Healthy
                 && recorded.last_turn == Some(successful_turn)
             {
-                proven.insert(ProviderKey { kind, id: node.provider.clone() }, successful_turn);
+                proven.insert(
+                    ProviderKey { kind, id: node.provider().to_owned() },
+                    successful_turn,
+                );
             }
         }
     }
@@ -946,8 +1004,8 @@ fn pipeline_provider_ids(graph: &PipelineGraph) -> Vec<String> {
         .topological_order()
         .unwrap_or_default()
         .into_iter()
-        .filter(|node| provider_kind_for_node(node.kind).is_some())
-        .map(|node| node.provider.clone())
+        .filter(|node| provider_kind_for_node(node.kind()).is_some())
+        .map(|node| node.provider().to_owned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -956,8 +1014,9 @@ fn pipeline_provider_ids(graph: &PipelineGraph) -> Vec<String> {
 fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
     match kind {
         NodeKind::Stt => Some(ProviderKind::Stt),
-        NodeKind::Llm => Some(ProviderKind::Llm),
-        NodeKind::Tool => Some(ProviderKind::Tool),
+        // A core's provider is the model it binds; its tools and memory are
+        // bindings rather than nodes, and are reported from the core plan.
+        NodeKind::Core => Some(ProviderKind::Llm),
         NodeKind::Tts => Some(ProviderKind::Tts),
         _ => None,
     }
@@ -1010,7 +1069,7 @@ fn project_components(
         .unwrap_or_default()
         .into_iter()
         .filter_map(|node| {
-            let kind = component_for_node_kind(node.kind)?;
+            let kind = component_for_node_kind(node.kind())?;
             let recorded = runtime.and_then(|runtime| runtime.components.get(&kind));
             let state = recorded.map_or(
                 if usable {
@@ -1022,7 +1081,7 @@ fn project_components(
             );
             Some(ComponentHealth {
                 kind,
-                provider: Some(node.provider.clone()),
+                provider: Some(node.provider().to_owned()),
                 state,
                 detail: recorded.and_then(|component| component.detail.clone()),
                 last_turn: recorded.and_then(|component| component.last_turn),
@@ -1034,8 +1093,7 @@ fn project_components(
 fn component_for_node_kind(kind: NodeKind) -> Option<ComponentKind> {
     match kind {
         NodeKind::Stt => Some(ComponentKind::Transcription),
-        NodeKind::Llm => Some(ComponentKind::Reasoning),
-        NodeKind::Tool => Some(ComponentKind::Tools),
+        NodeKind::Core => Some(ComponentKind::Reasoning),
         NodeKind::Tts => Some(ComponentKind::Synthesis),
         _ => None,
     }

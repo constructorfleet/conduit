@@ -11,23 +11,19 @@ use std::time::Duration;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{
+    Edge, MemoryBinding, MemoryMode, Modality, Node, PipelineGraph, ReasoningCore,
+};
+use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
-use conduit_runtime::{Providers, Runner};
+use conduit_runtime::{Providers, Reply, Runner};
 use fakes::{audio_of, FailingStt, FakeLlm, FakeStt, FakeTts, HangingTts, SlowTts};
 use futures_util::StreamExt;
 
-/// mic -> stt -> llm -> tts, the shape the runtime can execute today.
+/// mic -> stt -> core -> tts, the shape the runtime can execute today.
 fn linear_graph() -> PipelineGraph {
-    PipelineGraph::new("test")
-        .with_node(Node::new("mic", NodeKind::Source, "test"))
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("test").source("test").stt("fake-stt").core("fake-llm").tts("fake-tts").build()
 }
 
 /// Reads events until the turn ends, so assertions see the whole sequence.
@@ -59,6 +55,280 @@ fn names(events: &[Event]) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn speaks_the_model_response_for_a_typed_utterance() {
+    // A pipeline fed by text has no recognizer at all, so the turn has to
+    // reach the model without one rather than transcribing something.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers =
+        Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
+    let graph = PipelineGraph::new("typed")
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"));
+
+    let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
+    let spoken: Vec<_> = runner.run_text("turn on the light").speech().collect().await;
+
+    let audio: Vec<u8> = spoken
+        .into_iter()
+        .map(|chunk| chunk.expect("chunk"))
+        .flat_map(|chunk| chunk.data.to_vec())
+        .collect();
+    assert_eq!(String::from_utf8(audio).expect("utf-8"), "Done.");
+
+    // No capture and no partials, because nothing was heard — but SpeechFinal
+    // still opens the turn, so a reconstruction shows what was asked without
+    // needing to know which modality asked it.
+    let events = drain(&mut subscription).await;
+    let published = names(&events);
+    assert!(!published.contains(&"AudioStarted".to_owned()), "{published:?}");
+    assert!(!published.contains(&"SpeechPartial".to_owned()), "{published:?}");
+    assert_eq!(
+        published.iter().filter(|name| *name == "SpeechFinal").count(),
+        1,
+        "{published:?}"
+    );
+    let Some(Event::SpeechFinal { text, .. }) =
+        events.iter().find(|event| matches!(event, Event::SpeechFinal { .. }))
+    else {
+        panic!("a typed turn still reports what was asked");
+    };
+    assert_eq!(text, "turn on the light");
+}
+
+#[tokio::test]
+async fn a_text_pipeline_writes_its_reply_down_with_no_speech_providers() {
+    // The whole point of the track: a working pipeline with neither a
+    // recognizer nor a synthesizer configured.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let providers = Providers::new().with_llm(FakeLlm::new(vec!["One. ", "Two."]));
+    let graph = PipelineGraph::new("chat")
+        .with_node(Node::source("in", "test", Modality::Text))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::sink("out", "test", Modality::Text))
+        .with_edge(Edge::new("in", "core"))
+        .with_edge(Edge::new("core", "out"));
+
+    let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
+    let replies: Vec<_> = runner.run_text("hello").output.collect().await;
+
+    let written: Vec<String> = replies
+        .into_iter()
+        .filter_map(|reply| match reply.expect("reply") {
+            Reply::Text(text) => Some(text),
+            Reply::Speech(_) => None,
+        })
+        .collect();
+    // Sentence segmentation is what a voice pipeline speaks a piece at a time,
+    // and it is what a text pipeline writes a piece at a time. Same boundary,
+    // including the trimming — a written segment carries no more trailing
+    // space than a spoken one carries trailing silence.
+    assert_eq!(written, ["One.", "Two."]);
+
+    // Nothing was synthesized, so nothing announces a voice.
+    let published = names(&drain(&mut subscription).await);
+    assert!(!published.contains(&"TtsStarted".to_owned()), "{published:?}");
+    assert!(
+        published.contains(&"UtteranceSegmentStarted".to_owned()),
+        "a written segment is still a segment: {published:?}"
+    );
+}
+
+/// A pipeline whose core is bound to one memory store.
+fn remembering_graph(mode: MemoryMode) -> PipelineGraph {
+    let core = ReasoningCore {
+        memory: vec![MemoryBinding {
+            provider: "fake-memory".to_owned(),
+            mode,
+            scope: None,
+            limit: 5,
+        }],
+        ..ReasoningCore::new("fake-llm")
+    };
+    PipelineGraph::new("remembering")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "core".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
+}
+
+#[tokio::test]
+async fn a_core_is_reminded_before_it_answers_and_stores_after() {
+    let memory = fakes::FakeMemory::recalling("the oven is in the kitchen");
+    let llm = FakeLlm::new(vec!["It is in the kitchen."]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("where is the oven")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner = Runner::prepare(
+        &remembering_graph(MemoryMode::ReadWrite),
+        &providers,
+        EventBus::default(),
+    )
+    .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    let searched = memory.searched();
+    assert_eq!(searched.len(), 1, "retrieved once, before the first model call");
+    assert_eq!(searched[0].text, "where is the oven");
+    assert_eq!(searched[0].limit, 5, "the binding's limit is what is asked for");
+
+    // What was recalled has to actually reach the model, or retrieval is
+    // theatre: the store was read and the answer was given without it.
+    let prompt = llm.requests()[0]
+        .messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(prompt.contains("the oven is in the kitchen"), "{prompt}");
+
+    let stored = memory.stored();
+    assert_eq!(stored.len(), 1, "and the exchange is stored once, after the reply");
+    assert!(stored[0].content.contains("where is the oven"), "{:?}", stored[0]);
+    assert!(stored[0].content.contains("It is in the kitchen."), "{:?}", stored[0]);
+}
+
+#[tokio::test]
+async fn a_read_only_binding_never_writes() {
+    let memory = fakes::FakeMemory::recalling("something");
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Hello."]))
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner =
+        Runner::prepare(&remembering_graph(MemoryMode::Read), &providers, EventBus::default())
+            .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert_eq!(memory.searched().len(), 1);
+    assert!(memory.stored().is_empty(), "a read binding must not write");
+}
+
+#[tokio::test]
+async fn a_write_only_binding_never_reads() {
+    let memory = fakes::FakeMemory::recalling("something the model must not see");
+    let llm = FakeLlm::new(vec!["Hello."]);
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(llm.clone())
+        .with_tts(FakeTts::new())
+        .with_memory(memory.clone());
+
+    let runner =
+        Runner::prepare(&remembering_graph(MemoryMode::Write), &providers, EventBus::default())
+            .expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert!(memory.searched().is_empty(), "a write binding must not read");
+    assert_eq!(memory.stored().len(), 1);
+    let prompt = llm.requests()[0]
+        .messages
+        .iter()
+        .map(|message| message.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!prompt.contains("must not see"), "{prompt}");
+}
+
+/// Two ways in and two ways out, around one core.
+fn hybrid_graph() -> PipelineGraph {
+    PipelineGraph::new("hybrid")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_node(Node::sink("speaker", "test", Modality::Audio))
+        .with_node(Node::sink("transcript", "test", Modality::Text))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"))
+        .with_edge(Edge::new("tts", "speaker"))
+        .with_edge(Edge::new("core", "transcript"))
+}
+
+#[tokio::test]
+async fn a_hybrid_pipeline_both_speaks_and_writes_its_reply() {
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["One. ", "Two."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&hybrid_graph(), &providers, EventBus::default()).expect("executable");
+    let replies: Vec<_> = runner.run(audio_of(&["a"])).output.collect().await;
+
+    let mut spoken = Vec::new();
+    let mut written = Vec::new();
+    for reply in replies {
+        match reply.expect("reply") {
+            Reply::Speech(chunk) => spoken.extend_from_slice(&chunk.data),
+            Reply::Text(text) => written.push(text),
+        }
+    }
+
+    assert_eq!(written, ["One.", "Two."], "the transcript sink gets the words");
+    assert_eq!(
+        String::from_utf8(spoken).expect("utf-8"),
+        "One.Two.",
+        "and the speaker gets the audio for the same sentences"
+    );
+}
+
+#[tokio::test]
+async fn a_hybrid_pipeline_takes_either_kind_of_input() {
+    // One core, reached from a microphone or from a chat box. Which one a turn
+    // used is the caller's choice, not the graph's.
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("hi")]))
+        .with_llm(FakeLlm::new(vec!["Done."]))
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&hybrid_graph(), &providers, EventBus::default()).expect("executable");
+    let typed: Vec<_> = runner.run_text("hi").output.collect().await;
+
+    assert!(
+        typed.iter().any(|reply| matches!(reply, Ok(Reply::Text(_)))),
+        "a typed question is answered by the same pipeline"
+    );
+}
+
+#[tokio::test]
+async fn audio_handed_to_a_text_pipeline_fails_the_turn_rather_than_panicking() {
+    // The mismatch is a caller's, not an operator's, but it happens inside a
+    // spawned task where a panic would be invisible.
+    let bus = EventBus::default();
+    let providers =
+        Providers::new().with_llm(FakeLlm::new(vec!["Done."])).with_tts(FakeTts::new());
+    let graph = PipelineGraph::new("typed")
+        .with_node(Node::source("chat", "test", Modality::Text))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("chat", "core"))
+        .with_edge(Edge::new("core", "tts"));
+
+    let runner = Runner::prepare(&graph, &providers, bus).expect("graph is executable");
+    let spoken: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert!(
+        spoken.iter().any(std::result::Result::is_err),
+        "the turn must report the mismatch rather than speaking anyway"
+    );
+}
+
+#[tokio::test]
 async fn speaks_the_model_response_for_a_captured_utterance() {
     let bus = EventBus::default();
     let mut subscription = bus.subscribe();
@@ -73,7 +343,7 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let spoken: Vec<_> = runner.run(audio_of(&["a", "b"])).audio.collect().await;
+    let spoken: Vec<_> = runner.run(audio_of(&["a", "b"])).speech().collect().await;
 
     let audio: Vec<u8> = spoken
         .into_iter()
@@ -105,7 +375,7 @@ async fn speaks_the_model_response_for_a_captured_utterance() {
             "LlmToken",
             "LlmFinished",
             "TtsStarted",
-            "SpokenSegmentStarted",
+            "UtteranceSegmentStarted",
             "AudioStreaming",
             "TtsFinished",
             "ConversationCompleted",
@@ -125,7 +395,7 @@ async fn speech_starts_before_the_model_finishes() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let events = names(&drain(&mut subscription).await);
     let started = events.iter().position(|name| name == "TtsStarted").expect("TtsStarted");
@@ -147,7 +417,7 @@ async fn synthesized_audio_is_converted_to_the_requested_rate() {
         .expect("graph is executable");
     let conversation = runner.run(audio_of(&["a"]));
     let spoken: usize = conversation
-        .audio
+        .speech()
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -172,7 +442,7 @@ async fn passes_the_transcript_to_the_model() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let requests = llm.requests();
     assert_eq!(requests.len(), 1);
@@ -194,7 +464,7 @@ async fn requests_the_model_the_provider_definition_configures() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     assert_eq!(llm.requests()[0].model, "qwen3:8b");
 }
@@ -210,7 +480,7 @@ async fn speaks_each_sentence_as_soon_as_it_is_complete() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     // Waiting for the model to finish before speaking would collapse this to
     // one call with the whole response.
@@ -228,7 +498,7 @@ async fn stage_failures_reach_the_bus_and_the_caller() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let spoken: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let spoken: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     assert!(spoken.iter().any(Result::is_err), "caller must see the failure");
 
@@ -332,13 +602,13 @@ async fn a_stopped_turn_stops_producing_audio() {
 
     // Interrupt after the reply has started, so a truncated stream means the
     // stop cut it short rather than the turn never having begun.
-    let first = tokio::time::timeout(Duration::from_secs(5), conversation.audio.next())
+    let first = tokio::time::timeout(Duration::from_secs(5), conversation.output.next())
         .await
         .expect("audio starts");
     assert!(first.is_some(), "expected the turn to speak before being stopped");
     conversation.stop.request();
 
-    let rest = tokio::time::timeout(Duration::from_secs(5), conversation.audio.count())
+    let rest = tokio::time::timeout(Duration::from_secs(5), conversation.speech().count())
         .await
         .expect("the audio stream ends");
     // `One. Two. Three.` is 14 spoken bytes, one chunk each.
@@ -362,10 +632,10 @@ async fn a_listener_that_leaves_is_cancelled_as_disconnected() {
 
     // Leave mid-reply. Leaving before it starts would end the turn through the
     // same path, but this is the case an operator actually sees.
-    let _ = tokio::time::timeout(Duration::from_secs(5), conversation.audio.next())
+    let _ = tokio::time::timeout(Duration::from_secs(5), conversation.output.next())
         .await
         .expect("audio starts");
-    drop(conversation.audio);
+    drop(conversation);
 
     let events = drain(&mut subscription).await;
     assert_eq!(
@@ -397,11 +667,11 @@ async fn nothing_the_runtime_does_reports_barge_in() {
     let mut events = drain(&mut subscription).await;
 
     let dropped = runner.run(audio_of(&["a"]));
-    drop(dropped.audio);
+    drop(dropped.speech());
     events.extend(drain(&mut subscription).await);
 
     let completed = runner.run(audio_of(&["a"]));
-    let _: Vec<_> = completed.audio.collect().await;
+    let _: Vec<_> = completed.speech().collect().await;
     events.extend(drain(&mut subscription).await);
 
     let failing = Providers::new()
@@ -412,7 +682,7 @@ async fn nothing_the_runtime_does_reports_barge_in() {
     let mut failures = failing_bus.subscribe();
     let failing_runner =
         Runner::prepare(&linear_graph(), &failing, failing_bus).expect("graph is executable");
-    let _: Vec<_> = failing_runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = failing_runner.run(audio_of(&["a"])).speech().collect().await;
     events.extend(drain(&mut failures).await);
 
     assert!(
@@ -426,17 +696,18 @@ async fn nothing_the_runtime_does_reports_barge_in() {
 }
 
 #[tokio::test]
-async fn tool_fan_out_is_executable() {
-    // Two tools hanging off the model, which is the fan-out the runtime does
-    // support: tools requested together run together. Routing them through a
-    // `router` node is what it does not — see `tests/plan.rs`.
-    let graph = linear_graph()
-        .with_node(Node::new("search", NodeKind::Tool, "search"))
-        .with_node(Node::new("clock", NodeKind::Tool, "clock"))
-        .with_edge(Edge::new("llm", "search"))
-        .with_edge(Edge::new("llm", "clock"))
-        .with_edge(Edge::new("search", "tts"))
-        .with_edge(Edge::new("clock", "tts"));
+async fn several_tools_bound_to_one_core_are_executable() {
+    // Two tools on the model, which is the fan-out the runtime does support:
+    // tools requested together run together. Nothing is wired, because there
+    // is no order among them for an edge to state.
+    let graph = voice_graph("test")
+        .source("test")
+        .stt("fake-stt")
+        .core("fake-llm")
+        .tool("search")
+        .tool("clock")
+        .tts("fake-tts")
+        .build();
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -446,15 +717,24 @@ async fn tool_fan_out_is_executable() {
         .with_tts(FakeTts::new());
 
     Runner::prepare(&graph, &providers, EventBus::default())
-        .expect("tool fan-out is executable");
+        .expect("tools bound to a core are executable");
 }
 
 #[tokio::test]
 async fn rejects_stages_it_cannot_execute() {
-    let graph = linear_graph()
-        .with_node(Node::new("memory", NodeKind::Memory, "builtin"))
-        .with_edge(Edge::new("llm", "memory"))
-        .with_edge(Edge::new("memory", "tts"));
+    // The graph model is deliberately wider than this runtime. A stage it
+    // cannot run is refused at prepare time rather than skipped, so nobody
+    // discovers the omission by speaking to a pipeline that ignores it.
+    let graph = PipelineGraph::new("identified")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::speaker_id("who", "builtin"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "who"))
+        .with_edge(Edge::new("who", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
 
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![]))
@@ -462,8 +742,8 @@ async fn rejects_stages_it_cannot_execute() {
         .with_tts(FakeTts::new());
 
     let error = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect_err("memory is not executable yet");
-    assert!(matches!(error, Error::Config(message) if message.contains("memory")));
+        .expect_err("speaker identification is not executable yet");
+    assert!(matches!(error, Error::Config(message) if message.contains("speaker_id")));
 }
 
 #[tokio::test]
@@ -481,7 +761,7 @@ async fn a_definition_serving_several_models_uses_the_first() {
 
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     assert_eq!(llm.requests()[0].model, "qwen3:8b");
 }
@@ -530,8 +810,8 @@ async fn a_runner_can_serve_more_than_one_turn() {
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     assert_eq!(tts.spoken(), ["Hello.", "Hello."]);
 }
@@ -550,7 +830,7 @@ async fn the_returned_conversation_id_is_the_one_events_carry() {
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
     let conversation = runner.run(audio_of(&["a"]));
     let id = conversation.id;
-    let _: Vec<_> = conversation.audio.collect().await;
+    let _: Vec<_> = conversation.speech().collect().await;
 
     let envelope = subscription.recv().await.expect("event");
     assert_eq!(envelope.conversation, Some(id));
@@ -567,10 +847,10 @@ async fn each_turn_gets_its_own_conversation() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus.clone()).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     let first = subscription.recv().await.expect("event").conversation;
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
     let mut second = None;
     while let Ok(Some(envelope)) =
         tokio::time::timeout(Duration::from_secs(5), subscription.recv()).await
@@ -596,7 +876,7 @@ async fn every_event_in_a_turn_shares_one_trace() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let mut traces = Vec::new();
     while let Ok(Some(envelope)) =
@@ -628,7 +908,7 @@ async fn every_event_of_a_turn_names_the_device_it_came_from() {
     let device = conduit_core::id::DeviceId::new();
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run_for_device(device, audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run_for_device(device, audio_of(&["a"])).speech().collect().await;
 
     let mut seen = 0;
     while let Ok(Some(envelope)) =
@@ -661,7 +941,7 @@ async fn a_turn_nobody_authenticated_carries_no_device() {
 
     let runner =
         Runner::prepare(&linear_graph(), &providers, bus).expect("graph is executable");
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 
     let envelope = subscription.recv().await.expect("event");
     assert_eq!(envelope.device, None);

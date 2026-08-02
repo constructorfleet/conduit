@@ -14,6 +14,9 @@ use futures_util::future::join_all;
 use tracing::Instrument;
 
 use crate::emit::Emitter;
+use conduit_core::graph::ConfirmPolicy;
+
+use crate::confirm::Confirmations;
 use crate::plan::Plan;
 
 /// A tool invocation the model asked for.
@@ -45,6 +48,7 @@ pub struct Outcome {
 pub async fn execute(
     plan: Arc<Plan>,
     emitter: Emitter,
+    confirmations: Confirmations,
     conversation: ConversationId,
     speaker: Option<SpeakerId>,
     requests: Vec<Request>,
@@ -52,12 +56,15 @@ pub async fn execute(
     let calls = requests.into_iter().map(|request| {
         let plan = Arc::clone(&plan);
         let emitter = emitter.clone();
+        let confirmations = confirmations.clone();
         let span = tracing::info_span!(
             "conduit.tool",
             call = %request.id,
             tool = %request.name
         );
-        async move { run_one(&plan, &emitter, conversation, speaker, request).await }
+        async move {
+            run_one(&plan, &emitter, &confirmations, conversation, speaker, request).await
+        }
             .instrument(span)
     });
     join_all(calls).await
@@ -67,6 +74,7 @@ pub async fn execute(
 async fn run_one(
     plan: &Plan,
     emitter: &Emitter,
+    confirmations: &Confirmations,
     conversation: ConversationId,
     speaker: Option<SpeakerId>,
     request: Request,
@@ -74,9 +82,9 @@ async fn run_one(
     let Request { id, name, arguments } = request;
     emitter.emit(Event::ToolRequested { call: id.clone(), name: name.clone() });
 
-    let Some(tool) = plan.tools.get(&name) else {
+    let Some(bound) = plan.core.tools.get(&name) else {
         // Models do invent tool names. Say so instead of dropping the call.
-        let known: Vec<&str> = plan.tools.keys().map(String::as_str).collect();
+        let known: Vec<&str> = plan.core.tools.keys().map(String::as_str).collect();
         let content = format!(
             "there is no tool called `{name}`; available tools: {}",
             if known.is_empty() { "none".to_owned() } else { known.join(", ") }
@@ -86,8 +94,18 @@ async fn run_one(
         return Outcome { id, content, spoken: None };
     };
 
+    let tool = &bound.tool;
     let context = ToolContext { conversation, speaker };
-    match tool.permission(&arguments, &context).await {
+    // A pipeline that asked to be consulted is consulted even when the tool
+    // itself would have allowed the call: the operator's policy is about this
+    // pipeline, and the tool cannot know about it.
+    let permission = match bound.confirm {
+        ConfirmPolicy::Always => {
+            Permission::DenyUntilConfirmed { prompt: format!("Run `{name}`?") }
+        }
+        ConfirmPolicy::Never => tool.permission(&arguments, &context).await,
+    };
+    match permission {
         Permission::Allow => {}
         Permission::Deny { reason } => {
             let content = format!("the tool `{name}` was not permitted: {reason}");
@@ -96,22 +114,41 @@ async fn run_one(
             return Outcome { id, content, spoken: None };
         }
         Permission::DenyUntilConfirmed { prompt } => {
-            // Refusal-shaped, and deliberately explicit about not having run.
-            // Something that merely mentioned a confirmation would read to a
-            // model as a granted one, and it would report the action done.
-            let content = format!(
-                "the tool `{name}` was NOT run: it requires confirmation (\"{prompt}\"), \
-                 and this deployment cannot ask for one. Tell the user the action \
-                 was not performed and that they must do it another way."
-            );
-            tracing::info!(tool = %name, "tool call refused pending confirmation");
             emitter.emit(Event::ToolConfirmationRequested {
                 call: id.clone(),
                 prompt: prompt.clone(),
             });
-            // The prompt is not spoken. Asking a question nobody can answer
-            // leaves a speaker waiting; the model explains the refusal instead.
-            return Outcome { id, content, spoken: None };
+
+            if !confirmations.answerable() {
+                // Refusal-shaped, and deliberately explicit about not having
+                // run. Something that merely mentioned a confirmation would
+                // read to a model as a granted one, and it would report the
+                // action done.
+                //
+                // The prompt is not spoken either. Asking a question nobody
+                // can answer leaves a speaker waiting; the model explains the
+                // refusal instead.
+                let content = format!(
+                    "the tool `{name}` was NOT run: it requires confirmation \
+                     (\"{prompt}\"), and this deployment cannot ask for one. Tell the \
+                     user the action was not performed and that they must do it \
+                     another way."
+                );
+                tracing::info!(tool = %name, "tool call refused pending confirmation");
+                return Outcome { id, content, spoken: None };
+            }
+
+            tracing::info!(tool = %name, "waiting for confirmation");
+            if !confirmations.wait(&id).await {
+                let content = format!(
+                    "the tool `{name}` was NOT run: the user refused it. Tell them the \
+                     action was not performed."
+                );
+                tracing::info!(tool = %name, "tool call refused by the user");
+                emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
+                return Outcome { id, content, spoken: None };
+            }
+            tracing::info!(tool = %name, "tool call confirmed");
         }
     }
 

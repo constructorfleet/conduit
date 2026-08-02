@@ -17,21 +17,17 @@ use std::time::Duration;
 
 use conduit_core::bus::{EventBus, Subscription};
 use conduit_core::event::{CancelReason, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::PipelineGraph;
+use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Runner, DEFAULT_IDLE_TIMEOUT};
 use fakes::{audio_of, FakeLlm, FakeStt, FakeTts, HangingTts, SilentLlm, SilentStt};
 use futures_util::StreamExt;
 
-/// stt -> llm -> tts, the shape the runtime can execute.
+/// stt -> core -> tts, the shape the runtime can execute.
 fn linear_graph() -> PipelineGraph {
-    PipelineGraph::new("deadline")
-        .with_node(Node::new("stt", NodeKind::Stt, "fake-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "fake-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "fake-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+    voice_graph("deadline").stt("fake-stt").core("fake-llm").tts("fake-tts").build()
 }
 
 /// A deadline short enough that a stalled turn ends within a test's patience.
@@ -78,7 +74,7 @@ async fn a_recognizer_that_never_answers_ends_the_turn() {
 
     let spoken: Vec<_> = tokio::time::timeout(
         Duration::from_secs(5),
-        runner.run(audio_of(&["a"])).audio.collect(),
+        runner.run(audio_of(&["a"])).speech().collect(),
     )
     .await
     .expect("the turn ends rather than hanging");
@@ -110,7 +106,7 @@ async fn a_model_that_never_answers_ends_the_turn() {
 
     let _: Vec<_> = tokio::time::timeout(
         Duration::from_secs(5),
-        runner.run(audio_of(&["a"])).audio.collect(),
+        runner.run(audio_of(&["a"])).speech().collect(),
     )
     .await
     .expect("the turn ends rather than hanging");
@@ -135,7 +131,7 @@ async fn a_synthesizer_that_never_answers_ends_the_turn() {
 
     let _: Vec<_> = tokio::time::timeout(
         Duration::from_secs(5),
-        runner.run(audio_of(&["a"])).audio.collect(),
+        runner.run(audio_of(&["a"])).speech().collect(),
     )
     .await
     .expect("the turn ends rather than hanging");
@@ -158,7 +154,7 @@ async fn the_timeout_names_the_stage_that_went_quiet() {
 
     let spoken: Vec<_> = tokio::time::timeout(
         Duration::from_secs(5),
-        runner.run(audio_of(&["a"])).audio.collect(),
+        runner.run(audio_of(&["a"])).speech().collect(),
     )
     .await
     .expect("the turn ends");
@@ -196,7 +192,7 @@ async fn a_turn_that_keeps_talking_is_never_abandoned() {
     let started = std::time::Instant::now();
     let spoken: Vec<_> = tokio::time::timeout(
         Duration::from_secs(10),
-        runner.run(audio_of(&["a"])).audio.collect(),
+        runner.run(audio_of(&["a"])).speech().collect(),
     )
     .await
     .expect("the turn finishes");
@@ -243,8 +239,10 @@ async fn the_deadline_can_be_removed() {
         .with_idle_timeout(None);
 
     let mut conversation = runner.run(audio_of(&["a"]));
+    // Read as the raw reply stream rather than through `speech`, which
+    // consumes the conversation this test still needs to abort.
     let waited =
-        tokio::time::timeout(Duration::from_millis(200), conversation.audio.next()).await;
+        tokio::time::timeout(Duration::from_millis(200), conversation.output.next()).await;
 
     assert!(waited.is_err(), "with no deadline, a stalled turn keeps waiting");
     conversation.abort();
@@ -290,7 +288,7 @@ async fn a_caller_can_wait_for_a_turn_to_finish() {
     let mut conversation = runner.run(audio_of(&["a"]));
     // Drained first: the output channel is bounded, so a turn nobody reads from
     // is a turn that has not finished.
-    while conversation.audio.next().await.is_some() {}
+    while conversation.output.next().await.is_some() {}
 
     tokio::time::timeout(Duration::from_secs(5), conversation.finished())
         .await
@@ -338,5 +336,5 @@ async fn a_turn_is_bounded_without_anyone_configuring_one() {
     let runner = Runner::prepare(&linear_graph(), &providers, EventBus::default())
         .expect("graph is executable");
 
-    let _: Vec<_> = runner.run(audio_of(&["a"])).audio.collect().await;
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
 }

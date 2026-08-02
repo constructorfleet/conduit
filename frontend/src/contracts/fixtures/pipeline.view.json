@@ -3,29 +3,37 @@
     "name": "kitchen",
     "nodes": [
       {
-        "id": "mic",
         "kind": "source",
-        "provider": "websocket"
+        "id": "mic",
+        "provider": "websocket",
+        "modality": "audio"
       },
       {
-        "id": "stt",
         "kind": "stt",
+        "id": "stt",
         "provider": "whisper"
       },
       {
+        "kind": "core",
         "id": "llm",
-        "kind": "llm",
-        "provider": "openai"
+        "core": {
+          "model": {
+            "provider": "openai",
+            "model": "gpt-4o-mini"
+          },
+          "max_rounds": 4
+        }
       },
       {
-        "id": "tts",
         "kind": "tts",
+        "id": "tts",
         "provider": "piper-local"
       },
       {
-        "id": "speaker",
         "kind": "sink",
-        "provider": "websocket"
+        "id": "speaker",
+        "provider": "websocket",
+        "modality": "audio"
       }
     ],
     "edges": [

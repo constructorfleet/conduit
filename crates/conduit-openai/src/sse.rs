@@ -29,8 +29,8 @@ impl Decoder {
         self.buffer.extend_from_slice(packet);
 
         let mut payloads = Vec::new();
-        while let Some(end) = find(&self.buffer, b"\n\n") {
-            let event: Vec<u8> = self.buffer.drain(..end + 2).collect();
+        while let Some((end, width)) = terminator(&self.buffer) {
+            let event: Vec<u8> = self.buffer.drain(..end + width).collect();
             let event = String::from_utf8_lossy(&event);
             if let Some(data) = payload(&event) {
                 payloads.push(data);
@@ -38,6 +38,28 @@ impl Decoder {
         }
         payloads
     }
+}
+
+/// Where the first event ends, and how many bytes its terminator takes.
+///
+/// An event ends at a blank line, and the spec allows CRLF, LF, or CR line
+/// endings. Looking only for `\n\n` finds nothing in a CRLF stream, which is
+/// not a parse error anyone sees: the buffer grows until the stream ends and
+/// the response appears never to have arrived.
+///
+/// The earliest terminator wins, and CRLF is preferred where they start at the
+/// same byte so its trailing `\n` is not left to open the next event.
+fn terminator(buffer: &[u8]) -> Option<(usize, usize)> {
+    let mut found: Option<(usize, usize)> = None;
+    for (needle, width) in [(&b"\r\n\r\n"[..], 4), (&b"\n\n"[..], 2), (&b"\r\r"[..], 2)] {
+        if let Some(at) = find(buffer, needle) {
+            found = match found {
+                Some((best, _)) if best <= at => found,
+                _ => Some((at, width)),
+            };
+        }
+    }
+    found
 }
 
 /// Offset of `needle` in `haystack`.
@@ -69,6 +91,15 @@ fn payload(event: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_separated_by_crlf_are_decoded() {
+        // A provider using CRLF produced no payloads at all: the terminator
+        // was never found, so the stream read as one that answered nothing.
+        let mut decoder = Decoder::new();
+
+        assert_eq!(decoder.push(b"data: {\"a\":1}\r\n\r\n"), ["{\"a\":1}"]);
+    }
 
     #[test]
     fn a_whole_event_yields_its_payload() {

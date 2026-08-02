@@ -11,23 +11,52 @@ use std::time::Duration;
 
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
-use conduit_core::event::{CancelReason, Event, FinishReason, SpokenSegmentRole, Stage};
+use conduit_core::event::{CancelReason, Event, FinishReason, Stage, UtteranceSegmentRole};
+use conduit_core::graph::Modality;
 use conduit_core::id::{ConversationId, SpeakerId, TurnId};
+use conduit_core::memory::Scope;
 use conduit_core::resample::Resampler;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
+use conduit_provider::memory::{Query, Record};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest};
 use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 
+use crate::confirm::Confirmations;
 use crate::deadline::{until_idle, Progress};
 use crate::emit::Emitter;
 use crate::plan::Plan;
 use crate::sentences;
 use crate::stop::{until_stopped, Stop};
 use crate::tools;
+
+/// What a turn was given to reason about.
+///
+/// A voice pipeline hands over audio and a text pipeline hands over words that
+/// were already words. The distinction stops at the model: everything after
+/// `converse` is the same either way, which is what lets one runtime serve
+/// both.
+pub enum TurnInput {
+    /// Captured audio, to be transcribed by the pipeline's recognizer.
+    Audio(ChunkStream<AudioChunk>),
+    /// Words a client typed, needing no recognizer.
+    Text(String),
+}
+
+/// One piece of a reply, rendered the way its pipeline renders replies.
+///
+/// Speech and text are the two renderings of an utterance. A caller reads
+/// whichever its pipeline produces; nothing upstream of here had to know which
+/// that would be.
+pub enum Reply {
+    /// Synthesized audio.
+    Speech(SpeechChunk),
+    /// One written segment, as the model said it.
+    Text(String),
+}
 
 /// What one call to the model produced.
 struct Round {
@@ -44,7 +73,7 @@ pub struct Turn {
     plan: Arc<Plan>,
     emitter: Emitter,
     format: AudioFormat,
-    output: Sender<Result<SpeechChunk>>,
+    output: Sender<Result<Reply>>,
     /// Who is speaking, when anything has identified them.
     ///
     /// Always `None` in production today: no speaker identification provider
@@ -56,6 +85,8 @@ pub struct Turn {
     speaker: Option<SpeakerId>,
     /// How a client asks this turn to stop talking.
     stop: Stop,
+    /// How a client answers this turn's confirmation requests.
+    confirmations: Confirmations,
     /// How long this turn may publish nothing before it is abandoned, and the
     /// marker every publication reports through. `None` removes the bound.
     idle: Option<Duration>,
@@ -88,8 +119,9 @@ impl Turn {
         plan: Arc<Plan>,
         bus: EventBus,
         format: AudioFormat,
-        output: Sender<Result<SpeechChunk>>,
+        output: Sender<Result<Reply>>,
         stop: Stop,
+        confirmations: Confirmations,
         idle: Option<Duration>,
     ) -> Self {
         let progress = Progress::default();
@@ -101,6 +133,7 @@ impl Turn {
             output,
             speaker: None,
             stop,
+            confirmations,
             idle,
             progress,
             turn: TurnId::new(),
@@ -143,7 +176,7 @@ impl Turn {
     /// Never returns an error: failures are published as events and forwarded
     /// to the caller as stream items, because by this point there is no one
     /// left to return an error to.
-    pub async fn run(mut self, audio: ChunkStream<AudioChunk>) {
+    pub async fn run(mut self, input: TurnInput) {
         self.emitter.emit(Event::ConversationStarted);
         // After the conversation, before anything a turn does: a subscriber
         // reading in order sees the conversation open, then the turn it is
@@ -162,7 +195,7 @@ impl Turn {
         let stop = self.stop.clone();
         let (idle, progress) = (self.idle, self.progress.clone());
         let finished =
-            until_stopped(&stop, until_idle(&progress, idle, self.body(audio))).await;
+            until_stopped(&stop, until_idle(&progress, idle, self.body(input))).await;
 
         match finished {
             Some(Ok(Some(()))) => {
@@ -207,8 +240,22 @@ impl Turn {
     /// The turn itself, minus the stop race and the ending events.
     ///
     /// Returns `None` if it published its own cancellation on the way out.
-    async fn body(&mut self, audio: ChunkStream<AudioChunk>) -> Option<()> {
-        let transcript = self.listen(audio).await?;
+    async fn body(&mut self, input: TurnInput) -> Option<()> {
+        let transcript = match input {
+            TurnInput::Audio(audio) => self.listen(audio).await?,
+            // Nothing was heard, so nothing is transcribed. `SpeechFinal` is
+            // still published: it is what opens a turn for anyone
+            // reconstructing it, and a reader should not have to know which
+            // modality a pipeline used to find what was asked.
+            TurnInput::Text(text) => {
+                self.emitter.emit(Event::SpeechFinal {
+                    text: text.clone(),
+                    confidence: None,
+                    language: None,
+                });
+                text
+            }
+        };
         self.converse(transcript).await
     }
 
@@ -219,10 +266,30 @@ impl Turn {
         // a socket, a file, or a test all reach the recognizer through here.
         let audio = self.emitter.observe_capture(audio);
 
+        // A caller that hands audio to a pipeline with no recognizer has
+        // mismatched the two. Failing here reports which pipeline and stays on
+        // the same path as any other stage failure, rather than panicking in a
+        // spawned task where nothing would see it.
+        let Some(recognizer) =
+            self.plan.stt.as_ref().map(|stt| (Arc::clone(&stt.provider), stt.node.clone()))
+        else {
+            let pipeline = self.plan.pipeline.clone();
+            return self
+                .fail(
+                    &pipeline.clone(),
+                    Error::Config(format!(
+                        "pipeline `{pipeline}` is fed by text and has no recognizer, but \
+                         this turn was given audio"
+                    )),
+                )
+                .await;
+        };
+        let (provider, node) = recognizer;
+
         let options = TranscribeOptions { format: self.format, ..TranscribeOptions::default() };
-        let mut transcripts = match self.plan.stt.transcribe(audio, options).await {
+        let mut transcripts = match provider.transcribe(audio, options).await {
             Ok(transcripts) => transcripts,
-            Err(error) => return self.fail(&self.plan.stt_node.clone(), error).await,
+            Err(error) => return self.fail(&node.clone(), error).await,
         };
 
         let mut final_text = String::new();
@@ -239,7 +306,7 @@ impl Turn {
                 Ok(transcript) => {
                     self.emitter.emit(Event::SpeechPartial { text: transcript.text });
                 }
-                Err(error) => return self.fail(&self.plan.stt_node.clone(), error).await,
+                Err(error) => return self.fail(&node.clone(), error).await,
             }
         }
 
@@ -253,22 +320,28 @@ impl Turn {
     /// look that up" is heard while the lookup happens rather than after it.
     async fn converse(&mut self, transcript: String) -> Option<()> {
         let mut messages = Vec::new();
-        if let Some(system) = &self.plan.system {
+        if let Some(system) = &self.plan.core.system {
             messages.push(Message::system(system.clone()));
         }
-        messages.push(Message::user(transcript));
+        // Retrieved before the first call and not again: what the model is
+        // reminded of should not change under it between rounds of one turn.
+        if let Some(recalled) = self.recall(&transcript).await {
+            messages.push(Message::system(recalled));
+        }
+        messages.push(Message::user(transcript.clone()));
 
-        for round_number in 0..self.plan.max_tool_rounds {
+        for round_number in 0..self.plan.core.max_rounds {
             let round = self.ask(&messages).await?;
 
             if round.requests.is_empty() {
                 // Nothing left to do but finish saying it.
                 let remainder = round.pending.trim().to_owned();
                 if !remainder.is_empty()
-                    && !self.speak(remainder, SpokenSegmentRole::AssistantResponse).await
+                    && !self.speak(remainder, UtteranceSegmentRole::AssistantResponse).await
                 {
                     return None;
                 }
+                self.remember(&transcript, &round.text).await;
                 return Some(());
             }
 
@@ -282,12 +355,12 @@ impl Turn {
 
         // A model that never stops asking for tools would otherwise loop while
         // someone waits for an answer.
-        tracing::warn!(rounds = self.plan.max_tool_rounds, "tool round limit reached");
+        tracing::warn!(rounds = self.plan.core.max_rounds, "tool round limit reached");
         self.emitter.emit(Event::StageFailed {
-            node: self.plan.llm_node.clone(),
+            node: self.plan.core.node.clone(),
             error: format!(
                 "stopped after {} tool rounds without a final answer",
-                self.plan.max_tool_rounds
+                self.plan.core.max_rounds
             ),
             recovered: true,
         });
@@ -315,6 +388,7 @@ impl Turn {
         let running = tools::execute(
             Arc::clone(&self.plan),
             self.emitter.clone(),
+            self.confirmations.clone(),
             self.emitter.conversation(),
             self.speaker,
             round.requests.clone(),
@@ -324,7 +398,7 @@ impl Turn {
             if preamble.is_empty() {
                 true
             } else {
-                self.speak(preamble, SpokenSegmentRole::AssistantPreamble).await
+                self.speak(preamble, UtteranceSegmentRole::AssistantPreamble).await
             }
         };
 
@@ -334,7 +408,7 @@ impl Turn {
         }
 
         for spoken in outcomes.iter().filter_map(|outcome| outcome.spoken.as_ref()) {
-            if !self.speak(spoken.trim().to_owned(), SpokenSegmentRole::ToolOutput).await {
+            if !self.speak(spoken.trim().to_owned(), UtteranceSegmentRole::ToolOutput).await {
                 return None;
             }
         }
@@ -350,14 +424,14 @@ impl Turn {
     /// Streams one model response, speaking sentences as they complete.
     async fn ask(&mut self, messages: &[Message]) -> Option<Round> {
         let request = CompletionRequest {
-            tools: self.plan.tool_specs(),
-            ..CompletionRequest::new(self.plan.model.clone(), messages.to_vec())
+            tools: self.plan.core.tool_specs(),
+            ..CompletionRequest::new(self.plan.core.model.clone(), messages.to_vec())
         };
-        self.emitter.emit(Event::LlmRequestStarted { model: self.plan.model.clone() });
+        self.emitter.emit(Event::LlmRequestStarted { model: self.plan.core.model.clone() });
 
-        let mut completions = match self.plan.llm.complete(request).await {
+        let mut completions = match self.plan.core.llm.complete(request).await {
             Ok(completions) => completions,
-            Err(error) => return self.fail(&self.plan.llm_node.clone(), error).await,
+            Err(error) => return self.fail(&self.plan.core.node.clone(), error).await,
         };
 
         let mut round =
@@ -370,7 +444,8 @@ impl Turn {
                     round.text.push_str(&delta);
                     round.pending.push_str(&delta);
                     for sentence in sentences::take_complete(&mut round.pending) {
-                        if !self.speak(sentence, SpokenSegmentRole::AssistantResponse).await {
+                        if !self.speak(sentence, UtteranceSegmentRole::AssistantResponse).await
+                        {
                             return None;
                         }
                     }
@@ -396,40 +471,136 @@ impl Turn {
                 Ok(unknown) => {
                     tracing::debug!(?unknown, "ignoring unrecognized completion item");
                 }
-                Err(error) => return self.fail(&self.plan.llm_node.clone(), error).await,
+                Err(error) => return self.fail(&self.plan.core.node.clone(), error).await,
             }
         }
 
         Some(round)
     }
 
-    /// Synthesizes one sentence and forwards its audio.
+    /// What this core's memory has to say about the question, if anything.
+    ///
+    /// Returns `None` when nothing is bound for reading or nothing matched, so
+    /// a turn with no memory builds exactly the messages it built before.
+    ///
+    /// A store that fails is reported and stepped over rather than ending the
+    /// turn: answering without what was remembered is worse than answering
+    /// well, and much better than not answering.
+    async fn recall(&mut self, question: &str) -> Option<String> {
+        let mut recalled = Vec::new();
+        for store in &self.plan.core.memory {
+            if !store.mode.reads() {
+                continue;
+            }
+            let query = Query {
+                text: question.to_owned(),
+                limit: store.limit,
+                scope: store.scope,
+                conversation: Some(self.emitter.conversation()),
+                speaker: self.speaker,
+            };
+            match store.provider.search(query).await {
+                Ok(matches) => {
+                    recalled.extend(matches.into_iter().map(|found| found.record.content));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %store.provider.name(),
+                        %error,
+                        "memory retrieval failed; answering without it"
+                    );
+                }
+            }
+        }
+
+        (!recalled.is_empty()).then(|| format!("You remember:\n{}", recalled.join("\n")))
+    }
+
+    /// Stores what was asked and what was answered.
+    ///
+    /// After the reply rather than before it, so a turn that is interrupted or
+    /// times out does not leave a memory of an exchange that never finished.
+    async fn remember(&mut self, question: &str, answer: &str) {
+        let content = format!("Asked: {question}\nAnswered: {answer}");
+        for store in &self.plan.core.memory {
+            if !store.mode.writes() {
+                continue;
+            }
+            let record = Record {
+                content: content.clone(),
+                scope: store.scope.unwrap_or(Scope::Conversation),
+                conversation: Some(self.emitter.conversation()),
+                speaker: self.speaker,
+                metadata: serde_json::Value::Null,
+            };
+            if let Err(error) = store.provider.store(record).await {
+                tracing::warn!(
+                    provider = %store.provider.name(),
+                    %error,
+                    "memory write failed; the turn stands"
+                );
+            }
+        }
+    }
+
+    /// Renders one sentence and forwards it, as speech or as text.
     ///
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
-    async fn speak(&mut self, sentence: String, role: SpokenSegmentRole) -> bool {
+    async fn speak(&mut self, sentence: String, role: UtteranceSegmentRole) -> bool {
+        // A graph may ask for both renderings. The segment is one fact
+        // whichever way it is delivered, so it is announced once, named by
+        // the rendering the pipeline leads with.
+        if self.plan.writes_text {
+            if self.plan.tts.is_none() {
+                self.spoken_segments = self.spoken_segments.saturating_add(1);
+                self.emitter.emit(Event::UtteranceSegmentStarted {
+                    segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
+                    role,
+                    modality: Modality::Text,
+                    text: sentence.clone(),
+                });
+            }
+            if self.output.send(Ok(Reply::Text(sentence.clone()))).await.is_err() {
+                return false;
+            }
+        }
+
+        let Some(synthesizer) = self.plan.tts.as_ref() else {
+            // Nothing synthesizes, so the written segment above was the whole
+            // delivery. A pipeline with neither is refused at resolution.
+            return true;
+        };
+        let (provider, node, voice) = (
+            Arc::clone(&synthesizer.provider),
+            synthesizer.node.clone(),
+            synthesizer.voice.clone(),
+        );
+
         if !self.speaking {
-            let voice = self.plan.voice.clone().unwrap_or_else(|| "default".to_owned());
-            self.emitter.emit(Event::TtsStarted { voice });
+            self.emitter.emit(Event::TtsStarted {
+                voice: voice.clone().unwrap_or_else(|| "default".to_owned()),
+            });
             self.speaking = true;
         }
         self.spoken_segments = self.spoken_segments.saturating_add(1);
-        self.emitter.emit(Event::SpokenSegmentStarted {
-            segment: format!("{}-spoken-{}", self.turn, self.spoken_segments),
+        self.emitter.emit(Event::UtteranceSegmentStarted {
+            segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
             role,
+            modality: Modality::Audio,
             text: sentence.clone(),
         });
 
         let request = SynthesisRequest {
-            voice: self.plan.voice.clone(),
+            voice: voice.clone(),
             format: self.format,
             ..SynthesisRequest::new(sentence)
         };
 
-        let mut chunks = match self.plan.tts.synthesize(request).await {
+        let mut chunks = match provider.synthesize(request).await {
             Ok(chunks) => chunks,
             Err(error) => {
-                self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                self.fail::<()>(&node.clone(), error).await;
                 return false;
             }
         };
@@ -444,7 +615,7 @@ impl Turn {
             let mut chunk = match item {
                 Ok(chunk) => chunk,
                 Err(error) => {
-                    self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                    self.fail::<()>(&node.clone(), error).await;
                     return false;
                 }
             };
@@ -455,7 +626,7 @@ impl Turn {
                     None => match Resampler::new(chunk.format, self.format) {
                         Ok(converter) => {
                             tracing::info!(
-                                node = %self.plan.tts_node,
+                                node = %node,
                                 from = chunk.format.sample_rate,
                                 to = self.format.sample_rate,
                                 "resampling synthesized audio to the requested format"
@@ -463,7 +634,7 @@ impl Turn {
                             resampler.insert(converter)
                         }
                         Err(error) => {
-                            self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                            self.fail::<()>(&node.clone(), error).await;
                             return false;
                         }
                     },
@@ -478,7 +649,7 @@ impl Turn {
                         chunk.format = self.format;
                     }
                     Err(error) => {
-                        self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                        self.fail::<()>(&node.clone(), error).await;
                         return false;
                     }
                 }
@@ -492,7 +663,7 @@ impl Turn {
                 bytes: chunk.data.len(),
             });
 
-            if self.output.send(Ok(chunk)).await.is_err() {
+            if self.output.send(Ok(Reply::Speech(chunk))).await.is_err() {
                 // The listener left. Whether they meant to is unknowable from
                 // here, so this is not reported as an interruption.
                 tracing::debug!("output closed; abandoning turn");
@@ -507,7 +678,7 @@ impl Turn {
             let tail = match converter.flush() {
                 Ok(tail) => tail,
                 Err(error) => {
-                    self.fail::<()>(&self.plan.tts_node.clone(), error).await;
+                    self.fail::<()>(&node.clone(), error).await;
                     return false;
                 }
             };
@@ -523,7 +694,7 @@ impl Turn {
                     sequence: chunk.sequence,
                     bytes: chunk.data.len(),
                 });
-                if self.output.send(Ok(chunk)).await.is_err() {
+                if self.output.send(Ok(Reply::Speech(chunk))).await.is_err() {
                     tracing::debug!("output closed; abandoning turn");
                     self.cancel(CancelReason::Disconnected);
                     return false;

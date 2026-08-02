@@ -10,7 +10,7 @@ use conduit_api::status::StatusCollector;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_core::event::{CancelReason, Envelope, Event, FinishReason};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
 use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
@@ -201,21 +201,21 @@ impl TextToSpeech for StatusTts {
 
 fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
+        .with_node(Node::stt("stt", "echo-stt"))
+        .with_node(Node::core("core", "echo-llm"))
+        .with_node(Node::tts("tts", "echo-tts"))
         .with_edge(Edge::new("mic", "stt"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 fn provider_status_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "configured-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "configured-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "configured-tts"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
+        .with_node(Node::stt("stt", "configured-stt"))
+        .with_node(Node::core("llm", "configured-llm"))
+        .with_node(Node::tts("tts", "configured-tts"))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -403,9 +403,9 @@ async fn status_reports_unavailable_provider_slots_without_a_runtime_registry() 
 #[tokio::test]
 async fn concrete_missing_provider_references_replace_generic_unavailable_slots() {
     let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "qwen3:8b"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
+        .with_node(Node::stt("stt", "whisper"))
+        .with_node(Node::core("llm", "qwen3:8b"))
+        .with_node(Node::tts("tts", "piper"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"));
     let state = guarded();

@@ -307,6 +307,7 @@ impl LanguageModel for FakeLlm {
 #[derive(Clone)]
 pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
+    voices: Arc<Mutex<Vec<Option<String>>>>,
     spoke: Arc<Notify>,
     encodings: Vec<Encoding>,
     /// Rate this synthesizer speaks at, when it is not the requested one.
@@ -317,6 +318,7 @@ impl FakeTts {
     pub fn new() -> Self {
         Self {
             spoken: Arc::new(Mutex::new(Vec::new())),
+            voices: Arc::new(Mutex::new(Vec::new())),
             spoke: Arc::new(Notify::new()),
             encodings: Vec::new(),
             native_rate: None,
@@ -338,6 +340,11 @@ impl FakeTts {
     /// The text of every synthesis request, in order.
     pub fn spoken(&self) -> Vec<String> {
         self.spoken.lock().expect("lock").clone()
+    }
+
+    /// The voice asked for on every synthesis request, in order.
+    pub fn voices_requested(&self) -> Vec<Option<String>> {
+        self.voices.lock().expect("lock").clone()
     }
 
     /// Notified the first time anything is synthesized.
@@ -575,5 +582,85 @@ impl Tool for FakeTool {
                 Ok(ToolOutput::new(value.clone()))
             }
         }
+    }
+}
+
+/// A memory store that keeps everything in a vector.
+///
+/// Records what it was asked to store and what it was searched for, so a test
+/// can assert that a turn read before answering and wrote after.
+#[derive(Clone, Default)]
+pub struct FakeMemory {
+    stored: Arc<Mutex<Vec<conduit_provider::memory::Record>>>,
+    searched: Arc<Mutex<Vec<conduit_provider::memory::Query>>>,
+    /// Returned from every search, whatever was asked.
+    recalls: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeMemory {
+    /// A store that remembers nothing yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A store that answers every search with `content`.
+    pub fn recalling(content: &str) -> Self {
+        let memory = Self::new();
+        memory.recalls.lock().expect("lock").push(content.to_owned());
+        memory
+    }
+
+    /// Everything stored, in order.
+    pub fn stored(&self) -> Vec<conduit_provider::memory::Record> {
+        self.stored.lock().expect("lock").clone()
+    }
+
+    /// Every search, in order.
+    pub fn searched(&self) -> Vec<conduit_provider::memory::Query> {
+        self.searched.lock().expect("lock").clone()
+    }
+}
+
+impl Provider for FakeMemory {
+    fn name(&self) -> &str {
+        "fake-memory"
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::memory::Memory for FakeMemory {
+    async fn store(&self, record: conduit_provider::memory::Record) -> Result<()> {
+        self.stored.lock().expect("lock").push(record);
+        Ok(())
+    }
+
+    async fn search(
+        &self,
+        query: conduit_provider::memory::Query,
+    ) -> Result<Vec<conduit_provider::memory::Match>> {
+        self.searched.lock().expect("lock").push(query);
+        Ok(self
+            .recalls
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|content| conduit_provider::memory::Match {
+                record: conduit_provider::memory::Record {
+                    content: content.clone(),
+                    scope: conduit_core::memory::Scope::Conversation,
+                    conversation: None,
+                    speaker: None,
+                    metadata: serde_json::Value::Null,
+                },
+                score: 1.0,
+            })
+            .collect())
+    }
+
+    async fn forget_conversation(
+        &self,
+        _conversation: conduit_core::id::ConversationId,
+    ) -> Result<()> {
+        Ok(())
     }
 }

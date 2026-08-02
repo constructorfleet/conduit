@@ -10,18 +10,54 @@ export type NodeKind =
   | "wake_word"
   | "stt"
   | "speaker_id"
-  | "router"
-  | "llm"
-  | "tool"
-  | "memory"
+  | "core"
   | "tts"
   | "sink";
 
-export interface PipelineNode {
+export type MemoryMode = "read" | "write" | "read_write";
+export type MemoryScope = "conversation" | "speaker" | "global";
+export type Modality = "audio" | "text" | "utterance";
+
+export interface PipelineNodeBase {
   id: IdString;
-  kind: NodeKind;
   provider: string;
 }
+
+export type ConfirmPolicy = "never" | "always";
+
+export interface ModelBinding {
+  provider: string;
+  model?: string;
+}
+
+export interface ToolBinding {
+  provider: string;
+  confirm: ConfirmPolicy;
+}
+
+export interface MemoryBinding {
+  provider: string;
+  mode: MemoryMode;
+  scope?: MemoryScope;
+  limit: number;
+}
+
+export interface ReasoningCore {
+  model: ModelBinding;
+  system?: string;
+  tools?: ToolBinding[];
+  memory?: MemoryBinding[];
+  max_rounds: number;
+}
+
+export type PipelineNode =
+  | (PipelineNodeBase & { kind: "source"; modality?: Modality })
+  | (PipelineNodeBase & { kind: "wake_word" })
+  | (PipelineNodeBase & { kind: "stt" })
+  | (PipelineNodeBase & { kind: "speaker_id" })
+  | (PipelineNodeBase & { kind: "tts"; voice?: string })
+  | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
+  | { kind: "core"; id: IdString; core: ReasoningCore };
 
 export interface PipelineEdge {
   from: IdString;
@@ -58,6 +94,7 @@ export interface PipelineTestResult {
   conversation: IdString;
   status: "completed";
   audio_bytes: number;
+  reply_text?: string;
   reply_audio?: string;
 }
 
@@ -78,7 +115,7 @@ export interface ComponentConfigSchema {
 export interface ProviderComponentDescriptor {
   id: string;
   label: string;
-  kind: NodeKind;
+  kind: ProviderCapability;
   definition_variant: ProviderDefinitionVariantType;
   schema: ComponentConfigSchema;
 }
@@ -160,7 +197,7 @@ export interface ProviderDefinitionView {
 }
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
   | "requested"
   | "running"
@@ -195,13 +232,14 @@ export interface TurnSnapshot {
   items: ReconstructionItem[];
 }
 
-export type ReconstructionItem = SpokenSegmentItem | ToolBatchItem;
+export type ReconstructionItem = UtteranceSegmentItem | ToolBatchItem;
 
-export interface SpokenSegmentItem {
-  kind: "spoken_segment";
+export interface UtteranceSegmentItem {
+  kind: "utterance_segment";
   id: string;
   sequence: number;
-  role: SpokenSegmentRole;
+  role: UtteranceSegmentRole;
+  modality: Modality;
   text: string;
   started_at: DateTimeString;
   evidence: IdString[];
@@ -436,29 +474,37 @@ export const pipelineViewFixture = {
     "name": "kitchen",
     "nodes": [
       {
-        "id": "mic",
         "kind": "source",
-        "provider": "websocket"
+        "id": "mic",
+        "provider": "websocket",
+        "modality": "audio"
       },
       {
-        "id": "stt",
         "kind": "stt",
+        "id": "stt",
         "provider": "whisper"
       },
       {
+        "kind": "core",
         "id": "llm",
-        "kind": "llm",
-        "provider": "openai"
+        "core": {
+          "model": {
+            "provider": "openai",
+            "model": "gpt-4o-mini"
+          },
+          "max_rounds": 4
+        }
       },
       {
-        "id": "tts",
         "kind": "tts",
+        "id": "tts",
         "provider": "piper-local"
       },
       {
-        "id": "speaker",
         "kind": "sink",
-        "provider": "websocket"
+        "id": "speaker",
+        "provider": "websocket",
+        "modality": "audio"
       }
     ],
     "edges": [
@@ -497,7 +543,8 @@ export const turnSnapshotFixture = {
         "00000000-0000-0000-0000-00000000012d"
       ],
       "id": "assistant-preamble-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_preamble",
       "sequence": 2,
       "started_at": "2026-08-01T01:02:00Z",
@@ -532,7 +579,8 @@ export const turnSnapshotFixture = {
         "00000000-0000-0000-0000-000000000131"
       ],
       "id": "assistant-response-1",
-      "kind": "spoken_segment",
+      "kind": "utterance_segment",
+      "modality": "audio",
       "role": "assistant_response",
       "sequence": 4,
       "started_at": "2026-08-01T01:02:01Z",

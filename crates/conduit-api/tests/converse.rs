@@ -9,7 +9,7 @@ use std::time::Duration;
 use conduit_api::{router, AppState};
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
@@ -173,11 +173,11 @@ impl TextToSpeech for SlowTts {
 /// A pipeline built on the in-memory providers: text in, text out.
 fn echo_graph() -> PipelineGraph {
     PipelineGraph::new("echo")
-        .with_node(Node::new("stt", NodeKind::Stt, "echo-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_node(Node::stt("stt", "echo-stt"))
+        .with_node(Node::core("core", "echo-llm"))
+        .with_node(Node::tts("tts", "echo-tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 fn providers() -> Providers {
@@ -196,11 +196,11 @@ fn silent_providers() -> Providers {
 
 fn recording_graph() -> PipelineGraph {
     PipelineGraph::new("recording")
-        .with_node(Node::new("stt", NodeKind::Stt, "recording-stt"))
-        .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-        .with_node(Node::new("tts", NodeKind::Tts, "recording-tts"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_node(Node::stt("stt", "recording-stt"))
+        .with_node(Node::core("core", "echo-llm"))
+        .with_node(Node::tts("tts", "recording-tts"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 /// Both listeners on ephemeral ports. Stops when the test ends.
@@ -556,11 +556,11 @@ async fn a_pipeline_the_runtime_cannot_execute_is_refused() {
         &state,
         "unrunnable",
         PipelineGraph::new("unrunnable")
-            .with_node(Node::new("stt", NodeKind::Stt, "nonexistent"))
-            .with_node(Node::new("llm", NodeKind::Llm, "echo-llm"))
-            .with_node(Node::new("tts", NodeKind::Tts, "echo-tts"))
-            .with_edge(Edge::new("stt", "llm"))
-            .with_edge(Edge::new("llm", "tts")),
+            .with_node(Node::stt("stt", "nonexistent"))
+            .with_node(Node::core("core", "echo-llm"))
+            .with_node(Node::tts("tts", "echo-tts"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("core", "tts")),
     )
     .await;
     let server = Server::start(state).await;

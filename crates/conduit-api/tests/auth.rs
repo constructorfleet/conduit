@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use conduit_api::auth::{Access, Tokens};
 use conduit_api::{ops_router, router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{Edge, Node, PipelineGraph};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -42,11 +42,11 @@ fn guarded() -> AppState {
 
 fn valid_graph() -> PipelineGraph {
     PipelineGraph::new("kitchen")
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "ollama"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper"))
-        .with_edge(Edge::new("stt", "llm"))
-        .with_edge(Edge::new("llm", "tts"))
+        .with_node(Node::stt("stt", "whisper"))
+        .with_node(Node::core("core", "ollama"))
+        .with_node(Node::tts("tts", "piper"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
 }
 
 /// Sends `request` to the service router.

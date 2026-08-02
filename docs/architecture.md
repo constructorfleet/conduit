@@ -49,15 +49,82 @@ over the event bus instead of the socket audio path.
 ## Graphs
 
 `PipelineGraph` is a serializable list of nodes and edges. Validation catches
-duplicate node ids, dangling edges, cycles, missing source or sink nodes, and
-disconnected subgraphs. The graph model can describe more than the runtime can
-execute; `Runner::prepare` refuses unsupported node kinds and topologies rather
-than accepting and ignoring them.
+duplicate node ids, dangling edges, cycles, missing source or sink nodes,
+disconnected subgraphs, and edges whose two ends disagree about what they
+carry. The graph model can describe more than the runtime can execute;
+`Runner::prepare` refuses unsupported node kinds and topologies rather than
+accepting and ignoring them.
 
-Today the runtime executes one recognizer, one language model, one synthesizer,
-and any number of tool branches downstream of the model. `router`, `wake_word`,
-`speaker_id`, and `memory` nodes exist in the graph vocabulary but are not
-runnable runtime stages yet.
+Edges are typed by modality — `audio`, `text`, or `utterance`. A `source` and a
+`sink` declare theirs, because nothing about a websocket says whether it carries
+microphone samples or typed words; every other kind derives one from what it
+does. Recognition reads audio and writes text, a model reads text and produces
+an utterance, synthesis speaks an utterance or plain text, and a text sink
+writes an utterance down. An utterance is what a model said before anything
+decided how to render it, which is what keeps a model unaware of whether it will
+be heard or read. A graph wired `tts -> llm -> stt` therefore fails validation
+naming the offending edge, rather than failing a stage-order assertion in the
+runtime.
+
+`tool`, `memory`, and `router` nodes are not modality transforms — they are the
+visible half of a call-and-return arc — so edges touching them are not checked.
+[ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) removes those
+kinds rather than inventing modalities for them.
+
+Modality compatibility is a property of a single edge, so it does not say
+anything about paths. A graph wiring `stt -> llm` beside `stt -> tts` has two
+compatible edges and still drops the model's answer on the floor, which is why
+`Plan::resolve` still asks whether each stage is reachable from the one before
+it. Core reachability replaces that check once a graph has exactly one core to
+state the rule about.
+
+A node is a typed variant rather than a generic record, tagged by `kind`, and
+carries the configuration belonging to that kind: an `llm` node names its
+model, system prompt, and round cap; a `tts` node its voice; a `memory` node its
+mode, scope, and limit. A node still selects a provider definition by stable id
+only. Settings that belong to one pipeline live on the node, so two pipelines
+may share a provider definition and request different models from it; settings
+that belong to the provider live in its definition. An absent `model` means
+whichever model the provider serves first, so a node that expresses no
+preference behaves as it did before nodes could express one.
+
+[ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) replaces this flat
+model with a transport pipeline plus a reasoning core;
+[docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks
+that work.
+
+A `core` node is that replacement, and it currently stands beside the kinds it
+replaces rather than instead of them. It holds a model binding together with
+its tool and memory bindings, so what the model may reach for is configuration
+on one node instead of edges describing half of a call-and-return arc. A core
+occupies the same place in the transport pipeline as an `llm`: it reads text and
+produces an utterance. A tool binding also says whether this pipeline wants to
+be asked before that tool runs, which is not visible in the tool's own schema.
+
+A graph reasons in one place. Validation refuses a second reasoning node,
+counting `core` and `llm` nodes together, because a pipeline that reasons twice
+says nothing about which answer is the reply — and the refusal is about there
+being two models rather than about how the graph spells them.
+
+Today the runtime executes at most one recognizer, one language model, at most
+one synthesizer, and any number of tool branches downstream of the model.
+`router`, `wake_word`, `speaker_id`, and `memory` nodes exist in the graph
+vocabulary but are not runnable runtime stages yet.
+
+Validation requires every origin to reach the core and the core to reach every
+terminal, so a graph cannot branch past the model and deliver something the
+model never saw. A pipeline may have several sources and several sinks: one
+core can be fed from a microphone and a chat box and deliver to a speaker and
+a transcript, and the same segment is then spoken and written.
+
+Recognition and synthesis are both optional. A turn starts from audio or from
+words a client typed, and delivers a `Reply` that is either synthesized speech
+or a written segment, so `source(text) -> llm -> sink(text)` runs on a
+deployment where the only configured provider is a language model. Absence is
+what selects the modality: a graph carrying audio to a model without
+transcribing it fails modality validation long before resolution. Sentence
+segmentation is shared — what a voice pipeline speaks a piece at a time is what
+a text pipeline writes a piece at a time.
 
 ## Providers
 
@@ -107,6 +174,4 @@ pipeline definition.
 
 ## Current Limits
 
-The runtime does not yet detect wake words, identify speakers, run memory
-nodes, route through graph `router` nodes, or ask for human confirmation before
-executing a tool. These are documented as known gaps in [README.md](../README.md).
+The runtime does not yet detect wake words or identify speakers. These are documented as known gaps in [README.md](../README.md).

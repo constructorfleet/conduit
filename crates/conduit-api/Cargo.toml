@@ -43,6 +43,7 @@ postgres = ["conduit-store/postgres"]
 dev-providers = ["conduit-provider/testing"]
 
 [dev-dependencies]
+conduit-core = { workspace = true, features = ["testing"] }
 conduit-metrics.workspace = true
 conduit-store.workspace = true
 conduit-provider = { workspace = true, features = ["testing"] }

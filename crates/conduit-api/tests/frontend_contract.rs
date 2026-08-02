@@ -19,7 +19,9 @@ use conduit_api::status::{
     SnapshotEventBinding, SnapshotResource, StaleState,
 };
 use conduit_core::event::{Envelope, Event};
-use conduit_core::graph::{Edge, Node, NodeKind, PipelineGraph};
+use conduit_core::graph::{
+    Edge, Modality, ModelBinding, Node, PipelineGraph, ReasoningCore, DEFAULT_MAX_ROUNDS,
+};
 use conduit_core::id::{ConversationId, DeviceId, EventId, TraceId, TurnId};
 use uuid::Uuid;
 
@@ -171,6 +173,7 @@ fn status_fixture() -> OperatorStatusSnapshot {
             proven_by_turn: None,
             message: Some("no successful reachability check yet".to_owned()),
             affects_pipelines: vec!["kitchen".to_owned()],
+            offers_tools: Vec::new(),
         }],
         satellites: SatelliteStatus {
             connected: vec![ConnectedSatellite {
@@ -262,11 +265,26 @@ fn event_fixtures() -> Vec<Envelope> {
 
 fn pipeline_fixture() -> PipelineView {
     let graph = PipelineGraph::new("kitchen")
-        .with_node(Node::new("mic", NodeKind::Source, "websocket"))
-        .with_node(Node::new("stt", NodeKind::Stt, "whisper"))
-        .with_node(Node::new("llm", NodeKind::Llm, "openai"))
-        .with_node(Node::new("tts", NodeKind::Tts, "piper-local"))
-        .with_node(Node::new("speaker", NodeKind::Sink, "websocket"))
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
+        .with_node(Node::stt("stt", "whisper"))
+        .with_node(Node::Core {
+            id: "llm".to_owned(),
+            core: ReasoningCore {
+                // The fixture names a model because that is the point of a
+                // binding: the frontend has to render a field the wire may
+                // omit.
+                model: ModelBinding {
+                    provider: "openai".to_owned(),
+                    model: Some("gpt-4o-mini".to_owned()),
+                },
+                system: None,
+                tools: Vec::new(),
+                memory: Vec::new(),
+                max_rounds: DEFAULT_MAX_ROUNDS,
+            },
+        })
+        .with_node(Node::tts("tts", "piper-local"))
+        .with_node(Node::sink("speaker", "websocket", Modality::Audio))
         .with_edge(Edge::new("mic", "stt"))
         .with_edge(Edge::new("stt", "llm"))
         .with_edge(Edge::new("llm", "tts"))
@@ -276,7 +294,7 @@ fn pipeline_fixture() -> PipelineView {
         .topological_order()
         .expect("fixture graph is valid")
         .iter()
-        .map(|node| node.id.clone())
+        .map(|node| node.id().clone())
         .collect();
 
     PipelineView { graph, order }
@@ -293,10 +311,11 @@ fn turn_snapshot_fixture() -> serde_json::Value {
         "sequence": 5,
         "items": [
             {
-                "kind": "spoken_segment",
+                "kind": "utterance_segment",
                 "id": "assistant-preamble-1",
                 "sequence": 2,
                 "role": "assistant_preamble",
+                "modality": "audio",
                 "text": "I will check the lights.",
                 "started_at": "2026-08-01T01:02:00Z",
                 "evidence": [event_id(301)]
@@ -320,10 +339,11 @@ fn turn_snapshot_fixture() -> serde_json::Value {
                 "evidence": [event_id(300)]
             },
             {
-                "kind": "spoken_segment",
+                "kind": "utterance_segment",
                 "id": "assistant-response-1",
                 "sequence": 4,
                 "role": "assistant_response",
+                "modality": "audio",
                 "text": "The lights are on.",
                 "started_at": "2026-08-01T01:02:01Z",
                 "evidence": [event_id(305)]
@@ -345,18 +365,54 @@ export type NodeKind =
   | "wake_word"
   | "stt"
   | "speaker_id"
-  | "router"
-  | "llm"
-  | "tool"
-  | "memory"
+  | "core"
   | "tts"
   | "sink";
 
-export interface PipelineNode {{
+export type MemoryMode = "read" | "write" | "read_write";
+export type MemoryScope = "conversation" | "speaker" | "global";
+export type Modality = "audio" | "text" | "utterance";
+
+export interface PipelineNodeBase {{
   id: IdString;
-  kind: NodeKind;
   provider: string;
 }}
+
+export type ConfirmPolicy = "never" | "always";
+
+export interface ModelBinding {{
+  provider: string;
+  model?: string;
+}}
+
+export interface ToolBinding {{
+  provider: string;
+  confirm: ConfirmPolicy;
+}}
+
+export interface MemoryBinding {{
+  provider: string;
+  mode: MemoryMode;
+  scope?: MemoryScope;
+  limit: number;
+}}
+
+export interface ReasoningCore {{
+  model: ModelBinding;
+  system?: string;
+  tools?: ToolBinding[];
+  memory?: MemoryBinding[];
+  max_rounds: number;
+}}
+
+export type PipelineNode =
+  | (PipelineNodeBase & {{ kind: "source"; modality?: Modality }})
+  | (PipelineNodeBase & {{ kind: "wake_word" }})
+  | (PipelineNodeBase & {{ kind: "stt" }})
+  | (PipelineNodeBase & {{ kind: "speaker_id" }})
+  | (PipelineNodeBase & {{ kind: "tts"; voice?: string }})
+  | (PipelineNodeBase & {{ kind: "sink"; modality?: Modality }})
+  | {{ kind: "core"; id: IdString; core: ReasoningCore }};
 
 export interface PipelineEdge {{
   from: IdString;
@@ -393,6 +449,7 @@ export interface PipelineTestResult {{
   conversation: IdString;
   status: "completed";
   audio_bytes: number;
+  reply_text?: string;
   reply_audio?: string;
 }}
 
@@ -413,7 +470,7 @@ export interface ComponentConfigSchema {{
 export interface ProviderComponentDescriptor {{
   id: string;
   label: string;
-  kind: NodeKind;
+  kind: ProviderCapability;
   definition_variant: ProviderDefinitionVariantType;
   schema: ComponentConfigSchema;
 }}
@@ -495,7 +552,7 @@ export interface ProviderDefinitionView {{
 }}
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type SpokenSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
   | "requested"
   | "running"
@@ -530,13 +587,14 @@ export interface TurnSnapshot {{
   items: ReconstructionItem[];
 }}
 
-export type ReconstructionItem = SpokenSegmentItem | ToolBatchItem;
+export type ReconstructionItem = UtteranceSegmentItem | ToolBatchItem;
 
-export interface SpokenSegmentItem {{
-  kind: "spoken_segment";
+export interface UtteranceSegmentItem {{
+  kind: "utterance_segment";
   id: string;
   sequence: number;
-  role: SpokenSegmentRole;
+  role: UtteranceSegmentRole;
+  modality: Modality;
   text: string;
   started_at: DateTimeString;
   evidence: IdString[];
@@ -846,6 +904,7 @@ export interface ProviderStatus {{
   proven_by_turn: IdString | null;
   message: string | null;
   affects_pipelines: string[];
+  offers_tools?: string[];
 }}
 
 export interface SatelliteStatus {{
@@ -922,10 +981,11 @@ export type CancelReason =
   | "error"
   | "shutdown";
 export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
-export type SpokenSegmentRole =
+export type UtteranceSegmentRole =
   | "assistant_preamble"
   | "tool_output"
   | "assistant_response";
+export type Modality = "audio" | "text" | "utterance";
 
 export interface AudioFormat {{
   encoding: AudioEncoding;
@@ -971,7 +1031,13 @@ export type Event =
   | {{ type: "ToolCompleted"; call: ToolCallId; duration_ms: number }}
   | {{ type: "ToolFailed"; call: ToolCallId; error: string }}
   | {{ type: "TtsStarted"; voice: string }}
-  | {{ type: "SpokenSegmentStarted"; segment: string; role: SpokenSegmentRole; text: string }}
+  | {{
+      type: "UtteranceSegmentStarted";
+      segment: string;
+      role: UtteranceSegmentRole;
+      modality: Modality;
+      text: string;
+    }}
   | {{ type: "AudioStreaming"; sequence: number; bytes: number }}
   | {{ type: "TtsFinished"; duration_ms: number }}
   | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }};
