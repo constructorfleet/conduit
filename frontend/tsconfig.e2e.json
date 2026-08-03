@@ -1,23 +1,20 @@
 {
   "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
     "target": "es2023",
-    "lib": ["ES2023"],
+    /* Specs run assertions in Node but evaluate callbacks in the browser, so
+       they need both sets of globals. */
+    "lib": ["ES2023", "DOM"],
     "types": ["node"],
     "skipLibCheck": true,
-
-    /* Bundler mode */
     "module": "nodenext",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
     "moduleDetection": "force",
+    "verbatimModuleSyntax": true,
     "noEmit": true,
-
-    /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts", "vite.config.test.ts", "playwright.config.ts"]
+  "include": ["e2e"]
 }

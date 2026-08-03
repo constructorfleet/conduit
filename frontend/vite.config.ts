@@ -20,5 +20,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/setupTests.ts",
+    /// e2e/ is driven by Playwright against a real browser, so vitest must
+    /// not try to collect it.
+    exclude: ["node_modules/**", "dist/**", "e2e/**"],
   },
 });
