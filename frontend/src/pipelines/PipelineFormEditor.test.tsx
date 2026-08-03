@@ -9,6 +9,7 @@ import {
   BUILTIN_CONFIRM_PROVIDER,
   PipelineFormEditor,
   type ProviderOptions,
+  type VoiceCatalog,
 } from "./PipelineFormEditor";
 
 function voiceForm(): PipelineForm {
@@ -30,14 +31,24 @@ const providers: ProviderOptions = {
   ],
   tts: [{ id: "piper", label: "piper" }],
   tool: [{ id: "search", label: "search" }],
+  wake: [
+    { id: "openwakeword", label: "openWakeWord" },
+    { id: "okay-nabu", label: "On-device (okay nabu)" },
+  ],
+  speakerId: [{ id: "voices", label: "SpeechBrain" }],
 };
 
-function renderEditor(form: PipelineForm, readOnly = false) {
+function renderEditor(
+  form: PipelineForm,
+  readOnly = false,
+  voices: VoiceCatalog = null,
+) {
   const onChange = vi.fn();
   render(
     <PipelineFormEditor
       form={form}
       providers={providers}
+      voices={voices}
       readOnly={readOnly}
       onChange={onChange}
     />,
@@ -151,5 +162,68 @@ describe("PipelineFormEditor", () => {
     expect(screen.getByLabelText("System prompt")).toBeDisabled();
     expect(screen.getByLabelText("Add tool")).toBeDisabled();
     expect(screen.getByLabelText("Remove Speech to text")).toBeDisabled();
+  });
+
+  it("binds a configured detector when the wake stage is added", async () => {
+    // The editor used to offer no detectors at all, so adding the stage wrote
+    // a hardcoded provider name that no deployment had.
+    const onChange = renderEditor(voiceForm());
+
+    await userEvent.click(screen.getByLabelText("Add Wake word"));
+
+    const next = onChange.mock.calls[0]?.[0] as PipelineForm;
+    expect(next.wakeWord?.provider).toBe("openwakeword");
+    expect(
+      graphFromForm(next).nodes.some((node) => node.kind === "wake_word"),
+    ).toBe(true);
+  });
+
+  it("binds a configured identifier when the speaker stage is added", async () => {
+    const onChange = renderEditor(voiceForm());
+
+    await userEvent.click(screen.getByLabelText("Add Speaker ID"));
+
+    const next = onChange.mock.calls[0]?.[0] as PipelineForm;
+    expect(next.speakerId?.provider).toBe("voices");
+  });
+
+  it("offers the voices the synthesizer reported", async () => {
+    // The point of asking the provider: an operator picks a voice that exists
+    // instead of typing one and finding out at the first reply.
+    const onChange = renderEditor(voiceForm(), false, [
+      { id: "en_US-amy", label: "Amy (en_US-amy)" },
+      { id: "en_GB-alba", label: "Alba (en_GB-alba)" },
+    ]);
+
+    const voice = screen.getByLabelText("Voice");
+    expect(voice.tagName).toBe("SELECT");
+    await userEvent.selectOptions(voice, "en_GB-alba");
+
+    const next = onChange.mock.calls[0]?.[0] as PipelineForm;
+    expect(next.tts?.voice).toBe("en_GB-alba");
+  });
+
+  it("falls back to a typed voice when the provider offers no catalogue", async () => {
+    // A Wyoming synthesizer enumerates nothing and accepts any name, and an
+    // unreachable provider cannot be asked at all. Neither is a reason to stop
+    // an operator naming a voice.
+    const onChange = renderEditor(voiceForm(), false, []);
+
+    const voice = screen.getByLabelText("Voice");
+    expect(voice.tagName).toBe("INPUT");
+    await userEvent.type(voice, "a");
+
+    const next = onChange.mock.calls[0]?.[0] as PipelineForm;
+    expect(next.tts?.voice).toBe("a");
+  });
+
+  it("keeps a voice the pipeline names but the provider no longer offers", () => {
+    // The same rule an unlisted provider follows: show what the pipeline says
+    // rather than silently rebinding it to something else.
+    const form = voiceForm();
+    form.tts = { ...form.tts!, voice: "en_US-retired" };
+    renderEditor(form, false, [{ id: "en_US-amy", label: "Amy (en_US-amy)" }]);
+
+    expect(screen.getByLabelText("Voice")).toHaveValue("en_US-retired");
   });
 });

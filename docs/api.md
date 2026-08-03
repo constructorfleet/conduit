@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/test`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/test`, `/v1/providers/{id}/voices`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -310,8 +310,40 @@ Each variant registers a Runtime Provider under the definition id:
 | Variant | Registers | Notes |
 | --- | --- | --- |
 | `openai_llm`, `openai_stt`, `openai_tts` | One provider under the definition id | |
-| `wyoming_stt`, `wyoming_tts` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `wyoming_stt`, `wyoming_tts`, `wyoming_wake` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `device_wake` | One wake word detector under the definition id | No endpoint: the satellite runs the detector. `engine` must be `microwakeword`, the only one small enough for that hardware |
+| `http_speaker_id` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
+| `diarization_server_speaker_id` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `mcp_tool` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+
+A `wyoming_wake` definition names which detector is behind the endpoint —
+`openwakeword`, `microwakeword`, or `nanowakeword` — along with the `phrases` to
+listen for and a `threshold_percent` a detection must reach. An empty `phrases`
+list asks the server to score whatever it has loaded.
+
+A `device_wake` definition describes a satellite that wakes itself. There is no
+endpoint because there is no server: the device scores audio locally and only
+streams once it has activated, so the pipeline's wake stage accepts immediately
+and publishes the activation the device already made. It exists so a pipeline
+can *say* it wakes on-device, and have the stage be visible in the editor, in
+validation, and on the event stream.
+
+A `diarization_server_speaker_id` definition points at an existing
+[Diarization_Server](https://github.com/CptCamembert/Diarization_Server), which
+despite its name performs speaker recognition against enrolled embeddings
+rather than diarization. It speaks its own dialect — raw 16 kHz mono 16-bit PCM
+bodies and a `name` query parameter — so a pipeline capturing any other format
+is refused at the stage rather than sent samples the server would misread. It
+has no authentication, so the definition carries no key.
+
+An `http_speaker_id` definition points at a service implementing three requests
+— `POST {base_url}/identify`, `POST {base_url}/speakers/{speaker}/enroll`, and
+`DELETE {base_url}/speakers/{speaker}` — documented in full on the
+`conduit-speaker` crate. `engine` records which embedding model is behind it
+(`speechbrain`, `resemblyzer`, or `pyannote`) and `threshold_percent` is the
+similarity below which a match is reported as an unknown voice. Conduit owns
+the speaker id and the service stores it as an opaque label, so a deployment
+can change embedding models without every enrolled voice becoming a stranger.
 
 An MCP definition registers the tools its server currently advertises, each as
 `<definition id>.<tool name>`. A server advertising exactly one tool is also
@@ -319,6 +351,29 @@ registered under the definition id itself. Discovery needs the server, but
 saving does not: a server that cannot be reached within five seconds saves the
 definition and registers no tools, and `POST /v1/providers/{id}/test`
 rediscovers them once it answers.
+
+### `GET /v1/providers/{id}/voices`
+
+Lists the voices one saved text-to-speech Provider Definition offers, so the
+pipeline editor can present a choice rather than a text box an operator fills
+in and learns about at the first reply.
+
+Returns `404` when there is no such definition and `422` when the definition is
+not a text-to-speech one. An empty `voices` list is a successful answer, not a
+failure: a Wyoming synthesizer enumerates nothing and accepts any voice its
+server was given, and a definition saved while its service was down is not
+registered at all. The console falls back to a typed voice in both cases.
+
+Success body:
+
+```json
+{
+  "provider": "openai-speech",
+  "voices": [
+    { "id": "alloy", "name": "alloy", "language": "en-US" }
+  ]
+}
+```
 
 ### `DELETE /v1/providers/{id}`
 

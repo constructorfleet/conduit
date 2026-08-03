@@ -1,0 +1,65 @@
+# Conduit, and the optional services a pipeline can point at.
+#
+#   docker compose up                          # just Conduit
+#   docker compose --profile speaker-id up     # and speaker identification
+#
+# Everything optional sits behind a profile, so the default is the smallest
+# thing that runs. Optional services are deliberately not published to the
+# host: Conduit reaches them over the compose network by service name, and a
+# port mapping would put an unauthenticated model server on your LAN.
+
+services:
+  conduit:
+    build:
+      context: .
+    # The service API. 9090 serves /health and /metrics with no authentication
+    # at all, so it is deliberately unmapped — reach it from inside the network
+    # or add a mapping you have decided is inside your trust boundary.
+    ports:
+      - "${CONDUIT_PORT:-8080}:8080"
+    environment:
+      # There is no open default: a server with neither a token file nor
+      # anonymous mode refuses to start, and that refusal is the intended
+      # behaviour rather than a papercut. Set one of these in .env.
+      CONDUIT_TOKENS: ${CONDUIT_TOKENS:-}
+      CONDUIT_ALLOW_ANONYMOUS: ${CONDUIT_ALLOW_ANONYMOUS:-}
+      CONDUIT_LOG: ${CONDUIT_LOG:-info}
+      CONDUIT_DATA_DIR: /var/lib/conduit
+    volumes:
+      - conduit-data:/var/lib/conduit
+      # Where a token file goes when you use one. Create ./secrets/tokens.json
+      # and set CONDUIT_TOKENS=/run/secrets/tokens.json; the file must not be
+      # group- or world-readable, which Conduit checks at startup.
+      - ./secrets:/run/secrets:ro
+    restart: unless-stopped
+
+  # Speaker identification, reached at http://speaker-id:8080 from Conduit.
+  #
+  # Create a provider definition of type `http_speaker_id` whose `base_url` is
+  # that address, then add a Speaker ID stage to a pipeline.
+  #
+  # Set CONDUIT_SPEAKER_ID_IMAGE to pin a published tag, or leave it unset to
+  # build from this repository. The GPU tag is the same image with a CUDA base:
+  # see services/speaker-id/README.md.
+  speaker-id:
+    profiles: ["speaker-id"]
+    image: ${CONDUIT_SPEAKER_ID_IMAGE:-conduit-speaker-id:speechbrain}
+    build:
+      context: ./services/speaker-id
+    environment:
+      # Optional. When set, Conduit's provider definition needs the same value
+      # as its api_key. Unset means the service is open, which is only
+      # reasonable because its port is not published.
+      SPEAKER_ID_API_KEY: ${SPEAKER_ID_API_KEY:-}
+    volumes:
+      # Voice prints outlive the container, or every household member is a
+      # stranger again after an update.
+      - speaker-id-data:/data
+      # The model, so a restart does not re-download several hundred megabytes.
+      - speaker-id-models:/models
+    restart: unless-stopped
+
+volumes:
+  conduit-data:
+  speaker-id-data:
+  speaker-id-models:

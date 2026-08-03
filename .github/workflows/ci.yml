@@ -226,6 +226,55 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
+  # The reference speaker identification service ships in this repository and is
+  # published as an image, so its tests and its build are gates like any other.
+  speaker-id:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/speaker-id
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/speaker-id/requirements-dev.txt
+      # requirements-dev deliberately excludes torch: the tests inject their own
+      # encoder, so a CI run neither downloads a model nor installs a deep
+      # learning framework to check that a 404 is a 404.
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+      # Uncached, for the same reason the Conduit image build is: a torch layer
+      # runs to gigabytes and would evict the far more frequently used Rust
+      # cache entries from the same repository budget.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: services/speaker-id
+          push: false
+
+  # `docker compose up` is the documented way to run Conduit, so a compose file
+  # that does not parse is a broken front door. `config` resolves variables,
+  # profiles, and the build contexts without starting anything.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the compose file resolves
+        run: |
+          docker compose config --quiet
+          docker compose --profile speaker-id config --quiet
+          # The default `up` must not need the optional profile, or the
+          # smallest thing that runs is not the default.
+          services=$(docker compose config --services | tr '\n' ' ')
+          if [ "${services}" != "conduit " ]; then
+            echo "default profile should start conduit alone, got '${services}'" >&2
+            exit 1
+          fi
+
   # The published image is built from this Dockerfile, so a change that breaks
   # it must fail on the pull request rather than after merge. Building without
   # pushing needs no registry credentials.

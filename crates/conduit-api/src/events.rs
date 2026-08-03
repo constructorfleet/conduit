@@ -68,48 +68,14 @@ impl StreamQuery {
 
 /// Parses one stage name from the query string.
 ///
-/// A stage nothing publishes is refused rather than accepted: subscribing to
-/// one would hand back a stream that stays open and silent for as long as the
-/// client waits, which is indistinguishable from a pipeline that has stopped
-/// working. Better to say so at subscribe time.
+/// Every stage carries traffic now that wake word detection and speaker
+/// identification have providers behind them, so the only thing to refuse is a
+/// name that is not a stage at all. Subscribing to a stage a *particular*
+/// pipeline does not run is not an error: which stages a deployment uses is
+/// not something the subscription endpoint knows.
 fn parse_stage(stage: &str) -> Result<Stage, ApiError> {
-    let parsed: Stage = serde_json::from_value(serde_json::Value::String(stage.to_owned()))
-        .map_err(|_| ApiError::unprocessable(format!("unknown stage `{stage}`")))?;
-
-    if !parsed.has_emitter() {
-        return Err(ApiError::unprocessable(format!(
-            "nothing publishes `{stage}` events yet, so this subscription would never \
-             deliver anything; the stages that carry traffic are {}",
-            emitting_stages().join(", ")
-        )));
-    }
-    Ok(parsed)
-}
-
-/// The stage names a subscription can usefully ask for, for the error above.
-///
-/// Derived from [`Stage::has_emitter`] rather than written out, so a stage that
-/// gains an emitter starts being suggested without anyone remembering to edit
-/// this message.
-fn emitting_stages() -> Vec<String> {
-    [
-        Stage::WakeWord,
-        Stage::Capture,
-        Stage::Transcription,
-        Stage::Identity,
-        Stage::Conversation,
-        Stage::Reasoning,
-        Stage::Tools,
-        Stage::Synthesis,
-        Stage::Diagnostics,
-    ]
-    .into_iter()
-    .filter(|stage| stage.has_emitter())
-    .filter_map(|stage| match serde_json::to_value(stage) {
-        Ok(serde_json::Value::String(name)) => Some(format!("`{name}`")),
-        _ => None,
-    })
-    .collect()
+    serde_json::from_value(serde_json::Value::String(stage.to_owned()))
+        .map_err(|_| ApiError::unprocessable(format!("unknown stage `{stage}`")))
 }
 
 /// `GET /v1/events` — server-sent events from the bus.

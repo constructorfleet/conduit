@@ -47,7 +47,9 @@ import type {
   ProviderDefinitionVariant,
   ProviderDefinitionView,
   ProviderSecret,
+  SpeakerEngine,
   TurnSnapshot,
+  WakeEngine,
 } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
@@ -81,7 +83,14 @@ import type {
   PipelineValidator,
 } from "./pipelines/graph";
 import { PipelineFormEditor } from "./pipelines/PipelineFormEditor";
-import type { ProviderOptions } from "./pipelines/PipelineFormEditor";
+import type {
+  ProviderOptions,
+  VoiceCatalog,
+} from "./pipelines/PipelineFormEditor";
+
+/// Asks a provider what voices it offers, answering `null` when it could not
+/// be asked at all.
+type VoiceLoader = (providerId: string) => Promise<VoiceCatalog>;
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -117,6 +126,9 @@ interface AppProps {
   dataMode?: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineDeleted?: (name: string) => void;
+  /// The definition as it goes to the API, for tests that care what shape the
+  /// console actually sends.
+  onProviderDefinitionSaved?: (definition: ApiProviderDefinition) => void;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
 }
@@ -132,6 +144,7 @@ function App({
   dataMode = defaultDataMode(),
   onPipelineSaved,
   onPipelineDeleted,
+  onProviderDefinitionSaved,
   onPipelineValidate,
   onPipelineTest,
 }: AppProps = {}) {
@@ -158,6 +171,7 @@ function App({
       dataMode={dataMode}
       onPipelineSaved={onPipelineSaved}
       onPipelineDeleted={onPipelineDeleted}
+      onProviderDefinitionSaved={onProviderDefinitionSaved}
       onPipelineValidate={onPipelineValidate}
       onPipelineTest={onPipelineTest}
       onSectionChange={setActiveSection}
@@ -256,6 +270,7 @@ function OperatorWorkspace({
   dataMode,
   onPipelineSaved,
   onPipelineDeleted,
+  onProviderDefinitionSaved,
   onPipelineValidate,
   onPipelineTest,
   onSectionChange,
@@ -273,6 +288,9 @@ function OperatorWorkspace({
   dataMode: OperatorDataMode;
   onPipelineSaved?: (graph: PipelineGraph) => void;
   onPipelineDeleted?: (name: string) => void;
+  /// The definition as it goes to the API, for tests that care what shape the
+  /// console actually sends.
+  onProviderDefinitionSaved?: (definition: ApiProviderDefinition) => void;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
   onSectionChange: (section: SectionId) => void;
@@ -412,12 +430,30 @@ function OperatorWorkspace({
     }`;
   }
 
+  /// The voices a synthesizer offers, or `null` when it could not be asked.
+  ///
+  /// A provider that is saved but unreachable must not stop an operator
+  /// editing the pipeline that uses it, so a failure falls back to the typed
+  /// voice field rather than surfacing an error.
+  async function loadProviderVoices(providerId: string): Promise<VoiceCatalog> {
+    try {
+      const { voices } = await snapshotClient.loadProviderVoices(providerId);
+      return voices.map((voice) => ({
+        id: voice.id,
+        label:
+          voice.name === voice.id ? voice.id : `${voice.name} (${voice.id})`,
+      }));
+    } catch {
+      return null;
+    }
+  }
+
   async function saveProviderDefinition(
     definition: ProviderDefinition,
   ): Promise<ProviderDefinition> {
-    const saved = await snapshotClient.saveProviderDefinition(
-      toApiProviderDefinition(definition),
-    );
+    const request = toApiProviderDefinition(definition);
+    onProviderDefinitionSaved?.(request);
+    const saved = await snapshotClient.saveProviderDefinition(request);
     const mapped = fromApiProviderDefinition(componentCatalog, saved);
     setProviderDefinitions((current) =>
       mergeProviderDefinitions(
@@ -713,6 +749,7 @@ function OperatorWorkspace({
           }
           onPipelineTest={onPipelineTest ?? runPipelineTest}
           onProviderTest={runProviderTest}
+          onProviderVoices={loadProviderVoices}
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
@@ -743,6 +780,7 @@ function SectionPanel({
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
+  onProviderVoices,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
 }: {
@@ -762,6 +800,7 @@ function SectionPanel({
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
   onProviderTest: ProviderTester;
+  onProviderVoices: VoiceLoader;
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinition>;
@@ -806,6 +845,7 @@ function SectionPanel({
         onPipelineDiscarded={onPipelineDiscarded}
         onPipelineValidate={onPipelineValidate}
         onPipelineTest={onPipelineTest}
+        onProviderVoices={onProviderVoices}
       />
     );
   }
@@ -842,7 +882,27 @@ interface OperatorConsoleSettings {
   logLevel: LogLevelOption;
 }
 
+/// The acceptance threshold a definition falls back to, mirroring
+/// `conduit_provider::storage::DEFAULT_THRESHOLD_PERCENT`. A definition saved
+/// without one must behave as the API documents rather than as zero, which
+/// would be a detector that accepts everything it hears.
+const DEFAULT_THRESHOLD_PERCENT = 50;
+
 type ProviderFilter = "all" | ProviderKind;
+
+/// What an operator reads for a provider capability.
+///
+/// Written out rather than upper-cased, because `SPEAKER_ID` names a field in
+/// a JSON document and not a thing a house does.
+function providerKindLabel(kind: ProviderFilter): string {
+  if (kind === "speaker_id") {
+    return "Speaker ID";
+  }
+  if (kind === "wake") {
+    return "Wake word";
+  }
+  return kind.toUpperCase();
+}
 
 interface ProviderDefinition {
   id: string;
@@ -905,7 +965,15 @@ function ProvidersPanel({
   const visibleProviderCards = providerCards.filter(
     (provider) => filter === "all" || provider.kind === filter,
   );
-  const providerKinds: ProviderFilter[] = ["all", "stt", "llm", "tool", "tts"];
+  const providerKinds: ProviderFilter[] = [
+    "all",
+    "stt",
+    "llm",
+    "tool",
+    "tts",
+    "wake",
+    "speaker_id",
+  ];
   const providerIds = new Set([
     ...providers.map((provider) => provider.id),
     ...providerDefinitions.map((provider) => provider.id),
@@ -1384,7 +1452,7 @@ function ProviderAddDialog({
                 ))}
                 {selectedKindComponents.length === 0 ? (
                   <span className="provider-kind-empty">
-                    No components for {selectedKind.toUpperCase()}
+                    No components for {providerKindLabel(selectedKind)}
                   </span>
                 ) : null}
               </>
@@ -1398,7 +1466,7 @@ function ProviderAddDialog({
                     role="menuitem"
                     onClick={() => onKindChange(kind)}
                   >
-                    {kind.toUpperCase()}
+                    {providerKindLabel(kind)}
                   </button>
                 ))
             )}
@@ -2022,6 +2090,7 @@ function PipelinesPanel({
   onPipelineDiscarded,
   onPipelineValidate,
   onPipelineTest,
+  onProviderVoices,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
@@ -2030,6 +2099,7 @@ function PipelinesPanel({
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
+  onProviderVoices: VoiceLoader;
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
@@ -2075,7 +2145,38 @@ function PipelinesPanel({
     llm: providerOptionsFor("llm"),
     tts: providerOptionsFor("tts"),
     tool: providerOptionsFor("tool"),
+    wake: providerOptionsFor("wake"),
+    speakerId: providerOptionsFor("speaker_id"),
   };
+  /// The voices the draft's synthesizer offers, asked of the provider itself.
+  ///
+  /// Keyed by provider id so switching synthesizers does not briefly offer the
+  /// previous one's voices, and so a provider that was already asked is not
+  /// asked again on every keystroke elsewhere in the form.
+  const [voicesByProvider, setVoicesByProvider] = useState<
+    Record<string, VoiceCatalog>
+  >({});
+  const synthesisProvider = draft
+    ? (formFromGraph(draft).tts?.provider ?? null)
+    : null;
+
+  useEffect(() => {
+    if (!synthesisProvider || synthesisProvider in voicesByProvider) {
+      return;
+    }
+    let current = true;
+    void onProviderVoices(synthesisProvider).then((voices) => {
+      if (current) {
+        setVoicesByProvider((known) => ({
+          ...known,
+          [synthesisProvider]: voices,
+        }));
+      }
+    });
+    return () => {
+      current = false;
+    };
+  }, [synthesisProvider, voicesByProvider, onProviderVoices]);
 
   function providerOptionsFor(capability: ProviderCapability) {
     return providerDefinitions
@@ -2644,6 +2745,11 @@ function PipelinesPanel({
           <PipelineFormEditor
             form={formFromGraph(draft)}
             providers={formProviderOptions}
+            voices={
+              synthesisProvider
+                ? (voicesByProvider[synthesisProvider] ?? null)
+                : null
+            }
             readOnly={false}
             onChange={(next) => applyDraftEdit(() => graphFromForm(next))}
           />
@@ -2720,14 +2826,74 @@ function ComponentConfigFields({
           );
         }
 
+        // A closed set — a wake word engine, an embedding model — is a menu.
+        // A text box for it lets an operator save a definition the server then
+        // refuses, and the refusal arrives long after they typed it.
+        if (property.options && property.options.length > 0) {
+          return (
+            <label className="field" key={field}>
+              <span>{label}</span>
+              <select
+                required={required.has(field)}
+                value={typeof config[field] === "string" ? config[field] : ""}
+                onChange={(event) =>
+                  onChange(field, property, event.target.value)
+                }
+              >
+                <option value="">choose one</option>
+                {property.options.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        }
+
+        // Held as the text an operator is typing, and split into a list when
+        // the definition is built. Splitting on every keystroke would trim the
+        // space they just typed and run the words together.
+        if (property.type === "string_list") {
+          return (
+            <label className="field" key={field}>
+              <span>{`${label} (comma separated)`}</span>
+              <input
+                type="text"
+                required={required.has(field)}
+                value={typeof config[field] === "string" ? config[field] : ""}
+                onChange={(event) =>
+                  onChange(field, property, event.target.value)
+                }
+              />
+            </label>
+          );
+        }
+
         return (
           <label className="field" key={field}>
             <span>{label}</span>
             <input
-              type={property.format === "url" ? "url" : "text"}
-              pattern={property.pattern}
+              type={
+                property.type === "integer"
+                  ? "number"
+                  : property.format === "url"
+                    ? "url"
+                    : "text"
+              }
+              pattern={
+                property.type === "integer" ? undefined : property.pattern
+              }
               required={required.has(field)}
-              value={typeof config[field] === "string" ? config[field] : ""}
+              value={
+                property.type === "integer"
+                  ? typeof config[field] === "number"
+                    ? String(config[field])
+                    : ""
+                  : typeof config[field] === "string"
+                    ? config[field]
+                    : ""
+              }
               onChange={(event) =>
                 onChange(field, property, event.target.value)
               }
@@ -2983,6 +3149,31 @@ function configFromProviderVariant(
       streaming: variant.streaming,
     };
   }
+  if (variant.type === "wyoming_wake") {
+    return {
+      url: variant.url,
+      engine: variant.engine,
+      phrases: variant.phrases.join(", "),
+      threshold_percent: variant.threshold_percent,
+    };
+  }
+  if (variant.type === "device_wake") {
+    return { engine: variant.engine, phrases: variant.phrases.join(", ") };
+  }
+  if (variant.type === "diarization_server_speaker_id") {
+    return {
+      base_url: variant.base_url,
+      threshold_percent: variant.threshold_percent,
+    };
+  }
+  if (variant.type === "http_speaker_id") {
+    return {
+      base_url: variant.base_url,
+      api_key: secretToConfigValue(variant.api_key),
+      engine: variant.engine,
+      threshold_percent: variant.threshold_percent,
+    };
+  }
   if (variant.transport.type === "stdio") {
     return {
       command: variant.transport.command,
@@ -3009,6 +3200,19 @@ function variantFromProviderDefinition(
   const text = (field: string) =>
     typeof config[field] === "string" ? config[field].trim() : "";
   const flag = (field: string) => config[field] === true;
+  /// A comma-separated field, as the form holds it while it is being typed.
+  const list = (field: string) =>
+    text(field)
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  /// A number field. The default is the server's own, so a definition saved
+  /// without one behaves as the API documents rather than as zero — which
+  /// would be a detector that accepts everything it hears.
+  const whole = (field: string) =>
+    typeof config[field] === "number"
+      ? (config[field] as number)
+      : DEFAULT_THRESHOLD_PERCENT;
   const apiKey = secretFromConfig(text("api_key"));
 
   if (
@@ -3055,6 +3259,40 @@ function variantFromProviderDefinition(
       url: text("url"),
       ...(text("voice") ? { voice: text("voice") } : {}),
       streaming: flag("streaming"),
+    };
+  }
+  if (definition.component === "wyoming.wake") {
+    return {
+      type: "wyoming_wake",
+      url: text("url"),
+      engine: (text("engine") || "openwakeword") as WakeEngine,
+      phrases: list("phrases"),
+      threshold_percent: whole("threshold_percent"),
+    };
+  }
+  if (definition.component === "device.wake") {
+    return {
+      type: "device_wake",
+      // A satellite runs microWakeWord or nothing, and the catalog offers no
+      // other choice, so a definition arriving without one means the same.
+      engine: (text("engine") || "microwakeword") as WakeEngine,
+      phrases: list("phrases"),
+    };
+  }
+  if (definition.component === "speaker.diarization_server") {
+    return {
+      type: "diarization_server_speaker_id",
+      base_url: text("base_url"),
+      threshold_percent: whole("threshold_percent"),
+    };
+  }
+  if (definition.component === "speaker.http") {
+    return {
+      type: "http_speaker_id",
+      base_url: text("base_url"),
+      ...(apiKey ? { api_key: apiKey } : {}),
+      engine: (text("engine") || "speechbrain") as SpeakerEngine,
+      threshold_percent: whole("threshold_percent"),
     };
   }
   if (definition.component === "mcp.sse") {
@@ -3204,6 +3442,23 @@ function validateProviderDefinitionConfig(
     if (property.type === "boolean" && typeof value !== "boolean") {
       return { ok: false, message: `${field} must be a boolean` };
     }
+    if (property.type === "integer" && typeof value !== "number") {
+      return { ok: false, message: `${field} must be a number` };
+    }
+    if (property.type === "string_list" && typeof value !== "string") {
+      return { ok: false, message: `${field} must be a list` };
+    }
+    if (
+      property.options &&
+      property.options.length > 0 &&
+      typeof value === "string" &&
+      !property.options.includes(value)
+    ) {
+      return {
+        ok: false,
+        message: `${field} must be one of ${property.options.join(", ")}`,
+      };
+    }
   }
 
   return { ok: true, order: [] };
@@ -3218,11 +3473,24 @@ function updateConfigValue(
   const next = { ...config };
   if (property.type === "boolean") {
     next[field] = value === true;
-  } else if (typeof value === "string" && value.length > 0) {
-    next[field] = value;
-  } else {
-    delete next[field];
+    return next;
   }
+  if (typeof value !== "string" || value.length === 0) {
+    delete next[field];
+    return next;
+  }
+  if (property.type === "integer") {
+    // A number, not the digits an operator typed: the server reads
+    // `threshold_percent` as a number and refuses a string of one.
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      next[field] = Math.trunc(parsed);
+    } else {
+      delete next[field];
+    }
+    return next;
+  }
+  next[field] = value;
   return next;
 }
 
@@ -3253,6 +3521,12 @@ function capabilityForNodeKind(kind: NodeKind): ProviderCapability | null {
   }
   if (kind === "core") {
     return "llm";
+  }
+  if (kind === "wake_word") {
+    return "wake";
+  }
+  if (kind === "speaker_id") {
+    return "speaker_id";
   }
   return null;
 }

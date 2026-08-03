@@ -1,10 +1,14 @@
 //! Wake word provider interface.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use conduit_core::Result;
+use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::stt::AudioChunk;
-use crate::{ChunkStream, Provider};
+use crate::{ChunkStream, Health, Provider};
 
 /// A wake phrase the detector is listening for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,5 +71,151 @@ pub trait WakeWordDetector: Provider {
     /// or loads phrases on demand.
     fn available_phrases(&self) -> &[String] {
         &[]
+    }
+
+    /// The phrases to listen for, with the thresholds this detector was
+    /// configured with.
+    ///
+    /// What [`WakeWordDetector::detect`] is called with when a pipeline names
+    /// no phrases of its own, which is every pipeline today: a graph node
+    /// selects a provider definition, and which phrases that definition
+    /// listens for is a property of the definition.
+    fn configured_phrases(&self) -> Vec<WakePhrase> {
+        self.available_phrases().iter().map(WakePhrase::new).collect()
+    }
+}
+
+/// The detector for a satellite that wakes itself.
+///
+/// A device running microWakeWord scores audio locally and only opens a stream
+/// once it has activated, so by the time the server sees a sample the decision
+/// has already been made. This detector says exactly that: it accepts
+/// immediately, at full confidence, and never looks at the audio.
+///
+/// It is a provider rather than a special case in the runtime because the
+/// difference between waking on the satellite and waking on a Wyoming server
+/// is a deployment choice. Expressing it as a provider is what lets a pipeline
+/// name the stage either way and everything downstream — validation, the
+/// editor, the event stream — stay the same.
+#[derive(Debug, Clone)]
+pub struct DeviceWake {
+    /// Stable registration name, surfaced in health and diagnostics.
+    name: String,
+    /// Phrases the satellite is flashed with, for operator screens.
+    phrases: Vec<String>,
+}
+
+impl DeviceWake {
+    /// A detector standing for the satellite's own, listening for `phrases`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, phrases: Vec<String>) -> Self {
+        Self { name: name.into(), phrases }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for DeviceWake {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Always healthy: there is no service to reach. A satellite that stopped
+    /// detecting stops streaming, which is not something the server can probe.
+    async fn health(&self) -> Health {
+        Health::Healthy
+    }
+}
+
+#[async_trait::async_trait]
+impl WakeWordDetector for DeviceWake {
+    async fn detect(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        phrases: Vec<WakePhrase>,
+    ) -> Result<ChunkStream<Detection>> {
+        // Whichever phrase the pipeline asked for, reported so the event names
+        // something an operator configured rather than an empty string. A
+        // pipeline that named none has only the definition's list to go on.
+        let phrase = phrases
+            .first()
+            .map(|phrase| phrase.phrase.clone())
+            .or_else(|| self.phrases.first().cloned())
+            .unwrap_or_else(|| self.name.clone());
+        Ok(Box::pin(AlreadyAwake {
+            detection: Some(Detection { phrase, confidence: 1.0, accepted: true }),
+            audio,
+        }))
+    }
+
+    fn available_phrases(&self) -> &[String] {
+        &self.phrases
+    }
+}
+
+/// A stream that reports one activation and then ends.
+///
+/// It holds the audio it was handed without reading it, so that whoever is
+/// feeding the detector sees a live consumer rather than a closed one: a gate
+/// whose sends started failing would report a broken detector for a stage that
+/// worked exactly as intended.
+struct AlreadyAwake {
+    detection: Option<Detection>,
+    #[allow(dead_code)]
+    audio: ChunkStream<AudioChunk>,
+}
+
+impl Stream for AlreadyAwake {
+    type Item = Result<Detection>;
+
+    fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().detection.take().map(Ok))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    fn silence() -> ChunkStream<AudioChunk> {
+        Box::pin(futures_util::stream::empty())
+    }
+
+    #[tokio::test]
+    async fn a_satellite_that_woke_itself_is_already_awake() {
+        // The device only streams once it has activated, so the first sample
+        // the server sees is already past the wake word. Scoring it would
+        // discard the activation the satellite already made.
+        let detector = DeviceWake::new("okay-nabu", vec!["okay nabu".to_owned()]);
+        let mut detections = detector
+            .detect(silence(), vec![WakePhrase::new("okay nabu")])
+            .await
+            .expect("session");
+
+        let first = detections.next().await.expect("a detection").expect("not an error");
+        assert!(first.accepted);
+        assert_eq!(first.phrase, "okay nabu");
+        assert!((first.confidence - 1.0).abs() < f32::EPSILON);
+        assert!(detections.next().await.is_none(), "one activation per stream");
+    }
+
+    #[tokio::test]
+    async fn the_detection_names_a_phrase_the_operator_configured() {
+        // A pipeline that named no phrase still gets an event naming something
+        // recognizable, rather than an empty string in the event stream.
+        let detector = DeviceWake::new("okay-nabu", vec!["okay nabu".to_owned()]);
+        let mut detections = detector.detect(silence(), Vec::new()).await.expect("session");
+
+        let first = detections.next().await.expect("a detection").expect("not an error");
+        assert_eq!(first.phrase, "okay nabu", "the definition's phrase stands in");
+    }
+
+    #[test]
+    fn a_phrase_carries_the_conventional_threshold_until_it_is_tuned() {
+        assert!((WakePhrase::new("hey jarvis").threshold - 0.5).abs() < f32::EPSILON);
+        assert!(
+            (WakePhrase::new("hey jarvis").with_threshold(0.8).threshold - 0.8).abs()
+                < f32::EPSILON
+        );
     }
 }

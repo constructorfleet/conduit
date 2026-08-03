@@ -7,6 +7,7 @@ import type {
   ProviderComponentCatalog,
   ProviderDefinition,
   ProviderDefinitionView,
+  ProviderVoices,
   RawTurnEvents,
   TurnList,
   TurnSnapshot,
@@ -69,6 +70,7 @@ export interface SnapshotClient {
   ) => Promise<ProviderDefinitionView>;
   deleteProviderDefinition: (id: string) => Promise<void>;
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
+  loadProviderVoices: (id: string) => Promise<ProviderVoices>;
 }
 
 export function createSnapshotClient(
@@ -136,6 +138,7 @@ export function createSnapshotClient(
       client.putProviderDefinition(definition.id, definition),
     deleteProviderDefinition: (id) => client.deleteProviderDefinition(id),
     testProviderDefinition: (id) => client.testProviderDefinition(id),
+    loadProviderVoices: (id) => client.listProviderVoices(id),
   };
 }
 
@@ -193,6 +196,7 @@ function createMockSnapshotClient(
       message: null,
       affects_pipelines: [],
     }),
+    loadProviderVoices: async (id) => ({ provider: id, voices: [] }),
   };
 }
 

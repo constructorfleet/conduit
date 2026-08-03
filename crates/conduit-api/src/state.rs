@@ -14,11 +14,15 @@ use conduit_provider::storage::{
     McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
     ProviderDefinitionVariant, ProviderSecret,
 };
+use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
+use conduit_speaker::diarization_server::DiarizationServerSpeakerId;
+use conduit_speaker::HttpSpeakerId;
 use conduit_store::MemoryStore;
 use conduit_wyoming::stt::WyomingStt;
 use conduit_wyoming::tts::WyomingTts;
+use conduit_wyoming::wake::WyomingWake;
 use tokio::time::timeout;
 
 use crate::auth::Access;
@@ -397,6 +401,39 @@ async fn register_definition(
         ProviderDefinitionVariant::McpTool { transport } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
+        ProviderDefinitionVariant::WyomingWake { url, phrases, threshold_percent, .. } => {
+            Ok(providers.with_wake(WyomingWake::new(
+                &definition.id,
+                url,
+                phrases.clone(),
+                f32::from(*threshold_percent) / 100.0,
+            )?))
+        }
+        // A satellite that wakes itself still registers a detector, so that a
+        // pipeline naming the stage resolves and the activation reaches the
+        // event stream. It scores nothing: the device already decided.
+        ProviderDefinitionVariant::DeviceWake { phrases, .. } => {
+            Ok(providers.with_wake(DeviceWake::new(&definition.id, phrases.clone())))
+        }
+        ProviderDefinitionVariant::DiarizationServerSpeakerId {
+            base_url,
+            threshold_percent,
+        } => Ok(providers.with_speaker(DiarizationServerSpeakerId::new(
+            &definition.id,
+            base_url,
+            f32::from(*threshold_percent) / 100.0,
+        )?)),
+        ProviderDefinitionVariant::HttpSpeakerId {
+            base_url,
+            api_key,
+            threshold_percent,
+            ..
+        } => Ok(providers.with_speaker(HttpSpeakerId::new(
+            &definition.id,
+            base_url,
+            secret_value(api_key),
+            f32::from(*threshold_percent) / 100.0,
+        )?)),
     }
 }
 

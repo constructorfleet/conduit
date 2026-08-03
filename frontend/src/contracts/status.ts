@@ -10,7 +10,13 @@ export type StaleState = "fresh" | "stale";
 export type PipelineHealthState = "not_runnable" | "unproven" | "healthy" | "degraded" | "unhealthy";
 export type ComponentKind = "capture" | "transcription" | "reasoning" | "tools" | "synthesis";
 export type ComponentHealthState = "not_configured" | "unused" | "unproven" | "healthy" | "degraded" | "unhealthy";
-export type ProviderKind = "stt" | "llm" | "tool" | "tts";
+export type ProviderKind =
+  | "stt"
+  | "llm"
+  | "tool"
+  | "tts"
+  | "wake"
+  | "speaker_id";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
 export type SnapshotResource =
   | "runtime_state"

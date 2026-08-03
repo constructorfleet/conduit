@@ -23,7 +23,9 @@ echoes described under [Running](#running).
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
-| [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition and synthesis |
+| [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
+| [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
+| [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
@@ -103,6 +105,33 @@ action as *not* performed. See [Known gaps](#known-gaps).
 ```sh
 cargo run -p conduit-api
 ```
+
+Or with Docker Compose, which is the shortest path to a working deployment:
+
+```sh
+cp .env.example .env      # then set CONDUIT_TOKENS or CONDUIT_ALLOW_ANONYMOUS
+docker compose up
+```
+
+There is no open default — a server with neither a token file nor anonymous
+mode refuses to start — so that copy is a step rather than a courtesy. A token
+file goes in `./secrets`, which is mounted read-only and git-ignored.
+
+Optional services sit behind compose profiles, so the default is the smallest
+thing that runs:
+
+```sh
+docker compose --profile speaker-id up
+```
+
+That adds [`services/speaker-id`](services/speaker-id), the reference
+implementation of Conduit's speaker identification contract, reachable from
+Conduit at `http://speaker-id:8080`. It is published as
+`ghcr.io/constructorfleet/conduit-speaker-id` with `latest-speechbrain` and
+`latest-speechbrain-gpu` tags; set `CONDUIT_SPEAKER_ID_IMAGE` to pin one rather
+than building locally. Its port is deliberately not published: Conduit reaches
+it over the compose network, and a mapping would put an unauthenticated model
+server on your LAN.
 
 The published container image is `ghcr.io/constructorfleet/conduit:latest`. Every
 `main` build also tags it `sha-<commit>`, so whatever `latest` currently points
@@ -517,7 +546,7 @@ FLAC.
 ## Next
 
 - gRPC and MQTT device transports alongside the WebSocket one
-- Wake word, speaker identification, and memory in the runtime
+- Memory and routing in the runtime
 
 ## Known gaps
 
@@ -572,29 +601,28 @@ and it will announce a door unlocked. Operators see these as the
 `awaiting_confirmation` tool outcome; read it as "blocked on a human", not
 "waiting for an answer".
 
-**Nothing identifies a speaker, so tools cannot enforce per-speaker policy.**
-A tool's permission check receives an optional speaker, and it is always absent:
-no speaker identification provider exists and nothing runs one, so a tool that
-would allow an action for one household member and refuse it for another has
-nothing to branch on. The path from a turn to the permission check exists and is
-tested, so registering a provider is the remaining work — but until then, treat
-every voice as unidentified. Nothing substitutes the device or the conversation
-for a speaker, and nothing should: those name which satellite is connected, and
-a policy satisfied by the wrong identity is worse than one satisfied by none.
+**A speaker is only identified when a pipeline asks.** A tool's permission
+check receives an optional speaker, and it is filled in by a `speaker_id`
+stage — a pipeline without one reaches every tool with no speaker, exactly as
+before. An identification service that is unreachable also leaves it absent:
+the turn still answers, and its per-speaker policies simply do not apply that
+turn. Nothing substitutes the device or the conversation for a speaker, and
+nothing should: those name which satellite is connected, and a policy satisfied
+by the wrong identity is worse than one satisfied by none.
 
-**Wake word, speaker identification, memory, and routing are graph-only.** The
-graph model describes those nodes, but the runtime refuses them. For wake word,
-speaker identification, and memory the provider traits exist, and what is
-missing is any implementation of them and the runtime wiring to run one. For
-`router` there is no trait yet either.
+**Speaker identification is remote only.** The embedding models that recognize
+a voice are Python and want more memory than an ESP32 has, so there is no
+on-device counterpart to `device_wake`. A satellite can wake itself; it cannot
+tell who woke it.
 
-**Three event variants have no emitter yet.** `WakeWordDetected`,
-`WakeWordRejected`, and `SpeakerIdentified` are part of the vocabulary but
-nothing publishes them, because no provider detects a wake word or matches a
-voice print. Their stages — `wake_word` and `identity` — are therefore refused
-at subscribe time: `/v1/events?stages=wake_word` is a `422` naming the stages
-that do carry traffic, rather than a `200` followed by silence for as long as
-the client is willing to wait. One silent stage refuses the whole subscription,
-since quietly narrowing it would deliver something other than what was asked
-for. The stages that carry traffic today are `capture`, `transcription`,
-`conversation`, `reasoning`, `tools`, `synthesis`, and `diagnostics`.
+**The identification threshold is not calibrated for you.** The 50% default is
+a starting point. Cosine similarities from an embedding model depend on the
+microphones, the room, and how much audio a turn captured, so tune
+`threshold_percent` against your own voices — every `SpeakerIdentified` event
+carries its confidence, including the ones that matched nobody, which is what
+shows you where the two populations separate.
+
+**Memory and routing are graph-only.** The graph model describes `memory`
+bindings and `router` nodes, but the runtime does not run them. For memory the
+provider trait exists and what is missing is the runtime wiring; for `router`
+there is no trait yet either.

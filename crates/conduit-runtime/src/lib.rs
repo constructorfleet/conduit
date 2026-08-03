@@ -4,10 +4,11 @@
 //! providers once, and [`Runner::run`] then executes a turn per utterance —
 //! audio in, speech out, events throughout.
 //!
-//! The runtime executes one recognizer, one model, one synthesizer, and any
-//! number of tool branches. Stages that still have no runtime contract, such
-//! as memory and speaker identification, are rejected at prepare time rather
-//! than silently mishandled.
+//! The runtime executes one wake stage, one identification stage, one
+//! recognizer, one model, one synthesizer, and any number of tool branches.
+//! Each of those stages is optional except the model. A graph naming a stage
+//! twice, or naming a provider the deployment does not have, is rejected at
+//! prepare time rather than silently mishandled.
 //!
 //! # Example
 //!
@@ -28,11 +29,13 @@
 pub mod confirm;
 pub mod deadline;
 mod emit;
+pub mod identity;
 pub mod plan;
 pub mod sentences;
 pub mod stop;
 pub mod tools;
 mod turn;
+pub mod wake;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,9 +47,11 @@ use conduit_core::id::{ConversationId, DeviceId, SpeakerId};
 use conduit_core::Result;
 use conduit_provider::llm::LanguageModel;
 use conduit_provider::memory::Memory;
+use conduit_provider::speaker::SpeakerIdentifier;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
+use conduit_provider::wake::WakeWordDetector;
 use conduit_provider::{ChunkStream, Registry};
 use futures_util::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -73,6 +78,8 @@ pub struct Providers {
     tts: Registry<dyn TextToSpeech>,
     tools: Registry<dyn Tool>,
     memory: Registry<dyn Memory>,
+    wake: Registry<dyn WakeWordDetector>,
+    speaker: Registry<dyn SpeakerIdentifier>,
 }
 
 impl Providers {
@@ -127,6 +134,22 @@ impl Providers {
         self
     }
 
+    /// Registers a wake word detector under its own name.
+    #[must_use]
+    pub fn with_wake<P: WakeWordDetector>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.wake.insert(name, Arc::new(provider));
+        self
+    }
+
+    /// Registers a speaker identifier under its own name.
+    #[must_use]
+    pub fn with_speaker<P: SpeakerIdentifier>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.speaker.insert(name, Arc::new(provider));
+        self
+    }
+
     /// The registered recognizers.
     #[must_use]
     pub const fn stt(&self) -> &Registry<dyn SpeechToText> {
@@ -156,6 +179,18 @@ impl Providers {
     pub const fn memory(&self) -> &Registry<dyn Memory> {
         &self.memory
     }
+
+    /// The registered wake word detectors.
+    #[must_use]
+    pub const fn wake(&self) -> &Registry<dyn WakeWordDetector> {
+        &self.wake
+    }
+
+    /// The registered speaker identifiers.
+    #[must_use]
+    pub const fn speaker(&self) -> &Registry<dyn SpeakerIdentifier> {
+        &self.speaker
+    }
 }
 
 /// Written by hand because the registries hold trait objects, which are not
@@ -168,6 +203,8 @@ impl std::fmt::Debug for Providers {
             .field("tts", &self.tts.names().collect::<Vec<_>>())
             .field("tools", &self.tools.names().collect::<Vec<_>>())
             .field("memory", &self.memory.names().collect::<Vec<_>>())
+            .field("wake", &self.wake.names().collect::<Vec<_>>())
+            .field("speaker", &self.speaker.names().collect::<Vec<_>>())
             .finish()
     }
 }

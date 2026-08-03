@@ -453,13 +453,20 @@ export interface PipelineTestResult {{
   reply_audio?: string;
 }}
 
-export type ComponentConfigValueType = "string" | "boolean";
+export type ComponentConfigValueType =
+  | "string"
+  | "boolean"
+  | "integer"
+  | "string_list";
 export type ComponentConfigFormat = "url";
 
 export interface ComponentConfigProperty {{
   type: ComponentConfigValueType;
   format?: ComponentConfigFormat;
   pattern?: string;
+  /// The only values this field accepts, when it is a closed set — a wake
+  /// word engine, for instance. Absent means the field is open.
+  options?: string[];
 }}
 
 export interface ComponentConfigSchema {{
@@ -479,14 +486,31 @@ export interface ProviderComponentCatalog {{
   components: ProviderComponentDescriptor[];
 }}
 
-export type ProviderCapability = "stt" | "llm" | "tts" | "tool";
+export type ProviderCapability =
+  | "stt"
+  | "llm"
+  | "tts"
+  | "tool"
+  | "wake"
+  | "speaker_id";
 export type ProviderDefinitionVariantType =
   | "openai_llm"
   | "openai_stt"
   | "openai_tts"
   | "wyoming_stt"
   | "wyoming_tts"
+  | "wyoming_wake"
+  | "device_wake"
+  | "http_speaker_id"
+  | "diarization_server_speaker_id"
   | "mcp_tool";
+
+/// The three wake word detectors Conduit speaks to. All are packaged as
+/// Wyoming services; only microWakeWord also runs on satellite hardware.
+export type WakeEngine = "microwakeword" | "openwakeword" | "nanowakeword";
+
+/// The embedding models a speaker identification service may be running.
+export type SpeakerEngine = "speechbrain" | "resemblyzer" | "pyannote";
 
 export type ProviderSecret =
   | {{ type: "inline"; value: string }}
@@ -529,6 +553,30 @@ export type ProviderDefinitionVariant =
       streaming: boolean;
     }}
   | {{
+      type: "wyoming_wake";
+      url: string;
+      engine: WakeEngine;
+      phrases: string[];
+      threshold_percent: number;
+    }}
+  | {{
+      type: "device_wake";
+      engine: WakeEngine;
+      phrases: string[];
+    }}
+  | {{
+      type: "diarization_server_speaker_id";
+      base_url: string;
+      threshold_percent: number;
+    }}
+  | {{
+      type: "http_speaker_id";
+      base_url: string;
+      api_key?: ProviderSecret;
+      engine: SpeakerEngine;
+      threshold_percent: number;
+    }}
+  | {{
       type: "mcp_tool";
       transport: McpTransport;
     }};
@@ -542,6 +590,22 @@ export interface ProviderDefinition {{
   id: string;
   label: string;
   variant: ProviderDefinitionVariant;
+}}
+
+/// One voice a synthesizer can speak with.
+export interface Voice {{
+  id: string;
+  name: string;
+  language: string;
+}}
+
+/// The voices a synthesizer offers.
+///
+/// An empty list is a real answer: a provider that accepts any voice name has
+/// no catalogue, and the editor lets an operator type one instead.
+export interface ProviderVoices {{
+  provider: string;
+  voices: Voice[];
 }}
 
 export interface ProviderDefinitionView {{
@@ -652,6 +716,7 @@ export interface ConduitApiClient {{
   ) => Promise<ProviderDefinitionView>;
   deleteProviderDefinition: (id: string) => Promise<void>;
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
+  listProviderVoices: (id: string) => Promise<ProviderVoices>;
   getPipeline: (name: string) => Promise<PipelineView>;
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
@@ -676,6 +741,7 @@ export const conduitApiRoutes = {{
   providers: "/v1/providers",
   provider: "/v1/providers/{{id}}",
   providerTest: "/v1/providers/{{id}}/test",
+  providerVoices: "/v1/providers/{{id}}/voices",
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{{name}}",
   pipelineTest: "/v1/pipelines/{{name}}/test-turn",
@@ -717,6 +783,8 @@ export function createConduitApiClient(
       requestJson<ProviderStatus>(request, config, providerTestRoute(id), {{
         method: "POST",
       }}),
+    listProviderVoices: (id) =>
+      requestJson<ProviderVoices>(request, config, providerVoicesRoute(id)),
     getPipeline: (name) =>
       requestJson<PipelineView>(request, config, pipelineRoute(name)),
     putPipeline: (name, graph) =>
@@ -753,6 +821,13 @@ function pipelineRoute(name: string): string {{
 
 function providerRoute(id: string): string {{
   return conduitApiRoutes.provider.replace("{{id}}", encodeURIComponent(id));
+}}
+
+function providerVoicesRoute(id: string): string {{
+  return conduitApiRoutes.providerVoices.replace(
+    "{{id}}",
+    encodeURIComponent(id),
+  );
 }}
 
 function providerTestRoute(id: string): string {{
@@ -846,7 +921,13 @@ export type StaleState = "fresh" | "stale";
 export type PipelineHealthState = "not_runnable" | "unproven" | "healthy" | "degraded" | "unhealthy";
 export type ComponentKind = "capture" | "transcription" | "reasoning" | "tools" | "synthesis";
 export type ComponentHealthState = "not_configured" | "unused" | "unproven" | "healthy" | "degraded" | "unhealthy";
-export type ProviderKind = "stt" | "llm" | "tool" | "tts";
+export type ProviderKind =
+  | "stt"
+  | "llm"
+  | "tool"
+  | "tts"
+  | "wake"
+  | "speaker_id";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
 export type SnapshotResource =
   | "runtime_state"

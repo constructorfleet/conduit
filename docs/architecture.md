@@ -12,7 +12,9 @@ runtime progress is published as events.
 | `conduit-provider` | Object-safe provider traits for speech recognition, language models, synthesis, tools, storage, wake word, speaker identification, and memory. |
 | `conduit-runtime` | Resolves a graph against registered providers and runs one conversation turn from captured audio to synthesized speech. |
 | `conduit-openai` | OpenAI-compatible provider implementations for chat completions, audio transcriptions, and audio speech. |
-| `conduit-wyoming` | Wyoming protocol speech recognition and synthesis over a TCP endpoint. |
+| `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
+| `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |
+| `services/speaker-id` | The reference implementation of that contract, published as `conduit-speaker-id` with CPU and GPU tags. |
 | `conduit-mcp` | Model Context Protocol client and tool providers over stdio, streamable HTTP, and SSE. |
 | `conduit-store` | Memory, file, and PostgreSQL implementations of the pipeline store contract. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
@@ -106,10 +108,25 @@ counting `core` and `llm` nodes together, because a pipeline that reasons twice
 says nothing about which answer is the reply — and the refusal is about there
 being two models rather than about how the graph spells them.
 
-Today the runtime executes at most one recognizer, one language model, at most
-one synthesizer, and any number of tool branches downstream of the model.
-`router`, `wake_word`, `speaker_id`, and `memory` nodes exist in the graph
-vocabulary but are not runnable runtime stages yet.
+Today the runtime executes at most one wake stage, one identification stage,
+one recognizer, one language model, at most one synthesizer, and any number of
+tool branches downstream of the model. `router` and `memory` nodes exist in the
+graph vocabulary but are not runnable runtime stages yet.
+
+A wake stage gates capture: every chunk reaches the detector and nothing
+reaches the recognizer until a phrase is accepted. The gate forwards half a
+second of audio from before the activation, because a detector reports some way
+after the phrase ended and opening at that instant would clip the first word of
+the command. Where detection runs — on a Wyoming server or on the satellite
+itself — is a property of the provider definition rather than of the node.
+
+An identification stage forks capture rather than queuing behind it: it and the
+recognizer both want the whole utterance, and asking in sequence would double
+how long the person waits. The identity it finds is what a tool's per-speaker
+permission check sees. A detector that fails ends the turn, because a pipeline
+that cannot tell whether it was addressed should not guess; an identifier that
+fails does not, because not knowing who is speaking is how every pipeline
+behaved before the stage existed.
 
 Validation requires every origin to reach the core and the core to reach every
 terminal, so a graph cannot branch past the model and deliver something the
@@ -174,4 +191,5 @@ pipeline definition.
 
 ## Current Limits
 
-The runtime does not yet detect wake words or identify speakers. These are documented as known gaps in [README.md](../README.md).
+The runtime does not yet route between branches or read and write memory. These
+are documented as known gaps in [README.md](../README.md).

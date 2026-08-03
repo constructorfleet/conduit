@@ -1114,6 +1114,118 @@ async fn saving_a_wyoming_tts_definition_registers_a_runtime_tts_provider() {
 }
 
 #[tokio::test]
+async fn a_synthesizer_reports_the_voices_it_offers() {
+    // So the pipeline editor can offer a choice instead of a text box an
+    // operator fills in and finds out about at the first reply.
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/openai-speech",
+            serde_json::json!({
+                "id": "openai-speech",
+                "label": "OpenAI Speech",
+                "variant": {
+                    "type": "openai_tts",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "tts-1",
+                    "voices": ["alloy", "shimmer"]
+                }
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/openai-speech/voices")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["provider"], "openai-speech");
+    let voices = body["voices"].as_array().expect("voices");
+    let ids: Vec<&str> = voices.iter().filter_map(|voice| voice["id"].as_str()).collect();
+    assert_eq!(ids, ["alloy", "shimmer"]);
+}
+
+#[tokio::test]
+async fn a_synthesizer_with_no_catalogue_reports_an_empty_list() {
+    // A Wyoming synthesizer does not enumerate: the voices it can speak are
+    // whatever the server has been given, and it accepts any name. An empty
+    // list is a real answer, not a failure — the console falls back to letting
+    // an operator type one, which is what they had before this endpoint.
+    let server = MockWyomingServer::listening().await;
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/piper-local",
+            serde_json::json!({
+                "id": "piper-local",
+                "label": "Piper",
+                "variant": { "type": "wyoming_tts", "url": server.url() }
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/piper-local/voices")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["voices"].as_array().expect("voices").is_empty());
+}
+
+#[tokio::test]
+async fn a_definition_that_names_no_voices_still_offers_the_models_own() {
+    // Leaving the voice list empty on an OpenAI definition does not mean "no
+    // voices": the model has its own, and an operator who did not narrow them
+    // should be offered all of them rather than none.
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/openai-speech",
+            serde_json::json!({
+                "id": "openai-speech",
+                "label": "OpenAI Speech",
+                "variant": {
+                    "type": "openai_tts",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "tts-1",
+                    "voices": []
+                }
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/openai-speech/voices")).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !body["voices"].as_array().expect("voices").is_empty(),
+        "the model's built-in voices are offered: {body}"
+    );
+}
+
+#[tokio::test]
+async fn asking_a_recognizer_for_voices_is_refused() {
+    // A recognizer has no voices, and answering with an empty list would read
+    // as "this synthesizer offers none" rather than "this is not one".
+    let state = AppState::new(EventBus::default());
+    store_valid_graph_provider_definitions(&state).await;
+
+    let (status, body) = call(&state, get("/v1/providers/whisper/voices")).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().expect("detail").contains("text-to-speech"), "{body}");
+}
+
+#[tokio::test]
+async fn asking_an_unknown_provider_for_voices_is_a_404() {
+    let state = AppState::new(EventBus::default());
+    let (status, _) = call(&state, get("/v1/providers/nobody/voices")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn saving_a_wyoming_stt_definition_registers_a_runtime_stt_provider() {
     let server = MockWyomingServer::listening().await;
     let state = AppState::new(EventBus::default());
@@ -1399,30 +1511,17 @@ async fn unknown_stage_filters_are_rejected() {
 }
 
 #[tokio::test]
-async fn subscribing_to_a_stage_nothing_publishes_is_refused() {
-    // `wake_word` is a real stage name that parses, and nothing emits it — so
-    // this used to be a 200 followed by silence for as long as the client was
-    // willing to wait, which is indistinguishable from a broken pipeline.
+async fn every_stage_can_be_subscribed_to_now_that_each_one_publishes() {
+    // `wake_word` and `identity` were once refused, because nothing emitted
+    // them and a subscription would have been a stream that stayed open and
+    // silent. Both have providers behind them now, so refusing them would deny
+    // an operator the events they configured a detector to produce.
     let state = AppState::new(EventBus::default());
-    let (status, body) = call(&state, get("/v1/events?stages=wake_word")).await;
-
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    let detail = body["detail"].as_str().expect("detail");
-    assert!(detail.contains("wake_word"), "the message must name the stage: {detail}");
-    assert!(
-        detail.contains("reasoning") && detail.contains("capture"),
-        "and say what does carry traffic, including the newly emitting capture: {detail}"
-    );
-}
-
-#[tokio::test]
-async fn one_silent_stage_refuses_the_whole_subscription() {
-    // Dropping just the silent stage would hand back a stream that quietly
-    // means something narrower than what was asked for.
-    let state = AppState::new(EventBus::default());
-    let (status, body) = call(&state, get("/v1/events?stages=reasoning,identity")).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body["detail"].as_str().expect("detail").contains("identity"));
+    let response = router(state)
+        .oneshot(get("/v1/events?stages=wake_word,identity"))
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

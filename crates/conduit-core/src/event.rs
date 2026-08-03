@@ -91,9 +91,8 @@ pub enum Event {
     // ---- wake word -------------------------------------------------------
     /// A wake word crossed its detection threshold.
     ///
-    /// Nothing publishes this: there is no wake word provider trait, so
-    /// detection happens on the device and never reaches the bus. See
-    /// [`Stage::has_emitter`].
+    /// Published by a pipeline with a wake stage, at the moment the gate
+    /// opens and audio starts reaching the recognizer.
     WakeWordDetected {
         /// Configured name of the phrase, e.g. `"hey jarvis"`.
         phrase: String,
@@ -102,8 +101,8 @@ pub enum Event {
     },
     /// A candidate activation was scored but fell below threshold.
     ///
-    /// Nothing publishes this, for the same reason as
-    /// [`Event::WakeWordDetected`].
+    /// Published rather than swallowed: a near miss is the evidence an
+    /// operator has that a detector's threshold is set too high.
     WakeWordRejected {
         /// Configured name of the phrase that was considered.
         phrase: String,
@@ -149,8 +148,9 @@ pub enum Event {
     // ---- identity --------------------------------------------------------
     /// The speaker was matched against an enrolled voice print.
     ///
-    /// Nothing publishes this: no provider identifies a voice, so a turn has
-    /// nothing to learn an identity from. See [`Stage::has_emitter`].
+    /// Published by a pipeline with an identification stage, once per turn.
+    /// A voice that matched nobody is published too, with no speaker: not
+    /// recognizing someone is an answer.
     SpeakerIdentified {
         /// The matched speaker, or `None` when the voice is unknown.
         speaker: Option<SpeakerId>,
@@ -467,48 +467,6 @@ pub enum Stage {
     Diagnostics,
 }
 
-impl Stage {
-    /// Whether anything in Conduit publishes events for this stage.
-    ///
-    /// The vocabulary is deliberately wider than the implementation — a stage
-    /// is named here before a provider exists for it, so the wire format does
-    /// not change when one arrives. But a subscriber that filters on a stage
-    /// nothing emits gets a stream that stays open and silent forever, which
-    /// reads exactly like a broken pipeline. Whoever accepts a subscription can
-    /// ask this and refuse instead, so "nothing is happening" is answered at
-    /// subscribe time rather than left to be diagnosed.
-    ///
-    /// This is about emitters, not about whether a *particular* pipeline
-    /// reaches a stage: `tools` has an emitter even though a graph with no tool
-    /// nodes will never reach it.
-    ///
-    /// The match is exhaustive on purpose, despite `Stage` being
-    /// `#[non_exhaustive]`: a stage added without deciding whether anything
-    /// publishes it should fail to compile rather than default to either
-    /// answer. Defaulting to "silent" would refuse a subscription to a stage
-    /// that works; defaulting to "emitted" would reintroduce the silent stream
-    /// this exists to prevent.
-    #[must_use]
-    pub const fn has_emitter(self) -> bool {
-        match self {
-            Self::Capture
-            | Self::Transcription
-            | Self::Conversation
-            | Self::Reasoning
-            | Self::Tools
-            | Self::Synthesis
-            | Self::Diagnostics => true,
-            // No wake word provider trait: detection happens on the device and
-            // is never reported to the server.
-            Self::WakeWord => false,
-            // No speaker identification provider, so nothing ever matches a
-            // voice print. `Runner::run_as` takes an identity but no caller
-            // has one to give.
-            Self::Identity => false,
-        }
-    }
-}
-
 /// Why a conversation ended before completing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -582,93 +540,23 @@ mod tests {
     }
 
     #[test]
-    fn the_stages_a_turn_produces_all_have_emitters() {
-        // Each of these is published by `conduit-runtime`, which the tests in
-        // `crates/conduit-runtime/tests/turn.rs` assert directly. If one of
-        // those stops being emitted, this claim becomes a lie that leaves a
-        // subscriber waiting on a stream that will never speak.
-        for stage in [
-            Stage::Capture,
-            Stage::Transcription,
-            Stage::Conversation,
-            Stage::Reasoning,
-            Stage::Tools,
-            Stage::Synthesis,
-            Stage::Diagnostics,
-        ] {
-            assert!(stage.has_emitter(), "{stage:?} is emitted by the runtime");
-        }
-    }
-
-    #[test]
-    fn the_stages_nothing_implements_say_so() {
-        // Not aspirational: there is no wake word or speaker identification
-        // provider trait, so nothing can publish these. Accepting a
-        // subscription to them would hand back a permanently silent stream.
-        assert!(!Stage::WakeWord.has_emitter());
-        assert!(!Stage::Identity.has_emitter());
-    }
-
-    #[test]
-    fn a_stage_with_no_emitter_has_no_event_the_runtime_sends() {
-        // The check that keeps `has_emitter` honest in the other direction.
-        // Every variant below is one the runtime publishes; none of them may
-        // belong to a stage this claims is silent, or a subscriber would be
-        // refused a stage that does in fact carry traffic.
-        let emitted = [
-            Event::AudioStarted { format: AudioFormat::DEFAULT },
-            Event::AudioChunkReceived { sequence: 0, bytes: 1 },
-            Event::AudioFinished { duration_ms: 1 },
-            Event::SpeechPartial { text: String::new() },
-            Event::SpeechFinal { text: String::new(), confidence: None, language: None },
-            Event::ConversationStarted,
-            Event::TurnStarted { turn: TurnId::new() },
-            Event::ConversationCancelled { reason: CancelReason::Error },
-            Event::ConversationCompleted,
-            Event::LlmRequestStarted { model: String::new() },
-            Event::LlmToken { delta: String::new() },
-            Event::LlmFinished {
-                reason: FinishReason::Stop,
-                prompt_tokens: None,
-                completion_tokens: None,
-            },
-            Event::ToolRequested { call: ToolCallId::new("c"), name: String::new() },
-            Event::ToolStarted { call: ToolCallId::new("c") },
-            Event::ToolConfirmationRequested {
-                call: ToolCallId::new("c"),
-                prompt: String::new(),
-            },
-            Event::ToolCompleted { call: ToolCallId::new("c"), duration_ms: 0 },
-            Event::ToolFailed { call: ToolCallId::new("c"), error: String::new() },
-            Event::TtsStarted { voice: String::new() },
-            Event::AudioStreaming { sequence: 0, bytes: 0 },
-            Event::TtsFinished { duration_ms: 0 },
-            Event::StageFailed { node: String::new(), error: String::new(), recovered: false },
-        ];
-
-        for event in emitted {
-            let stage = event.stage();
-            assert!(stage.has_emitter(), "{event:?} is published, so {stage:?} is not silent");
-        }
-    }
-
-    #[test]
-    fn the_events_with_no_emitter_belong_to_the_silent_stages() {
-        // The converse: these seven have no production emitter, and each must
-        // sit in a stage marked silent so nothing subscribes to it expecting
-        // traffic. `SpeechPartial` is not here — it has one.
-        let silent = [
-            Event::WakeWordDetected { phrase: String::new(), confidence: 0.0 },
-            Event::WakeWordRejected { phrase: String::new(), confidence: 0.0 },
-            Event::SpeakerIdentified { speaker: None, confidence: 0.0 },
-        ];
-
-        for event in silent {
-            let stage = event.stage();
-            assert!(
-                !stage.has_emitter(),
-                "nothing publishes {event:?}, so {stage:?} is silent"
-            );
-        }
+    fn an_activation_and_a_match_are_filed_under_their_own_stages() {
+        // A subscriber follows one stage at a time, so an event filed under
+        // the wrong one is invisible to whoever asked for it. Wake word
+        // detection and speaker identification were the last two stages
+        // nothing published; now that the runtime does, where their events
+        // land is what makes `?stage=wake_word` show anything.
+        assert_eq!(
+            Event::WakeWordDetected { phrase: String::new(), confidence: 0.0 }.stage(),
+            Stage::WakeWord
+        );
+        assert_eq!(
+            Event::WakeWordRejected { phrase: String::new(), confidence: 0.0 }.stage(),
+            Stage::WakeWord
+        );
+        assert_eq!(
+            Event::SpeakerIdentified { speaker: None, confidence: 0.0 }.stage(),
+            Stage::Identity
+        );
     }
 }

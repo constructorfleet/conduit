@@ -117,6 +117,60 @@ pub async fn delete(
     }
 }
 
+/// The voices a synthesizer offers.
+#[derive(Debug, Serialize)]
+pub struct ProviderVoices {
+    /// Provider definition the voices belong to.
+    pub provider: String,
+    /// Voices the provider reported, in the order it reported them.
+    ///
+    /// Empty is a real answer: a provider that passes any voice name through
+    /// to its backend has no catalogue to offer, and the console should let an
+    /// operator type one rather than pretend there is nothing to choose.
+    pub voices: Vec<conduit_provider::tts::Voice>,
+}
+
+/// `GET /v1/providers/{id}/voices` — the voices one synthesizer offers.
+///
+/// The pipeline editor asks so an operator picks a voice their provider
+/// actually has, rather than typing one and finding out at the first reply.
+///
+/// # Errors
+///
+/// Returns 404 if there is no such definition, 422 if the definition is not a
+/// synthesizer, and 503 if the provider is registered but its catalogue cannot
+/// be retrieved.
+pub async fn voices(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderVoices>, ApiError> {
+    let definition = state
+        .provider_definition(&id)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
+    if definition.capability() != ProviderCapability::Tts {
+        return Err(ApiError::unprocessable(format!(
+            "provider definition `{id}` is not a text-to-speech provider, so it has no voices"
+        )));
+    }
+
+    // A definition that is saved but not registered — its service was down
+    // when the snapshot was built — has no catalogue to read. That is not a
+    // failure of the request: the console falls back to a typed voice, which
+    // is what an operator had before this endpoint existed.
+    let Some(provider) = state.providers().and_then(|providers| providers.tts().get(&id))
+    else {
+        return Ok(Json(ProviderVoices { provider: id, voices: Vec::new() }));
+    };
+
+    let voices = provider.voices().await.map_err(|error| {
+        ApiError::unavailable(format!("provider `{id}` could not list its voices: {error}"))
+    })?;
+    Ok(Json(ProviderVoices { provider: id, voices }))
+}
+
 /// `POST /v1/providers/{id}/test` — active reachability check for one provider.
 pub async fn test(
     _caller: ManagementCaller,
@@ -166,6 +220,14 @@ pub async fn test(
             Some(provider) => Some(provider.health().await),
             None => None,
         },
+        ProviderCapability::Wake => match providers.wake().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+        ProviderCapability::SpeakerId => match providers.speaker().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
     };
 
     let Some(health) = health else {
@@ -198,6 +260,8 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Llm => ProviderKind::Llm,
         ProviderCapability::Tts => ProviderKind::Tts,
         ProviderCapability::Tool => ProviderKind::Tool,
+        ProviderCapability::Wake => ProviderKind::Wake,
+        ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
     }
 }
 
@@ -209,8 +273,25 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
             validate_http_url("base_url", base_url)?;
         }
         ProviderDefinitionVariant::WyomingStt { url, .. }
-        | ProviderDefinitionVariant::WyomingTts { url, .. } => {
+        | ProviderDefinitionVariant::WyomingTts { url, .. }
+        | ProviderDefinitionVariant::WyomingWake { url, .. } => {
             validate_tcp_url("url", url)?;
+        }
+        ProviderDefinitionVariant::HttpSpeakerId { base_url, .. }
+        | ProviderDefinitionVariant::DiarizationServerSpeakerId { base_url, .. } => {
+            validate_http_url("base_url", base_url)?;
+        }
+        // A satellite that wakes itself has no endpoint to check: the
+        // detector is flashed onto the device, and the only thing that could
+        // be wrong here is an engine too large for it to run.
+        ProviderDefinitionVariant::DeviceWake { engine, .. } => {
+            if !engine.runs_on_device() {
+                return Err(ApiError::unprocessable(format!(
+                    "`{}` cannot run on a satellite; use a wyoming_wake definition for it, \
+                     or microwakeword on the device",
+                    engine.name()
+                )));
+            }
         }
         ProviderDefinitionVariant::McpTool { transport } => {
             validate_mcp_transport(transport)?;
