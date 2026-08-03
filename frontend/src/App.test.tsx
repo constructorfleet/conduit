@@ -1912,6 +1912,55 @@ describe("Pipelines graph editor", () => {
 });
 
 describe("Providers workspace", () => {
+  it("builds a wake word definition with the field types the server expects", async () => {
+    // The schema grew three shapes the form could not render: a closed set, a
+    // list, and a number. Typing them all into text boxes produced a
+    // definition the API refuses — `threshold_percent: "70"` is not a number —
+    // and the refusal arrived long after the operator filled the form in.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Wyoming wake word" }),
+    );
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openwakeword");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
+    await user.type(
+      screen.getByLabelText("url required"),
+      "tcp://openwakeword.local:10400",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("engine required"),
+      "openwakeword",
+    );
+    await user.type(
+      screen.getByLabelText("phrases (comma separated)"),
+      "hey jarvis, okay nabu",
+    );
+    await user.type(screen.getByLabelText("threshold_percent"), "70");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider openwakeword saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toMatchObject({
+      type: "wyoming_wake",
+      url: "tcp://openwakeword.local:10400",
+      engine: "openwakeword",
+      phrases: ["hey jarvis", "okay nabu"],
+      threshold_percent: 70,
+    });
+  });
+
   it("creates and edits schema-backed provider instances from provider cards", async () => {
     const user = userEvent.setup();
     render(<App initialComponentCatalog={componentCatalog()} />);
@@ -2457,6 +2506,24 @@ function componentCatalog(): ProviderComponentCatalog {
             streaming: { type: "boolean" },
           },
           required: ["base_url", "model"],
+        },
+      },
+      {
+        id: "wyoming.wake",
+        label: "Wyoming wake word",
+        kind: "wake",
+        definition_variant: "wyoming_wake",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+            engine: {
+              type: "string",
+              options: ["openwakeword", "microwakeword", "nanowakeword"],
+            },
+            phrases: { type: "string_list" },
+            threshold_percent: { type: "integer" },
+          },
+          required: ["url", "engine"],
         },
       },
       {
