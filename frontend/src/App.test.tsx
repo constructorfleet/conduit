@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +22,6 @@ beforeEach(() => {
   vi.restoreAllMocks();
   sessionStorage.clear();
   localStorage.clear();
-  mockSmallScreen(false);
   mockOperatorApi();
 });
 
@@ -310,9 +309,7 @@ describe("Overview operations workspace", () => {
 
     expect(screen.getByText("garage_mic")).toBeInTheDocument();
     expect(screen.getByText("garage_tts")).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("garage_mic to garage_stt"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline stages")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       new URL("/v1/status", window.location.origin),
       expect.objectContaining({
@@ -399,7 +396,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent("stt");
   });
 
   it("invokes inline Provider Settings and allows optional tool setup to be skipped", async () => {
@@ -596,7 +593,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent("stt");
   });
 
   it("creates provider definitions before saving the first guided pipeline", async () => {
@@ -668,7 +665,7 @@ describe("First-Run Guided Setup", () => {
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
     expect(screen.getByText("kitchen")).toBeInTheDocument();
-    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent("stt");
   });
 });
 
@@ -842,20 +839,20 @@ describe("Pipelines graph editor", () => {
     await enterPipelinesSection(user);
 
     expect(
-      screen.getByRole("heading", { name: "Graph Editor" }),
+      screen.getByRole("heading", { name: "Pipeline Editor" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("mic")).toBeInTheDocument();
-    expect(screen.getByText("stt")).toBeInTheDocument();
-    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent(
+      "micsource / websocketsttstt / whisperllmcore / openaittstts / piper-localspeakersink / websocket",
+    );
     expect(screen.getByLabelText("Pipeline selector")).toHaveTextContent(
       "Pipeline1kitchen",
     );
-    expect(
-      screen.getByRole("group", { name: "tts synthesis" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("synthesis / piper-local"),
-    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Speech to text provider")).toHaveValue(
+      "whisper",
+    );
+    expect(screen.getByLabelText("Text to speech provider")).toHaveValue(
+      "piper-local",
+    );
   });
 
   it("validates edits through the pipeline validation seam before saving", async () => {
@@ -877,14 +874,14 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
 
     expect(screen.getByText("graph is disconnected")).toBeInTheDocument();
     expect(savedGraphs).toEqual([]);
 
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(screen.getByText("Validation passed")).toBeInTheDocument();
     // Binding a tool adds no node and no edge: the graph it validated is the
@@ -904,7 +901,7 @@ describe("Pipelines graph editor", () => {
     render(<App initialPipelineViews={[pipelineView()]} />);
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
 
     expect(await screen.findByText("Validation passed")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -929,15 +926,9 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for llm" }),
-    );
-    await user.selectOptions(
-      screen.getByLabelText("Provider for llm"),
-      "openai",
-    );
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.selectOptions(screen.getByLabelText("Model provider"), "openai");
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
     expect(llm).toMatchObject({
@@ -958,12 +949,9 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for llm" }),
-    );
-    await user.type(screen.getByLabelText("Model for llm"), "qwen3:8b");
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.type(screen.getByLabelText("Model"), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
     expect(llm).toMatchObject({
@@ -984,12 +972,9 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for tts" }),
-    );
-    await user.type(screen.getByLabelText("Voice for tts"), "en_GB-alba");
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.type(screen.getByLabelText("Voice"), "en_GB-alba");
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     const tts = savedGraphs[0]?.nodes.find((node) => node.id === "tts");
     expect(tts).toMatchObject({ kind: "tts", voice: "en_GB-alba" });
@@ -1010,14 +995,11 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for llm" }),
-    );
-    const model = screen.getByLabelText("Model for llm");
+    const model = screen.getByLabelText("Model");
     await user.type(model, "gpt-4o");
     await user.clear(model);
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     const llm = savedGraphs[0]?.nodes.find((node) => node.id === "llm");
     expect(llm).toMatchObject({ kind: "core" });
@@ -1037,16 +1019,11 @@ describe("Pipelines graph editor", () => {
 
     await enterPipelinesSection(user);
 
-    const graph = screen.getByLabelText("Pipeline graph");
     // Recognition turns audio into text and the model answers with an
-    // utterance, so three consecutive links carry three different things.
-    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
-      "audio",
-    );
-    expect(within(graph).getByLabelText("stt to llm").dataset.modality).toBe(
-      "text",
-    );
-    expect(within(graph).getByLabelText("llm to tts").dataset.modality).toBe(
+    // utterance, so three consecutive stages hand on three different things.
+    expect(screen.getByLabelText("mic stage").dataset.modality).toBe("audio");
+    expect(screen.getByLabelText("stt stage").dataset.modality).toBe("text");
+    expect(screen.getByLabelText("llm stage").dataset.modality).toBe(
       "utterance",
     );
   });
@@ -1063,19 +1040,11 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    const graph = screen.getByLabelText("Pipeline graph");
-    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
-      "audio",
-    );
+    expect(screen.getByLabelText("mic stage").dataset.modality).toBe("audio");
 
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for mic" }),
-    );
-    await user.selectOptions(screen.getByLabelText("Modality for mic"), "text");
+    await user.selectOptions(screen.getByLabelText("Source modality"), "text");
 
-    expect(within(graph).getByLabelText("mic to stt").dataset.modality).toBe(
-      "text",
-    );
+    expect(screen.getByLabelText("mic stage").dataset.modality).toBe("text");
   });
 
   it("uses providers configured on the Providers page as pipeline choices", async () => {
@@ -1117,15 +1086,12 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
-    await user.click(
-      screen.getByRole("button", { name: "Edit provider for llm" }),
-    );
     await user.selectOptions(
-      screen.getByLabelText("Provider for llm"),
+      screen.getByLabelText("Model provider"),
       "openai-fast",
     );
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(
       savedGraphs[0]?.nodes.find((node) => node.id === "llm"),
@@ -1181,8 +1147,8 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(
       savedGraphs[0]?.nodes.find((node) => node.id === "llm"),
@@ -1228,9 +1194,9 @@ describe("Pipelines graph editor", () => {
 
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
-    expect(
-      screen.getByRole("group", { name: "tts synthesis" }),
-    ).toHaveTextContent("piper");
+    expect(await screen.findByLabelText("tts stage")).toHaveTextContent(
+      "piper",
+    );
   });
 
   it("keeps saved OpenAI and Wyoming provider configuration over inferred defaults", async () => {
@@ -1428,7 +1394,7 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders an atom-style graph canvas and exposes editor actions", async () => {
+  it("renders the pipeline as a form and exposes editor actions", async () => {
     const user = userEvent.setup();
     render(
       <App
@@ -1439,56 +1405,36 @@ describe("Pipelines graph editor", () => {
 
     await enterPipelinesSection(user);
 
-    const graph = screen.getByLabelText("Pipeline graph");
-    expect(within(graph).getByLabelText("mic to stt")).toBeInTheDocument();
-    const llmToTtsLink = within(graph).getByLabelText("llm to tts");
-    expect(llmToTtsLink.closest(".atom-flow-item")).toContainElement(
-      within(graph).getByRole("group", { name: "tts synthesis" }),
+    const editor = screen.getByLabelText("Pipeline configuration");
+    for (const stage of ["Input", "Reasoning", "Output"]) {
+      expect(within(editor).getByLabelText(stage)).toBeInTheDocument();
+    }
+    expect(within(editor).getByLabelText("Pipeline stages")).toHaveTextContent(
+      "micsource / websocketsttstt / whisperllmcore / openaittstts / piper-localspeakersink / websocket",
     );
-    expect(llmToTtsLink.closest(".atom-flow-item")).not.toContainElement(
-      within(graph).getByRole("group", { name: "llm reasoning" }),
-    );
-    expect(
-      within(graph).getByRole("group", { name: "mic capture" }),
-    ).toHaveClass("linear");
-    expect(
-      within(graph).getByRole("group", { name: "llm reasoning" }),
-    ).not.toHaveClass("linear");
-    expect(within(graph).getAllByText("Reasoning core")).toHaveLength(1);
-    expect(
-      within(graph).queryByRole("list", { name: "Pipeline edges" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(graph).getByRole("toolbar", { name: "Graph canvas controls" }),
-    ).toBeInTheDocument();
 
     const toolbar = screen.getByRole("toolbar", {
-      name: "Graph editor actions",
+      name: "Pipeline editor actions",
     });
     for (const action of [
-      "Add tool node",
-      "Add memory node",
-      "Validate Graph",
+      "Validate pipeline",
       "Run test turn",
-      "Save Graph",
-      "Delete selected node",
+      "Save pipeline",
     ]) {
       expect(
         within(toolbar).getByRole("button", { name: action }),
       ).toBeInTheDocument();
     }
-    expect(
-      within(toolbar).queryByRole("button", { name: "Add fallback TTS" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete mic" })).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Delete speaker" }),
-    ).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Delete tts" }));
-    expect(screen.queryByText("tts")).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Remove Text to speech"));
+
+    expect(
+      within(screen.getByLabelText("Pipeline stages")).queryByText(
+        "tts / piper-local",
+      ),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add TTS node" })).toBeEnabled();
+    expect(screen.getByLabelText("Add Text to speech")).toBeEnabled();
   });
 
   it("keeps mic and speaker as functional graph endpoints when saving", async () => {
@@ -1527,17 +1473,12 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    const graph = screen.getByLabelText("Pipeline graph");
-    const mic = within(graph).getByRole("group", { name: "mic capture" });
-    const speaker = within(graph).getByRole("group", {
-      name: "speaker capture",
-    });
-    expect(
-      mic.compareDocumentPosition(speaker) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent(
+      "micsource / websocketsttstt / whisperllmcore / openaittstts / piper-localspeakersink / websocket",
+    );
 
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(savedGraphs[0]?.nodes.map((node) => node.id)).toEqual([
       "mic",
@@ -1566,10 +1507,10 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Delete tts" }));
-    await user.click(screen.getByRole("button", { name: "Add TTS node" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByLabelText("Remove Text to speech"));
+    await user.click(screen.getByLabelText("Add Text to speech"));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(savedGraphs[0]?.nodes.map((node) => node.id)).toEqual([
       "mic",
@@ -1585,48 +1526,6 @@ describe("Pipelines graph editor", () => {
     });
   });
 
-  it("keeps long pipeline node labels inside the rendered node card", async () => {
-    const user = userEvent.setup();
-    const longId = "llm_node_with_a_needlessly_long_operator_label";
-    const longProvider = "openai-provider-with-a-very-long-local-name";
-    render(
-      <App
-        initialPipelineViews={[
-          {
-            graph: {
-              ...pipelineView().graph,
-              nodes: pipelineView().graph.nodes.map((node) =>
-                node.kind === "core"
-                  ? {
-                      ...node,
-                      id: longId,
-                      core: { ...node.core, model: { provider: longProvider } },
-                    }
-                  : node,
-              ),
-              edges: pipelineView().graph.edges.map((edge) => ({
-                ...edge,
-                from: edge.from === "llm" ? longId : edge.from,
-                to: edge.to === "llm" ? longId : edge.to,
-              })),
-            },
-            order: ["mic", "stt", longId, "tts", "speaker"],
-          },
-        ]}
-      />,
-    );
-
-    await enterPipelinesSection(user);
-
-    const nodeCard = screen.getByRole("group", {
-      name: `${longId} reasoning`,
-    });
-    expect(within(nodeCard).getByText(longId)).toHaveClass("node-label");
-    expect(within(nodeCard).getByText(longProvider)).toHaveClass(
-      "node-provider-label",
-    );
-  });
-
   it("keeps unsaved drafts when switching between pipelines", async () => {
     const user = userEvent.setup();
     render(
@@ -1637,7 +1536,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add memory" }));
     expect(screen.getByText("builtin.memory")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "garage" }));
@@ -1671,10 +1570,9 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("group", { name: "speaker capture" }));
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     // Selecting a node used to decide where a tool was inserted. A binding
     // has nowhere to be inserted, so the selection cannot misplace it.
@@ -1714,12 +1612,14 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-    await user.click(screen.getByRole("menuitem", { name: "Calendar Tool" }));
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-    await user.click(screen.getByRole("menuitem", { name: "Lights Tool" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
+    await user.selectOptions(
+      screen.getByLabelText("Tool 2 provider"),
+      "lights-tool",
+    );
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     // Two bindings on the one core, and no new nodes or edges: a tool is
     // configuration rather than a stage the reply passes through.
@@ -1731,9 +1631,6 @@ describe("Pipelines graph editor", () => {
     expect(
       savedGraphs[0]?.nodes.filter((node) => node.kind === "core"),
     ).toHaveLength(1);
-    expect(
-      screen.getByText("No unused configured tool providers"),
-    ).toBeInTheDocument();
   });
 
   it("binds each memory store separately to the core", async () => {
@@ -1747,10 +1644,10 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Add memory" }));
+    await user.click(screen.getByRole("button", { name: "Add memory" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     // Two bindings, not two nodes with invented unique ids. A binding is
     // identified by its position on the core, so nothing has to be made
@@ -1769,9 +1666,9 @@ describe("Pipelines graph editor", () => {
     const firstLoad = render(<App />);
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
+    await user.click(screen.getByRole("button", { name: "Validate pipeline" }));
+    await user.click(screen.getByRole("button", { name: "Save pipeline" }));
 
     expect(
       await screen.findByText("Saved graph for kitchen"),
@@ -1781,23 +1678,20 @@ describe("Pipelines graph editor", () => {
     render(<App />);
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 
-    expect(await screen.findByText("builtin.confirm")).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("Move builtin.confirm binding"),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Tool 1 provider")).toHaveValue(
+      "builtin.confirm",
+    );
   });
 
-  it("supports undo, test run, and frontend-only augment actions", async () => {
+  it("supports undo and test run over core bindings", async () => {
     const user = userEvent.setup();
     render(<App initialPipelineViews={[pipelineView()]} />);
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add memory" }));
 
     expect(screen.getByText("builtin.memory")).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("Move builtin.memory binding"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Memory 1 mode")).toHaveValue("read_write");
     expect(screen.getByText("1 unsaved edit")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Undo last edit" }));
@@ -1843,7 +1737,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
+    await user.click(screen.getByRole("button", { name: "Add memory" }));
     await user.click(screen.getByRole("button", { name: "Run test turn" }));
 
     expect(
@@ -1858,74 +1752,6 @@ describe("Pipelines graph editor", () => {
       savedCore?.kind === "core" ? savedCore.core.memory : [],
     ).toHaveLength(1);
     expect(testedPipelines).toEqual(["kitchen"]);
-  });
-
-  it("places and drags core bindings without stacking new components", async () => {
-    const user = userEvent.setup();
-    const savedGraphs: PipelineGraph[] = [];
-    render(
-      <App
-        initialPipelineViews={[pipelineView()]}
-        onPipelineSaved={(graph) => savedGraphs.push(graph)}
-      />,
-    );
-
-    await enterPipelinesSection(user);
-    await user.click(screen.getByRole("button", { name: "Add memory node" }));
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
-
-    const graph = screen.getByLabelText("Pipeline graph");
-    const memoryOrbital = within(graph).getByLabelText(
-      "Move builtin.memory binding",
-    );
-    const toolOrbital = within(graph).getByLabelText(
-      "Move builtin.confirm binding",
-    );
-    // Tools are listed before memory on a core, so the tool takes the first
-    // orbital slot however the two were added.
-    expect(toolOrbital).toHaveStyle({
-      "--orbit-x": "0px",
-      "--orbit-y": "-175px",
-      "--orbit-start-x": "0px",
-      "--orbit-start-y": "-175px",
-    });
-    expect(memoryOrbital).not.toHaveAttribute(
-      "data-orbit-slot",
-      toolOrbital.getAttribute("data-orbit-slot") ?? "",
-    );
-    expect(memoryOrbital).toHaveAttribute("draggable", "false");
-    expect(graph.querySelector(".atom-motion-particle")).toBeInTheDocument();
-    expect(graph.querySelector(".atom-spoke-link")).not.toBeInTheDocument();
-    expect(
-      graph.querySelector(".atom-orbitals.motion-enabled"),
-    ).toBeInTheDocument();
-
-    fireEvent.pointerDown(memoryOrbital, {
-      clientX: 120,
-      clientY: 80,
-      pointerId: 1,
-    });
-    fireEvent.pointerMove(window, {
-      clientX: 180,
-      clientY: 130,
-      pointerId: 1,
-    });
-    fireEvent.pointerUp(window, {
-      clientX: 180,
-      clientY: 130,
-      pointerId: 1,
-    });
-
-    await user.click(screen.getByRole("button", { name: "Validate Graph" }));
-    await user.click(screen.getByRole("button", { name: "Save Graph" }));
-
-    // Dragging an orbital moves it on screen. It is presentation only: the
-    // binding it stands for is unchanged, and there is no node for a drag to
-    // have created.
-    const core = savedGraphs[0]?.nodes.find((node) => node.kind === "core");
-    expect(core?.kind === "core" ? core.core.memory : []).toEqual([
-      { provider: "builtin.memory", mode: "read_write", limit: 8 },
-    ]);
   });
 
   it("lists an MCP server once and still offers each tool it advertises", async () => {
@@ -1967,9 +1793,11 @@ describe("Pipelines graph editor", () => {
     // And its tools are still bindable, because a core binds them one at a
     // time even though the server is one provider.
     await user.click(screen.getByRole("tab", { name: "Pipelines" }));
-    await user.click(screen.getByRole("button", { name: "Add tool node" }));
+    await user.click(screen.getByRole("button", { name: "Add tool" }));
     expect(
-      screen.getByRole("menuitem", { name: "plex.search_movies" }),
+      within(screen.getByLabelText("Tool 1 provider")).getByRole("option", {
+        name: "plex.search_movies",
+      }),
     ).toBeInTheDocument();
   });
 
@@ -1993,7 +1821,7 @@ describe("Pipelines graph editor", () => {
 
     // The readable pipeline is still there, which is the part that used to be
     // lost entirely.
-    expect(screen.getByLabelText("Pipeline graph")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pipeline configuration")).toBeInTheDocument();
 
     expect(screen.getByText("unknown variant `llm`")).toBeInTheDocument();
     await user.click(
@@ -2008,7 +1836,7 @@ describe("Pipelines graph editor", () => {
 
   it("creates a pipeline when none are stored", async () => {
     // The trap this closes: delete your only pipeline, or have it stop
-    // parsing, and the section showed "No stored pipeline graphs" with no way
+    // parsing, and the section showed "No stored pipelines" with no way
     // to make another. Guided Setup does not come back, so that was permanent.
     const user = userEvent.setup();
     const savedGraphs: PipelineGraph[] = [];
@@ -2030,7 +1858,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterPipelinesSection(user);
-    expect(screen.getByText("No stored pipeline graphs")).toBeInTheDocument();
+    expect(screen.getByText("No stored pipelines")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Add pipeline" }));
     await user.clear(screen.getByLabelText("New pipeline name"));
@@ -2080,34 +1908,6 @@ describe("Pipelines graph editor", () => {
 
     // And it is selectable, so the operator lands on the thing they made.
     expect(screen.getByRole("button", { name: "bedroom" })).toBeInTheDocument();
-  });
-
-  it("keeps graph editing read-only on small screens", async () => {
-    const user = userEvent.setup();
-    render(
-      <App initialPipelineViews={[pipelineView()]} initialSmallScreen={true} />,
-    );
-
-    await enterPipelinesSection(user);
-
-    expect(screen.getByText("Read-only on small screens")).toBeInTheDocument();
-    expect(screen.getByLabelText("mic to stt")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Add tool node" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("derives read-only graph mode from the current viewport", async () => {
-    const user = userEvent.setup();
-    mockSmallScreen(true);
-    render(<App initialPipelineViews={[pipelineView()]} />);
-
-    await enterPipelinesSection(user);
-
-    expect(screen.getByText("Read-only on small screens")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Validate Graph" }),
-    ).not.toBeInTheDocument();
   });
 });
 
@@ -3169,23 +2969,6 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
     status: 200,
     headers: { "content-type": "application/json" },
     ...init,
-  });
-}
-
-function mockSmallScreen(matches: boolean) {
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    writable: true,
-    value: (query: string): MediaQueryList => ({
-      matches,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(() => false),
-    }),
   });
 }
 

@@ -2025,3 +2025,121 @@ button {
     animation: none;
   }
 }
+
+/* Pipeline form editor
+ *
+ * The editor is a form rather than a canvas, so it reflows: the stage chain
+ * scrolls on its own axis and the rows collapse to a single column when there
+ * is no room for a label beside its control.
+ */
+.pipeline-form {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.pipeline-chain {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 0 0 4px;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.pipeline-chain-stage {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 3%);
+}
+
+.pipeline-chain-stage + .pipeline-chain-stage {
+  position: relative;
+  margin-left: 14px;
+}
+
+.pipeline-chain-stage + .pipeline-chain-stage::before {
+  position: absolute;
+  top: 50%;
+  left: -14px;
+  content: "→";
+  opacity: 0.5;
+  transform: translateY(-50%);
+}
+
+.pipeline-form-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 12px;
+}
+
+.pipeline-form-section header {
+  display: grid;
+  gap: 2px;
+}
+
+.pipeline-form-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pipeline-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pipeline-form-row.wide {
+  align-items: start;
+}
+
+.pipeline-form-row textarea {
+  flex: 1 1 100%;
+  min-width: 0;
+  resize: vertical;
+}
+
+.pipeline-form-row select,
+.pipeline-form-row input {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.pipeline-form-label {
+  flex: 0 0 130px;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.pipeline-form-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+}
+
+.pipeline-form-list-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pipeline-form-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+@media (width <= 720px) {
+  .pipeline-form-label {
+    flex-basis: 100%;
+  }
+}
