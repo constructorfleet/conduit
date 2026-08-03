@@ -1452,6 +1452,51 @@ async fn an_mcp_definition_saves_while_its_server_is_down() {
 }
 
 #[tokio::test]
+async fn a_saved_mcp_definition_is_probed_without_being_asked() {
+    // The probe that follows a definition write looked providers up in the
+    // runtime registry by their definition id, but an MCP definition registers
+    // its tools under qualified `<id>.<tool>` ids — never under the id itself
+    // once the server advertises more than one tool. So a tool provider read
+    // "no successful reachability check yet" however healthy its server was,
+    // and said so again after every restart. It must be probed through its
+    // transport, the way the explicit test endpoint already probes it.
+    let server = MockMcpServer::exposing(&["forecast", "history"]).await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": { "type": "streamable_http", "url": server.url() }
+            }
+        }
+    });
+    call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+
+    let mut provider = serde_json::Value::Null;
+    for _ in 0..50 {
+        let (status, body) = call(&state, get("/v1/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        provider = body["providers"]
+            .as_array()
+            .expect("providers")
+            .iter()
+            .find(|provider| provider["id"] == "weather-tools")
+            .expect("provider status")
+            .clone();
+        if provider["reachable"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(provider["reachable"], true, "a healthy MCP server must be probed: {provider}");
+    assert_eq!(provider["state"], "reachable");
+}
+
+#[tokio::test]
 async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
     // Wyoming speaks its own protocol over a socket. Storing an http endpoint
     // would save a definition the runtime could never build a provider from.

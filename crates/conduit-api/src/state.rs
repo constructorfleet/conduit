@@ -330,7 +330,24 @@ impl AppState {
                 } else if let Some(provider) = providers.tools().get(&id) {
                     provider.health().await
                 } else {
-                    continue;
+                    // The registry holds no provider under the definition id.
+                    // An MCP definition registers its tools as
+                    // `<definition id>.<tool name>` rather than under the id
+                    // itself — and none at all while its server is down — so it
+                    // can never be found by the lookups above. Probe the server
+                    // through its transport, exactly as the explicit test
+                    // endpoint does.
+                    let Some(definition) = state.provider_definition(&id).await.ok().flatten()
+                    else {
+                        continue;
+                    };
+                    let ProviderDefinitionVariant::Tool {
+                        variant: ToolVariant::Mcp { transport },
+                    } = &definition.variant
+                    else {
+                        continue;
+                    };
+                    probe_mcp(transport).await
                 };
                 tracing::debug!(provider = %id, ?health, "probed provider reachability");
                 state.record_provider_reachability(&id, health);
@@ -345,6 +362,15 @@ impl AppState {
     /// Returns an error if definitions cannot be read or converted.
     pub async fn reload_provider_definitions(&self) -> Result<()> {
         self.rebuild_provider_snapshot().await
+    }
+}
+
+/// Lists an MCP server's tools: the narrowest check that proves the server is
+/// reachable and speaks the protocol, without invoking anything.
+pub(crate) async fn probe_mcp(transport: &McpTransport) -> Health {
+    match McpClient::new(transport.clone()).list_tools().await {
+        Ok(_) => Health::Healthy,
+        Err(error) => Health::Unhealthy { reason: error.to_string() },
     }
 }
 

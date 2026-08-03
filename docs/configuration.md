@@ -114,6 +114,12 @@ does not require it: discovery is given five seconds, and a server that does not
 answer leaves the definition saved with no tools registered. Running a
 reachability test on that definition rediscovers them.
 
+Reachability is probed automatically whenever definitions change — and again at
+startup — for every capability, including MCP: a tool provider is checked
+through its transport the way the explicit test checks it, so a healthy server
+reads `reachable` without an operator pressing Test, however the registry is
+populated.
+
 ## OpenTelemetry
 
 | Variable | Default | Description |

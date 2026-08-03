@@ -31,6 +31,10 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   synthesizer's own voices rather than a free text box. Providers that
   enumerate none, and providers that cannot be reached, still accept a typed
   voice.
+- MCP tool provider definitions are now reachability-probed automatically along
+  with every other capability, both when definitions change and at startup. A
+  tool provider's server being healthy no longer shows `configured` with "no
+  successful reachability check yet" until an operator presses Test.
 - `/v1/events` no longer refuses `wake_word` or `identity` stage
   subscriptions. Both now carry traffic, so `Stage::has_emitter` and the
   refusal it powered are gone.

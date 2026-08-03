@@ -4,7 +4,6 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use conduit_mcp::McpClient;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
     ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
@@ -195,7 +194,7 @@ pub async fn test(
     if let ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } =
         &definition.variant
     {
-        let health = probe_mcp(transport).await;
+        let health = crate::state::probe_mcp(transport).await;
         if health.is_usable() {
             state.reload_provider_definitions().await.map_err(store_failure)?;
         }
@@ -240,15 +239,6 @@ pub async fn test(
 
     state.record_provider_reachability(&id, health.clone());
     Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
-}
-
-/// Lists an MCP server's tools: the narrowest check that proves the server is
-/// reachable and speaks the protocol, without invoking anything.
-async fn probe_mcp(transport: &McpTransport) -> Health {
-    match McpClient::new(transport.clone()).list_tools().await {
-        Ok(_) => Health::Healthy,
-        Err(error) => Health::Unhealthy { reason: error.to_string() },
-    }
 }
 
 #[derive(Serialize)]
