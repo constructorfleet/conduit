@@ -24,7 +24,8 @@ echoes described under [Running](#running).
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
-| [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, for SpeechBrain, Resemblyzer, or pyannote |
+| [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
+| [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
@@ -104,6 +105,33 @@ action as *not* performed. See [Known gaps](#known-gaps).
 ```sh
 cargo run -p conduit-api
 ```
+
+Or with Docker Compose, which is the shortest path to a working deployment:
+
+```sh
+cp .env.example .env      # then set CONDUIT_TOKENS or CONDUIT_ALLOW_ANONYMOUS
+docker compose up
+```
+
+There is no open default — a server with neither a token file nor anonymous
+mode refuses to start — so that copy is a step rather than a courtesy. A token
+file goes in `./secrets`, which is mounted read-only and git-ignored.
+
+Optional services sit behind compose profiles, so the default is the smallest
+thing that runs:
+
+```sh
+docker compose --profile speaker-id up
+```
+
+That adds [`services/speaker-id`](services/speaker-id), the reference
+implementation of Conduit's speaker identification contract, reachable from
+Conduit at `http://speaker-id:8080`. It is published as
+`ghcr.io/constructorfleet/conduit-speaker-id` with `latest-speechbrain` and
+`latest-speechbrain-gpu` tags; set `CONDUIT_SPEAKER_ID_IMAGE` to pin one rather
+than building locally. Its port is deliberately not published: Conduit reaches
+it over the compose network, and a mapping would put an unauthenticated model
+server on your LAN.
 
 The published container image is `ghcr.io/constructorfleet/conduit:latest`. Every
 `main` build also tags it `sha-<commit>`, so whatever `latest` currently points
@@ -586,6 +614,13 @@ by the wrong identity is worse than one satisfied by none.
 a voice are Python and want more memory than an ESP32 has, so there is no
 on-device counterpart to `device_wake`. A satellite can wake itself; it cannot
 tell who woke it.
+
+**The identification threshold is not calibrated for you.** The 50% default is
+a starting point. Cosine similarities from an embedding model depend on the
+microphones, the room, and how much audio a turn captured, so tune
+`threshold_percent` against your own voices — every `SpeakerIdentified` event
+carries its confidence, including the ones that matched nobody, which is what
+shows you where the two populations separate.
 
 **Memory and routing are graph-only.** The graph model describes `memory`
 bindings and `router` nodes, but the runtime does not run them. For memory the

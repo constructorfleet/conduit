@@ -18,6 +18,15 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   over the contract documented on the new `conduit-speaker` crate. The identity
   found reaches a tool's per-speaker permission check; an identification service
   that is down costs a turn its per-speaker policies rather than its answer.
+- Added `services/speaker-id`, a reference implementation of the speaker
+  identification contract over SpeechBrain ECAPA-TDNN embeddings, published as
+  `conduit-speaker-id` with `latest-speechbrain` and `latest-speechbrain-gpu`
+  tags. Its encoder is pluggable, so a further engine is a class rather than a
+  new contract.
+- Added `docker-compose.yml`, which runs Conduit alone by default and adds the
+  identification service under `--profile speaker-id`.
+- Added a `diarization_server_speaker_id` provider definition for deployments
+  already running a [Diarization_Server](https://github.com/CptCamembert/Diarization_Server).
 - Added `GET /v1/providers/{id}/voices`, and the pipeline editor now offers a
   synthesizer's own voices rather than a free text box. Providers that
   enumerate none, and providers that cannot be reached, still accept a typed

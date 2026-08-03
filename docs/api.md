@@ -313,6 +313,7 @@ Each variant registers a Runtime Provider under the definition id:
 | `wyoming_stt`, `wyoming_tts`, `wyoming_wake` | One provider under the definition id | `url` must be `tcp://host:port` |
 | `device_wake` | One wake word detector under the definition id | No endpoint: the satellite runs the detector. `engine` must be `microwakeword`, the only one small enough for that hardware |
 | `http_speaker_id` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
+| `diarization_server_speaker_id` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `mcp_tool` | One tool provider per tool the server advertises | Requires tool discovery, see below |
 
 A `wyoming_wake` definition names which detector is behind the endpoint —
@@ -326,6 +327,14 @@ streams once it has activated, so the pipeline's wake stage accepts immediately
 and publishes the activation the device already made. It exists so a pipeline
 can *say* it wakes on-device, and have the stage be visible in the editor, in
 validation, and on the event stream.
+
+A `diarization_server_speaker_id` definition points at an existing
+[Diarization_Server](https://github.com/CptCamembert/Diarization_Server), which
+despite its name performs speaker recognition against enrolled embeddings
+rather than diarization. It speaks its own dialect — raw 16 kHz mono 16-bit PCM
+bodies and a `name` query parameter — so a pipeline capturing any other format
+is refused at the stage rather than sent samples the server would misread. It
+has no authentication, so the definition carries no key.
 
 An `http_speaker_id` definition points at a service implementing three requests
 — `POST {base_url}/identify`, `POST {base_url}/speakers/{speaker}/enroll`, and

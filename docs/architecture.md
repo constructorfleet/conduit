@@ -13,7 +13,8 @@ runtime progress is published as events.
 | `conduit-runtime` | Resolves a graph against registered providers and runs one conversation turn from captured audio to synthesized speech. |
 | `conduit-openai` | OpenAI-compatible provider implementations for chat completions, audio transcriptions, and audio speech. |
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
-| `conduit-speaker` | Speaker identification over an HTTP contract, for SpeechBrain, Resemblyzer, or pyannote embedding services. |
+| `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |
+| `services/speaker-id` | The reference implementation of that contract, published as `conduit-speaker-id` with CPU and GPU tags. |
 | `conduit-mcp` | Model Context Protocol client and tool providers over stdio, streamable HTTP, and SSE. |
 | `conduit-store` | Memory, file, and PostgreSQL implementations of the pipeline store contract. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
