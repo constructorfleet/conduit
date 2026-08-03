@@ -123,7 +123,8 @@ def test_a_forgotten_speaker_stops_matching(client: TestClient) -> None:
     speaker = uuid.uuid4()
     client.post(f"/speakers/{speaker}/enroll", content=tone(440))
 
-    assert client.delete(f"/speakers/{speaker}").status_code == 204
+    forgotten = client.delete(f"/speakers/{speaker}")
+    assert forgotten.status_code == 204
 
     identified = client.post("/identify", content=tone(440))
     assert identified.json()["speaker"] is None
@@ -133,7 +134,8 @@ def test_forgetting_an_unknown_speaker_is_a_404(client: TestClient) -> None:
     # Conduit treats this as success, because the voice print the caller wanted
     # gone is gone. The status still distinguishes the two for anyone driving
     # the service directly.
-    assert client.delete(f"/speakers/{uuid.uuid4()}").status_code == 404
+    response = client.delete(f"/speakers/{uuid.uuid4()}")
+    assert response.status_code == 404
 
 
 def test_a_speaker_that_is_not_a_uuid_is_refused(client: TestClient) -> None:
@@ -142,7 +144,8 @@ def test_a_speaker_that_is_not_a_uuid_is_refused(client: TestClient) -> None:
     refused = client.post("/speakers/..%2F..%2Fetc%2Fpasswd/enroll", content=tone(440))
     assert refused.status_code in (400, 404)
 
-    assert client.delete("/speakers/not-a-uuid").status_code == 400
+    deleted = client.delete("/speakers/not-a-uuid")
+    assert deleted.status_code == 400
 
 
 def test_audio_too_short_to_enroll_is_refused(client: TestClient) -> None:
