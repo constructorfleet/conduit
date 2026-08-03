@@ -3085,8 +3085,8 @@ function componentForApiProviderDefinition(
   definition: Pick<ProviderDefinitionView, "kind" | "variant">,
 ): ProviderComponentDescriptor | null {
   const kind = capabilityForProviderKind(definition.kind);
-  if (definition.variant.type === "mcp_tool") {
-    const transport = definition.variant.transport.type;
+  if (definition.variant.type === "tool") {
+    const transport = definition.variant.variant.transport.type;
     const componentId =
       transport === "streamable_http"
         ? "mcp.streamable_http"
@@ -3101,7 +3101,7 @@ function componentForApiProviderDefinition(
   return (
     catalog.components.find(
       (component) =>
-        component.definition_variant === definition.variant.type &&
+        component.definition_variant === definition.variant.variant.type &&
         component.kind === kind,
     ) ?? null
   );
@@ -3110,77 +3110,80 @@ function componentForApiProviderDefinition(
 function configFromProviderVariant(
   variant: ProviderDefinitionVariant,
 ): Record<string, unknown> {
-  if (variant.type === "openai_llm") {
+  if (variant.type === "llm") {
     return {
-      base_url: variant.base_url,
-      api_key: secretToConfigValue(variant.api_key),
-      model: variant.models[0] ?? "",
-      streaming: variant.streaming,
-      system_prompt: variant.system_prompt ?? "",
+      base_url: variant.variant.base_url,
+      api_key: secretToConfigValue(variant.variant.api_key),
+      model: variant.variant.models[0] ?? "",
+      streaming: variant.variant.streaming,
+      system_prompt: variant.variant.system_prompt ?? "",
     };
   }
-  if (variant.type === "openai_stt") {
+  if (variant.type === "stt") {
+    if (variant.variant.type === "openai") {
+      return {
+        base_url: variant.variant.base_url,
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.model,
+        stream: variant.variant.stream,
+      };
+    }
     return {
-      base_url: variant.base_url,
-      api_key: secretToConfigValue(variant.api_key),
-      model: variant.model,
-      stream: variant.stream,
+      url: variant.variant.url,
+      model: variant.variant.model ?? "",
+      streaming: variant.variant.streaming,
     };
   }
-  if (variant.type === "openai_tts") {
+  if (variant.type === "tts") {
+    if (variant.variant.type === "openai") {
+      return {
+        base_url: variant.variant.base_url,
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.model,
+        voices: variant.variant.voices.join(", "),
+      };
+    }
     return {
-      base_url: variant.base_url,
-      api_key: secretToConfigValue(variant.api_key),
-      model: variant.model,
-      voices: variant.voices.join(", "),
+      url: variant.variant.url,
+      voice: variant.variant.voice ?? "",
+      streaming: variant.variant.streaming,
     };
   }
-  if (variant.type === "wyoming_stt") {
+  if (variant.type === "wake") {
+    if (variant.variant.type === "wyoming") {
+      return {
+        url: variant.variant.url,
+        engine: variant.variant.engine,
+        phrases: variant.variant.phrases.join(", "),
+        threshold_percent: variant.variant.threshold_percent,
+      };
+    }
     return {
-      url: variant.url,
-      model: variant.model ?? "",
-      streaming: variant.streaming,
+      engine: variant.variant.engine,
+      phrases: variant.variant.phrases.join(", "),
     };
   }
-  if (variant.type === "wyoming_tts") {
+  if (variant.type === "speaker_id") {
+    if (variant.variant.type === "diarization_server") {
+      return {
+        base_url: variant.variant.base_url,
+        threshold_percent: variant.variant.threshold_percent,
+      };
+    }
     return {
-      url: variant.url,
-      voice: variant.voice ?? "",
-      streaming: variant.streaming,
+      base_url: variant.variant.base_url,
+      api_key: secretToConfigValue(variant.variant.api_key),
+      engine: variant.variant.engine,
+      threshold_percent: variant.variant.threshold_percent,
     };
   }
-  if (variant.type === "wyoming_wake") {
+  if (variant.variant.transport.type === "stdio") {
     return {
-      url: variant.url,
-      engine: variant.engine,
-      phrases: variant.phrases.join(", "),
-      threshold_percent: variant.threshold_percent,
+      command: variant.variant.transport.command,
+      args: variant.variant.transport.args.join(" "),
     };
   }
-  if (variant.type === "device_wake") {
-    return { engine: variant.engine, phrases: variant.phrases.join(", ") };
-  }
-  if (variant.type === "diarization_server_speaker_id") {
-    return {
-      base_url: variant.base_url,
-      threshold_percent: variant.threshold_percent,
-    };
-  }
-  if (variant.type === "http_speaker_id") {
-    return {
-      base_url: variant.base_url,
-      api_key: secretToConfigValue(variant.api_key),
-      engine: variant.engine,
-      threshold_percent: variant.threshold_percent,
-    };
-  }
-  if (variant.transport.type === "stdio") {
-    return {
-      command: variant.transport.command,
-      args: variant.transport.args.join(" "),
-    };
-  }
-  return { url: variant.transport.url };
+  return { url: variant.variant.transport.url };
 }
 
 function toApiProviderDefinition(
@@ -3220,105 +3223,141 @@ function variantFromProviderDefinition(
     definition.component === "openai.completions"
   ) {
     return {
-      type: "openai_llm",
-      base_url: text("base_url"),
-      ...(apiKey ? { api_key: apiKey } : {}),
-      models: text("model") ? [text("model")] : [],
-      streaming: flag("streaming"),
-      ...(text("system_prompt")
-        ? { system_prompt: text("system_prompt") }
-        : {}),
+      type: "llm",
+      variant: {
+        type: "openai",
+        base_url: text("base_url"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+        ...(text("system_prompt")
+          ? { system_prompt: text("system_prompt") }
+          : {}),
+      },
     };
   }
   if (definition.component === "openai.transcription") {
     return {
-      type: "openai_stt",
-      base_url: text("base_url") || "https://api.openai.com/v1",
-      model: text("model"),
-      ...(apiKey ? { api_key: apiKey } : {}),
-      stream: flag("stream"),
+      type: "stt",
+      variant: {
+        type: "openai",
+        base_url: text("base_url") || "https://api.openai.com/v1",
+        model: text("model"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        stream: flag("stream"),
+      },
     };
   }
   if (definition.component === "openai.speech") {
     return {
-      type: "openai_tts",
-      base_url: text("base_url") || "https://api.openai.com/v1",
-      model: text("model"),
-      ...(apiKey ? { api_key: apiKey } : {}),
-      voices: text("voices")
-        ? text("voices")
-            .split(",")
-            .map((voice) => voice.trim())
-            .filter(Boolean)
-        : [],
+      type: "tts",
+      variant: {
+        type: "openai",
+        base_url: text("base_url") || "https://api.openai.com/v1",
+        model: text("model"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        voices: text("voices")
+          ? text("voices")
+              .split(",")
+              .map((voice) => voice.trim())
+              .filter(Boolean)
+          : [],
+      },
     };
   }
   if (definition.component === "wyoming.tts") {
     return {
-      type: "wyoming_tts",
-      url: text("url"),
-      ...(text("voice") ? { voice: text("voice") } : {}),
-      streaming: flag("streaming"),
+      type: "tts",
+      variant: {
+        type: "wyoming",
+        url: text("url"),
+        ...(text("voice") ? { voice: text("voice") } : {}),
+        streaming: flag("streaming"),
+      },
     };
   }
   if (definition.component === "wyoming.wake") {
     return {
-      type: "wyoming_wake",
-      url: text("url"),
-      engine: (text("engine") || "openwakeword") as WakeEngine,
-      phrases: list("phrases"),
-      threshold_percent: whole("threshold_percent"),
+      type: "wake",
+      variant: {
+        type: "wyoming",
+        url: text("url"),
+        engine: (text("engine") || "openwakeword") as WakeEngine,
+        phrases: list("phrases"),
+        threshold_percent: whole("threshold_percent"),
+      },
     };
   }
   if (definition.component === "device.wake") {
     return {
-      type: "device_wake",
-      // A satellite runs microWakeWord or nothing, and the catalog offers no
-      // other choice, so a definition arriving without one means the same.
-      engine: (text("engine") || "microwakeword") as WakeEngine,
-      phrases: list("phrases"),
+      type: "wake",
+      variant: {
+        // A satellite runs microWakeWord or nothing, and the catalog offers no
+        // other choice, so a definition arriving without one means the same.
+        type: "device",
+        engine: (text("engine") || "microwakeword") as WakeEngine,
+        phrases: list("phrases"),
+      },
     };
   }
   if (definition.component === "speaker.diarization_server") {
     return {
-      type: "diarization_server_speaker_id",
-      base_url: text("base_url"),
-      threshold_percent: whole("threshold_percent"),
+      type: "speaker_id",
+      variant: {
+        type: "diarization_server",
+        base_url: text("base_url"),
+        threshold_percent: whole("threshold_percent"),
+      },
     };
   }
   if (definition.component === "speaker.http") {
     return {
-      type: "http_speaker_id",
-      base_url: text("base_url"),
-      ...(apiKey ? { api_key: apiKey } : {}),
-      engine: (text("engine") || "speechbrain") as SpeakerEngine,
-      threshold_percent: whole("threshold_percent"),
+      type: "speaker_id",
+      variant: {
+        type: "http",
+        base_url: text("base_url"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        engine: (text("engine") || "speechbrain") as SpeakerEngine,
+        threshold_percent: whole("threshold_percent"),
+      },
     };
   }
   if (definition.component === "mcp.sse") {
-    return { type: "mcp_tool", transport: { type: "sse", url: text("url") } };
+    return {
+      type: "tool",
+      variant: { type: "mcp", transport: { type: "sse", url: text("url") } },
+    };
   }
   if (definition.component === "mcp.streamable_http") {
     return {
-      type: "mcp_tool",
-      transport: { type: "streamable_http", url: text("url") },
+      type: "tool",
+      variant: {
+        type: "mcp",
+        transport: { type: "streamable_http", url: text("url") },
+      },
     };
   }
   if (definition.component === "mcp.stdio") {
     return {
-      type: "mcp_tool",
-      transport: {
-        type: "stdio",
-        command: text("command"),
-        args: text("args").split(/\s+/).filter(Boolean),
+      type: "tool",
+      variant: {
+        type: "mcp",
+        transport: {
+          type: "stdio",
+          command: text("command"),
+          args: text("args").split(/\s+/).filter(Boolean),
+        },
       },
     };
   }
   return {
-    type: "wyoming_stt",
-    url: text("url"),
-    ...(text("model") ? { model: text("model") } : {}),
-    streaming: flag("streaming"),
+    type: "stt",
+    variant: {
+      type: "wyoming",
+      url: text("url"),
+      ...(text("model") ? { model: text("model") } : {}),
+      streaming: flag("streaming"),
+    },
   };
 }
 
@@ -4180,30 +4219,39 @@ function guidedSetupProviderDefinitions({
       id: sttProvider,
       label: sttProvider,
       variant: {
-        type: "openai_stt",
-        base_url: "https://api.openai.com/v1",
-        model: "whisper-1",
-        stream: false,
+        type: "stt",
+        variant: {
+          type: "openai",
+          base_url: "https://api.openai.com/v1",
+          model: "whisper-1",
+          stream: false,
+        },
       },
     },
     {
       id: llmProvider,
       label: llmProvider,
       variant: {
-        type: "openai_llm",
-        base_url: "https://api.openai.com/v1",
-        models: llmModel ? [llmModel] : [],
-        streaming: true,
+        type: "llm",
+        variant: {
+          type: "openai",
+          base_url: "https://api.openai.com/v1",
+          models: llmModel ? [llmModel] : [],
+          streaming: true,
+        },
       },
     },
     {
       id: ttsProvider,
       label: ttsProvider,
       variant: {
-        type: "openai_tts",
-        base_url: "https://api.openai.com/v1",
-        model: "tts-1",
-        voices: [],
+        type: "tts",
+        variant: {
+          type: "openai",
+          base_url: "https://api.openai.com/v1",
+          model: "tts-1",
+          voices: [],
+        },
       },
     },
   ];

@@ -11,8 +11,9 @@ use conduit_mcp::{McpClient, McpTool};
 use conduit_metrics::Metrics;
 use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
-    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    ProviderDefinitionVariant, ProviderSecret,
+    LlmVariant, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    ProviderDefinitionVariant, ProviderSecret, SpeakerIdVariant, SttVariant, ToolVariant,
+    TtsVariant, WakeVariant,
 };
 use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
@@ -359,23 +360,23 @@ async fn register_definition(
     };
 
     match &definition.variant {
-        ProviderDefinitionVariant::OpenAiLlm {
-            base_url,
-            api_key,
-            models,
-            system_prompt,
-            ..
+        ProviderDefinitionVariant::Llm {
+            variant: LlmVariant::OpenAi { base_url, api_key, models, system_prompt, .. },
         } => {
             let mut config = config(base_url, api_key);
             config.models = models.clone();
             config.system_prompt = system_prompt.clone();
             Ok(providers.with_llm(OpenAi::new(config)?))
         }
-        ProviderDefinitionVariant::OpenAiStt { base_url, model, api_key, .. } => {
+        ProviderDefinitionVariant::Stt {
+            variant: SttVariant::OpenAi { base_url, model, api_key, .. },
+        } => {
             let config = config(base_url, api_key);
             Ok(providers.with_stt(OpenAiStt::new(&config, model)?))
         }
-        ProviderDefinitionVariant::OpenAiTts { base_url, model, api_key, voices } => {
+        ProviderDefinitionVariant::Tts {
+            variant: TtsVariant::OpenAi { base_url, model, api_key, voices },
+        } => {
             let config = config(base_url, api_key);
             let provider = OpenAiTts::new(&config, model)?;
             let provider = if voices.is_empty() {
@@ -394,40 +395,48 @@ async fn register_definition(
             };
             Ok(providers.with_tts(provider))
         }
-        ProviderDefinitionVariant::WyomingStt { url, model, streaming } => Ok(providers
-            .with_stt(WyomingStt::new(&definition.id, url, model.clone(), *streaming)?)),
-        ProviderDefinitionVariant::WyomingTts { url, voice, streaming } => Ok(providers
-            .with_tts(WyomingTts::new(&definition.id, url, voice.clone(), *streaming)?)),
-        ProviderDefinitionVariant::McpTool { transport } => {
+        ProviderDefinitionVariant::Stt {
+            variant: SttVariant::Wyoming { url, model, streaming },
+        } => Ok(providers.with_stt(WyomingStt::new(
+            &definition.id,
+            url,
+            model.clone(),
+            *streaming,
+        )?)),
+        ProviderDefinitionVariant::Tts {
+            variant: TtsVariant::Wyoming { url, voice, streaming },
+        } => Ok(providers.with_tts(WyomingTts::new(
+            &definition.id,
+            url,
+            voice.clone(),
+            *streaming,
+        )?)),
+        ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
-        ProviderDefinitionVariant::WyomingWake { url, phrases, threshold_percent, .. } => {
-            Ok(providers.with_wake(WyomingWake::new(
-                &definition.id,
-                url,
-                phrases.clone(),
-                f32::from(*threshold_percent) / 100.0,
-            )?))
-        }
+        ProviderDefinitionVariant::Wake {
+            variant: WakeVariant::Wyoming { url, phrases, threshold_percent, .. },
+        } => Ok(providers.with_wake(WyomingWake::new(
+            &definition.id,
+            url,
+            phrases.clone(),
+            f32::from(*threshold_percent) / 100.0,
+        )?)),
         // A satellite that wakes itself still registers a detector, so that a
         // pipeline naming the stage resolves and the activation reaches the
         // event stream. It scores nothing: the device already decided.
-        ProviderDefinitionVariant::DeviceWake { phrases, .. } => {
+        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { phrases, .. } } => {
             Ok(providers.with_wake(DeviceWake::new(&definition.id, phrases.clone())))
         }
-        ProviderDefinitionVariant::DiarizationServerSpeakerId {
-            base_url,
-            threshold_percent,
+        ProviderDefinitionVariant::SpeakerId {
+            variant: SpeakerIdVariant::DiarizationServer { base_url, threshold_percent },
         } => Ok(providers.with_speaker(DiarizationServerSpeakerId::new(
             &definition.id,
             base_url,
             f32::from(*threshold_percent) / 100.0,
         )?)),
-        ProviderDefinitionVariant::HttpSpeakerId {
-            base_url,
-            api_key,
-            threshold_percent,
-            ..
+        ProviderDefinitionVariant::SpeakerId {
+            variant: SpeakerIdVariant::Http { base_url, api_key, threshold_percent, .. },
         } => Ok(providers.with_speaker(HttpSpeakerId::new(
             &definition.id,
             base_url,

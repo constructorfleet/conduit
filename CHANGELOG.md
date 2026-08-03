@@ -36,6 +36,14 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   refusal it powered are gone.
 - Added project documentation covering contribution workflow, architecture, API
   routes, configuration, and crate responsibilities.
+- **Breaking:** provider definition variants are now two-level. An outer `type`
+  names the capability (`llm`, `stt`, `tts`, `tool`, `wake`, `speaker_id`) and
+  an inner `variant.type` names the vendor (`openai`, `wyoming`, `mcp`,
+  `device`, `http`, `diarization_server`), e.g.
+  `{ "type": "llm", "variant": { "type": "openai", ... } }`. Flat tags such as
+  `openai_llm` are still accepted when reading stored records and upgrade to
+  the new shape when re-saved. See
+  [ADR-0013](docs/adr/0013-nested-provider-definition-variants.md).
 
 ## 0.1.0
 
