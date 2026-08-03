@@ -131,6 +131,7 @@ export function PipelineFormEditor({
             key={node.id}
             className="pipeline-chain-stage"
             aria-label={`${node.id} stage`}
+            data-kind={node.kind}
             /// What this stage hands the next one, so a miswiring reads off
             /// the chain rather than off a save the backend refuses.
             data-modality={outputModality(node) ?? ""}
@@ -167,6 +168,7 @@ export function PipelineFormEditor({
             <option value="websocket">websocket</option>
           </select>
           <select
+            className="compact"
             aria-label="Source modality"
             value={form.source.modality}
             disabled={readOnly}
@@ -280,6 +282,7 @@ export function PipelineFormEditor({
           </label>
           <input
             id="core-max-rounds"
+            className="compact"
             aria-label="Max rounds"
             type="number"
             min={1}
@@ -339,6 +342,7 @@ export function PipelineFormEditor({
                   {providerChoices(providers.tool, tool.provider)}
                 </select>
                 <select
+                  className="compact"
                   aria-label={`Tool ${index + 1} confirmation`}
                   value={tool.confirm}
                   disabled={readOnly}
@@ -405,6 +409,7 @@ export function PipelineFormEditor({
               <div className="pipeline-form-row" key={`memory-${index}`}>
                 <span className="node-provider-label">{store.provider}</span>
                 <select
+                  className="compact"
                   aria-label={`Memory ${index + 1} mode`}
                   value={store.mode}
                   disabled={readOnly}
@@ -424,6 +429,7 @@ export function PipelineFormEditor({
                   ))}
                 </select>
                 <input
+                  className="compact"
                   aria-label={`Memory ${index + 1} limit`}
                   type="number"
                   min={1}
@@ -542,6 +548,7 @@ export function PipelineFormEditor({
             <option value="websocket">websocket</option>
           </select>
           <select
+            className="compact"
             aria-label="Sink modality"
             value={form.sink.modality}
             disabled={readOnly}

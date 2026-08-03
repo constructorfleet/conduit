@@ -736,9 +736,8 @@ button {
 }
 
 .graph-surface {
-  min-height: 460px;
+  min-width: 0;
   padding: 0;
-  overflow: hidden;
 }
 
 .pipeline-editor-status p {
@@ -1570,70 +1569,114 @@ button {
 /* Pipeline form editor
  *
  * The editor is a form rather than a canvas, so it reflows: the stage chain
- * scrolls on its own axis and the rows collapse to a single column when there
- * is no room for a label beside its control.
+ * scrolls on its own axis and each row collapses to a single column when a
+ * label no longer fits beside its control.
  */
 .pipeline-form {
   display: grid;
-  gap: 16px;
-  padding: 16px;
+  gap: 18px;
+  min-width: 0;
+  padding: 18px;
 }
 
+.pipeline-form > * {
+  min-width: 0;
+}
+
+/* The derived chain, read-only: what the form adds up to. */
 .pipeline-chain {
   display: flex;
-  gap: 8px;
+  gap: 0;
+  align-items: stretch;
   margin: 0;
-  padding: 0 0 4px;
+  padding: 2px 2px 10px;
   overflow-x: auto;
   list-style: none;
+  scrollbar-width: thin;
 }
 
 .pipeline-chain-stage {
+  position: relative;
   display: grid;
   flex: 0 0 auto;
   gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: 10px;
-  background: rgb(255 255 255 / 3%);
+  align-content: center;
+  min-width: 128px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--surface-raised);
+}
+
+.pipeline-chain-stage strong {
+  color: var(--strong);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.pipeline-chain-stage .node-provider-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The core is the one stage every pipeline must have, and the only one that
+ * carries bindings, so it reads as the centre of the chain. */
+.pipeline-chain-stage[data-kind="core"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-quiet);
+}
+
+.pipeline-chain-stage[data-kind="core"] strong {
+  color: var(--accent-hover);
 }
 
 .pipeline-chain-stage + .pipeline-chain-stage {
-  position: relative;
-  margin-left: 14px;
+  margin-left: 26px;
 }
 
+/* Anchored to the stage it precedes, so the arrow travels with the card when
+ * the chain scrolls instead of positioning against the page. */
 .pipeline-chain-stage + .pipeline-chain-stage::before {
   position: absolute;
   top: 50%;
-  left: -14px;
+  left: -19px;
+  color: var(--border-strong);
   content: "→";
-  opacity: 0.5;
+  font-size: 13px;
+  line-height: 1;
   transform: translateY(-50%);
 }
 
 .pipeline-form-section {
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 12px;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px 18px;
+  background: var(--surface);
 }
 
-.pipeline-form-section header {
+.pipeline-form-section > header {
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
 }
 
 .pipeline-form-section h3 {
   margin: 0;
-  font-size: 1rem;
+  color: var(--strong);
+  font-size: 15px;
+  font-weight: 650;
 }
 
+/* A fixed label basis lines the controls up down the section, while the
+ * control area flexes — a row may hold one field, two, or two and an action. */
 .pipeline-form-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
 }
 
@@ -1641,46 +1684,141 @@ button {
   align-items: start;
 }
 
-.pipeline-form-row textarea {
-  flex: 1 1 100%;
+.pipeline-form-label {
+  flex: 0 0 148px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.pipeline-form-row.absent .pipeline-form-label {
+  color: var(--muted);
+}
+
+/* An "Add" button stands for an absent stage: it sizes to its text rather
+ * than stretching across the space the stage would have filled. */
+.pipeline-form-row.absent button {
+  flex: 0 0 auto;
+  margin-right: auto;
+}
+
+.pipeline-form select,
+.pipeline-form input,
+.pipeline-form textarea {
+  flex: 1 1 0;
   min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--input);
+  color: var(--strong);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pipeline-form textarea {
+  padding: 10px 12px;
+  line-height: 1.5;
   resize: vertical;
 }
 
-.pipeline-form-row select,
-.pipeline-form-row input {
-  flex: 1 1 140px;
-  min-width: 0;
+.pipeline-form select {
+  appearance: none;
+  padding-right: 30px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% + 2px),
+    calc(100% - 11px) calc(50% + 2px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
 }
 
-.pipeline-form-label {
-  flex: 0 0 130px;
-  font-size: 0.85rem;
-  opacity: 0.8;
+.pipeline-form select.compact,
+.pipeline-form input.compact {
+  flex: 0 0 148px;
 }
 
+.pipeline-form select:focus-visible,
+.pipeline-form input:focus-visible,
+.pipeline-form textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.pipeline-form select:disabled,
+.pipeline-form input:disabled,
+.pipeline-form textarea:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.pipeline-form ::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+/* Tools and memory: bindings on the core, so they sit inside Reasoning as
+ * their own bordered group rather than reading as more stages. */
 .pipeline-form-list {
   display: grid;
   gap: 8px;
-  padding-top: 6px;
-  border-top: 1px solid rgb(255 255 255 / 8%);
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--surface-sunken);
 }
 
 .pipeline-form-list-head {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
 }
 
-.pipeline-form-empty {
-  margin: 0;
-  font-size: 0.85rem;
-  opacity: 0.6;
+.pipeline-form-list-head .pipeline-form-label {
+  flex: 0 1 auto;
 }
 
-@media (width <= 720px) {
+.pipeline-form-list-head .pipeline-form-label {
+  color: var(--strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pipeline-form-list .node-provider-label {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.pipeline-form-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (width <= 900px) {
+  .pipeline-form-row {
+    flex-wrap: wrap;
+  }
+
   .pipeline-form-label {
-    flex-basis: 100%;
+    flex: 0 0 100%;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Two selects sharing a row clip their own text at this width, so a paired
+   * control takes its own line rather than truncating. */
+  .pipeline-form select.compact,
+  .pipeline-form input.compact {
+    flex: 1 1 100%;
   }
 }
