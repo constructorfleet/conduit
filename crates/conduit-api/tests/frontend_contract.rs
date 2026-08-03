@@ -493,17 +493,15 @@ export type ProviderCapability =
   | "tool"
   | "wake"
   | "speaker_id";
+/// Inner provider definition variant, paired with `kind` (the outer variant)
+/// to name the full two-level provider definition variant.
 export type ProviderDefinitionVariantType =
-  | "openai_llm"
-  | "openai_stt"
-  | "openai_tts"
-  | "wyoming_stt"
-  | "wyoming_tts"
-  | "wyoming_wake"
-  | "device_wake"
-  | "http_speaker_id"
-  | "diarization_server_speaker_id"
-  | "mcp_tool";
+  | "openai"
+  | "wyoming"
+  | "mcp"
+  | "device"
+  | "http"
+  | "diarization_server";
 
 /// The three wake word detectors Conduit speaks to. All are packaged as
 /// Wyoming services; only microWakeWord also runs on satellite hardware.
@@ -517,69 +515,85 @@ export type ProviderSecret =
   | {{ type: "external"; reference: string }}
   | {{ type: "redacted" }};
 
-export type ProviderDefinitionVariant =
+export type LlmVariant = {{
+  type: "openai";
+  base_url: string;
+  api_key?: ProviderSecret;
+  models: string[];
+  streaming: boolean;
+  system_prompt?: string;
+}};
+
+export type SttVariant =
   | {{
-      type: "openai_llm";
-      base_url: string;
-      api_key?: ProviderSecret;
-      models: string[];
-      streaming: boolean;
-      system_prompt?: string;
-    }}
-  | {{
-      type: "openai_stt";
+      type: "openai";
       base_url: string;
       model: string;
       api_key?: ProviderSecret;
       stream: boolean;
     }}
   | {{
-      type: "openai_tts";
+      type: "wyoming";
+      url: string;
+      model?: string;
+      streaming: boolean;
+    }};
+
+export type TtsVariant =
+  | {{
+      type: "openai";
       base_url: string;
       model: string;
       api_key?: ProviderSecret;
       voices: string[];
     }}
   | {{
-      type: "wyoming_stt";
-      url: string;
-      model?: string;
-      streaming: boolean;
-    }}
-  | {{
-      type: "wyoming_tts";
+      type: "wyoming";
       url: string;
       voice?: string;
       streaming: boolean;
-    }}
+    }};
+
+export type ToolVariant = {{
+  type: "mcp";
+  transport: McpTransport;
+}};
+
+export type WakeVariant =
   | {{
-      type: "wyoming_wake";
+      type: "wyoming";
       url: string;
       engine: WakeEngine;
       phrases: string[];
       threshold_percent: number;
     }}
   | {{
-      type: "device_wake";
+      type: "device";
       engine: WakeEngine;
       phrases: string[];
-    }}
+    }};
+
+export type SpeakerIdVariant =
   | {{
-      type: "diarization_server_speaker_id";
+      type: "diarization_server";
       base_url: string;
       threshold_percent: number;
     }}
   | {{
-      type: "http_speaker_id";
+      type: "http";
       base_url: string;
       api_key?: ProviderSecret;
       engine: SpeakerEngine;
       threshold_percent: number;
-    }}
-  | {{
-      type: "mcp_tool";
-      transport: McpTransport;
     }};
+
+export type ProviderDefinitionVariant =
+  | {{ type: "llm"; variant: LlmVariant }}
+  | {{ type: "stt"; variant: SttVariant }}
+  | {{ type: "tts"; variant: TtsVariant }}
+  | {{ type: "tool"; variant: ToolVariant }}
+  | {{ type: "wake"; variant: WakeVariant }}
+  | {{ type: "speaker_id"; variant: SpeakerIdVariant }};
 
 export type McpTransport =
   | {{ type: "sse"; url: string }}

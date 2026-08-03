@@ -248,7 +248,7 @@ Success body:
       "id": "openai.responses",
       "label": "OpenAI Responses",
       "kind": "llm",
-      "definition_variant": "openai_llm",
+      "definition_variant": "openai",
       "schema": {
         "properties": {
           "base_url": { "type": "string", "format": "url" },
@@ -285,11 +285,14 @@ Success body:
   "label": "OpenAI Primary",
   "kind": "llm",
   "variant": {
-    "type": "openai_llm",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": { "type": "redacted" },
-    "models": ["gpt-4.1"],
-    "streaming": true
+    "type": "llm",
+    "variant": {
+      "type": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": { "type": "redacted" },
+      "models": ["gpt-4.1"],
+      "streaming": true
+    }
   }
 }
 ```
@@ -305,39 +308,42 @@ Inline secrets are accepted on writes but are redacted from read responses.
 Sending `{ "type": "redacted" }` for an existing secret keeps the stored secret;
 omitting or nulling the secret field clears it.
 
-Each variant registers a Runtime Provider under the definition id:
+A provider definition variant is two-level: an outer `type` names the
+capability and an inner `variant.type` names the vendor. Each variant registers
+a Runtime Provider under the definition id:
 
-| Variant | Registers | Notes |
-| --- | --- | --- |
-| `openai_llm`, `openai_stt`, `openai_tts` | One provider under the definition id | |
-| `wyoming_stt`, `wyoming_tts`, `wyoming_wake` | One provider under the definition id | `url` must be `tcp://host:port` |
-| `device_wake` | One wake word detector under the definition id | No endpoint: the satellite runs the detector. `engine` must be `microwakeword`, the only one small enough for that hardware |
-| `http_speaker_id` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
-| `diarization_server_speaker_id` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
-| `mcp_tool` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+| Capability (`type`) | Vendor (`variant.type`) | Registers | Notes |
+| --- | --- | --- | --- |
+| `llm`, `stt`, `tts` | `openai` | One provider under the definition id | |
+| `stt`, `tts`, `wake` | `wyoming` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `wake` | `device` | One wake word detector under the definition id | No endpoint: the satellite runs the detector. `engine` must be `microwakeword`, the only one small enough for that hardware |
+| `speaker_id` | `http` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
+| `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
+| `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
 
-A `wyoming_wake` definition names which detector is behind the endpoint —
-`openwakeword`, `microwakeword`, or `nanowakeword` — along with the `phrases` to
-listen for and a `threshold_percent` a detection must reach. An empty `phrases`
-list asks the server to score whatever it has loaded.
+A `wake` definition with the `wyoming` variant names which detector is behind
+the endpoint — `openwakeword`, `microwakeword`, or `nanowakeword` — along with
+the `phrases` to listen for and a `threshold_percent` a detection must reach.
+An empty `phrases` list asks the server to score whatever it has loaded.
 
-A `device_wake` definition describes a satellite that wakes itself. There is no
-endpoint because there is no server: the device scores audio locally and only
-streams once it has activated, so the pipeline's wake stage accepts immediately
-and publishes the activation the device already made. It exists so a pipeline
-can *say* it wakes on-device, and have the stage be visible in the editor, in
-validation, and on the event stream.
+A `wake` definition with the `device` variant describes a satellite that wakes
+itself. There is no endpoint because there is no server: the device scores audio
+locally and only streams once it has activated, so the pipeline's wake stage
+accepts immediately and publishes the activation the device already made. It
+exists so a pipeline can *say* it wakes on-device, and have the stage be visible
+in the editor, in validation, and on the event stream.
 
-A `diarization_server_speaker_id` definition points at an existing
-[Diarization_Server](https://github.com/CptCamembert/Diarization_Server), which
-despite its name performs speaker recognition against enrolled embeddings
+A `speaker_id` definition with the `diarization_server` variant points at an
+existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server),
+which despite its name performs speaker recognition against enrolled embeddings
 rather than diarization. It speaks its own dialect — raw 16 kHz mono 16-bit PCM
 bodies and a `name` query parameter — so a pipeline capturing any other format
 is refused at the stage rather than sent samples the server would misread. It
 has no authentication, so the definition carries no key.
 
-An `http_speaker_id` definition points at a service implementing three requests
-— `POST {base_url}/identify`, `POST {base_url}/speakers/{speaker}/enroll`, and
+A `speaker_id` definition with the `http` variant points at a service
+implementing three requests — `POST {base_url}/identify`,
+`POST {base_url}/speakers/{speaker}/enroll`, and
 `DELETE {base_url}/speakers/{speaker}` — documented in full on the
 `conduit-speaker` crate. `engine` records which embedding model is behind it
 (`speechbrain`, `resemblyzer`, or `pyannote`) and `threshold_percent` is the
@@ -345,12 +351,12 @@ similarity below which a match is reported as an unknown voice. Conduit owns
 the speaker id and the service stores it as an opaque label, so a deployment
 can change embedding models without every enrolled voice becoming a stranger.
 
-An MCP definition registers the tools its server currently advertises, each as
-`<definition id>.<tool name>`. A server advertising exactly one tool is also
-registered under the definition id itself. Discovery needs the server, but
-saving does not: a server that cannot be reached within five seconds saves the
-definition and registers no tools, and `POST /v1/providers/{id}/test`
-rediscovers them once it answers.
+A `tool` definition with the `mcp` variant registers the tools its server
+currently advertises, each as `<definition id>.<tool name>`. A server
+advertising exactly one tool is also registered under the definition id itself.
+Discovery needs the server, but saving does not: a server that cannot be
+reached within five seconds saves the definition and registers no tools, and
+`POST /v1/providers/{id}/test` rediscovers them once it answers.
 
 ### `GET /v1/providers/{id}/voices`
 

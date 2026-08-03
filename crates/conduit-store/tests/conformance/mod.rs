@@ -11,8 +11,8 @@ use std::sync::Arc;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::testing::voice_graph;
 use conduit_provider::storage::{
-    validate_name, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    ProviderDefinitionVariant, ProviderSecret,
+    validate_name, LlmVariant, McpTransport, PipelineStore, ProviderDefinition,
+    ProviderDefinitionStore, ProviderDefinitionVariant, ProviderSecret, ToolVariant,
 };
 
 /// A small but complete pipeline, named `name`.
@@ -116,12 +116,14 @@ pub fn provider_definition(id: &str) -> ProviderDefinition {
     ProviderDefinition {
         id: id.to_owned(),
         label: format!("{id} Provider"),
-        variant: ProviderDefinitionVariant::OpenAiLlm {
-            base_url: "https://api.openai.example/v1".to_owned(),
-            api_key: Some(ProviderSecret::Inline { value: "sk-test".to_owned() }),
-            models: vec!["gpt-5".to_owned()],
-            streaming: true,
-            system_prompt: Some("Be terse.".to_owned()),
+        variant: ProviderDefinitionVariant::Llm {
+            variant: LlmVariant::OpenAi {
+                base_url: "https://api.openai.example/v1".to_owned(),
+                api_key: Some(ProviderSecret::Inline { value: "sk-test".to_owned() }),
+                models: vec!["gpt-5".to_owned()],
+                streaming: true,
+                system_prompt: Some("Be terse.".to_owned()),
+            },
         },
     }
 }
@@ -130,9 +132,11 @@ fn replacement_provider_definition(id: &str) -> ProviderDefinition {
     ProviderDefinition {
         id: id.to_owned(),
         label: format!("{id} Tools"),
-        variant: ProviderDefinitionVariant::McpTool {
-            transport: McpTransport::StreamableHttp {
-                url: "https://tools.example.test/mcp".to_owned(),
+        variant: ProviderDefinitionVariant::Tool {
+            variant: ToolVariant::Mcp {
+                transport: McpTransport::StreamableHttp {
+                    url: "https://tools.example.test/mcp".to_owned(),
+                },
             },
         },
     }

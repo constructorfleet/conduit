@@ -242,14 +242,14 @@ async fn the_provider_definition_is_stored_as_queryable_json() {
     .expect("stores");
 
     let row: (String,) = sqlx::query_as(
-        "SELECT definition->'variant'->>'type'
+        "SELECT (definition->'variant'->>'type') || '/' || (definition->'variant'->'variant'->>'type')
          FROM provider_definitions
          WHERE id = 'openai'",
     )
     .fetch_one(store.pool())
     .await
     .expect("queries inside the document");
-    assert_eq!(row.0, "openai_llm");
+    assert_eq!(row.0, "llm/openai");
 }
 
 #[tokio::test]

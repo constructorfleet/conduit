@@ -1953,11 +1953,14 @@ describe("Providers workspace", () => {
 
     expect(screen.getByText("Provider openwakeword saved")).toBeInTheDocument();
     expect(saved[0]?.variant).toMatchObject({
-      type: "wyoming_wake",
-      url: "tcp://openwakeword.local:10400",
-      engine: "openwakeword",
-      phrases: ["hey jarvis", "okay nabu"],
-      threshold_percent: 70,
+      type: "wake",
+      variant: {
+        type: "wyoming",
+        url: "tcp://openwakeword.local:10400",
+        engine: "openwakeword",
+        phrases: ["hey jarvis", "okay nabu"],
+        threshold_percent: 70,
+      },
     });
   });
 
@@ -2482,7 +2485,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "openai.responses",
         label: "OpenAI Responses",
         kind: "llm",
-        definition_variant: "openai_llm",
+        definition_variant: "openai",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2497,7 +2500,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "openai.completions",
         label: "OpenAI Completions",
         kind: "llm",
-        definition_variant: "openai_llm",
+        definition_variant: "openai",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2512,7 +2515,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "wyoming.wake",
         label: "Wyoming wake word",
         kind: "wake",
-        definition_variant: "wyoming_wake",
+        definition_variant: "wyoming",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2530,7 +2533,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "wyoming",
         label: "Wyoming",
         kind: "stt",
-        definition_variant: "wyoming_stt",
+        definition_variant: "wyoming",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2544,7 +2547,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "openai.transcription",
         label: "OpenAI Transcription",
         kind: "stt",
-        definition_variant: "openai_stt",
+        definition_variant: "openai",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2558,7 +2561,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "openai.speech",
         label: "OpenAI Speech",
         kind: "tts",
-        definition_variant: "openai_tts",
+        definition_variant: "openai",
         schema: {
           properties: {
             base_url: { type: "string", format: "url" },
@@ -2571,7 +2574,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "wyoming.tts",
         label: "Wyoming TTS",
         kind: "tts",
-        definition_variant: "wyoming_tts",
+        definition_variant: "wyoming",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2587,7 +2590,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "mcp.sse",
         label: "MCP SSE",
         kind: "tool",
-        definition_variant: "mcp_tool",
+        definition_variant: "mcp",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2599,7 +2602,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "mcp.streamable_http",
         label: "MCP Streamable HTTP",
         kind: "tool",
-        definition_variant: "mcp_tool",
+        definition_variant: "mcp",
         schema: {
           properties: {
             url: { type: "string", format: "url" },
@@ -2611,7 +2614,7 @@ function componentCatalog(): ProviderComponentCatalog {
         id: "mcp.stdio",
         label: "MCP STDIO",
         kind: "tool",
-        definition_variant: "mcp_tool",
+        definition_variant: "mcp",
         schema: {
           properties: {
             command: { type: "string" },
@@ -2852,19 +2855,11 @@ function mockOperatorApi({
   return fetchMock;
 }
 
+/// The outer provider definition variant is the capability itself.
 function providerKindForVariant(
   variant: ProviderDefinition["variant"]["type"],
 ): ProviderDefinitionView["kind"] {
-  if (variant === "openai_llm") {
-    return "llm";
-  }
-  if (variant === "openai_stt" || variant === "wyoming_stt") {
-    return "stt";
-  }
-  if (variant === "openai_tts" || variant === "wyoming_tts") {
-    return "tts";
-  }
-  return "tool";
+  return variant;
 }
 
 function providerStatusForDefinition(
@@ -2908,11 +2903,14 @@ function providerDefinitionFixture({
       label,
       kind: "llm",
       variant: {
-        type: "openai_llm",
-        base_url: text("base_url"),
-        ...(apiKey ? { api_key: apiKey } : {}),
-        models: text("model") ? [text("model")] : [],
-        streaming: flag("streaming"),
+        type: "llm",
+        variant: {
+          type: "openai",
+          base_url: text("base_url"),
+          ...(apiKey ? { api_key: apiKey } : {}),
+          models: text("model") ? [text("model")] : [],
+          streaming: flag("streaming"),
+        },
       },
     };
   }
@@ -2925,12 +2923,15 @@ function providerDefinitionFixture({
       label,
       kind: "tts",
       variant: {
-        type: "wyoming_tts",
-        url: text("url"),
-        ...(text("voice") || text("model")
-          ? { voice: text("voice") || text("model") }
-          : {}),
-        streaming: flag("streaming"),
+        type: "tts",
+        variant: {
+          type: "wyoming",
+          url: text("url"),
+          ...(text("voice") || text("model")
+            ? { voice: text("voice") || text("model") }
+            : {}),
+          streaming: flag("streaming"),
+        },
       },
     };
   }
@@ -2940,10 +2941,13 @@ function providerDefinitionFixture({
       label,
       kind: "tool",
       variant: {
-        type: "mcp_tool",
-        transport: {
-          type: component === "mcp.sse" ? "sse" : "streamable_http",
-          url: text("url"),
+        type: "tool",
+        variant: {
+          type: "mcp",
+          transport: {
+            type: component === "mcp.sse" ? "sse" : "streamable_http",
+            url: text("url"),
+          },
         },
       },
     };
@@ -2953,10 +2957,13 @@ function providerDefinitionFixture({
     label,
     kind: "stt",
     variant: {
-      type: "wyoming_stt",
-      url: text("url"),
-      ...(text("model") ? { model: text("model") } : {}),
-      streaming: flag("streaming"),
+      type: "stt",
+      variant: {
+        type: "wyoming",
+        url: text("url"),
+        ...(text("model") ? { model: text("model") } : {}),
+        streaming: flag("streaming"),
+      },
     },
   };
 }

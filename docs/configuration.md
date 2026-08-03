@@ -92,11 +92,14 @@ development seam.
 
 ### Runtime Providers Built From Definitions
 
-| Variant | Runtime provider | Endpoint |
-| --- | --- | --- |
-| `openai_llm` / `openai_stt` / `openai_tts` | `conduit-openai` | `base_url`, `http` or `https` |
-| `wyoming_stt` / `wyoming_tts` | `conduit-wyoming` | `url`, `tcp://host:port` |
-| `mcp_tool` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
+Each provider definition variant is two-level: an outer `type` names the
+capability and an inner `variant.type` names the vendor.
+
+| Capability (`type`) | Vendor (`variant.type`) | Runtime provider | Endpoint |
+| --- | --- | --- | --- |
+| `llm` / `stt` / `tts` | `openai` | `conduit-openai` | `base_url`, `http` or `https` |
+| `stt` / `tts` / `wake` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
@@ -110,6 +113,12 @@ Discovering those tools needs the server to answer, but saving a definition
 does not require it: discovery is given five seconds, and a server that does not
 answer leaves the definition saved with no tools registered. Running a
 reachability test on that definition rediscovers them.
+
+Reachability is probed automatically whenever definitions change — and again at
+startup — for every capability, including MCP: a tool provider is checked
+through its transport the way the explicit test checks it, so a healthy server
+reads `reachable` without an operator pressing Test, however the registry is
+populated.
 
 ## OpenTelemetry
 

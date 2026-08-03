@@ -200,19 +200,11 @@ function createMockSnapshotClient(
   };
 }
 
+/// The outer provider definition variant is the capability itself.
 function providerKindFromVariant(
   variant: ProviderDefinition["variant"]["type"],
 ): ProviderDefinitionView["kind"] {
-  if (variant === "openai_llm") {
-    return "llm";
-  }
-  if (variant === "openai_stt" || variant === "wyoming_stt") {
-    return "stt";
-  }
-  if (variant === "openai_tts" || variant === "wyoming_tts") {
-    return "tts";
-  }
-  return "tool";
+  return variant;
 }
 
 export function authorizationHeaders(access: OperatorAccess): HeadersInit {

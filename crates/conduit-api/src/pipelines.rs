@@ -44,7 +44,10 @@ pub struct ProviderComponentDescriptor {
     /// bindings rather than graph stages, so there is no node kind left for
     /// their components to name.
     pub kind: ProviderCapability,
-    /// Provider definition variant created from this catalog entry.
+    /// Inner provider definition variant created from this catalog entry.
+    ///
+    /// The saved definition's outer variant is `kind` and its inner variant is
+    /// this value, so the two together name the full two-level variant.
     pub definition_variant: &'static str,
     /// Configuration fields accepted by this provider component.
     pub schema: ComponentConfigSchema,
@@ -452,21 +455,21 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "openai.responses",
             label: "OpenAI Responses",
             kind: ProviderCapability::Llm,
-            definition_variant: "openai_llm",
+            definition_variant: "openai",
             schema: openai_llm_schema(),
         },
         ProviderComponentDescriptor {
             id: "openai.completions",
             label: "OpenAI Completions",
             kind: ProviderCapability::Llm,
-            definition_variant: "openai_llm",
+            definition_variant: "openai",
             schema: openai_llm_schema(),
         },
         ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: ProviderCapability::Stt,
-            definition_variant: "wyoming_stt",
+            definition_variant: "wyoming",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -480,7 +483,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "openai.transcription",
             label: "OpenAI Transcription",
             kind: ProviderCapability::Stt,
-            definition_variant: "openai_stt",
+            definition_variant: "openai",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -494,7 +497,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "openai.speech",
             label: "OpenAI Speech",
             kind: ProviderCapability::Tts,
-            definition_variant: "openai_tts",
+            definition_variant: "openai",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -507,7 +510,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "wyoming.tts",
             label: "Wyoming TTS",
             kind: ProviderCapability::Tts,
-            definition_variant: "wyoming_tts",
+            definition_variant: "wyoming",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -523,7 +526,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "mcp.sse",
             label: "MCP SSE",
             kind: ProviderCapability::Tool,
-            definition_variant: "mcp_tool",
+            definition_variant: "mcp",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -536,7 +539,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "mcp.streamable_http",
             label: "MCP Streamable HTTP",
             kind: ProviderCapability::Tool,
-            definition_variant: "mcp_tool",
+            definition_variant: "mcp",
             schema: ComponentConfigSchema {
                 properties: properties([(
                     "url",
@@ -549,7 +552,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "wyoming.wake",
             label: "Wyoming wake word",
             kind: ProviderCapability::Wake,
-            definition_variant: "wyoming_wake",
+            definition_variant: "wyoming",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -564,7 +567,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "device.wake",
             label: "On-device wake word",
             kind: ProviderCapability::Wake,
-            definition_variant: "device_wake",
+            definition_variant: "device",
             schema: ComponentConfigSchema {
                 // No URL: the satellite runs the detector and streams only
                 // once it has activated, so there is no service to point at.
@@ -580,7 +583,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "speaker.http",
             label: "Speaker identification",
             kind: ProviderCapability::SpeakerId,
-            definition_variant: "http_speaker_id",
+            definition_variant: "http",
             schema: ComponentConfigSchema {
                 properties: properties([
                     ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
@@ -595,7 +598,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "speaker.diarization_server",
             label: "Diarization Server",
             kind: ProviderCapability::SpeakerId,
-            definition_variant: "diarization_server_speaker_id",
+            definition_variant: "diarization_server",
             schema: ComponentConfigSchema {
                 // No engine: the server decides which model it runs, and no
                 // API key: it has no authentication to offer one to.
@@ -610,7 +613,7 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: ProviderCapability::Tool,
-            definition_variant: "mcp_tool",
+            definition_variant: "mcp",
             schema: ComponentConfigSchema {
                 properties: properties([("command", string_property(None, None))]),
                 required: vec!["command"],

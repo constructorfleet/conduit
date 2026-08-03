@@ -31,11 +31,23 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   synthesizer's own voices rather than a free text box. Providers that
   enumerate none, and providers that cannot be reached, still accept a typed
   voice.
+- MCP tool provider definitions are now reachability-probed automatically along
+  with every other capability, both when definitions change and at startup. A
+  tool provider's server being healthy no longer shows `configured` with "no
+  successful reachability check yet" until an operator presses Test.
 - `/v1/events` no longer refuses `wake_word` or `identity` stage
   subscriptions. Both now carry traffic, so `Stage::has_emitter` and the
   refusal it powered are gone.
 - Added project documentation covering contribution workflow, architecture, API
   routes, configuration, and crate responsibilities.
+- **Breaking:** provider definition variants are now two-level. An outer `type`
+  names the capability (`llm`, `stt`, `tts`, `tool`, `wake`, `speaker_id`) and
+  an inner `variant.type` names the vendor (`openai`, `wyoming`, `mcp`,
+  `device`, `http`, `diarization_server`), e.g.
+  `{ "type": "llm", "variant": { "type": "openai", ... } }`. Flat tags such as
+  `openai_llm` are still accepted when reading stored records and upgrade to
+  the new shape when re-saved. See
+  [ADR-0013](docs/adr/0013-nested-provider-definition-variants.md).
 
 ## 0.1.0
 

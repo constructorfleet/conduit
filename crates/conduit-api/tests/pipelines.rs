@@ -58,9 +58,12 @@ async fn store_valid_graph_provider_definitions(state: &AppState) {
                 "id": "whisper",
                 "label": "Whisper",
                 "variant": {
-                    "type": "openai_stt",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "whisper-1"
+                    "type": "stt",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "whisper-1"
+                    }
                 }
             }),
         ),
@@ -74,9 +77,12 @@ async fn store_valid_graph_provider_definitions(state: &AppState) {
                 "id": "ollama",
                 "label": "Ollama",
                 "variant": {
-                    "type": "openai_llm",
-                    "base_url": "http://localhost:11434/v1",
-                    "models": ["llama3"]
+                    "type": "llm",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "http://localhost:11434/v1",
+                        "models": ["llama3"]
+                    }
                 }
             }),
         ),
@@ -90,10 +96,13 @@ async fn store_valid_graph_provider_definitions(state: &AppState) {
                 "id": "piper",
                 "label": "Piper",
                 "variant": {
-                    "type": "openai_tts",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "tts-1",
-                    "voices": []
+                    "type": "tts",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "tts-1",
+                        "voices": []
+                    }
                 }
             }),
         ),
@@ -110,9 +119,12 @@ async fn store_llm_provider_definition(state: &AppState, id: &str) {
                 "id": id,
                 "label": id,
                 "variant": {
-                    "type": "openai_llm",
-                    "base_url": "http://localhost:11434/v1",
-                    "models": ["llama3"]
+                    "type": "llm",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "http://localhost:11434/v1",
+                        "models": ["llama3"]
+                    }
                 }
             }),
         ),
@@ -477,9 +489,12 @@ async fn storing_a_pipeline_rejects_provider_definition_kind_mismatches_and_does
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -575,9 +590,12 @@ async fn validate_rejects_provider_definition_kind_mismatches() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -690,7 +708,7 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["components"][0]["id"], "openai.responses");
     assert_eq!(body["components"][0]["kind"], "llm");
-    assert_eq!(body["components"][0]["definition_variant"], "openai_llm");
+    assert_eq!(body["components"][0]["definition_variant"], "openai");
     assert_eq!(
         body["components"][0]["schema"]["properties"]["base_url"],
         serde_json::json!({ "type": "string", "format": "url" })
@@ -745,12 +763,15 @@ async fn provider_definition_crud_round_trips_typed_variants_and_redacts_secrets
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "api_key": { "type": "inline", "value": "sk-test" },
-            "models": ["gpt-4.1"],
-            "streaming": true,
-            "system_prompt": "Be useful."
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": { "type": "inline", "value": "sk-test" },
+                "models": ["gpt-4.1"],
+                "streaming": true,
+                "system_prompt": "Be useful."
+            }
         }
     });
 
@@ -760,12 +781,19 @@ async fn provider_definition_crud_round_trips_typed_variants_and_redacts_secrets
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["id"], "openai-primary");
     assert_eq!(body["kind"], "llm");
-    assert_eq!(body["variant"]["type"], "openai_llm");
-    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+    assert_eq!(body["variant"]["type"], "llm");
+    assert_eq!(body["variant"]["variant"]["type"], "openai");
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" })
+    );
 
     let (status, body) = call(&state, get("/v1/providers/openai-primary")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" })
+    );
 
     let (status, body) = call(&state, get("/v1/providers")).await;
     assert_eq!(status, StatusCode::OK);
@@ -779,9 +807,12 @@ async fn saving_openai_provider_definition_rebuilds_the_runtime_registry_snapsho
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "http://localhost:11434/v1",
-            "models": ["llama3.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "http://localhost:11434/v1",
+                "models": ["llama3.1"]
+            }
         }
     });
 
@@ -799,20 +830,26 @@ async fn redacted_provider_secret_update_keeps_the_existing_secret() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "api_key": { "type": "inline", "value": "sk-test" },
-            "models": ["gpt-4.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": { "type": "inline", "value": "sk-test" },
+                "models": ["gpt-4.1"]
+            }
         }
     });
     let updated = serde_json::json!({
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://proxy.local/v1",
-            "api_key": { "type": "redacted" },
-            "models": ["gpt-4.1-mini"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://proxy.local/v1",
+                "api_key": { "type": "redacted" },
+                "models": ["gpt-4.1-mini"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", original)).await;
@@ -820,8 +857,11 @@ async fn redacted_provider_secret_update_keeps_the_existing_secret() {
     let (status, body) = call(&state, put_json("/v1/providers/openai-primary", updated)).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["variant"]["base_url"], "https://proxy.local/v1");
-    assert_eq!(body["variant"]["api_key"], serde_json::json!({ "type": "redacted" }));
+    assert_eq!(body["variant"]["variant"]["base_url"], "https://proxy.local/v1");
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" })
+    );
 }
 
 #[tokio::test]
@@ -831,20 +871,26 @@ async fn empty_provider_secret_update_clears_the_existing_secret() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "api_key": { "type": "inline", "value": "sk-test" },
-            "models": ["gpt-4.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": { "type": "inline", "value": "sk-test" },
+                "models": ["gpt-4.1"]
+            }
         }
     });
     let updated = serde_json::json!({
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "api_key": { "type": "inline", "value": "" },
-            "models": ["gpt-4.1-mini"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": { "type": "inline", "value": "" },
+                "models": ["gpt-4.1-mini"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", original)).await;
@@ -852,9 +898,9 @@ async fn empty_provider_secret_update_clears_the_existing_secret() {
     let (status, body) = call(&state, put_json("/v1/providers/openai-primary", updated)).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["variant"]["models"], serde_json::json!(["gpt-4.1-mini"]));
+    assert_eq!(body["variant"]["variant"]["models"], serde_json::json!(["gpt-4.1-mini"]));
     assert!(
-        body["variant"].get("api_key").is_none(),
+        body["variant"]["variant"].get("api_key").is_none(),
         "empty secret updates should clear the stored secret: {body}"
     );
 }
@@ -866,18 +912,24 @@ async fn invalid_provider_definition_updates_do_not_replace_existing_settings() 
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "models": ["gpt-4.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "models": ["gpt-4.1"]
+            }
         }
     });
     let invalid = serde_json::json!({
         "id": "openai-primary",
         "label": "Broken OpenAI",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "not a url",
-            "models": ["gpt-4.1-mini"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "not a url",
+                "models": ["gpt-4.1-mini"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", original)).await;
@@ -891,8 +943,8 @@ async fn invalid_provider_definition_updates_do_not_replace_existing_settings() 
     let (status, body) = call(&state, get("/v1/providers/openai-primary")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["label"], "OpenAI Primary");
-    assert_eq!(body["variant"]["base_url"], "https://api.openai.com/v1");
-    assert_eq!(body["variant"]["models"], serde_json::json!(["gpt-4.1"]));
+    assert_eq!(body["variant"]["variant"]["base_url"], "https://api.openai.com/v1");
+    assert_eq!(body["variant"]["variant"]["models"], serde_json::json!(["gpt-4.1"]));
     assert_eq!(
         state.providers().expect("snapshot").llm().names().collect::<Vec<_>>(),
         ["openai-primary"]
@@ -906,8 +958,11 @@ async fn invalid_wyoming_provider_definition_urls_are_rejected_without_storing()
         "id": "piper-local",
         "label": "Piper Local",
         "variant": {
-            "type": "wyoming_tts",
-            "url": "piper.local:10200"
+            "type": "tts",
+            "variant": {
+                "type": "wyoming",
+                "url": "piper.local:10200"
+            }
         }
     });
 
@@ -929,10 +984,13 @@ async fn invalid_mcp_provider_definition_urls_are_rejected_without_storing() {
         "id": "home-tools",
         "label": "Home Tools",
         "variant": {
-            "type": "mcp_tool",
-            "transport": {
-                "type": "sse",
-                "url": "tools.local/mcp"
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": {
+                    "type": "sse",
+                    "url": "tools.local/mcp"
+                }
             }
         }
     });
@@ -956,9 +1014,12 @@ async fn provider_reachability_test_marks_a_provider_reachable() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": server.url(),
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": server.url(),
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -983,9 +1044,12 @@ async fn a_saved_provider_definition_is_probed_without_being_asked() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": server.url(),
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": server.url(),
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -1028,9 +1092,12 @@ async fn successful_provider_reachability_test_updates_provider_status() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": server.url(),
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": server.url(),
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -1061,9 +1128,12 @@ async fn provider_reachability_test_reports_actionable_failures() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": server.url(),
-            "models": ["gpt-test"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": server.url(),
+                "models": ["gpt-test"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -1101,7 +1171,10 @@ async fn saving_a_wyoming_tts_definition_registers_a_runtime_tts_provider() {
     let definition = serde_json::json!({
         "id": "piper-local",
         "label": "Piper",
-        "variant": { "type": "wyoming_tts", "url": server.url(), "voice": "en_US-amy" }
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "wyoming", "url": server.url(), "voice": "en_US-amy" }
+        }
     });
     call(&state, put_json("/v1/providers/piper-local", definition)).await;
 
@@ -1126,10 +1199,13 @@ async fn a_synthesizer_reports_the_voices_it_offers() {
                 "id": "openai-speech",
                 "label": "OpenAI Speech",
                 "variant": {
-                    "type": "openai_tts",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "tts-1",
-                    "voices": ["alloy", "shimmer"]
+                    "type": "tts",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "tts-1",
+                        "voices": ["alloy", "shimmer"]
+                    }
                 }
             }),
         ),
@@ -1160,7 +1236,10 @@ async fn a_synthesizer_with_no_catalogue_reports_an_empty_list() {
             serde_json::json!({
                 "id": "piper-local",
                 "label": "Piper",
-                "variant": { "type": "wyoming_tts", "url": server.url() }
+                "variant": {
+                    "type": "tts",
+                    "variant": { "type": "wyoming", "url": server.url() }
+                }
             }),
         ),
     )
@@ -1186,10 +1265,13 @@ async fn a_definition_that_names_no_voices_still_offers_the_models_own() {
                 "id": "openai-speech",
                 "label": "OpenAI Speech",
                 "variant": {
-                    "type": "openai_tts",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "tts-1",
-                    "voices": []
+                    "type": "tts",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "tts-1",
+                        "voices": []
+                    }
                 }
             }),
         ),
@@ -1232,7 +1314,10 @@ async fn saving_a_wyoming_stt_definition_registers_a_runtime_stt_provider() {
     let definition = serde_json::json!({
         "id": "whisper-local",
         "label": "Faster Whisper",
-        "variant": { "type": "wyoming_stt", "url": server.url(), "model": "tiny" }
+        "variant": {
+            "type": "stt",
+            "variant": { "type": "wyoming", "url": server.url(), "model": "tiny" }
+        }
     });
     call(&state, put_json("/v1/providers/whisper-local", definition)).await;
 
@@ -1253,7 +1338,10 @@ async fn a_wyoming_definition_saves_while_its_server_is_down() {
     let definition = serde_json::json!({
         "id": "piper-local",
         "label": "Piper",
-        "variant": { "type": "wyoming_tts", "url": format!("tcp://{address}") }
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "wyoming", "url": format!("tcp://{address}") }
+        }
     });
 
     let (status, _) = call(&state, put_json("/v1/providers/piper-local", definition)).await;
@@ -1275,8 +1363,11 @@ async fn saving_an_mcp_definition_registers_its_discovered_tool() {
         "id": "weather-tools",
         "label": "Weather Tools",
         "variant": {
-            "type": "mcp_tool",
-            "transport": { "type": "streamable_http", "url": server.url() }
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": { "type": "streamable_http", "url": server.url() }
+            }
         }
     });
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
@@ -1309,8 +1400,11 @@ async fn a_multi_tool_mcp_definition_registers_each_tool_under_its_own_id() {
         "id": "weather-tools",
         "label": "Weather Tools",
         "variant": {
-            "type": "mcp_tool",
-            "transport": { "type": "streamable_http", "url": server.url() }
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": { "type": "streamable_http", "url": server.url() }
+            }
         }
     });
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
@@ -1335,8 +1429,14 @@ async fn an_mcp_definition_saves_while_its_server_is_down() {
         "id": "weather-tools",
         "label": "Weather Tools",
         "variant": {
-            "type": "mcp_tool",
-            "transport": { "type": "streamable_http", "url": format!("http://{address}") }
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": {
+                    "type": "streamable_http",
+                    "url": format!("http://{address}")
+                }
+            }
         }
     });
 
@@ -1352,6 +1452,51 @@ async fn an_mcp_definition_saves_while_its_server_is_down() {
 }
 
 #[tokio::test]
+async fn a_saved_mcp_definition_is_probed_without_being_asked() {
+    // The probe that follows a definition write looked providers up in the
+    // runtime registry by their definition id, but an MCP definition registers
+    // its tools under qualified `<id>.<tool>` ids — never under the id itself
+    // once the server advertises more than one tool. So a tool provider read
+    // "no successful reachability check yet" however healthy its server was,
+    // and said so again after every restart. It must be probed through its
+    // transport, the way the explicit test endpoint already probes it.
+    let server = MockMcpServer::exposing(&["forecast", "history"]).await;
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "weather-tools",
+        "label": "Weather Tools",
+        "variant": {
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": { "type": "streamable_http", "url": server.url() }
+            }
+        }
+    });
+    call(&state, put_json("/v1/providers/weather-tools", definition)).await;
+
+    let mut provider = serde_json::Value::Null;
+    for _ in 0..50 {
+        let (status, body) = call(&state, get("/v1/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        provider = body["providers"]
+            .as_array()
+            .expect("providers")
+            .iter()
+            .find(|provider| provider["id"] == "weather-tools")
+            .expect("provider status")
+            .clone();
+        if provider["reachable"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(provider["reachable"], true, "a healthy MCP server must be probed: {provider}");
+    assert_eq!(provider["state"], "reachable");
+}
+
+#[tokio::test]
 async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
     // Wyoming speaks its own protocol over a socket. Storing an http endpoint
     // would save a definition the runtime could never build a provider from.
@@ -1359,7 +1504,10 @@ async fn a_wyoming_url_that_is_not_tcp_is_rejected_without_storing() {
     let invalid = serde_json::json!({
         "id": "piper-local",
         "label": "Piper Local",
-        "variant": { "type": "wyoming_tts", "url": "http://piper.local:10200" }
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "wyoming", "url": "http://piper.local:10200" }
+        }
     });
 
     let (status, body) = call(&state, put_json("/v1/providers/piper-local", invalid)).await;
@@ -1425,8 +1573,11 @@ async fn deleting_an_mcp_definition_is_refused_while_a_pipeline_uses_one_of_its_
         "id": "weather-tools",
         "label": "Weather Tools",
         "variant": {
-            "type": "mcp_tool",
-            "transport": { "type": "streamable_http", "url": server.url() }
+            "type": "tool",
+            "variant": {
+                "type": "mcp",
+                "transport": { "type": "streamable_http", "url": server.url() }
+            }
         }
     });
     call(&state, put_json("/v1/providers/weather-tools", definition)).await;
@@ -1452,9 +1603,12 @@ async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "https://api.openai.com/v1",
-            "models": ["gpt-4.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "models": ["gpt-4.1"]
+            }
         }
     });
     call(&state, put_json("/v1/providers/openai-primary", definition)).await;
@@ -1589,9 +1743,12 @@ async fn a_provider_definition_survives_a_restart() {
         "id": "openai-primary",
         "label": "OpenAI Primary",
         "variant": {
-            "type": "openai_llm",
-            "base_url": "http://localhost:11434/v1",
-            "models": ["llama3.1"]
+            "type": "llm",
+            "variant": {
+                "type": "openai",
+                "base_url": "http://localhost:11434/v1",
+                "models": ["llama3.1"]
+            }
         }
     });
 

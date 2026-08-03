@@ -4,9 +4,10 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use conduit_mcp::McpClient;
 use conduit_provider::storage::{
-    McpTransport, ProviderCapability, ProviderDefinition, ProviderDefinitionVariant,
+    LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
+    ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
+    WakeVariant,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -190,8 +191,10 @@ pub async fn test(
     // and reporting that as "not registered" would hide the connection error
     // the operator needs to see. A probe that succeeds also rediscovers the
     // tools, so a provider becomes usable without another write.
-    if let ProviderDefinitionVariant::McpTool { transport } = &definition.variant {
-        let health = probe_mcp(transport).await;
+    if let ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } =
+        &definition.variant
+    {
+        let health = crate::state::probe_mcp(transport).await;
         if health.is_usable() {
             state.reload_provider_definitions().await.map_err(store_failure)?;
         }
@@ -238,15 +241,6 @@ pub async fn test(
     Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
 }
 
-/// Lists an MCP server's tools: the narrowest check that proves the server is
-/// reachable and speaks the protocol, without invoking anything.
-async fn probe_mcp(transport: &McpTransport) -> Health {
-    match McpClient::new(transport.clone()).list_tools().await {
-        Ok(_) => Health::Healthy,
-        Err(error) => Health::Unhealthy { reason: error.to_string() },
-    }
-}
-
 #[derive(Serialize)]
 struct DeleteConflict {
     error: &'static str,
@@ -267,24 +261,28 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
 
 fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), ApiError> {
     match &definition.variant {
-        ProviderDefinitionVariant::OpenAiLlm { base_url, .. }
-        | ProviderDefinitionVariant::OpenAiStt { base_url, .. }
-        | ProviderDefinitionVariant::OpenAiTts { base_url, .. } => {
+        ProviderDefinitionVariant::Llm { variant: LlmVariant::OpenAi { base_url, .. } }
+        | ProviderDefinitionVariant::Stt { variant: SttVariant::OpenAi { base_url, .. } }
+        | ProviderDefinitionVariant::Tts { variant: TtsVariant::OpenAi { base_url, .. } } => {
             validate_http_url("base_url", base_url)?;
         }
-        ProviderDefinitionVariant::WyomingStt { url, .. }
-        | ProviderDefinitionVariant::WyomingTts { url, .. }
-        | ProviderDefinitionVariant::WyomingWake { url, .. } => {
+        ProviderDefinitionVariant::Stt { variant: SttVariant::Wyoming { url, .. } }
+        | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } }
+        | ProviderDefinitionVariant::Wake { variant: WakeVariant::Wyoming { url, .. } } => {
             validate_tcp_url("url", url)?;
         }
-        ProviderDefinitionVariant::HttpSpeakerId { base_url, .. }
-        | ProviderDefinitionVariant::DiarizationServerSpeakerId { base_url, .. } => {
+        ProviderDefinitionVariant::SpeakerId {
+            variant: SpeakerIdVariant::Http { base_url, .. },
+        }
+        | ProviderDefinitionVariant::SpeakerId {
+            variant: SpeakerIdVariant::DiarizationServer { base_url, .. },
+        } => {
             validate_http_url("base_url", base_url)?;
         }
         // A satellite that wakes itself has no endpoint to check: the
         // detector is flashed onto the device, and the only thing that could
         // be wrong here is an engine too large for it to run.
-        ProviderDefinitionVariant::DeviceWake { engine, .. } => {
+        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { engine, .. } } => {
             if !engine.runs_on_device() {
                 return Err(ApiError::unprocessable(format!(
                     "`{}` cannot run on a satellite; use a wyoming_wake definition for it, \
@@ -293,7 +291,7 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                 )));
             }
         }
-        ProviderDefinitionVariant::McpTool { transport } => {
+        ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             validate_mcp_transport(transport)?;
         }
     }
