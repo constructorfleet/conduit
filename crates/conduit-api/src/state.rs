@@ -13,7 +13,7 @@ use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
     LlmVariant, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
     ProviderDefinitionVariant, ProviderSecret, SpeakerIdVariant, SttVariant, ToolVariant,
-    TtsVariant, WakeVariant,
+    TtsVariant, WakeVariant, DEFAULT_THRESHOLD_PERCENT,
 };
 use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
@@ -440,19 +440,8 @@ async fn register_definition(
         ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
-        ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Wyoming { url, phrases, threshold_percent, .. },
-        } => Ok(providers.with_wake(WyomingWake::new(
-            &definition.id,
-            url,
-            phrases.clone(),
-            f32::from(*threshold_percent) / 100.0,
-        )?)),
-        // A satellite that wakes itself still registers a detector, so that a
-        // pipeline naming the stage resolves and the activation reaches the
-        // event stream. It scores nothing: the device already decided.
-        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { phrases, .. } } => {
-            Ok(providers.with_wake(DeviceWake::new(&definition.id, phrases.clone())))
+        ProviderDefinitionVariant::Wake { variant } => {
+            register_wake(providers, &definition.id, variant)
         }
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::DiarizationServer { base_url, threshold_percent },
@@ -470,6 +459,32 @@ async fn register_definition(
             f32::from(*threshold_percent) / 100.0,
         )?)),
     }
+}
+
+/// Registers the detector a wake definition describes.
+///
+/// The engine says which detector is listening and the runtime says where, so
+/// what gets registered follows from the runtime alone: a Wyoming server gets a
+/// client, and a satellite that wakes itself still gets a detector — one that
+/// scores nothing, because the device already decided — so that a pipeline
+/// naming the stage resolves and the activation reaches the event stream.
+fn register_wake(providers: Providers, id: &str, variant: &WakeVariant) -> Result<Providers> {
+    let phrases = variant.phrases().to_vec();
+    if let Some(url) = variant.wyoming_url() {
+        let threshold = variant.threshold_percent().unwrap_or(DEFAULT_THRESHOLD_PERCENT);
+        return Ok(providers.with_wake(WyomingWake::new(
+            id,
+            url,
+            phrases,
+            f32::from(threshold) / 100.0,
+        )?));
+    }
+    if variant.local_models_dir().is_some() {
+        return Err(conduit_core::Error::Config(crate::providers::local_wake_unavailable(
+            variant.engine().name(),
+        )));
+    }
+    Ok(providers.with_wake(DeviceWake::new(id, phrases)))
 }
 
 /// Registers whatever tools an MCP server currently advertises.

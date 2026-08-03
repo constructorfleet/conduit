@@ -7,7 +7,6 @@ use axum::Json;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
     ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
-    WakeVariant,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -259,6 +258,17 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
     }
 }
 
+/// Why a definition that detects in process cannot be used.
+///
+/// Shared by validation and by registration so that an operator saving one and
+/// a server loading one already stored are told the same thing.
+pub(crate) fn local_wake_unavailable(engine: &str) -> String {
+    format!(
+        "`{engine}` cannot yet detect in process; point the definition at a Wyoming server \
+         instead"
+    )
+}
+
 fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), ApiError> {
     match &definition.variant {
         ProviderDefinitionVariant::Llm { variant: LlmVariant::OpenAi { base_url, .. } }
@@ -267,8 +277,7 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
             validate_http_url("base_url", base_url)?;
         }
         ProviderDefinitionVariant::Stt { variant: SttVariant::Wyoming { url, .. } }
-        | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } }
-        | ProviderDefinitionVariant::Wake { variant: WakeVariant::Wyoming { url, .. } } => {
+        | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } } => {
             validate_tcp_url("url", url)?;
         }
         ProviderDefinitionVariant::SpeakerId {
@@ -279,15 +288,19 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         } => {
             validate_http_url("base_url", base_url)?;
         }
-        // A satellite that wakes itself has no endpoint to check: the
-        // detector is flashed onto the device, and the only thing that could
-        // be wrong here is an engine too large for it to run.
-        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { engine, .. } } => {
-            if !engine.runs_on_device() {
-                return Err(ApiError::unprocessable(format!(
-                    "`{}` cannot run on a satellite; use a wyoming_wake definition for it, \
-                     or microwakeword on the device",
-                    engine.name()
+        // Where a wake definition detects is the shape of the definition
+        // rather than two fields that can disagree, so an engine on hardware
+        // too small for it is no longer something to reject — it is no longer
+        // something to write. What is left to check is the endpoint, when
+        // there is one; a satellite has none, because the detector is flashed
+        // onto the device.
+        ProviderDefinitionVariant::Wake { variant } => {
+            if let Some(url) = variant.wyoming_url() {
+                validate_tcp_url("url", url)?;
+            }
+            if variant.local_models_dir().is_some() {
+                return Err(ApiError::unprocessable(local_wake_unavailable(
+                    variant.engine().name(),
                 )));
             }
         }

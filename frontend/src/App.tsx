@@ -49,7 +49,7 @@ import type {
   ProviderSecret,
   SpeakerEngine,
   TurnSnapshot,
-  WakeEngine,
+  WakeRuntime,
 } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
@@ -3150,17 +3150,26 @@ function configFromProviderVariant(
     };
   }
   if (variant.type === "wake") {
-    if (variant.variant.type === "wyoming") {
+    // The engine is the variant and the place is inside it, so the form flattens
+    // the runtime back out: `where` picks which of the remaining fields matter.
+    const runtime = variant.variant.runtime;
+    const phrases = variant.variant.phrases.join(", ");
+    if (runtime.where === "device") {
+      return { where: runtime.where, phrases };
+    }
+    if (runtime.where === "local") {
       return {
-        url: variant.variant.url,
-        engine: variant.variant.engine,
-        phrases: variant.variant.phrases.join(", "),
-        threshold_percent: variant.variant.threshold_percent,
+        where: runtime.where,
+        models_dir: runtime.models_dir ?? "",
+        phrases,
+        threshold_percent: runtime.threshold_percent,
       };
     }
     return {
-      engine: variant.variant.engine,
-      phrases: variant.variant.phrases.join(", "),
+      where: runtime.where,
+      url: runtime.url,
+      phrases,
+      threshold_percent: runtime.threshold_percent,
     };
   }
   if (variant.type === "speaker_id") {
@@ -3276,26 +3285,50 @@ function variantFromProviderDefinition(
       },
     };
   }
-  if (definition.component === "wyoming.wake") {
+  if (definition.component === "microwakeword") {
+    // The satellite is the reason microWakeWord exists on this list, so a
+    // definition arriving without a place named means the device.
+    const url = text("url");
     return {
       type: "wake",
       variant: {
-        type: "wyoming",
-        url: text("url"),
-        engine: (text("engine") || "openwakeword") as WakeEngine,
+        type: "microwakeword",
+        runtime:
+          text("where") === "wyoming"
+            ? {
+                where: "wyoming",
+                url,
+                threshold_percent: whole("threshold_percent"),
+              }
+            : { where: "device" },
         phrases: list("phrases"),
-        threshold_percent: whole("threshold_percent"),
       },
     };
   }
-  if (definition.component === "device.wake") {
+  if (
+    definition.component === "openwakeword" ||
+    definition.component === "nanowakeword"
+  ) {
+    // Both are ONNX end-to-end, so both can be scored here or handed to a
+    // server; the component says which engine, `where` says which of those.
+    const modelsDir = text("models_dir");
+    const runtime: WakeRuntime =
+      text("where") === "wyoming"
+        ? {
+            where: "wyoming",
+            url: text("url"),
+            threshold_percent: whole("threshold_percent"),
+          }
+        : {
+            where: "local",
+            ...(modelsDir ? { models_dir: modelsDir } : {}),
+            threshold_percent: whole("threshold_percent"),
+          };
     return {
       type: "wake",
       variant: {
-        // A satellite runs microWakeWord or nothing, and the catalog offers no
-        // other choice, so a definition arriving without one means the same.
-        type: "device",
-        engine: (text("engine") || "microwakeword") as WakeEngine,
+        type: definition.component,
+        runtime,
         phrases: list("phrases"),
       },
     };

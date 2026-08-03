@@ -315,23 +315,49 @@ a Runtime Provider under the definition id:
 | Capability (`type`) | Vendor (`variant.type`) | Registers | Notes |
 | --- | --- | --- | --- |
 | `llm`, `stt`, `tts` | `openai` | One provider under the definition id | |
-| `stt`, `tts`, `wake` | `wyoming` | One provider under the definition id | `url` must be `tcp://host:port` |
-| `wake` | `device` | One wake word detector under the definition id | No endpoint: the satellite runs the detector. `engine` must be `microwakeword`, the only one small enough for that hardware |
+| `stt`, `tts` | `wyoming` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `wake` | `openwakeword`, `nanowakeword` | One wake word detector under the definition id | `runtime.where` is `local` or `wyoming` |
+| `wake` | `microwakeword` | One wake word detector under the definition id | `runtime.where` is `device` or `wyoming` |
 | `speaker_id` | `http` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
 | `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
 
-A `wake` definition with the `wyoming` variant names which detector is behind
-the endpoint — `openwakeword`, `microwakeword`, or `nanowakeword` — along with
-the `phrases` to listen for and a `threshold_percent` a detection must reach.
-An empty `phrases` list asks the server to score whatever it has loaded.
+A `wake` definition names its detector as the variant — `openwakeword`,
+`nanowakeword`, or `microwakeword` — and where that detector runs as a
+`runtime` inside it. The engine is the variant rather than a field beside the
+place because the three do not run in the same places, and a shape that let
+them be chosen independently could describe a detector that does not exist:
 
-A `wake` definition with the `device` variant describes a satellite that wakes
-itself. There is no endpoint because there is no server: the device scores audio
-locally and only streams once it has activated, so the pipeline's wake stage
-accepts immediately and publishes the activation the device already made. It
-exists so a pipeline can *say* it wakes on-device, and have the stage be visible
-in the editor, in validation, and on the event stream.
+```jsonc
+{ "type": "wake", "variant": {
+    "type": "openwakeword",
+    "runtime": { "where": "local", "models_dir": "/var/lib/conduit/wake-models",
+                 "threshold_percent": 50 },
+    "phrases": ["hey jarvis"] } }
+```
+
+- `where: "wyoming"` hands audio to a Wyoming server at `url`, which must be
+  `tcp://host:port`. Every engine is packaged as one.
+- `where: "local"` scores the models in the Conduit process, with no service to
+  run. openWakeWord and nanoWakeWord only: microWakeWord's models are
+  tflite-micro graphs Conduit cannot load. `models_dir` defaults to
+  `wake-models` under the data directory.
+- `where: "device"` describes a satellite that wakes itself. microWakeWord
+  only, being the one engine small enough for that hardware. There is no
+  endpoint because there is no server, and no `threshold_percent` because there
+  is nothing left to score: the device only streams once it has activated, so
+  the pipeline's wake stage accepts immediately and publishes the activation the
+  device already made. It exists so a pipeline can *say* it wakes on-device, and
+  have the stage be visible in the editor, in validation, and on the event
+  stream.
+
+`phrases` names what to listen for; an empty list asks for whatever was loaded.
+`threshold_percent` is the confidence a detection must reach.
+
+Definitions written before the engine became the variant — a `wyoming_wake` or
+`device_wake` type, or a `wake` variant of `wyoming` or `device` naming an
+`engine` — are still read, and are rewritten into the shape above the next time
+they are saved.
 
 A `speaker_id` definition with the `diarization_server` variant points at an
 existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server),

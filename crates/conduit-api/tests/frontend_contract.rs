@@ -499,12 +499,14 @@ export type ProviderDefinitionVariantType =
   | "openai"
   | "wyoming"
   | "mcp"
-  | "device"
+  | "openwakeword"
+  | "nanowakeword"
+  | "microwakeword"
   | "http"
   | "diarization_server";
 
-/// The three wake word detectors Conduit speaks to. All are packaged as
-/// Wyoming services; only microWakeWord also runs on satellite hardware.
+/// The three wake word detectors Conduit speaks to. Each is its own wake
+/// variant, because the three do not run in the same places.
 export type WakeEngine = "microwakeword" | "openwakeword" | "nanowakeword";
 
 /// The embedding models a speaker identification service may be running.
@@ -559,17 +561,44 @@ export type ToolVariant = {{
   transport: McpTransport;
 }};
 
-export type WakeVariant =
+/// Where a detector Conduit can score itself is running.
+export type WakeRuntime =
   | {{
-      type: "wyoming";
-      url: string;
-      engine: WakeEngine;
-      phrases: string[];
+      where: "local";
+      models_dir?: string;
       threshold_percent: number;
     }}
   | {{
-      type: "device";
-      engine: WakeEngine;
+      where: "wyoming";
+      url: string;
+      threshold_percent: number;
+    }};
+
+/// Where microWakeWord is running. A different set from `WakeRuntime`, not a
+/// subset: its models cannot be scored in process, and it is the only engine
+/// small enough for satellite hardware.
+export type MicroWakeWordRuntime =
+  | {{ where: "device" }}
+  | {{
+      where: "wyoming";
+      url: string;
+      threshold_percent: number;
+    }};
+
+export type WakeVariant =
+  | {{
+      type: "openwakeword";
+      runtime: WakeRuntime;
+      phrases: string[];
+    }}
+  | {{
+      type: "nanowakeword";
+      runtime: WakeRuntime;
+      phrases: string[];
+    }}
+  | {{
+      type: "microwakeword";
+      runtime: MicroWakeWordRuntime;
       phrases: string[];
     }};
 

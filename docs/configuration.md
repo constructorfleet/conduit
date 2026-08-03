@@ -98,8 +98,11 @@ capability and an inner `variant.type` names the vendor.
 | Capability (`type`) | Vendor (`variant.type`) | Runtime provider | Endpoint |
 | --- | --- | --- | --- |
 | `llm` / `stt` / `tts` | `openai` | `conduit-openai` | `base_url`, `http` or `https` |
-| `stt` / `tts` / `wake` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
+| `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
+| `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
+| `speaker_id` | `http` / `diarization_server` | `conduit-speaker` | `base_url`, `http` or `https` |
 
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.

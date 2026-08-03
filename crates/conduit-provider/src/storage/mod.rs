@@ -20,7 +20,7 @@ pub use speaker::SpeakerIdVariant;
 pub use stt::SttVariant;
 pub use tool::{McpTransport, ToolVariant};
 pub use tts::TtsVariant;
-pub use wake::WakeVariant;
+pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 
 /// The longest a pipeline name may be.
 const MAX_NAME: usize = 128;
@@ -175,16 +175,6 @@ impl WakeEngine {
             Self::OpenWakeWord => "openwakeword",
             Self::NanoWakeWord => "nanowakeword",
         }
-    }
-
-    /// Whether this engine can run on satellite hardware.
-    ///
-    /// Only microWakeWord is small enough for an ESP32, so a `device_wake`
-    /// definition naming either of the others describes a detector the
-    /// satellite cannot load.
-    #[must_use]
-    pub const fn runs_on_device(self) -> bool {
-        matches!(self, Self::MicroWakeWord)
     }
 }
 
@@ -589,10 +579,15 @@ impl From<LegacyProviderDefinitionVariant> for ProviderDefinitionVariant {
                 phrases,
                 threshold_percent,
             } => Self::Wake {
-                variant: WakeVariant::Wyoming { url, engine, phrases, threshold_percent },
+                variant: WakeVariant::from_engine_on_wyoming(
+                    engine,
+                    url,
+                    phrases,
+                    threshold_percent,
+                ),
             },
             LegacyProviderDefinitionVariant::DeviceWake { engine, phrases } => {
-                Self::Wake { variant: WakeVariant::Device { engine, phrases } }
+                Self::Wake { variant: WakeVariant::from_engine_on_device(engine, phrases) }
             }
             LegacyProviderDefinitionVariant::DiarizationServerSpeakerId {
                 base_url,
@@ -757,14 +752,16 @@ mod tests {
         }))
         .expect("legacy flat wake shape still reads");
 
-        let ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Wyoming { threshold_percent, phrases, .. },
-        } = variant
-        else {
-            panic!("a legacy `wyoming_wake` reads as a Wyoming wake definition");
+        let ProviderDefinitionVariant::Wake { variant } = variant else {
+            panic!("a legacy `wyoming_wake` reads as a wake definition");
         };
-        assert_eq!(threshold_percent, DEFAULT_THRESHOLD_PERCENT);
-        assert!(phrases.is_empty(), "no phrases named means whatever the server loaded");
+        assert_eq!(variant.engine(), WakeEngine::OpenWakeWord, "the engine it named");
+        assert_eq!(variant.wyoming_url(), Some("tcp://openwakeword:10400"));
+        assert_eq!(variant.threshold_percent(), Some(DEFAULT_THRESHOLD_PERCENT));
+        assert!(
+            variant.phrases().is_empty(),
+            "no phrases named means whatever the server loaded"
+        );
     }
 
     #[test]

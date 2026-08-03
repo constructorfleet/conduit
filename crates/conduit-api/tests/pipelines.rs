@@ -748,6 +748,71 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
 }
 
 #[tokio::test]
+async fn each_wake_engine_offers_only_the_places_it_runs() {
+    // The console builds its form from this catalog, so the catalog is what
+    // keeps an operator from describing a detector that cannot exist: an engine
+    // on hardware too small for it, or one Conduit cannot score in a process.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+    for scored in ["openwakeword", "nanowakeword"] {
+        assert_component(
+            components,
+            scored,
+            "wake",
+            &["where", "url", "models_dir", "phrases", "threshold_percent"],
+            &["where"],
+        );
+        assert_eq!(
+            places(components, scored),
+            serde_json::json!(["local", "wyoming"]),
+            "{scored} is ONNX end-to-end, so it runs here or on a server"
+        );
+    }
+    assert_component(
+        components,
+        "microwakeword",
+        "wake",
+        &["where", "url", "phrases", "threshold_percent"],
+        &["where"],
+    );
+    assert_eq!(
+        places(components, "microwakeword"),
+        serde_json::json!(["device", "wyoming"]),
+        "microWakeWord is the only engine a satellite runs, and the only one \
+         Conduit cannot score itself"
+    );
+    let properties = |id: &str| {
+        components.iter().find(|component| component["id"] == id).expect("component")["schema"]
+            ["properties"]
+            .clone()
+    };
+    assert!(
+        properties("microwakeword").get("models_dir").is_none(),
+        "there is no directory to read models from when Conduit never loads them"
+    );
+    for gone in ["wyoming.wake", "device.wake"] {
+        assert!(
+            !components.iter().any(|component| component["id"] == gone),
+            "`{gone}` named an engine beside a place; the engine is the component now"
+        );
+    }
+}
+
+/// The places one wake component offers.
+fn places(components: &[serde_json::Value], id: &str) -> serde_json::Value {
+    components
+        .iter()
+        .find(|component| component["id"] == id)
+        .unwrap_or_else(|| panic!("missing component {id}"))["schema"]["properties"]["where"]
+        ["options"]
+        .clone()
+}
+
+#[tokio::test]
 async fn old_pipeline_component_catalog_route_is_gone() {
     let state = AppState::new(EventBus::default());
 

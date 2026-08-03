@@ -441,9 +441,6 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
     }
 }
 
-/// The wake engines a Wyoming service may be running, in display order.
-const WAKE_ENGINES: [&str; 3] = ["openwakeword", "microwakeword", "nanowakeword"];
-
 /// The embedding models a speaker identification service may be running.
 const SPEAKER_ENGINES: [&str; 3] = ["speechbrain", "resemblyzer", "pyannote"];
 
@@ -549,34 +546,37 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
-            id: "wyoming.wake",
-            label: "Wyoming wake word",
+            id: "openwakeword",
+            label: "openWakeWord",
             kind: ProviderCapability::Wake,
-            definition_variant: "wyoming",
+            definition_variant: "openwakeword",
+            schema: scored_wake_schema(),
+        },
+        ProviderComponentDescriptor {
+            id: "nanowakeword",
+            label: "nanoWakeWord",
+            kind: ProviderCapability::Wake,
+            definition_variant: "nanowakeword",
+            schema: scored_wake_schema(),
+        },
+        ProviderComponentDescriptor {
+            id: "microwakeword",
+            label: "microWakeWord",
+            kind: ProviderCapability::Wake,
+            definition_variant: "microwakeword",
             schema: ComponentConfigSchema {
+                // `device` rather than `local`: microWakeWord's models are
+                // tflite-micro graphs Conduit cannot score itself, and it is
+                // the only engine small enough for satellite hardware. A
+                // satellite needs no URL — it streams only once it has
+                // activated — and no threshold, having already decided.
                 properties: properties([
+                    ("where", choice_property(vec!["device", "wyoming"])),
                     ("url", string_property(Some(ComponentConfigFormat::Url), None)),
-                    ("engine", choice_property(WAKE_ENGINES.to_vec())),
                     ("phrases", string_list_property()),
                     ("threshold_percent", integer_property()),
                 ]),
-                required: vec!["url", "engine"],
-            },
-        },
-        ProviderComponentDescriptor {
-            id: "device.wake",
-            label: "On-device wake word",
-            kind: ProviderCapability::Wake,
-            definition_variant: "device",
-            schema: ComponentConfigSchema {
-                // No URL: the satellite runs the detector and streams only
-                // once it has activated, so there is no service to point at.
-                // Only microWakeWord is small enough for that hardware.
-                properties: properties([
-                    ("engine", choice_property(vec!["microwakeword"])),
-                    ("phrases", string_list_property()),
-                ]),
-                required: vec!["engine"],
+                required: vec!["where"],
             },
         },
         ProviderComponentDescriptor {
@@ -620,6 +620,25 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
     ]
+}
+
+/// The shape shared by the two engines Conduit can score itself.
+///
+/// openWakeWord and nanoWakeWord are ONNX end-to-end, so each can either be
+/// loaded from disk and scored in process or handed to a Wyoming server. Which
+/// of the two fields matters follows from `where`: `models_dir` for `local`,
+/// `url` for `wyoming`.
+fn scored_wake_schema() -> ComponentConfigSchema {
+    ComponentConfigSchema {
+        properties: properties([
+            ("where", choice_property(vec!["local", "wyoming"])),
+            ("url", string_property(Some(ComponentConfigFormat::Url), None)),
+            ("models_dir", string_property(None, None)),
+            ("phrases", string_list_property()),
+            ("threshold_percent", integer_property()),
+        ]),
+        required: vec!["where"],
+    }
 }
 
 fn openai_llm_schema() -> ComponentConfigSchema {
