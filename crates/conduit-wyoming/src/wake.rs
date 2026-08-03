@@ -40,6 +40,8 @@ pub struct WyomingWake {
     /// Phrases this definition was configured with, offered to callers that
     /// do not name their own.
     phrases: Vec<String>,
+    /// Minimum confidence to accept, in `0.0..=1.0`, from the definition.
+    threshold: f32,
 }
 
 impl WyomingWake {
@@ -49,12 +51,17 @@ impl WyomingWake {
     /// # Errors
     ///
     /// Returns [`Error::Config`] if `url` is not a `tcp://host:port` address.
-    pub fn new(name: impl Into<String>, url: &str, phrases: Vec<String>) -> Result<Self> {
+    pub fn new(
+        name: impl Into<String>,
+        url: &str,
+        phrases: Vec<String>,
+        threshold: f32,
+    ) -> Result<Self> {
         let name = name.into();
         let address = tcp_address(url).ok_or_else(|| {
             Error::Config(format!("provider `{name}` Wyoming url must use tcp://host:port"))
         })?;
-        Ok(Self { name, address, phrases })
+        Ok(Self { name, address, phrases, threshold })
     }
 
     async fn connect(&self) -> Result<TcpStream> {
@@ -228,6 +235,13 @@ impl WakeWordDetector for WyomingWake {
     fn available_phrases(&self) -> &[String] {
         &self.phrases
     }
+
+    fn configured_phrases(&self) -> Vec<WakePhrase> {
+        self.phrases
+            .iter()
+            .map(|phrase| WakePhrase::new(phrase).with_threshold(self.threshold))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -269,7 +283,7 @@ mod tests {
         ));
 
         let provider =
-            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new())
+            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
                 .expect("built");
         let mut detections = provider
             .detect(audio(), vec![WakePhrase::new("hey jarvis")])
@@ -296,7 +310,7 @@ mod tests {
         ));
 
         let provider =
-            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new())
+            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
                 .expect("built");
         let mut detections = provider
             .detect(audio(), vec![WakePhrase::new("hey jarvis").with_threshold(0.8)])
@@ -320,7 +334,7 @@ mod tests {
             tokio::spawn(serve(listener, vec![(DETECTION, json!({ "name": "okay nabu" }))]));
 
         let provider =
-            WyomingWake::new("microwakeword", &format!("tcp://{address}"), Vec::new())
+            WyomingWake::new("microwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
                 .expect("built");
         let mut detections = provider
             .detect(audio(), vec![WakePhrase::new("okay nabu").with_threshold(0.9)])
@@ -340,7 +354,7 @@ mod tests {
         let server = tokio::spawn(serve(listener, vec![(NOT_DETECTED, json!({}))]));
 
         let provider =
-            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new())
+            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
                 .expect("built");
         let mut detections = provider
             .detect(audio(), vec![WakePhrase::new("hey jarvis")])
@@ -376,7 +390,7 @@ mod tests {
         });
 
         let provider =
-            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new())
+            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
                 .expect("built");
         let _detections = provider
             .detect(audio(), vec![WakePhrase::new("hey jarvis"), WakePhrase::new("okay nabu")])
@@ -394,8 +408,8 @@ mod tests {
 
     #[test]
     fn new_rejects_non_tcp_urls() {
-        let error =
-            WyomingWake::new("openwakeword", "ws://localhost:10400", Vec::new()).unwrap_err();
+        let error = WyomingWake::new("openwakeword", "ws://localhost:10400", Vec::new(), 0.5)
+            .unwrap_err();
         assert!(matches!(error, Error::Config(_)));
     }
 
@@ -405,8 +419,14 @@ mod tests {
             "openwakeword",
             "tcp://localhost:10400",
             vec!["hey jarvis".to_owned()],
+            0.8,
         )
         .expect("built");
         assert_eq!(provider.available_phrases(), ["hey jarvis"]);
+        // And with the threshold the definition set, so a detector an operator
+        // tightened is asked for that tightness rather than the default.
+        let configured = provider.configured_phrases();
+        assert_eq!(configured.len(), 1);
+        assert!((configured[0].threshold - 0.8).abs() < f32::EPSILON);
     }
 }

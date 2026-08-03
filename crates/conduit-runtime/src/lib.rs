@@ -4,10 +4,11 @@
 //! providers once, and [`Runner::run`] then executes a turn per utterance —
 //! audio in, speech out, events throughout.
 //!
-//! The runtime executes one recognizer, one model, one synthesizer, and any
-//! number of tool branches. Stages that still have no runtime contract, such
-//! as memory and speaker identification, are rejected at prepare time rather
-//! than silently mishandled.
+//! The runtime executes one wake stage, one identification stage, one
+//! recognizer, one model, one synthesizer, and any number of tool branches.
+//! Each of those stages is optional except the model. A graph naming a stage
+//! twice, or naming a provider the deployment does not have, is rejected at
+//! prepare time rather than silently mishandled.
 //!
 //! # Example
 //!
@@ -28,11 +29,13 @@
 pub mod confirm;
 pub mod deadline;
 mod emit;
+pub mod identity;
 pub mod plan;
 pub mod sentences;
 pub mod stop;
 pub mod tools;
 mod turn;
+pub mod wake;
 
 use std::sync::Arc;
 use std::time::Duration;

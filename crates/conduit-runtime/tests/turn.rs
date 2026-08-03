@@ -18,7 +18,9 @@ use conduit_core::testing::voice_graph;
 use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Reply, Runner};
-use fakes::{audio_of, FailingStt, FakeLlm, FakeStt, FakeTts, HangingTts, SlowTts};
+use fakes::{
+    audio_of, FailingStt, FakeLlm, FakeSpeaker, FakeStt, FakeTts, FakeWake, HangingTts, SlowTts,
+};
 use futures_util::StreamExt;
 
 /// mic -> stt -> core -> tts, the shape the runtime can execute today.
@@ -779,14 +781,90 @@ async fn several_tools_bound_to_one_core_are_executable() {
         .expect("tools bound to a core are executable");
 }
 
+/// mic -> wake -> stt -> core -> tts, with `detector` gating capture.
+fn woken_graph() -> PipelineGraph {
+    PipelineGraph::new("woken")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::wake_word("wake", "fake-wake"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "wake"))
+        .with_edge(Edge::new("wake", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"))
+}
+
 #[tokio::test]
-async fn rejects_stages_it_cannot_execute() {
-    // The graph model is deliberately wider than this runtime. A stage it
-    // cannot run is refused at prepare time rather than skipped, so nobody
-    // discovers the omission by speaking to a pipeline that ignores it.
+async fn a_pipeline_that_never_hears_its_wake_word_transcribes_nothing() {
+    // The whole point of the stage: audio nobody asked to be heard must not
+    // reach the recognizer, let alone the model.
+    let stt = FakeStt::new(vec![Transcript::final_text("what time is it")]).accepting_silence();
+    let providers = Providers::new()
+        .with_wake(FakeWake::never_accepting())
+        .with_stt(stt)
+        .with_llm(FakeLlm::new(vec!["it is noon"]))
+        .with_tts(FakeTts::new());
+
+    let bus = EventBus::default();
+    let runner = Runner::prepare(&woken_graph(), &providers, bus.clone()).expect("prepares");
+    let mut events = bus.subscribe();
+    let conversation = runner.run(audio_of(&["one", "two", "three"]));
+    let _reply: Vec<_> = conversation.output.collect().await;
+
+    let seen = drain(&mut events).await;
+    assert!(
+        !seen.iter().any(|event| matches!(event, Event::WakeWordDetected { .. })),
+        "nothing woke, so nothing is reported as having woken"
+    );
+    assert!(
+        seen.iter().any(|event| matches!(event, Event::WakeWordRejected { .. })),
+        "the near misses are still published, which is how a threshold gets tuned"
+    );
+}
+
+#[tokio::test]
+async fn a_wake_word_opens_the_pipeline_and_is_published() {
+    let providers = Providers::new()
+        .with_wake(FakeWake::accepting_after(1))
+        .with_stt(FakeStt::new(vec![Transcript::final_text("what time is it")]))
+        .with_llm(FakeLlm::new(vec!["it is noon"]))
+        .with_tts(FakeTts::new());
+
+    let bus = EventBus::default();
+    let runner = Runner::prepare(&woken_graph(), &providers, bus.clone()).expect("prepares");
+    let mut events = bus.subscribe();
+    let conversation = runner.run(audio_of(&["one", "two", "three"]));
+    let _reply: Vec<_> = conversation.output.collect().await;
+
+    let seen = drain(&mut events).await;
+    let detected = seen.iter().find_map(|event| match event {
+        Event::WakeWordDetected { phrase, confidence } => Some((phrase.clone(), *confidence)),
+        _ => None,
+    });
+    let (phrase, confidence) = detected.expect("the activation is published");
+    assert_eq!(phrase, "hey jarvis");
+    assert!((confidence - 0.9).abs() < f32::EPSILON);
+    assert!(
+        seen.iter().any(|event| matches!(event, Event::SpeechFinal { .. })),
+        "and the audio after it was transcribed"
+    );
+}
+
+#[tokio::test]
+async fn an_identified_speaker_is_published_and_reaches_the_turn() {
+    // The path this stage exists for: a voice becomes an identity, and the
+    // identity is what a per-speaker tool policy is checked against.
+    let speaker = conduit_core::id::SpeakerId::new();
+    let providers = Providers::new()
+        .with_speaker(FakeSpeaker::knowing(speaker))
+        .with_stt(FakeStt::new(vec![Transcript::final_text("unlock the door")]))
+        .with_llm(FakeLlm::new(vec!["unlocked"]))
+        .with_tts(FakeTts::new());
+
     let graph = PipelineGraph::new("identified")
         .with_node(Node::source("mic", "test", Modality::Audio))
-        .with_node(Node::speaker_id("who", "builtin"))
+        .with_node(Node::speaker_id("who", "fake-speaker"))
         .with_node(Node::stt("stt", "fake-stt"))
         .with_node(Node::core("core", "fake-llm"))
         .with_node(Node::tts("tts", "fake-tts"))
@@ -795,14 +873,65 @@ async fn rejects_stages_it_cannot_execute() {
         .with_edge(Edge::new("stt", "core"))
         .with_edge(Edge::new("core", "tts"));
 
+    let bus = EventBus::default();
+    let runner = Runner::prepare(&graph, &providers, bus.clone()).expect("prepares");
+    let mut events = bus.subscribe();
+    let conversation = runner.run(audio_of(&["unlock", "the", "door"]));
+    let _reply: Vec<_> = conversation.output.collect().await;
+
+    let seen = drain(&mut events).await;
+    let identified = seen.iter().find_map(|event| match event {
+        Event::SpeakerIdentified { speaker, confidence } => Some((*speaker, *confidence)),
+        _ => None,
+    });
+    let (identified, confidence) = identified.expect("the match is published");
+    assert_eq!(identified, Some(speaker));
+    assert!((confidence - 0.95).abs() < f32::EPSILON);
+    assert!(
+        seen.iter().any(|event| matches!(event, Event::SpeechFinal { .. })),
+        "identification did not take the audio away from recognition"
+    );
+}
+
+#[tokio::test]
+async fn a_broken_identifier_costs_the_speaker_rather_than_the_answer() {
+    // Not knowing who asked is how every pipeline behaved before this stage
+    // existed. A service that is down must not cost the person their reply.
     let providers = Providers::new()
-        .with_stt(FakeStt::new(vec![]))
-        .with_llm(FakeLlm::new(vec![]))
+        .with_speaker(FakeSpeaker::unreachable())
+        .with_stt(FakeStt::new(vec![Transcript::final_text("what time is it")]))
+        .with_llm(FakeLlm::new(vec!["it is noon"]))
         .with_tts(FakeTts::new());
 
-    let error = Runner::prepare(&graph, &providers, EventBus::default())
-        .expect_err("speaker identification is not executable yet");
-    assert!(matches!(error, Error::Config(message) if message.contains("speaker_id")));
+    let graph = PipelineGraph::new("identified")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::speaker_id("who", "fake-speaker"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "who"))
+        .with_edge(Edge::new("who", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
+
+    let bus = EventBus::default();
+    let runner = Runner::prepare(&graph, &providers, bus.clone()).expect("prepares");
+    let mut events = bus.subscribe();
+    let conversation = runner.run(audio_of(&["what", "time"]));
+    let _reply: Vec<_> = conversation.output.collect().await;
+
+    let seen = drain(&mut events).await;
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            Event::StageFailed { node, recovered: true, .. } if node == "who"
+        )),
+        "the failure is reported as one the turn survived"
+    );
+    assert!(
+        seen.iter().any(|event| matches!(event, Event::ConversationCompleted)),
+        "and the turn still answered"
+    );
 }
 
 #[tokio::test]

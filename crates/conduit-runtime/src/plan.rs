@@ -10,9 +10,11 @@ use conduit_core::memory::Scope;
 use conduit_core::{Error, Result};
 use conduit_provider::llm::{LanguageModel, ToolSpec};
 use conduit_provider::memory::Memory;
+use conduit_provider::speaker::SpeakerIdentifier;
 use conduit_provider::stt::SpeechToText;
 use conduit_provider::tool::Tool;
 use conduit_provider::tts::TextToSpeech;
+use conduit_provider::wake::{WakePhrase, WakeWordDetector};
 
 use crate::Providers;
 
@@ -24,6 +26,28 @@ pub struct Recognizer {
     /// The provider that transcribes.
     pub provider: Arc<dyn SpeechToText>,
     /// Node id of the recognizer.
+    pub node: String,
+}
+
+/// The wake word detector a pipeline resolved, and the node that chose it.
+///
+/// `None` on a plan means the pipeline listens continuously: every turn it is
+/// given is one somebody already decided to start, whether by pressing a button
+/// or by typing.
+pub struct Detector {
+    /// The provider that scores activations.
+    pub provider: Arc<dyn WakeWordDetector>,
+    /// Node id of the wake stage.
+    pub node: String,
+    /// Phrases to listen for, with the thresholds the definition set.
+    pub phrases: Vec<WakePhrase>,
+}
+
+/// The speaker identifier a pipeline resolved, and the node that chose it.
+pub struct Identifier {
+    /// The provider that matches a voice against enrolled prints.
+    pub provider: Arc<dyn SpeakerIdentifier>,
+    /// Node id of the identification stage.
     pub node: String,
 }
 
@@ -87,6 +111,17 @@ impl CorePlan {
 pub struct Plan {
     /// Pipeline this plan executes.
     pub pipeline: String,
+    /// Wake word detector, and the node that selected it.
+    ///
+    /// `None` for a pipeline that listens continuously: nothing gates the
+    /// audio, because every turn it is given is one somebody already started.
+    pub wake: Option<Detector>,
+    /// Speaker identifier, and the node that selected it.
+    ///
+    /// `None` for a pipeline that does not care who is speaking. A turn with no
+    /// identifier reaches a tool's permission check with no speaker, which is
+    /// what every pipeline did before identification existed.
+    pub speaker: Option<Identifier>,
     /// Recognizer, and the node that selected it.
     ///
     /// `None` for a pipeline fed by text. Absence is what says the input is
@@ -122,6 +157,8 @@ impl Plan {
     /// registered, and [`Error::Config`] if the topology is one the runtime
     /// cannot execute yet.
     pub fn resolve(graph: &PipelineGraph, providers: &Providers) -> Result<Self> {
+        let mut wake = None;
+        let mut speaker = None;
         let mut stt = None;
         let mut reasoning = None;
         let mut tts = None;
@@ -133,6 +170,23 @@ impl Plan {
                 // Endpoints describe where audio enters and leaves; the
                 // caller supplies both, so there is nothing to resolve.
                 Node::Source { .. } | Node::Sink { .. } => {}
+                Node::WakeWord { id, provider } => {
+                    reject_duplicate(&wake, node)?;
+                    let detector = providers.wake().require(provider)?;
+                    // The phrases come from the provider definition rather than
+                    // from the node: which words wake a house is a property of
+                    // the detector that was configured, and two pipelines
+                    // pointing at one detector cannot listen for different ones.
+                    let phrases = detector.configured_phrases();
+                    wake = Some(Detector { provider: detector, node: id.clone(), phrases });
+                }
+                Node::SpeakerId { id, provider } => {
+                    reject_duplicate(&speaker, node)?;
+                    speaker = Some(Identifier {
+                        provider: providers.speaker().require(provider)?,
+                        node: id.clone(),
+                    });
+                }
                 Node::Stt { id, provider } => {
                     reject_duplicate(&stt, node)?;
                     stt = Some(Recognizer {
@@ -167,13 +221,6 @@ impl Plan {
                         voice: voice.clone(),
                     });
                 }
-                other => {
-                    return Err(Error::Config(format!(
-                        "`{}` nodes are not executable yet (node `{}`)",
-                        other.kind_name(),
-                        other.id()
-                    )))
-                }
             }
         }
 
@@ -204,6 +251,8 @@ impl Plan {
         let Reasoning { node, llm, model, system, max_rounds } = reasoning;
         Ok(Self {
             pipeline: graph.name.clone(),
+            wake,
+            speaker,
             stt,
             core: CorePlan { node, llm, model, system, tools, memory, max_rounds },
             tts,
@@ -369,6 +418,20 @@ fn reject_duplicate<T>(existing: &Option<T>, node: &Node) -> Result<()> {
 impl std::fmt::Debug for Plan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Plan")
+            .field(
+                "wake",
+                &self
+                    .wake
+                    .as_ref()
+                    .map(|wake| format!("{} ({})", wake.node, wake.provider.name())),
+            )
+            .field(
+                "speaker",
+                &self
+                    .speaker
+                    .as_ref()
+                    .map(|speaker| format!("{} ({})", speaker.node, speaker.provider.name())),
+            )
             .field(
                 "stt",
                 &self.stt.as_ref().map(|stt| format!("{} ({})", stt.node, stt.provider.name())),

@@ -17,7 +17,7 @@ use conduit_core::graph::{
 use conduit_core::{Error, GraphError};
 use conduit_runtime::plan::Plan;
 use conduit_runtime::{Providers, Runner};
-use fakes::{FakeLlm, FakeStt, FakeTool, FakeTts};
+use fakes::{FakeLlm, FakeSpeaker, FakeStt, FakeTool, FakeTts, FakeWake};
 
 /// A model node that names no model, so the provider chooses.
 fn llm_node(id: &str, provider: &str) -> Node {
@@ -39,6 +39,13 @@ fn providers() -> Providers {
         .with_stt(FakeStt::new(vec![]))
         .with_llm(FakeLlm::new(vec![]))
         .with_tts(FakeTts::new())
+}
+
+/// The same, plus a detector and an identifier to resolve those stages against.
+fn identifying_providers() -> Providers {
+    providers()
+        .with_wake(FakeWake::accepting_after(1))
+        .with_speaker(FakeSpeaker::knowing(conduit_core::id::SpeakerId::new()))
 }
 
 /// Resolves `graph` and returns the error, failing if it resolves.
@@ -202,8 +209,78 @@ fn a_stage_between_two_others_does_not_break_the_wiring() {
         .with_edge(Edge::new("llm", "tts"))
         .with_edge(Edge::new("tts", "speaker"));
 
-    Runner::prepare(&through_a_tool, &providers(), EventBus::default())
-        .expect_err("speaker identification is not executable yet");
+    Runner::prepare(&through_a_tool, &identifying_providers(), EventBus::default())
+        .expect("a stage between two others is still one pipeline");
+}
+
+#[test]
+fn a_stage_naming_a_detector_nobody_configured_is_refused() {
+    // Refused at prepare time rather than at the first word: a pipeline that
+    // names a detector the deployment does not have would otherwise look
+    // healthy right up until nothing ever woke it.
+    let graph = PipelineGraph::new("deaf")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::wake_word("wake", "openwakeword"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "wake"))
+        .with_edge(Edge::new("wake", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let error = refusal(&graph, &providers());
+    assert!(
+        matches!(&error, Error::UnknownProvider(name) if name == "openwakeword"),
+        "got {error}"
+    );
+}
+
+#[test]
+fn a_pipeline_can_wake_and_identify_in_the_same_graph() {
+    let graph = PipelineGraph::new("attentive")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::wake_word("wake", "fake-wake"))
+        .with_node(Node::speaker_id("who", "fake-speaker"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "wake"))
+        .with_edge(Edge::new("wake", "who"))
+        .with_edge(Edge::new("who", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let plan = Plan::resolve(&graph, &identifying_providers()).expect("resolves");
+    let wake = plan.wake.expect("the wake stage resolved");
+    assert_eq!(wake.node, "wake");
+    assert_eq!(
+        wake.phrases.iter().map(|phrase| phrase.phrase.as_str()).collect::<Vec<_>>(),
+        ["hey jarvis"],
+        "the phrases come from the detector's own definition"
+    );
+    assert_eq!(plan.speaker.expect("the identification stage resolved").node, "who");
+}
+
+#[test]
+fn two_wake_stages_are_refused() {
+    // One microphone, one activation. Two detectors scoring the same audio
+    // would each open the gate, and which one woke the house would be a race.
+    let graph = PipelineGraph::new("twice")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::wake_word("first", "fake-wake"))
+        .with_node(Node::wake_word("second", "fake-wake"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "first"))
+        .with_edge(Edge::new("first", "second"))
+        .with_edge(Edge::new("second", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let message = config_message(&refusal(&graph, &identifying_providers())).to_owned();
+    assert!(message.contains("wake_word"), "{message}");
 }
 
 #[test]

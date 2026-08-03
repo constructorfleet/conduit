@@ -260,11 +260,48 @@ impl Turn {
     }
 
     /// Transcribes the utterance, returning the final text.
+    ///
+    /// Two stages may sit between capture and recognition. A wake stage holds
+    /// the audio back until a phrase fires, so nothing is transcribed until
+    /// somebody asked for it; an identification stage listens to the same
+    /// audio in parallel and says whose voice it is, which is what a
+    /// per-speaker tool policy is checked against.
     async fn listen(&mut self, audio: ChunkStream<AudioChunk>) -> Option<String> {
         // Reported from here rather than by whoever produced the audio, because
         // this is the last place that sees every chunk regardless of transport:
         // a socket, a file, or a test all reach the recognizer through here.
         let audio = self.emitter.observe_capture(audio);
+
+        // Before capture is observed nothing has been decided; after the gate,
+        // everything downstream is audio somebody asked to be heard.
+        let audio = match &self.plan.wake {
+            Some(wake) => crate::wake::gate(
+                Arc::clone(&wake.provider),
+                wake.phrases.clone(),
+                wake.node.clone(),
+                self.emitter.clone(),
+                self.format,
+                audio,
+            ),
+            None => audio,
+        };
+
+        // Identification runs beside recognition rather than before it: both
+        // want the whole utterance, and asking in sequence would double how
+        // long the person waits for an answer.
+        let (audio, identifying) = match &self.plan.speaker {
+            Some(speaker) => {
+                let (for_recognition, for_identification) = crate::identity::fork(audio);
+                let running = crate::identity::identify(
+                    Arc::clone(&speaker.provider),
+                    speaker.node.clone(),
+                    self.emitter.clone(),
+                    for_identification,
+                );
+                (for_recognition, Some(running))
+            }
+            None => (audio, None),
+        };
 
         // A caller that hands audio to a pipeline with no recognizer has
         // mismatched the two. Failing here reports which pipeline and stays on
@@ -307,6 +344,20 @@ impl Turn {
                     self.emitter.emit(Event::SpeechPartial { text: transcript.text });
                 }
                 Err(error) => return self.fail(&node.clone(), error).await,
+            }
+        }
+
+        // Awaited after transcription rather than raced with it: the answer is
+        // needed before the model runs, and by now the utterance is over, so
+        // the identifier has everything it is ever going to get.
+        if let Some(identifying) = identifying {
+            match identifying.await {
+                Ok(speaker) => self.speaker = speaker,
+                Err(error) => {
+                    // The task itself failed, which a provider error would not
+                    // have done — that path publishes and answers `None`.
+                    tracing::warn!(%error, "the identification task did not finish");
+                }
             }
         }
 

@@ -400,8 +400,13 @@ async fn register_definition(
         ProviderDefinitionVariant::McpTool { transport } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
-        ProviderDefinitionVariant::WyomingWake { url, phrases, .. } => {
-            Ok(providers.with_wake(WyomingWake::new(&definition.id, url, phrases.clone())?))
+        ProviderDefinitionVariant::WyomingWake { url, phrases, threshold_percent, .. } => {
+            Ok(providers.with_wake(WyomingWake::new(
+                &definition.id,
+                url,
+                phrases.clone(),
+                f32::from(*threshold_percent) / 100.0,
+            )?))
         }
         // A satellite that wakes itself still registers a detector, so that a
         // pipeline naming the stage resolves and the activation reaches the

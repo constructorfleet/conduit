@@ -684,3 +684,127 @@ impl conduit_provider::memory::Memory for FakeMemory {
         Ok(())
     }
 }
+
+/// A wake word detector that accepts once it has heard `after` chunks.
+///
+/// The lag is the point: a real detector reports an activation after the
+/// phrase has ended, and a gate that assumed otherwise would clip whatever was
+/// said next.
+pub struct FakeWake {
+    after: usize,
+    accept: bool,
+    heard: Arc<Mutex<usize>>,
+}
+
+impl FakeWake {
+    /// A detector that accepts on the `after`th chunk it is given.
+    pub fn accepting_after(after: usize) -> Self {
+        Self { after, accept: true, heard: Arc::new(Mutex::new(0)) }
+    }
+
+    /// A detector that scores every chunk below its threshold.
+    pub fn never_accepting() -> Self {
+        Self { after: usize::MAX, accept: false, heard: Arc::new(Mutex::new(0)) }
+    }
+
+    /// How much audio the detector was given, which is every chunk captured —
+    /// a gate that only fed it until it woke would never hear the next
+    /// activation.
+    pub fn heard(&self) -> usize {
+        *self.heard.lock().expect("lock")
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for FakeWake {
+    fn name(&self) -> &str {
+        "fake-wake"
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::wake::WakeWordDetector for FakeWake {
+    async fn detect(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        _phrases: Vec<conduit_provider::wake::WakePhrase>,
+    ) -> Result<ChunkStream<conduit_provider::wake::Detection>> {
+        let after = self.after;
+        let accept = self.accept;
+        let heard = Arc::clone(&self.heard);
+        Ok(Box::pin(audio.enumerate().map(move |(index, _)| {
+            *heard.lock().expect("lock") += 1;
+            Ok(conduit_provider::wake::Detection {
+                phrase: "hey jarvis".to_owned(),
+                confidence: if accept && index + 1 >= after { 0.9 } else { 0.1 },
+                accepted: accept && index + 1 >= after,
+            })
+        })))
+    }
+
+    fn configured_phrases(&self) -> Vec<conduit_provider::wake::WakePhrase> {
+        vec![conduit_provider::wake::WakePhrase::new("hey jarvis")]
+    }
+}
+
+/// A speaker identifier that always answers with the same voice.
+pub struct FakeSpeaker {
+    speaker: Option<conduit_core::id::SpeakerId>,
+    failing: bool,
+    heard: Arc<Mutex<usize>>,
+}
+
+impl FakeSpeaker {
+    /// An identifier that recognizes every voice as `speaker`.
+    pub fn knowing(speaker: conduit_core::id::SpeakerId) -> Self {
+        Self { speaker: Some(speaker), failing: false, heard: Arc::new(Mutex::new(0)) }
+    }
+
+    /// An identifier whose service is down.
+    pub fn unreachable() -> Self {
+        Self { speaker: None, failing: true, heard: Arc::new(Mutex::new(0)) }
+    }
+
+    /// How many bytes of audio identification was given.
+    pub fn heard(&self) -> usize {
+        *self.heard.lock().expect("lock")
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for FakeSpeaker {
+    fn name(&self) -> &str {
+        "fake-speaker"
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::speaker::SpeakerIdentifier for FakeSpeaker {
+    async fn identify(
+        &self,
+        mut audio: ChunkStream<AudioChunk>,
+    ) -> Result<conduit_provider::speaker::Identification> {
+        while let Some(chunk) = audio.next().await {
+            *self.heard.lock().expect("lock") += chunk?.data.len();
+        }
+        if self.failing {
+            return Err(Error::Config("speaker service is down".to_owned()));
+        }
+        Ok(conduit_provider::speaker::Identification {
+            speaker: self.speaker,
+            confidence: 0.95,
+        })
+    }
+
+    async fn enroll(
+        &self,
+        _speaker: conduit_core::id::SpeakerId,
+        _samples: ChunkStream<AudioChunk>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn forget(&self, _speaker: conduit_core::id::SpeakerId) -> Result<()> {
+        Ok(())
+    }
+}

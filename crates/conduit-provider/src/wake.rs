@@ -72,6 +72,17 @@ pub trait WakeWordDetector: Provider {
     fn available_phrases(&self) -> &[String] {
         &[]
     }
+
+    /// The phrases to listen for, with the thresholds this detector was
+    /// configured with.
+    ///
+    /// What [`WakeWordDetector::detect`] is called with when a pipeline names
+    /// no phrases of its own, which is every pipeline today: a graph node
+    /// selects a provider definition, and which phrases that definition
+    /// listens for is a property of the definition.
+    fn configured_phrases(&self) -> Vec<WakePhrase> {
+        self.available_phrases().iter().map(WakePhrase::new).collect()
+    }
 }
 
 /// The detector for a satellite that wakes itself.
