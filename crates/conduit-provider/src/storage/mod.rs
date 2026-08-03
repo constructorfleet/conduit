@@ -8,6 +8,20 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
+pub mod llm;
+pub mod speaker;
+pub mod stt;
+pub mod tool;
+pub mod tts;
+pub mod wake;
+
+pub use llm::LlmVariant;
+pub use speaker::SpeakerIdVariant;
+pub use stt::SttVariant;
+pub use tool::{McpTransport, ToolVariant};
+pub use tts::TtsVariant;
+pub use wake::WakeVariant;
+
 /// The longest a pipeline name may be.
 const MAX_NAME: usize = 128;
 
@@ -212,7 +226,7 @@ impl SpeakerEngine {
 pub const DEFAULT_THRESHOLD_PERCENT: u8 = 50;
 
 /// The default acceptance threshold, as a serde default.
-const fn default_threshold_percent() -> u8 {
+pub(crate) const fn default_threshold_percent() -> u8 {
     DEFAULT_THRESHOLD_PERCENT
 }
 
@@ -270,177 +284,6 @@ impl ProviderDefinition {
             .with_secret_updates_from(existing.map(|definition| &definition.variant));
         self
     }
-}
-
-/// LLM provider variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LlmVariant {
-    /// OpenAI-compatible language model.
-    #[serde(rename = "openai")]
-    OpenAi {
-        /// Base URL including any version prefix.
-        base_url: String,
-        /// Optional API key.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        api_key: Option<ProviderSecret>,
-        /// Advertised model ids. Empty allows any graph-selected model.
-        #[serde(default)]
-        models: Vec<String>,
-        /// Whether the provider should stream completions when supported.
-        #[serde(default)]
-        streaming: bool,
-        /// Optional system prompt attached at provider configuration time.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        system_prompt: Option<String>,
-    },
-}
-
-/// Speech recognition provider variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SttVariant {
-    /// OpenAI-compatible speech recognizer.
-    #[serde(rename = "openai")]
-    OpenAi {
-        /// Base URL including any version prefix.
-        base_url: String,
-        /// Model used for transcription.
-        model: String,
-        /// Optional API key.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        api_key: Option<ProviderSecret>,
-        /// Whether the recognizer streams partials.
-        #[serde(default)]
-        stream: bool,
-    },
-    /// Wyoming speech recognizer.
-    Wyoming {
-        /// Wyoming endpoint URL.
-        url: String,
-        /// Optional model hint.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-        /// Whether streaming is enabled.
-        #[serde(default)]
-        streaming: bool,
-    },
-}
-
-/// Speech synthesis provider variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TtsVariant {
-    /// OpenAI-compatible speech synthesizer.
-    #[serde(rename = "openai")]
-    OpenAi {
-        /// Base URL including any version prefix.
-        base_url: String,
-        /// Speech model.
-        model: String,
-        /// Optional API key.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        api_key: Option<ProviderSecret>,
-        /// Optional voice catalogue.
-        #[serde(default)]
-        voices: Vec<String>,
-    },
-    /// Wyoming speech synthesizer.
-    Wyoming {
-        /// Wyoming endpoint URL.
-        url: String,
-        /// Canonical voice id.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        voice: Option<String>,
-        /// Whether streaming is enabled.
-        #[serde(default)]
-        streaming: bool,
-    },
-}
-
-/// Tool provider variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ToolVariant {
-    /// MCP tool provider.
-    Mcp {
-        /// Tool transport configuration.
-        transport: McpTransport,
-    },
-}
-
-/// Wake word detection provider variants.
-///
-/// Where detection runs is a deployment choice, not a different kind of stage:
-/// a pipeline naming either definition has a wake word stage. The Wyoming
-/// variant points at a server; the device variant names a satellite that wakes
-/// itself.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum WakeVariant {
-    /// Wake word detection on a Wyoming server.
-    ///
-    /// All three engines are packaged as Wyoming services, so one variant
-    /// serves them and [`WakeEngine`] says which is listening.
-    Wyoming {
-        /// Wyoming endpoint URL.
-        url: String,
-        /// Which detector is behind the endpoint.
-        engine: WakeEngine,
-        /// Phrases to listen for. Empty asks the server for whatever it loaded.
-        #[serde(default)]
-        phrases: Vec<String>,
-        /// Minimum confidence to accept, as a percentage.
-        #[serde(default = "default_threshold_percent")]
-        threshold_percent: u8,
-    },
-    /// Wake word detection performed on the satellite itself.
-    ///
-    /// There is no endpoint because there is no server: the device runs the
-    /// detector and only streams audio once it has activated. The definition
-    /// exists so that a pipeline can *say* it wakes on-device — which is what
-    /// makes the stage visible in the editor, in validation, and in the event
-    /// stream — rather than the stage silently being absent.
-    Device {
-        /// Which detector the satellite runs.
-        engine: WakeEngine,
-        /// Phrases the satellite is flashed with, for operator screens. The
-        /// server never scores them.
-        #[serde(default)]
-        phrases: Vec<String>,
-    },
-}
-
-/// Speaker identification provider variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SpeakerIdVariant {
-    /// Speaker identification on a Diarization_Server instance.
-    ///
-    /// A separate variant rather than a flag on [`Self::Http`] because the two
-    /// speak different dialects — raw samples and query parameters against a
-    /// container and paths — and a definition should say which service it is
-    /// describing rather than which options that service happens to want.
-    DiarizationServer {
-        /// Base URL of the Diarization_Server instance.
-        base_url: String,
-        /// Minimum similarity to call a voice a match, as a percentage.
-        #[serde(default = "default_threshold_percent")]
-        threshold_percent: u8,
-    },
-    /// Speaker identification over the Conduit speaker HTTP contract.
-    Http {
-        /// Base URL of the identification service.
-        base_url: String,
-        /// Optional API key.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        api_key: Option<ProviderSecret>,
-        /// Which embedding model is behind the endpoint.
-        engine: SpeakerEngine,
-        /// Minimum similarity to call a voice a match, as a percentage.
-        #[serde(default = "default_threshold_percent")]
-        threshold_percent: u8,
-    },
 }
 
 /// Closed set of provider definition variants, grouped by the capability the
@@ -794,85 +637,6 @@ impl<'de> Deserialize<'de> for ProviderDefinitionVariant {
     }
 }
 
-impl LlmVariant {
-    fn redacted(&self) -> Self {
-        match self {
-            Self::OpenAi { base_url, api_key, models, streaming, system_prompt } => {
-                Self::OpenAi {
-                    base_url: base_url.clone(),
-                    api_key: redact_secret(api_key),
-                    models: models.clone(),
-                    streaming: *streaming,
-                    system_prompt: system_prompt.clone(),
-                }
-            }
-        }
-    }
-}
-
-impl SttVariant {
-    fn redacted(&self) -> Self {
-        match self {
-            Self::OpenAi { base_url, model, api_key, stream } => Self::OpenAi {
-                base_url: base_url.clone(),
-                model: model.clone(),
-                api_key: redact_secret(api_key),
-                stream: *stream,
-            },
-            Self::Wyoming { url, model, streaming } => {
-                Self::Wyoming { url: url.clone(), model: model.clone(), streaming: *streaming }
-            }
-        }
-    }
-}
-
-impl TtsVariant {
-    fn redacted(&self) -> Self {
-        match self {
-            Self::OpenAi { base_url, model, api_key, voices } => Self::OpenAi {
-                base_url: base_url.clone(),
-                model: model.clone(),
-                api_key: redact_secret(api_key),
-                voices: voices.clone(),
-            },
-            Self::Wyoming { url, voice, streaming } => {
-                Self::Wyoming { url: url.clone(), voice: voice.clone(), streaming: *streaming }
-            }
-        }
-    }
-}
-
-impl ToolVariant {
-    fn redacted(&self) -> Self {
-        self.clone()
-    }
-}
-
-impl WakeVariant {
-    fn redacted(&self) -> Self {
-        self.clone()
-    }
-}
-
-impl SpeakerIdVariant {
-    fn redacted(&self) -> Self {
-        match self {
-            Self::DiarizationServer { base_url, threshold_percent } => {
-                Self::DiarizationServer {
-                    base_url: base_url.clone(),
-                    threshold_percent: *threshold_percent,
-                }
-            }
-            Self::Http { base_url, api_key, engine, threshold_percent } => Self::Http {
-                base_url: base_url.clone(),
-                api_key: redact_secret(api_key),
-                engine: *engine,
-                threshold_percent: *threshold_percent,
-            },
-        }
-    }
-}
-
 fn redact_secret(secret: &Option<ProviderSecret>) -> Option<ProviderSecret> {
     secret.as_ref().map(|secret| match secret {
         ProviderSecret::Inline { .. } => ProviderSecret::Redacted,
@@ -894,30 +658,6 @@ fn merge_secret(
         Some(other) => Some(other),
         None => None,
     }
-}
-
-/// MCP transport variants.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum McpTransport {
-    /// Server-sent events transport.
-    Sse {
-        /// MCP endpoint URL.
-        url: String,
-    },
-    /// Streamable HTTP transport.
-    StreamableHttp {
-        /// MCP endpoint URL.
-        url: String,
-    },
-    /// Local stdio command transport.
-    Stdio {
-        /// Command to run.
-        command: String,
-        /// Command arguments.
-        #[serde(default)]
-        args: Vec<String>,
-    },
 }
 
 /// Somewhere provider definitions are kept.
@@ -967,58 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn wake_definitions_supply_the_wake_capability_wherever_they_detect() {
-        // Where detection runs is a deployment choice, not a different kind of
-        // stage: a pipeline naming either definition has a wake word stage.
-        let remote = ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Wyoming {
-                url: "tcp://openwakeword:10400".to_owned(),
-                engine: WakeEngine::OpenWakeWord,
-                phrases: vec!["hey jarvis".to_owned()],
-                threshold_percent: DEFAULT_THRESHOLD_PERCENT,
-            },
-        };
-        let on_device = ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Device {
-                engine: WakeEngine::MicroWakeWord,
-                phrases: vec!["okay nabu".to_owned()],
-            },
-        };
-
-        assert_eq!(remote.capability(), ProviderCapability::Wake);
-        assert_eq!(on_device.capability(), ProviderCapability::Wake);
-    }
-
-    #[test]
-    fn a_wake_definition_that_omits_its_threshold_reads_as_the_documented_default() {
-        let variant: ProviderDefinitionVariant = serde_json::from_value(serde_json::json!({
-            "type": "wake",
-            "variant": {
-                "type": "wyoming",
-                "url": "tcp://openwakeword:10400",
-                "engine": "openwakeword",
-            },
-        }))
-        .expect("deserialize");
-
-        let ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Wyoming { threshold_percent, phrases, .. },
-        } = variant
-        else {
-            panic!("a `wake`/`wyoming` tag deserializes to a Wyoming wake definition");
-        };
-        assert_eq!(threshold_percent, DEFAULT_THRESHOLD_PERCENT);
-        assert!(phrases.is_empty(), "no phrases named means whatever the server loaded");
-    }
-
-    #[test]
-    fn only_microwakeword_is_small_enough_for_a_satellite() {
-        assert!(WakeEngine::MicroWakeWord.runs_on_device());
-        assert!(!WakeEngine::OpenWakeWord.runs_on_device());
-        assert!(!WakeEngine::NanoWakeWord.runs_on_device());
-    }
-
-    #[test]
     fn an_engines_name_is_the_word_it_is_written_as_on_the_wire() {
         for engine in
             [WakeEngine::MicroWakeWord, WakeEngine::OpenWakeWord, WakeEngine::NanoWakeWord]
@@ -1032,36 +720,6 @@ mod tests {
             let written = serde_json::to_value(engine).expect("serialize");
             assert_eq!(written, serde_json::Value::String(engine.name().to_owned()));
         }
-    }
-
-    #[test]
-    fn a_speaker_definitions_key_is_redacted_and_survives_an_update_that_omits_it() {
-        // The same secret semantics every keyed definition has: a read never
-        // shows the key, and saving what a read returned must not erase it.
-        let stored = ProviderDefinitionVariant::SpeakerId {
-            variant: SpeakerIdVariant::Http {
-                base_url: "https://voices.example".to_owned(),
-                api_key: Some(ProviderSecret::Inline { value: "sk-live".to_owned() }),
-                engine: SpeakerEngine::SpeechBrain,
-                threshold_percent: 70,
-            },
-        };
-
-        let read = stored.redacted();
-        assert_eq!(
-            read,
-            ProviderDefinitionVariant::SpeakerId {
-                variant: SpeakerIdVariant::Http {
-                    base_url: "https://voices.example".to_owned(),
-                    api_key: Some(ProviderSecret::Redacted),
-                    engine: SpeakerEngine::SpeechBrain,
-                    threshold_percent: 70,
-                }
-            }
-        );
-
-        let saved = read.with_secret_updates_from(Some(&stored));
-        assert_eq!(saved, stored, "saving a redacted key keeps the stored one");
     }
 
     #[test]
