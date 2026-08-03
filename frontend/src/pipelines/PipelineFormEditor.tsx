@@ -31,7 +31,17 @@ export interface ProviderOptions {
   llm: readonly ProviderOption[];
   tts: readonly ProviderOption[];
   tool: readonly ProviderOption[];
+  wake: readonly ProviderOption[];
+  speakerId: readonly ProviderOption[];
 }
+
+/// The voices the selected synthesizer offers.
+///
+/// `null` means nobody has asked yet, or the provider could not be reached —
+/// either way the editor falls back to a typed voice, which is what an
+/// operator had before providers could be asked. An empty list is the same
+/// fallback for a different reason: the provider accepts any name.
+export type VoiceCatalog = readonly ProviderOption[] | null;
 
 const MEMORY_MODES: MemoryMode[] = ["read", "write", "read_write"];
 const CONFIRM_POLICIES: ConfirmPolicy[] = ["never", "always"];
@@ -39,11 +49,14 @@ const CONFIRM_POLICIES: ConfirmPolicy[] = ["never", "always"];
 export function PipelineFormEditor({
   form,
   providers,
+  voices,
   readOnly,
   onChange,
 }: {
   form: PipelineForm;
   providers: ProviderOptions;
+  /// Voices the selected synthesizer offers, when it was asked and answered.
+  voices?: VoiceCatalog;
   readOnly: boolean;
   onChange: (form: PipelineForm) => void;
 }) {
@@ -191,8 +204,8 @@ export function PipelineFormEditor({
           label: "Wake word",
           stage: form.wakeWord,
           fallbackId: "wake_word",
-          options: [],
-          fallbackProvider: "porcupine",
+          options: providers.wake,
+          fallbackProvider: "openwakeword",
           onStageChange: (wakeWord) => update({ wakeWord }),
         })}
         {optionalStage({
@@ -207,8 +220,8 @@ export function PipelineFormEditor({
           label: "Speaker ID",
           stage: form.speakerId,
           fallbackId: "speaker_id",
-          options: [],
-          fallbackProvider: "resemblyzer",
+          options: providers.speakerId,
+          fallbackProvider: "speechbrain",
           onStageChange: (speakerId) => update({ speakerId }),
         })}
       </section>
@@ -485,20 +498,54 @@ export function PipelineFormEditor({
             >
               {providerChoices(providers.tts, form.tts.provider)}
             </select>
-            <input
-              aria-label="Voice"
-              value={form.tts.voice ?? ""}
-              disabled={readOnly}
-              placeholder="default voice"
-              onChange={(event) =>
-                update({
-                  tts: {
-                    ...form.tts!,
-                    voice: event.target.value || undefined,
-                  },
-                })
-              }
-            />
+            {voices && voices.length > 0 ? (
+              <select
+                aria-label="Voice"
+                value={form.tts.voice ?? ""}
+                disabled={readOnly}
+                onChange={(event) =>
+                  update({
+                    tts: {
+                      ...form.tts!,
+                      voice: event.target.value || undefined,
+                    },
+                  })
+                }
+              >
+                <option value="">default voice</option>
+                {/* A voice the pipeline names but the provider no longer
+                    offers stays listed, for the same reason an unlisted
+                    provider does: a pipeline should show what it says rather
+                    than silently rebind to something else. */}
+                {form.tts.voice &&
+                !voices.some((voice) => voice.id === form.tts!.voice) ? (
+                  <option value={form.tts.voice}>{form.tts.voice}</option>
+                ) : null}
+                {voices.map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              /* No catalogue to choose from: the provider was not reachable,
+                 or it accepts any name its backend knows. Either way a typed
+                 voice is better than an empty menu. */
+              <input
+                aria-label="Voice"
+                value={form.tts.voice ?? ""}
+                disabled={readOnly}
+                placeholder="default voice"
+                onChange={(event) =>
+                  update({
+                    tts: {
+                      ...form.tts!,
+                      voice: event.target.value || undefined,
+                    },
+                  })
+                }
+              />
+            )}
             <button
               className="icon-action danger subtle-danger"
               type="button"

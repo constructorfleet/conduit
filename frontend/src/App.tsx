@@ -81,7 +81,14 @@ import type {
   PipelineValidator,
 } from "./pipelines/graph";
 import { PipelineFormEditor } from "./pipelines/PipelineFormEditor";
-import type { ProviderOptions } from "./pipelines/PipelineFormEditor";
+import type {
+  ProviderOptions,
+  VoiceCatalog,
+} from "./pipelines/PipelineFormEditor";
+
+/// Asks a provider what voices it offers, answering `null` when it could not
+/// be asked at all.
+type VoiceLoader = (providerId: string) => Promise<VoiceCatalog>;
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -412,6 +419,24 @@ function OperatorWorkspace({
     }`;
   }
 
+  /// The voices a synthesizer offers, or `null` when it could not be asked.
+  ///
+  /// A provider that is saved but unreachable must not stop an operator
+  /// editing the pipeline that uses it, so a failure falls back to the typed
+  /// voice field rather than surfacing an error.
+  async function loadProviderVoices(providerId: string): Promise<VoiceCatalog> {
+    try {
+      const { voices } = await snapshotClient.loadProviderVoices(providerId);
+      return voices.map((voice) => ({
+        id: voice.id,
+        label:
+          voice.name === voice.id ? voice.id : `${voice.name} (${voice.id})`,
+      }));
+    } catch {
+      return null;
+    }
+  }
+
   async function saveProviderDefinition(
     definition: ProviderDefinition,
   ): Promise<ProviderDefinition> {
@@ -713,6 +738,7 @@ function OperatorWorkspace({
           }
           onPipelineTest={onPipelineTest ?? runPipelineTest}
           onProviderTest={runProviderTest}
+          onProviderVoices={loadProviderVoices}
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
@@ -743,6 +769,7 @@ function SectionPanel({
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
+  onProviderVoices,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
 }: {
@@ -762,6 +789,7 @@ function SectionPanel({
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
   onProviderTest: ProviderTester;
+  onProviderVoices: VoiceLoader;
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinition>;
@@ -806,6 +834,7 @@ function SectionPanel({
         onPipelineDiscarded={onPipelineDiscarded}
         onPipelineValidate={onPipelineValidate}
         onPipelineTest={onPipelineTest}
+        onProviderVoices={onProviderVoices}
       />
     );
   }
@@ -2022,6 +2051,7 @@ function PipelinesPanel({
   onPipelineDiscarded,
   onPipelineValidate,
   onPipelineTest,
+  onProviderVoices,
 }: {
   providerDefinitions: readonly ProviderDefinition[];
   pipelineViews: readonly PipelineView[];
@@ -2030,6 +2060,7 @@ function PipelinesPanel({
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
+  onProviderVoices: VoiceLoader;
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
@@ -2075,7 +2106,38 @@ function PipelinesPanel({
     llm: providerOptionsFor("llm"),
     tts: providerOptionsFor("tts"),
     tool: providerOptionsFor("tool"),
+    wake: providerOptionsFor("wake"),
+    speakerId: providerOptionsFor("speaker_id"),
   };
+  /// The voices the draft's synthesizer offers, asked of the provider itself.
+  ///
+  /// Keyed by provider id so switching synthesizers does not briefly offer the
+  /// previous one's voices, and so a provider that was already asked is not
+  /// asked again on every keystroke elsewhere in the form.
+  const [voicesByProvider, setVoicesByProvider] = useState<
+    Record<string, VoiceCatalog>
+  >({});
+  const synthesisProvider = draft
+    ? (formFromGraph(draft).tts?.provider ?? null)
+    : null;
+
+  useEffect(() => {
+    if (!synthesisProvider || synthesisProvider in voicesByProvider) {
+      return;
+    }
+    let current = true;
+    void onProviderVoices(synthesisProvider).then((voices) => {
+      if (current) {
+        setVoicesByProvider((known) => ({
+          ...known,
+          [synthesisProvider]: voices,
+        }));
+      }
+    });
+    return () => {
+      current = false;
+    };
+  }, [synthesisProvider, voicesByProvider, onProviderVoices]);
 
   function providerOptionsFor(capability: ProviderCapability) {
     return providerDefinitions
@@ -2644,6 +2706,11 @@ function PipelinesPanel({
           <PipelineFormEditor
             form={formFromGraph(draft)}
             providers={formProviderOptions}
+            voices={
+              synthesisProvider
+                ? (voicesByProvider[synthesisProvider] ?? null)
+                : null
+            }
             readOnly={false}
             onChange={(next) => applyDraftEdit(() => graphFromForm(next))}
           />
