@@ -100,6 +100,68 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
 
+  # The reference speaker identification service, published beside Conduit so a
+  # `docker compose --profile speaker-id up` does not have to build 1.8 GB of
+  # torch on the operator's machine.
+  #
+  # Two tags from one Dockerfile: the CPU image is the default the compose file
+  # names, and the GPU one is the same source with a CUDA base and CUDA torch
+  # wheels. Suffixed by engine rather than left bare, because a second engine is
+  # a class in that service and adding one should not need a new image name.
+  publish-speaker-id:
+    runs-on: ubuntu-latest
+    needs: [version, gates]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - suffix: speechbrain
+            base: python:3.12-slim-bookworm
+            torch_index: https://download.pytorch.org/whl/cpu
+            device: cpu
+          - suffix: speechbrain-gpu
+            base: nvidia/cuda:12.6.3-runtime-ubuntu24.04
+            torch_index: https://download.pytorch.org/whl/cu126
+            device: cuda
+    steps:
+      - uses: actions/checkout@v7
+      - id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASED: ${{ needs.version.outputs.released }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}-speaker-id"
+          {
+            echo "list<<EOF"
+            echo "${image}:latest-${SUFFIX}"
+            if [ "${RELEASED}" != "true" ]; then
+              echo "${image}:${VERSION}-${SUFFIX}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v4.5.2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: services/speaker-id
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.base }}
+            TORCH_INDEX=${{ matrix.torch_index }}
+            DEVICE=${{ matrix.device }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+
   publish-artifacts:
     runs-on: ubuntu-latest
     needs: [version, gates]
@@ -164,7 +226,7 @@ jobs:
   # checkout below.
   tag-release:
     runs-on: ubuntu-latest
-    needs: [version, publish-docker, publish-artifacts]
+    needs: [version, publish-docker, publish-speaker-id, publish-artifacts]
     if: needs.version.outputs.released != 'true'
     permissions:
       contents: write

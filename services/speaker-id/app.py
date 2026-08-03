@@ -1,0 +1,415 @@
+"""Conduit's reference speaker identification service.
+
+Conduit does not recognize voices itself. It packages an utterance and asks a
+service over the three-request contract documented on the `conduit-speaker`
+crate, and this is that contract implemented once, over a swappable embedding
+model.
+
+The routes are the stable part. The encoder is not: `SPEAKER_ID_ENGINE`
+chooses it, and adding pyannote or NeMo means adding a class here rather than
+changing anything Conduit knows about.
+
+## What it does not do
+
+It does not decide who is speaking. It reports the closest enrolled voice and
+how close it was, and Conduit applies the `threshold_percent` from the provider
+definition. Two deployments sharing one service can then disagree about how
+sure they want to be before a voice unlocks a door.
+
+It also does not diarize. "Who is speaking, out of the people I know" and "how
+many people are in this recording and when did each talk" are different
+questions, and only the first one has a stage in a Conduit pipeline.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+import os
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import numpy as np
+import soundfile as sf
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+LOG = logging.getLogger("speaker-id")
+
+# The embedding models each engine uses when the deployment names none.
+DEFAULT_MODELS = {"speechbrain": "speechbrain/spkrec-ecapa-voxceleb"}
+
+# ECAPA-TDNN is trained on 16 kHz speech. Anything else is resampled before it
+# reaches the encoder, because feeding 48 kHz audio to a 16 kHz model does not
+# fail — it quietly embeds a voice an octave too high, which reads as a
+# stranger.
+MODEL_SAMPLE_RATE = 16_000
+
+# Enrolling on a fragment produces a voice print that matches everybody, and it
+# poisons the store in a way that only shows up later as false matches.
+MIN_ENROLL_SECONDS = 1.0
+
+# Below this, identification answers "nobody" rather than scoring noise. A turn
+# whose wake gate never opened captured almost nothing, and a confident match
+# against 200 ms of silence is worse than no answer.
+MIN_IDENTIFY_SECONDS = 0.35
+
+
+class Encoder(Protocol):
+    """Turns mono 16 kHz samples into one embedding vector."""
+
+    def embed(self, samples: np.ndarray) -> np.ndarray: ...
+
+
+@dataclass
+class Match:
+    """The closest enrolled voice, and how close it was."""
+
+    speaker: uuid.UUID | None
+    confidence: float
+
+
+class VoicePrints:
+    """Enrolled embeddings, one file per speaker.
+
+    A speaker's file holds every embedding enrolled for them rather than a
+    running average, so a print built from three samples can be rebuilt if the
+    encoder changes, and one bad sample could be dropped without re-enrolling
+    the others.
+
+    The file name is the speaker's UUID, which is why every route parses one
+    before it reaches here: the identifier arrives from a URL, and a store that
+    turned `../../etc/passwd` into a path would be the whole vulnerability.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        # The directory is created on the first write rather than here, so
+        # importing this module does no filesystem work: `uvicorn app:app`
+        # builds the app at import, and a service that cannot be imported
+        # without write access to its volume fails in the wrong place with the
+        # wrong error.
+        self.directory = directory
+
+    def _path(self, speaker: uuid.UUID) -> Path:
+        return self.directory / f"{speaker}.npy"
+
+    def add(self, speaker: uuid.UUID, embedding: np.ndarray) -> int:
+        """Adds one embedding, returning how many that speaker now has."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self._path(speaker)
+        existing = np.load(path) if path.exists() else np.empty((0, embedding.size))
+        if existing.size and existing.shape[1] != embedding.size:
+            # The encoder changed under a store built by another one. Refused
+            # rather than stacked, because comparing a 192-dimension print to a
+            # 512-dimension voice is not a low score — it is nonsense.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"speaker {speaker} was enrolled with {existing.shape[1]}-dimension "
+                    f"embeddings and this engine produces {embedding.size}; re-enroll "
+                    "them or point at the engine they were enrolled with"
+                ),
+            )
+        updated = np.vstack([existing, embedding.reshape(1, -1)])
+        # Written beside the target and renamed, so a crash mid-write leaves
+        # the previous voice print rather than a truncated one.
+        #
+        # Saved through an open handle rather than by path: `np.save` appends
+        # `.npy` to any name that does not already end in it, so passing
+        # `<uuid>.npy.tmp` writes `<uuid>.npy.tmp.npy` and the rename below
+        # then has nothing to rename.
+        temporary = path.with_suffix(".npy.tmp")
+        with temporary.open("wb") as file:
+            np.save(file, updated)
+        temporary.replace(path)
+        return int(updated.shape[0])
+
+    def remove(self, speaker: uuid.UUID) -> bool:
+        """Removes a speaker's voice print, reporting whether it existed."""
+        path = self._path(speaker)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+    def closest(self, embedding: np.ndarray) -> Match:
+        """The enrolled speaker whose voice print is nearest `embedding`."""
+        best = Match(speaker=None, confidence=0.0)
+        for path in sorted(self._enrolled()):
+            try:
+                speaker = uuid.UUID(path.stem)
+            except ValueError:
+                # Something else put a file here. Skipping it is better than
+                # refusing every identification because of one stray name.
+                LOG.warning("ignoring voice print with a non-UUID name: %s", path.name)
+                continue
+            prints = np.load(path)
+            if prints.size == 0 or prints.shape[1] != embedding.size:
+                continue
+            # Compared against the mean of a speaker's enrollments rather than
+            # the best of them: matching the single closest sample rewards a
+            # speaker who enrolled many times with a higher score against
+            # everyone, including people who are not them.
+            score = cosine(embedding, prints.mean(axis=0))
+            if score > best.confidence:
+                best = Match(speaker=speaker, confidence=score)
+        return best
+
+    def count(self) -> int:
+        return len(self._enrolled())
+
+    def _enrolled(self) -> list[Path]:
+        """Every stored voice print. Nothing enrolled yet is not an error."""
+        if not self.directory.is_dir():
+            return []
+        return list(self.directory.glob("*.npy"))
+
+
+def cosine(left: np.ndarray, right: np.ndarray) -> float:
+    """Cosine similarity, clamped into the `0.0..=1.0` Conduit expects.
+
+    Negative similarities are floored rather than rescaled. A voice pointing
+    away from a print is not "35% of a match" — it is not a match, and
+    stretching the range would hand a confidence to something that has none.
+    """
+    magnitude = float(np.linalg.norm(left) * np.linalg.norm(right))
+    if magnitude == 0.0:
+        return 0.0
+    return max(0.0, min(1.0, float(np.dot(left, right) / magnitude)))
+
+
+class SpeechBrainEncoder:
+    """SpeechBrain's ECAPA-TDNN, loaded once and reused.
+
+    The CPU and GPU images differ only in `SPEAKER_ID_DEVICE` and the torch
+    wheel underneath, so this class is the same in both.
+    """
+
+    def __init__(self, model: str, cache: Path, device: str) -> None:
+        # Imported here rather than at module scope so the tests, which supply
+        # their own encoder, do not pay for torch.
+        import torch
+        from speechbrain.inference.speaker import EncoderClassifier
+
+        self._torch = torch
+        if device == "cuda" and not torch.cuda.is_available():
+            # Said out loud. A GPU image silently running on the CPU is a
+            # deployment that looks fine and is twenty times slower.
+            raise RuntimeError(
+                "SPEAKER_ID_DEVICE=cuda but torch reports no CUDA device; "
+                "check the container has GPU access"
+            )
+        LOG.info("loading %s onto %s", model, device)
+        self._model = EncoderClassifier.from_hparams(
+            source=model, savedir=str(cache), run_opts={"device": device}
+        )
+        self._device = device
+
+    def embed(self, samples: np.ndarray) -> np.ndarray:
+        waveform = self._torch.from_numpy(samples).float().unsqueeze(0)
+        with self._torch.no_grad():
+            embedding = self._model.encode_batch(waveform.to(self._device))
+        return embedding.squeeze().cpu().numpy()
+
+
+def build_encoder(engine: str, model: str, cache: Path, device: str) -> Encoder:
+    """The encoder for `engine`.
+
+    One place to add pyannote or NeMo. Conduit's `engine` field already accepts
+    any name, so a new backend is a class here and a tag on an image — nothing
+    the pipeline, the editor, or the contract has to learn about.
+    """
+    if engine == "speechbrain":
+        return SpeechBrainEncoder(model, cache, device)
+    raise RuntimeError(
+        f"unknown SPEAKER_ID_ENGINE `{engine}`; this image serves "
+        f"{', '.join(sorted(DEFAULT_MODELS))}"
+    )
+
+
+def decode(body: bytes) -> np.ndarray:
+    """Reads an uploaded file as mono 16 kHz float samples.
+
+    Conduit sends a WAV container it built around the pipeline's own samples,
+    or FLAC when that is what the pipeline captured. libsndfile reads both, so
+    the format is sniffed from the bytes rather than trusted from a header a
+    client set.
+    """
+    try:
+        samples, rate = sf.read(io.BytesIO(body), dtype="float32", always_2d=True)
+    except Exception as error:  # noqa: BLE001 - libsndfile raises broadly
+        raise HTTPException(
+            status_code=415, detail=f"could not decode the audio: {error}"
+        ) from error
+
+    # Averaged rather than taking the first channel: a stereo satellite with
+    # one dead microphone would otherwise enroll a voice print of silence.
+    mono = samples.mean(axis=1)
+    if rate != MODEL_SAMPLE_RATE:
+        mono = resample(mono, rate, MODEL_SAMPLE_RATE)
+    return mono
+
+
+def resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+    """Linear resampling onto the rate the model was trained at.
+
+    Linear interpolation is not the best resampler available, and it is enough
+    here: an embedding is robust to the artefacts it introduces, and the
+    alternative is a scipy dependency for a path most deployments never take,
+    because Conduit's own interchange format is already 16 kHz mono.
+    """
+    if source_rate == target_rate or samples.size == 0:
+        return samples
+    duration = samples.size / source_rate
+    target_length = max(1, int(round(duration * target_rate)))
+    source_positions = np.linspace(0.0, duration, num=samples.size, endpoint=False)
+    target_positions = np.linspace(0.0, duration, num=target_length, endpoint=False)
+    return np.interp(target_positions, source_positions, samples).astype(np.float32)
+
+
+def seconds(samples: np.ndarray) -> float:
+    return samples.size / MODEL_SAMPLE_RATE
+
+
+def create_app(
+    encoder: Encoder | None = None, prints: VoicePrints | None = None
+) -> FastAPI:
+    """Builds the service.
+
+    `encoder` and `prints` are injected by the tests, which have no use for a
+    model download to check that a 404 is a 404.
+    """
+    app = FastAPI(title="Conduit speaker identification", version="1")
+    api_key = os.environ.get("SPEAKER_ID_API_KEY") or None
+    store = prints or VoicePrints(
+        Path(os.environ.get("SPEAKER_ID_DATA_DIR", "/data"))
+    )
+    engine = os.environ.get("SPEAKER_ID_ENGINE", "speechbrain")
+    model_name = os.environ.get("SPEAKER_ID_MODEL") or DEFAULT_MODELS.get(engine, "")
+    model_cache = Path(os.environ.get("SPEAKER_ID_MODEL_DIR", "/models"))
+    device = os.environ.get("SPEAKER_ID_DEVICE", "cpu")
+
+    loaded: dict[str, Encoder] = {}
+    if encoder is not None:
+        loaded["encoder"] = encoder
+
+    def get_encoder() -> Encoder:
+        # Loaded on first use rather than at import, so the container starts,
+        # answers /health, and reports a model that will not load as an error
+        # on a request rather than as a crash loop nobody can query.
+        if "encoder" not in loaded:
+            try:
+                loaded["encoder"] = build_encoder(engine, model_name, model_cache, device)
+            except Exception as error:  # noqa: BLE001 - torch and hub raise broadly
+                LOG.exception("could not load the encoder")
+                raise HTTPException(
+                    status_code=503, detail=f"encoder unavailable: {error}"
+                ) from error
+        return loaded["encoder"]
+
+    bearer = HTTPBearer(auto_error=False)
+
+    def authorize(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> None:
+        """Checks the bearer token, when the deployment set one.
+
+        A service with no key configured is open, which is only reasonable
+        because it is meant to sit on an internal network beside Conduit. The
+        compose file does not publish its port for the same reason.
+        """
+        if api_key is None:
+            return
+        if credentials is None or credentials.credentials != api_key:
+            raise HTTPException(status_code=401, detail="invalid or missing API key")
+
+    def speaker_id(speaker: str) -> uuid.UUID:
+        """Parses the speaker in a route, which is also what keeps it a name.
+
+        The identifier becomes a file name, so anything that is not a UUID is
+        refused here rather than reaching the store.
+        """
+        try:
+            return uuid.UUID(speaker)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400, detail=f"`{speaker}` is not a speaker id"
+            ) from error
+
+    @app.get("/health")
+    def health() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "engine": engine,
+            "model": model_name,
+            "device": device,
+            "enrolled": store.count(),
+            # Whether the encoder is in memory yet. A container that has
+            # answered no requests has not paid for the model, and saying so is
+            # the difference between a slow first request and a service
+            # somebody restarts because they think it is wedged.
+            "model_loaded": "encoder" in loaded,
+        }
+
+    @app.post("/identify")
+    async def identify(
+        request: Request, _: None = Depends(authorize)
+    ) -> dict[str, object]:
+        samples = decode(await request.body())
+        if seconds(samples) < MIN_IDENTIFY_SECONDS:
+            # Not an error: a turn that captured almost nothing is a turn
+            # nobody can be identified from, and that is an answer.
+            LOG.info("identify: %.2fs is too short to score", seconds(samples))
+            return {"speaker": None, "confidence": 0.0}
+
+        match = store.closest(get_encoder().embed(samples))
+        LOG.info(
+            "identify: closest=%s confidence=%.3f enrolled=%d",
+            match.speaker,
+            match.confidence,
+            store.count(),
+        )
+        # Reported whole, including a poor match. Conduit holds the threshold,
+        # so a service that pre-filtered would silently override the operator's
+        # own setting and hide the near misses they tune it with.
+        return {
+            "speaker": str(match.speaker) if match.speaker else None,
+            "confidence": match.confidence,
+        }
+
+    @app.post("/speakers/{speaker}/enroll")
+    async def enroll(
+        speaker: str, request: Request, _: None = Depends(authorize)
+    ) -> dict[str, object]:
+        identity = speaker_id(speaker)
+        samples = decode(await request.body())
+        if seconds(samples) < MIN_ENROLL_SECONDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{seconds(samples):.2f}s is too short to enroll a voice; "
+                    f"at least {MIN_ENROLL_SECONDS}s is needed"
+                ),
+            )
+
+        held = store.add(identity, get_encoder().embed(samples))
+        LOG.info("enrolled %s from %.2fs (%d samples)", identity, seconds(samples), held)
+        return {"speaker": str(identity), "samples": held}
+
+    @app.delete("/speakers/{speaker}")
+    def forget(speaker: str, _: None = Depends(authorize)) -> Response:
+        identity = speaker_id(speaker)
+        if not store.remove(identity):
+            # Conduit treats this as success — the caller asked for that voice
+            # print to be gone and it is — but the status still says which
+            # happened, for anyone driving the service directly.
+            return Response(status_code=404)
+        LOG.info("forgot %s", identity)
+        return Response(status_code=204)
+
+    return app
+
+
+app = create_app()

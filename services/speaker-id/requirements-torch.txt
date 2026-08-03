@@ -1,0 +1,9 @@
+# Installed from a torch-specific index so the CPU image gets CPU wheels rather
+# than the multi-gigabyte CUDA build PyPI serves by default. See the
+# Dockerfile's TORCH_INDEX build argument.
+#
+# The two must be a matched pair, and their version numbers do not track each
+# other — these are what the index resolved together and what the published
+# images are built from. Bump them together, and rebuild both tags.
+torch==2.13.0
+torchaudio==2.11.0

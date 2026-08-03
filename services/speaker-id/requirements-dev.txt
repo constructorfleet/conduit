@@ -1,0 +1,7 @@
+# What the tests need, which is not torch: they inject their own encoder, so a
+# test run neither downloads a model nor installs a deep learning framework.
+fastapi==0.141.1
+httpx==0.28.1
+numpy==2.5.1
+pytest==9.1.1
+soundfile==0.14.0
