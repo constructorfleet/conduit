@@ -592,6 +592,21 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "speaker.diarization_server",
+            label: "Diarization Server",
+            kind: ProviderCapability::SpeakerId,
+            definition_variant: "diarization_server_speaker_id",
+            schema: ComponentConfigSchema {
+                // No engine: the server decides which model it runs, and no
+                // API key: it has no authentication to offer one to.
+                properties: properties([
+                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("threshold_percent", integer_property()),
+                ]),
+                required: vec!["base_url"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: ProviderCapability::Tool,

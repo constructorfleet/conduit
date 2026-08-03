@@ -17,6 +17,7 @@ use conduit_provider::storage::{
 use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
+use conduit_speaker::diarization_server::DiarizationServerSpeakerId;
 use conduit_speaker::HttpSpeakerId;
 use conduit_store::MemoryStore;
 use conduit_wyoming::stt::WyomingStt;
@@ -414,6 +415,14 @@ async fn register_definition(
         ProviderDefinitionVariant::DeviceWake { phrases, .. } => {
             Ok(providers.with_wake(DeviceWake::new(&definition.id, phrases.clone())))
         }
+        ProviderDefinitionVariant::DiarizationServerSpeakerId {
+            base_url,
+            threshold_percent,
+        } => Ok(providers.with_speaker(DiarizationServerSpeakerId::new(
+            &definition.id,
+            base_url,
+            f32::from(*threshold_percent) / 100.0,
+        )?)),
         ProviderDefinitionVariant::HttpSpeakerId {
             base_url,
             api_key,

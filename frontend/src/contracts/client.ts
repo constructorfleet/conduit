@@ -147,6 +147,7 @@ export type ProviderDefinitionVariantType =
   | "wyoming_wake"
   | "device_wake"
   | "http_speaker_id"
+  | "diarization_server_speaker_id"
   | "mcp_tool";
 
 /// The three wake word detectors Conduit speaks to. All are packaged as
@@ -207,6 +208,11 @@ export type ProviderDefinitionVariant =
       type: "device_wake";
       engine: WakeEngine;
       phrases: string[];
+    }
+  | {
+      type: "diarization_server_speaker_id";
+      base_url: string;
+      threshold_percent: number;
     }
   | {
       type: "http_speaker_id";

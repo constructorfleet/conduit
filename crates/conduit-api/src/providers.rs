@@ -277,7 +277,8 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         | ProviderDefinitionVariant::WyomingWake { url, .. } => {
             validate_tcp_url("url", url)?;
         }
-        ProviderDefinitionVariant::HttpSpeakerId { base_url, .. } => {
+        ProviderDefinitionVariant::HttpSpeakerId { base_url, .. }
+        | ProviderDefinitionVariant::DiarizationServerSpeakerId { base_url, .. } => {
             validate_http_url("base_url", base_url)?;
         }
         // A satellite that wakes itself has no endpoint to check: the

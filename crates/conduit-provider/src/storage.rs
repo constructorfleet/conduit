@@ -380,6 +380,20 @@ pub enum ProviderDefinitionVariant {
         #[serde(default)]
         phrases: Vec<String>,
     },
+    /// Speaker identification on a Diarization_Server instance.
+    ///
+    /// A separate variant rather than a flag on [`Self::HttpSpeakerId`]
+    /// because the two speak different dialects — raw samples and query
+    /// parameters against a container and paths — and a definition should say
+    /// which service it is describing rather than which options that service
+    /// happens to want.
+    DiarizationServerSpeakerId {
+        /// Base URL of the Diarization_Server instance.
+        base_url: String,
+        /// Minimum similarity to call a voice a match, as a percentage.
+        #[serde(default = "default_threshold_percent")]
+        threshold_percent: u8,
+    },
     /// Speaker identification over the Conduit speaker HTTP contract.
     HttpSpeakerId {
         /// Base URL of the identification service.
@@ -405,7 +419,9 @@ impl ProviderDefinitionVariant {
             Self::OpenAiTts { .. } | Self::WyomingTts { .. } => ProviderCapability::Tts,
             Self::McpTool { .. } => ProviderCapability::Tool,
             Self::WyomingWake { .. } | Self::DeviceWake { .. } => ProviderCapability::Wake,
-            Self::HttpSpeakerId { .. } => ProviderCapability::SpeakerId,
+            Self::HttpSpeakerId { .. } | Self::DiarizationServerSpeakerId { .. } => {
+                ProviderCapability::SpeakerId
+            }
         }
     }
 
@@ -453,6 +469,12 @@ impl ProviderDefinitionVariant {
             }
             Self::DeviceWake { engine, phrases } => {
                 Self::DeviceWake { engine: *engine, phrases: phrases.clone() }
+            }
+            Self::DiarizationServerSpeakerId { base_url, threshold_percent } => {
+                Self::DiarizationServerSpeakerId {
+                    base_url: base_url.clone(),
+                    threshold_percent: *threshold_percent,
+                }
             }
             Self::HttpSpeakerId { base_url, api_key, engine, threshold_percent } => {
                 Self::HttpSpeakerId {

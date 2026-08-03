@@ -21,6 +21,14 @@
 //! Conduit owns the identifier and the service stores it as an opaque label,
 //! so a deployment can swap embedding models without every speaker becoming a
 //! stranger to the tools that check who is asking.
+//!
+//! `services/speaker-id` in this repository implements the contract, and is
+//! published as `conduit-speaker-id`. A deployment already running
+//! [`Diarization_Server`](https://github.com/CptCamembert/Diarization_Server)
+//! can point at that instead: it speaks its own dialect, and
+//! [`diarization_server::DiarizationServerSpeakerId`] is the client for it.
+
+pub mod diarization_server;
 
 use std::time::Duration;
 
@@ -39,6 +47,67 @@ use serde::Deserialize;
 /// that has stopped answering must not be able to hold up a turn indefinitely:
 /// a turn that cannot say *who* asked is still a turn that can answer.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Builds the HTTP client every provider in this crate shares.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if the client cannot be built.
+pub(crate) fn http_client(name: &str, timeout: Duration) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|error| Error::provider(name.to_owned(), error))
+}
+
+/// Checks and trims a base URL.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if it is not an absolute HTTP URL.
+pub(crate) fn normalized_base_url(name: &str, base_url: &str) -> Result<String> {
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Err(Error::Config(format!(
+            "provider `{name}` base_url must use http or https"
+        )));
+    }
+    Ok(base_url.trim_end_matches('/').to_owned())
+}
+
+/// Collects a whole utterance into the raw samples it carried.
+///
+/// Identification is not streamed — a partial answer about who is speaking is
+/// not actionable — so the audio is buffered here rather than pretending to be
+/// incremental. What each provider wraps those samples in differs: Conduit's
+/// own contract takes a container, and Diarization_Server takes the samples
+/// themselves.
+pub(crate) async fn collect_samples(mut audio: ChunkStream<AudioChunk>) -> Result<Vec<u8>> {
+    let mut samples = Vec::new();
+    while let Some(chunk) = audio.next().await {
+        samples.extend_from_slice(&chunk?.data);
+    }
+    Ok(samples)
+}
+
+/// Fails with the status and body of a response that was not a success.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] describing what the service said.
+pub(crate) async fn checked(
+    name: &str,
+    response: reqwest::Response,
+) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(Error::Provider {
+        provider: name.to_owned(),
+        source: format!("speaker service returned {status}: {body}").into(),
+    })
+}
 
 /// A speaker identification provider backed by an HTTP service.
 #[derive(Debug, Clone)]
@@ -77,22 +146,13 @@ impl HttpSpeakerId {
         threshold: f32,
     ) -> Result<Self> {
         let name = name.into();
-        if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-            return Err(Error::Config(format!(
-                "provider `{name}` base_url must use http or https"
-            )));
-        }
-        let client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|error| Error::provider(name.clone(), error))?;
         Ok(Self {
+            client: http_client(&name, REQUEST_TIMEOUT)?,
+            base_url: normalized_base_url(&name, base_url)?,
             name,
-            base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             threshold,
             format: AudioFormat::DEFAULT,
-            client,
         })
     }
 
@@ -111,30 +171,16 @@ impl HttpSpeakerId {
         }
     }
 
-    /// Collects a whole utterance and packages it as a WAV file.
+    /// Collects a whole utterance and packages it as an uploadable file.
     ///
-    /// Identification is not streamed — a partial answer about who is speaking
-    /// is not actionable — so the audio is buffered here rather than pretending
-    /// to be incremental.
-    async fn collect(&self, mut audio: ChunkStream<AudioChunk>) -> Result<Vec<u8>> {
-        let mut samples = Vec::new();
-        while let Some(chunk) = audio.next().await {
-            samples.extend_from_slice(&chunk?.data);
-        }
-        Ok(conduit_core::wav::package(self.format, samples)?.bytes)
-    }
-
-    /// Fails with the status and body of a response that was not a success.
-    async fn checked(&self, response: reqwest::Response) -> Result<reqwest::Response> {
-        if response.status().is_success() {
-            return Ok(response);
-        }
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        Err(Error::Provider {
-            provider: self.name.clone(),
-            source: format!("speaker service returned {status}: {body}").into(),
-        })
+    /// Returns the bytes and the media type they are, because those two are
+    /// decided together: PCM is wrapped in a WAV container and FLAC passes
+    /// through as itself, and a request that announced the wrong one would ask
+    /// a service to parse a header that is not there.
+    async fn collect(&self, audio: ChunkStream<AudioChunk>) -> Result<(Vec<u8>, &'static str)> {
+        let samples = collect_samples(audio).await?;
+        let upload = conduit_core::wav::package(self.format, samples)?;
+        Ok((upload.bytes, upload.mime))
     }
 }
 
@@ -170,14 +216,14 @@ impl Provider for HttpSpeakerId {
 #[async_trait::async_trait]
 impl SpeakerIdentifier for HttpSpeakerId {
     async fn identify(&self, audio: ChunkStream<AudioChunk>) -> Result<Identification> {
-        let body = self.collect(audio).await?;
+        let (body, mime) = self.collect(audio).await?;
         let request = self
             .authorized(self.client.post(format!("{}/identify", self.base_url)))
-            .header("content-type", "audio/wav")
+            .header("content-type", mime)
             .body(body);
         let response =
             request.send().await.map_err(|error| Error::provider(self.name.clone(), error))?;
-        let response = self.checked(response).await?;
+        let response = checked(&self.name, response).await?;
         let identified: IdentifyResponse =
             response.json().await.map_err(|error| Error::provider(self.name.clone(), error))?;
 
@@ -197,16 +243,16 @@ impl SpeakerIdentifier for HttpSpeakerId {
     }
 
     async fn enroll(&self, speaker: SpeakerId, samples: ChunkStream<AudioChunk>) -> Result<()> {
-        let body = self.collect(samples).await?;
+        let (body, mime) = self.collect(samples).await?;
         let request = self
             .authorized(
                 self.client.post(format!("{}/speakers/{speaker}/enroll", self.base_url)),
             )
-            .header("content-type", "audio/wav")
+            .header("content-type", mime)
             .body(body);
         let response =
             request.send().await.map_err(|error| Error::provider(self.name.clone(), error))?;
-        self.checked(response).await.map(|_| ())
+        checked(&self.name, response).await.map(|_| ())
     }
 
     async fn forget(&self, speaker: SpeakerId) -> Result<()> {
@@ -219,7 +265,7 @@ impl SpeakerIdentifier for HttpSpeakerId {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(());
         }
-        self.checked(response).await.map(|_| ())
+        checked(&self.name, response).await.map(|_| ())
     }
 }
 
@@ -234,7 +280,11 @@ mod tests {
     use std::sync::Arc;
 
     /// Serves `router` on a local port and returns its base URL.
-    async fn serve(router: Router) -> String {
+    ///
+    /// Shared with the Diarization_Server tests: both clients are checked
+    /// against a real HTTP server rather than a mocked transport, because the
+    /// thing most likely to be wrong is the shape of the request.
+    pub(crate) async fn serve(router: Router) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("addr");
         tokio::spawn(async move {

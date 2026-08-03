@@ -3160,6 +3160,12 @@ function configFromProviderVariant(
   if (variant.type === "device_wake") {
     return { engine: variant.engine, phrases: variant.phrases.join(", ") };
   }
+  if (variant.type === "diarization_server_speaker_id") {
+    return {
+      base_url: variant.base_url,
+      threshold_percent: variant.threshold_percent,
+    };
+  }
   if (variant.type === "http_speaker_id") {
     return {
       base_url: variant.base_url,
@@ -3271,6 +3277,13 @@ function variantFromProviderDefinition(
       // other choice, so a definition arriving without one means the same.
       engine: (text("engine") || "microwakeword") as WakeEngine,
       phrases: list("phrases"),
+    };
+  }
+  if (definition.component === "speaker.diarization_server") {
+    return {
+      type: "diarization_server_speaker_id",
+      base_url: text("base_url"),
+      threshold_percent: whole("threshold_percent"),
     };
   }
   if (definition.component === "speaker.http") {
