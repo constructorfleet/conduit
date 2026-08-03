@@ -211,6 +211,10 @@ pub enum ProviderKind {
     Tool,
     /// Text-to-speech provider.
     Tts,
+    /// Wake word detector.
+    Wake,
+    /// Speaker identification provider.
+    SpeakerId,
 }
 
 /// Provider status state.
@@ -1018,6 +1022,8 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
         // bindings rather than nodes, and are reported from the core plan.
         NodeKind::Core => Some(ProviderKind::Llm),
         NodeKind::Tts => Some(ProviderKind::Tts),
+        NodeKind::WakeWord => Some(ProviderKind::Wake),
+        NodeKind::SpeakerId => Some(ProviderKind::SpeakerId),
         _ => None,
     }
 }
@@ -1028,6 +1034,8 @@ fn provider_kind_for_capability(capability: ProviderCapability) -> ProviderKind 
         ProviderCapability::Llm => ProviderKind::Llm,
         ProviderCapability::Tool => ProviderKind::Tool,
         ProviderCapability::Tts => ProviderKind::Tts,
+        ProviderCapability::Wake => ProviderKind::Wake,
+        ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
     }
 }
 
@@ -1041,6 +1049,8 @@ fn unavailable_slot_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Llm => "llm",
         ProviderKind::Tool => "tool",
         ProviderKind::Tts => "tts",
+        ProviderKind::Wake => "wake",
+        ProviderKind::SpeakerId => "speaker_id",
     }
 }
 
@@ -1050,6 +1060,8 @@ fn unavailable_message(kind: ProviderKind) -> &'static str {
         ProviderKind::Llm => "no language-model provider is registered",
         ProviderKind::Tool => "no tool provider is registered",
         ProviderKind::Tts => "no text-to-speech provider is registered",
+        ProviderKind::Wake => "no wake word provider is registered",
+        ProviderKind::SpeakerId => "no speaker identification provider is registered",
     }
 }
 

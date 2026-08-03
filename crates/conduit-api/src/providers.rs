@@ -166,6 +166,14 @@ pub async fn test(
             Some(provider) => Some(provider.health().await),
             None => None,
         },
+        ProviderCapability::Wake => match providers.wake().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
+        ProviderCapability::SpeakerId => match providers.speaker().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
     };
 
     let Some(health) = health else {
@@ -198,6 +206,8 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Llm => ProviderKind::Llm,
         ProviderCapability::Tts => ProviderKind::Tts,
         ProviderCapability::Tool => ProviderKind::Tool,
+        ProviderCapability::Wake => ProviderKind::Wake,
+        ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
     }
 }
 
@@ -209,8 +219,24 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
             validate_http_url("base_url", base_url)?;
         }
         ProviderDefinitionVariant::WyomingStt { url, .. }
-        | ProviderDefinitionVariant::WyomingTts { url, .. } => {
+        | ProviderDefinitionVariant::WyomingTts { url, .. }
+        | ProviderDefinitionVariant::WyomingWake { url, .. } => {
             validate_tcp_url("url", url)?;
+        }
+        ProviderDefinitionVariant::HttpSpeakerId { base_url, .. } => {
+            validate_http_url("base_url", base_url)?;
+        }
+        // A satellite that wakes itself has no endpoint to check: the
+        // detector is flashed onto the device, and the only thing that could
+        // be wrong here is an engine too large for it to run.
+        ProviderDefinitionVariant::DeviceWake { engine, .. } => {
+            if !engine.runs_on_device() {
+                return Err(ApiError::unprocessable(format!(
+                    "`{}` cannot run on a satellite; use a wyoming_wake definition for it, \
+                     or microwakeword on the device",
+                    engine.name()
+                )));
+            }
         }
         ProviderDefinitionVariant::McpTool { transport } => {
             validate_mcp_transport(transport)?;

@@ -13,6 +13,7 @@ conduit-mcp.workspace = true
 conduit-metrics.workspace = true
 conduit-openai.workspace = true
 conduit-provider.workspace = true
+conduit-speaker.workspace = true
 conduit-store.workspace = true
 conduit-runtime.workspace = true
 conduit-wyoming.workspace = true

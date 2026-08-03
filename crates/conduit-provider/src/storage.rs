@@ -123,6 +123,97 @@ pub enum ProviderCapability {
     Tts,
     /// Tool invocation.
     Tool,
+    /// Wake word detection.
+    Wake,
+    /// Speaker identification.
+    SpeakerId,
+}
+
+/// The detector behind a wake word definition.
+///
+/// Named rather than inferred from the endpoint because the three engines
+/// differ in what a phrase *is* — a microWakeWord model file, an openWakeWord
+/// model name, a nanoWakeWord embedding — so an operator choosing one is
+/// choosing which phrases they can ask for.
+/// Each engine is written as the one word its project is named by, rather than
+/// as the `snake_case` its variant would produce: an operator reading a stored
+/// definition should see `openwakeword`, which is what they installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WakeEngine {
+    /// microWakeWord: small models built for microcontrollers, which is why it
+    /// is also the engine an ESP32 satellite runs on-device.
+    #[serde(rename = "microwakeword")]
+    MicroWakeWord,
+    /// openWakeWord: the general-purpose detector Home Assistant ships.
+    #[serde(rename = "openwakeword")]
+    OpenWakeWord,
+    /// nanoWakeWord: openWakeWord's lighter successor, same model vocabulary.
+    #[serde(rename = "nanowakeword")]
+    NanoWakeWord,
+}
+
+impl WakeEngine {
+    /// The word this engine is written as in a definition.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::MicroWakeWord => "microwakeword",
+            Self::OpenWakeWord => "openwakeword",
+            Self::NanoWakeWord => "nanowakeword",
+        }
+    }
+
+    /// Whether this engine can run on satellite hardware.
+    ///
+    /// Only microWakeWord is small enough for an ESP32, so a `device_wake`
+    /// definition naming either of the others describes a detector the
+    /// satellite cannot load.
+    #[must_use]
+    pub const fn runs_on_device(self) -> bool {
+        matches!(self, Self::MicroWakeWord)
+    }
+}
+
+/// The service behind a speaker identification definition.
+///
+/// All three speak the same HTTP contract — enroll, identify, forget — and
+/// differ in the embedding model behind it. Naming the engine is what lets a
+/// diagnostic say whose voice print an operator is looking at.
+/// Written as each project names itself, for the same reason [`WakeEngine`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpeakerEngine {
+    /// SpeechBrain ECAPA-TDNN embeddings.
+    SpeechBrain,
+    /// Resemblyzer d-vector embeddings.
+    Resemblyzer,
+    /// pyannote speaker embeddings.
+    Pyannote,
+}
+
+impl SpeakerEngine {
+    /// The word this engine is written as in a definition.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SpeechBrain => "speechbrain",
+            Self::Resemblyzer => "resemblyzer",
+            Self::Pyannote => "pyannote",
+        }
+    }
+}
+
+/// The confidence a detection or a match must reach, as a percentage.
+///
+/// A percentage rather than the `0.0..=1.0` float the provider traits use, so
+/// that a definition stays comparable by value: an operator screen diffs two
+/// definitions, and two floats that are equal to the eye are not always equal
+/// to the machine.
+pub const DEFAULT_THRESHOLD_PERCENT: u8 = 50;
+
+/// The default acceptance threshold, as a serde default.
+const fn default_threshold_percent() -> u8 {
+    DEFAULT_THRESHOLD_PERCENT
 }
 
 /// A credential stored with a provider definition.
@@ -258,6 +349,50 @@ pub enum ProviderDefinitionVariant {
         /// Tool transport configuration.
         transport: McpTransport,
     },
+    /// Wake word detection on a Wyoming server.
+    ///
+    /// All three engines are packaged as Wyoming services, so one variant
+    /// serves them and [`WakeEngine`] says which is listening.
+    WyomingWake {
+        /// Wyoming endpoint URL.
+        url: String,
+        /// Which detector is behind the endpoint.
+        engine: WakeEngine,
+        /// Phrases to listen for. Empty asks the server for whatever it loaded.
+        #[serde(default)]
+        phrases: Vec<String>,
+        /// Minimum confidence to accept, as a percentage.
+        #[serde(default = "default_threshold_percent")]
+        threshold_percent: u8,
+    },
+    /// Wake word detection performed on the satellite itself.
+    ///
+    /// There is no endpoint because there is no server: the device runs the
+    /// detector and only streams audio once it has activated. The definition
+    /// exists so that a pipeline can *say* it wakes on-device — which is what
+    /// makes the stage visible in the editor, in validation, and in the event
+    /// stream — rather than the stage silently being absent.
+    DeviceWake {
+        /// Which detector the satellite runs.
+        engine: WakeEngine,
+        /// Phrases the satellite is flashed with, for operator screens. The
+        /// server never scores them.
+        #[serde(default)]
+        phrases: Vec<String>,
+    },
+    /// Speaker identification over the Conduit speaker HTTP contract.
+    HttpSpeakerId {
+        /// Base URL of the identification service.
+        base_url: String,
+        /// Optional API key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        api_key: Option<ProviderSecret>,
+        /// Which embedding model is behind the endpoint.
+        engine: SpeakerEngine,
+        /// Minimum similarity to call a voice a match, as a percentage.
+        #[serde(default = "default_threshold_percent")]
+        threshold_percent: u8,
+    },
 }
 
 impl ProviderDefinitionVariant {
@@ -269,6 +404,8 @@ impl ProviderDefinitionVariant {
             Self::OpenAiStt { .. } | Self::WyomingStt { .. } => ProviderCapability::Stt,
             Self::OpenAiTts { .. } | Self::WyomingTts { .. } => ProviderCapability::Tts,
             Self::McpTool { .. } => ProviderCapability::Tool,
+            Self::WyomingWake { .. } | Self::DeviceWake { .. } => ProviderCapability::Wake,
+            Self::HttpSpeakerId { .. } => ProviderCapability::SpeakerId,
         }
     }
 
@@ -306,6 +443,25 @@ impl ProviderDefinitionVariant {
                 streaming: *streaming,
             },
             Self::McpTool { transport } => Self::McpTool { transport: transport.clone() },
+            Self::WyomingWake { url, engine, phrases, threshold_percent } => {
+                Self::WyomingWake {
+                    url: url.clone(),
+                    engine: *engine,
+                    phrases: phrases.clone(),
+                    threshold_percent: *threshold_percent,
+                }
+            }
+            Self::DeviceWake { engine, phrases } => {
+                Self::DeviceWake { engine: *engine, phrases: phrases.clone() }
+            }
+            Self::HttpSpeakerId { base_url, api_key, engine, threshold_percent } => {
+                Self::HttpSpeakerId {
+                    base_url: base_url.clone(),
+                    api_key: redact_secret(api_key),
+                    engine: *engine,
+                    threshold_percent: *threshold_percent,
+                }
+            }
         }
     }
 
@@ -332,6 +488,14 @@ impl ProviderDefinitionVariant {
                 api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
                 voices,
             },
+            Self::HttpSpeakerId { base_url, api_key, engine, threshold_percent } => {
+                Self::HttpSpeakerId {
+                    base_url,
+                    api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
+                    engine,
+                    threshold_percent,
+                }
+            }
             other => other,
         }
     }
@@ -340,7 +504,8 @@ impl ProviderDefinitionVariant {
         match self {
             Self::OpenAiLlm { api_key, .. }
             | Self::OpenAiStt { api_key, .. }
-            | Self::OpenAiTts { api_key, .. } => api_key.as_ref(),
+            | Self::OpenAiTts { api_key, .. }
+            | Self::HttpSpeakerId { api_key, .. } => api_key.as_ref(),
             _ => None,
         }
     }
@@ -437,6 +602,91 @@ mod tests {
     fn an_overlong_name_is_rejected() {
         assert!(validate_name(&"a".repeat(MAX_NAME + 1)).is_err());
         assert!(validate_name(&"a".repeat(MAX_NAME)).is_ok());
+    }
+
+    #[test]
+    fn wake_definitions_supply_the_wake_capability_wherever_they_detect() {
+        // Where detection runs is a deployment choice, not a different kind of
+        // stage: a pipeline naming either definition has a wake word stage.
+        let remote = ProviderDefinitionVariant::WyomingWake {
+            url: "tcp://openwakeword:10400".to_owned(),
+            engine: WakeEngine::OpenWakeWord,
+            phrases: vec!["hey jarvis".to_owned()],
+            threshold_percent: DEFAULT_THRESHOLD_PERCENT,
+        };
+        let on_device = ProviderDefinitionVariant::DeviceWake {
+            engine: WakeEngine::MicroWakeWord,
+            phrases: vec!["okay nabu".to_owned()],
+        };
+
+        assert_eq!(remote.capability(), ProviderCapability::Wake);
+        assert_eq!(on_device.capability(), ProviderCapability::Wake);
+    }
+
+    #[test]
+    fn a_wake_definition_that_omits_its_threshold_reads_as_the_documented_default() {
+        let variant: ProviderDefinitionVariant = serde_json::from_value(serde_json::json!({
+            "type": "wyoming_wake",
+            "url": "tcp://openwakeword:10400",
+            "engine": "openwakeword",
+        }))
+        .expect("deserialize");
+
+        let ProviderDefinitionVariant::WyomingWake { threshold_percent, phrases, .. } = variant
+        else {
+            panic!("a `wyoming_wake` tag deserializes to a Wyoming wake definition");
+        };
+        assert_eq!(threshold_percent, DEFAULT_THRESHOLD_PERCENT);
+        assert!(phrases.is_empty(), "no phrases named means whatever the server loaded");
+    }
+
+    #[test]
+    fn only_microwakeword_is_small_enough_for_a_satellite() {
+        assert!(WakeEngine::MicroWakeWord.runs_on_device());
+        assert!(!WakeEngine::OpenWakeWord.runs_on_device());
+        assert!(!WakeEngine::NanoWakeWord.runs_on_device());
+    }
+
+    #[test]
+    fn an_engines_name_is_the_word_it_is_written_as_on_the_wire() {
+        for engine in
+            [WakeEngine::MicroWakeWord, WakeEngine::OpenWakeWord, WakeEngine::NanoWakeWord]
+        {
+            let written = serde_json::to_value(engine).expect("serialize");
+            assert_eq!(written, serde_json::Value::String(engine.name().to_owned()));
+        }
+        for engine in
+            [SpeakerEngine::SpeechBrain, SpeakerEngine::Resemblyzer, SpeakerEngine::Pyannote]
+        {
+            let written = serde_json::to_value(engine).expect("serialize");
+            assert_eq!(written, serde_json::Value::String(engine.name().to_owned()));
+        }
+    }
+
+    #[test]
+    fn a_speaker_definitions_key_is_redacted_and_survives_an_update_that_omits_it() {
+        // The same secret semantics every keyed definition has: a read never
+        // shows the key, and saving what a read returned must not erase it.
+        let stored = ProviderDefinitionVariant::HttpSpeakerId {
+            base_url: "https://voices.example".to_owned(),
+            api_key: Some(ProviderSecret::Inline { value: "sk-live".to_owned() }),
+            engine: SpeakerEngine::SpeechBrain,
+            threshold_percent: 70,
+        };
+
+        let read = stored.redacted();
+        assert_eq!(
+            read,
+            ProviderDefinitionVariant::HttpSpeakerId {
+                base_url: "https://voices.example".to_owned(),
+                api_key: Some(ProviderSecret::Redacted),
+                engine: SpeakerEngine::SpeechBrain,
+                threshold_percent: 70,
+            }
+        );
+
+        let saved = read.with_secret_updates_from(Some(&stored));
+        assert_eq!(saved, stored, "saving a redacted key keeps the stored one");
     }
 
     #[test]

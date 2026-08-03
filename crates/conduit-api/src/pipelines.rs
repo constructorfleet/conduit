@@ -71,6 +71,13 @@ pub struct ComponentConfigProperty {
     /// Optional regular expression hint for string inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<&'static str>,
+    /// The only values this field accepts, when it is a closed set.
+    ///
+    /// A wake word definition names one of three engines, and a console that
+    /// offered a free text box for it would let an operator save a definition
+    /// the server then refuses. Empty means the field is open.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<&'static str>,
 }
 
 /// Primitive config field value types.
@@ -81,6 +88,10 @@ pub enum ComponentConfigValueType {
     String,
     /// Boolean input.
     Boolean,
+    /// Whole-number input.
+    Integer,
+    /// A list of strings, e.g. the phrases a detector listens for.
+    StringList,
 }
 
 /// Config field format hints.
@@ -410,6 +421,8 @@ fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
     match kind {
         NodeKind::Stt => Some(ProviderCapability::Stt),
         NodeKind::Tts => Some(ProviderCapability::Tts),
+        NodeKind::WakeWord => Some(ProviderCapability::Wake),
+        NodeKind::SpeakerId => Some(ProviderCapability::SpeakerId),
         _ => None,
     }
 }
@@ -420,8 +433,16 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
         ProviderCapability::Llm => "llm",
         ProviderCapability::Tool => "tool",
         ProviderCapability::Tts => "tts",
+        ProviderCapability::Wake => "wake",
+        ProviderCapability::SpeakerId => "speaker_id",
     }
 }
+
+/// The wake engines a Wyoming service may be running, in display order.
+const WAKE_ENGINES: [&str; 3] = ["openwakeword", "microwakeword", "nanowakeword"];
+
+/// The embedding models a speaker identification service may be running.
+const SPEAKER_ENGINES: [&str; 3] = ["speechbrain", "resemblyzer", "pyannote"];
 
 /// Built-in component descriptors.
 #[must_use]
@@ -525,6 +546,52 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "wyoming.wake",
+            label: "Wyoming wake word",
+            kind: ProviderCapability::Wake,
+            definition_variant: "wyoming_wake",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("engine", choice_property(WAKE_ENGINES.to_vec())),
+                    ("phrases", string_list_property()),
+                    ("threshold_percent", integer_property()),
+                ]),
+                required: vec!["url", "engine"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "device.wake",
+            label: "On-device wake word",
+            kind: ProviderCapability::Wake,
+            definition_variant: "device_wake",
+            schema: ComponentConfigSchema {
+                // No URL: the satellite runs the detector and streams only
+                // once it has activated, so there is no service to point at.
+                // Only microWakeWord is small enough for that hardware.
+                properties: properties([
+                    ("engine", choice_property(vec!["microwakeword"])),
+                    ("phrases", string_list_property()),
+                ]),
+                required: vec!["engine"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "speaker.http",
+            label: "Speaker identification",
+            kind: ProviderCapability::SpeakerId,
+            definition_variant: "http_speaker_id",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("api_key", string_property(None, None)),
+                    ("engine", choice_property(SPEAKER_ENGINES.to_vec())),
+                    ("threshold_percent", integer_property()),
+                ]),
+                required: vec!["base_url", "engine"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: ProviderCapability::Tool,
@@ -556,7 +623,12 @@ fn string_property(
     format: Option<ComponentConfigFormat>,
     pattern: Option<&'static str>,
 ) -> ComponentConfigProperty {
-    ComponentConfigProperty { value_type: ComponentConfigValueType::String, format, pattern }
+    ComponentConfigProperty {
+        value_type: ComponentConfigValueType::String,
+        format,
+        pattern,
+        options: Vec::new(),
+    }
 }
 
 fn boolean_property() -> ComponentConfigProperty {
@@ -564,6 +636,36 @@ fn boolean_property() -> ComponentConfigProperty {
         value_type: ComponentConfigValueType::Boolean,
         format: None,
         pattern: None,
+        options: Vec::new(),
+    }
+}
+
+/// A field whose value must be one of `options`.
+fn choice_property(options: Vec<&'static str>) -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        value_type: ComponentConfigValueType::String,
+        format: None,
+        pattern: None,
+        options,
+    }
+}
+
+fn integer_property() -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        value_type: ComponentConfigValueType::Integer,
+        format: None,
+        pattern: None,
+        options: Vec::new(),
+    }
+}
+
+/// A list of free-text values, e.g. the phrases a detector listens for.
+fn string_list_property() -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        value_type: ComponentConfigValueType::StringList,
+        format: None,
+        pattern: None,
+        options: Vec::new(),
     }
 }
 
