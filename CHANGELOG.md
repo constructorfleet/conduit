@@ -8,6 +8,23 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added wake word detection as a runnable pipeline stage. `wyoming_wake`
+  provider definitions talk to openWakeWord, microWakeWord, or nanoWakeWord over
+  the Wyoming protocol; `device_wake` definitions describe a satellite that
+  wakes itself. A wake stage holds captured audio back until a phrase is
+  accepted, and publishes both activations and near misses.
+- Added speaker identification as a runnable pipeline stage. `http_speaker_id`
+  provider definitions talk to a SpeechBrain, Resemblyzer, or pyannote service
+  over the contract documented on the new `conduit-speaker` crate. The identity
+  found reaches a tool's per-speaker permission check; an identification service
+  that is down costs a turn its per-speaker policies rather than its answer.
+- Added `GET /v1/providers/{id}/voices`, and the pipeline editor now offers a
+  synthesizer's own voices rather than a free text box. Providers that
+  enumerate none, and providers that cannot be reached, still accept a typed
+  voice.
+- `/v1/events` no longer refuses `wake_word` or `identity` stage
+  subscriptions. Both now carry traffic, so `Stage::has_emitter` and the
+  refusal it powered are gone.
 - Added project documentation covering contribution workflow, architecture, API
   routes, configuration, and crate responsibilities.
 
