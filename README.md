@@ -24,6 +24,7 @@ echoes described under [Running](#running).
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-http`](crates/conduit-http) | Shared HTTP plumbing every HTTP-backed provider uses: sending, failure classification, SSE framing |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
+| [`conduit-anthropic`](crates/conduit-anthropic) | Language models over Anthropic's Messages API |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
@@ -565,6 +566,22 @@ the provider name, differently configured servers can be registered side by
 side — a local model and a hosted one — though today only one of them can be
 reached from a given pipeline, because the runtime executes a single `llm` node
 per turn.
+
+`conduit-anthropic` is a second implementation rather than another base URL,
+because Anthropic's Messages API differs in the three places that matter: it
+authenticates with an `x-api-key` header instead of a bearer token, requires a
+pinned `anthropic-version`, and streams typed events that open and close content
+blocks rather than uniform chunks. It also rejects `temperature` outright on
+current models, so the provider does not offer that setting at all — an operator
+is told when they save the definition instead of when a conversation fails.
+
+```rust
+Anthropic::new(AnthropicConfig {
+    api_key: Some(std::env::var("ANTHROPIC_API_KEY")?),
+    name: "claude".to_owned(),
+    ..AnthropicConfig::default()
+})?;
+```
 
 Two honest limits. Transcription takes a complete recording rather than a
 stream, so `OpenAiStt` buffers the utterance and reports no partial
