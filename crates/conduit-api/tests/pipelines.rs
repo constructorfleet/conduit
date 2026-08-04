@@ -748,6 +748,64 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
 }
 
 #[tokio::test]
+async fn a_speech_cleanup_definition_is_stored_and_read_back_with_its_rules() {
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "speech-cleanup",
+        "label": "Speech cleanup",
+        "variant": {
+            "type": "transform",
+            "variant": {
+                "type": "builtin",
+                "rules": ["markdown_to_speech", "strip_emoji"]
+            }
+        }
+    });
+
+    let (status, _) =
+        call(&state, put_json("/v1/providers/speech-cleanup", definition.clone())).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, get("/v1/providers/speech-cleanup")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    // Order is what the operator wrote: flattening markdown first means an
+    // emoji inside a link's text is seen as text.
+    assert_eq!(
+        body["variant"]["variant"]["rules"],
+        serde_json::json!(["markdown_to_speech", "strip_emoji"])
+    );
+}
+
+#[tokio::test]
+async fn the_speech_cleanup_component_offers_only_rules_this_build_implements() {
+    // The console builds its form from this catalog. A free text box for rule
+    // names would let an operator save a definition that rewrites nothing,
+    // which looks exactly like a model ignoring an instruction — the problem
+    // transforms exist to end.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+    assert_component(components, "transform.builtin", "transform", &["rules"], &["rules"]);
+
+    let component = components
+        .iter()
+        .find(|component| component["id"] == "transform.builtin")
+        .expect("the built-in transform is offered");
+    assert_eq!(component["definition_variant"], "builtin");
+    assert_eq!(
+        component["schema"]["properties"]["rules"],
+        serde_json::json!({
+            "type": "string_list",
+            "options": ["markdown_to_speech", "strip_emoji", "collapse_whitespace"]
+        })
+    );
+}
+
+#[tokio::test]
 async fn each_wake_engine_offers_only_the_places_it_runs() {
     // The console builds its form from this catalog, so the catalog is what
     // keeps an operator from describing a detector that cannot exist: an engine

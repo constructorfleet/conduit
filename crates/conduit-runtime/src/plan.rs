@@ -13,6 +13,7 @@ use conduit_provider::memory::Memory;
 use conduit_provider::speaker::SpeakerIdentifier;
 use conduit_provider::stt::SpeechToText;
 use conduit_provider::tool::Tool;
+use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::TextToSpeech;
 use conduit_provider::wake::{WakePhrase, WakeWordDetector};
 
@@ -48,6 +49,14 @@ pub struct Identifier {
     /// The provider that matches a voice against enrolled prints.
     pub provider: Arc<dyn SpeakerIdentifier>,
     /// Node id of the identification stage.
+    pub node: String,
+}
+
+/// One utterance transform a pipeline resolved, and the node that chose it.
+pub struct Rewriter {
+    /// The provider that rewrites.
+    pub provider: Arc<dyn UtteranceTransform>,
+    /// Node id of the transform stage.
     pub node: String,
 }
 
@@ -145,6 +154,21 @@ pub struct Plan {
     /// which one a pipeline uses is a property of its graph rather than of the
     /// model that produced the words.
     pub tts: Option<Synthesizer>,
+    /// Rewrites to apply before each rendering.
+    pub transforms: Transforms,
+}
+
+/// The transform chains a pipeline resolved, one per rendering.
+///
+/// Kept apart because that is the point of putting transforms in the graph:
+/// the markdown a model wrote belongs in a transcript and not in a voice, so
+/// a pipeline that does both needs to say which rewrites apply to which.
+#[derive(Default)]
+pub struct Transforms {
+    /// Applied to each segment before it is synthesized.
+    pub speech: Vec<Rewriter>,
+    /// Applied to each segment before it is written to a text sink.
+    pub text: Vec<Rewriter>,
 }
 
 impl Plan {
@@ -213,6 +237,11 @@ impl Plan {
                         max_rounds: core.max_rounds,
                     });
                 }
+                // Resolved from the renderer they feed rather than from the
+                // walk, because a transform means nothing on its own: which
+                // rendering it changes is what the operator wrote it down to
+                // say, and that is a property of its edges.
+                Node::Transform { .. } => {}
                 Node::Tts { id, provider, voice } => {
                     reject_duplicate(&tts, node)?;
                     tts = Some(Synthesizer {
@@ -248,6 +277,8 @@ impl Plan {
             )));
         }
 
+        let transforms = resolve_transforms(graph, tts.as_ref(), providers)?;
+
         let Reasoning { node, llm, model, system, max_rounds } = reasoning;
         Ok(Self {
             pipeline: graph.name.clone(),
@@ -256,6 +287,7 @@ impl Plan {
             stt,
             core: CorePlan { node, llm, model, system, tools, memory, max_rounds },
             tts,
+            transforms,
             // Validation has already established that every sink is fed by the
             // core, so a text sink existing is enough to know the reply is
             // written down.
@@ -265,6 +297,137 @@ impl Plan {
                 .any(|node| matches!(node, Node::Sink { modality: Modality::Text, .. })),
         })
     }
+}
+
+/// Resolves the transform chain feeding each rendering.
+///
+/// Every transform in the graph must end up in one of them. A transform that
+/// feeds nothing is a rewrite an operator wrote down and will never hear, and
+/// the difference between that and a working pipeline is one edge — so it is
+/// reported here rather than discovered when the emoji come out anyway.
+fn resolve_transforms(
+    graph: &PipelineGraph,
+    tts: Option<&Synthesizer>,
+    providers: &Providers,
+) -> Result<Transforms> {
+    let speech = match tts {
+        Some(synthesizer) => chain_into(graph, &synthesizer.node, providers)?,
+        None => Vec::new(),
+    };
+
+    let mut text: Vec<Rewriter> = Vec::new();
+    let mut first_sink: Option<&str> = None;
+    for node in &graph.nodes {
+        let Node::Sink { id, modality: Modality::Text, .. } = node else {
+            continue;
+        };
+        let chain = chain_into(graph, id, providers)?;
+        match first_sink {
+            None => {
+                first_sink = Some(id);
+                text = chain;
+            }
+            // One written rendering is delivered per turn, so two text sinks
+            // asking for different rewrites is a pipeline that cannot say what
+            // the transcript should read.
+            Some(first) if !same_chain(&text, &chain) => {
+                return Err(Error::Config(format!(
+                    "text sinks `{first}` and `{id}` are fed by different transforms, but \
+                     one turn writes one transcript; feed them from the same transform or \
+                     keep one of them"
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+
+    let mut unused = graph
+        .nodes
+        .iter()
+        .filter(|node| matches!(node, Node::Transform { .. }))
+        .map(Node::id)
+        .filter(|id| !applied(&speech, id) && !applied(&text, id));
+    if let Some(orphan) = unused.next() {
+        return Err(Error::Config(format!(
+            "node `{orphan}` is a `transform` that nothing renders through; wire it into \
+             the `tts` node or a text sink, or remove it"
+        )));
+    }
+
+    Ok(Transforms { speech, text })
+}
+
+/// The transforms feeding `target`, in the order they run.
+///
+/// Walked backwards from the renderer because that is the question being
+/// asked: not "what transforms exist" but "what happens to what this one
+/// speaks".
+fn chain_into(
+    graph: &PipelineGraph,
+    target: &str,
+    providers: &Providers,
+) -> Result<Vec<Rewriter>> {
+    let mut chain: Vec<(&str, &str)> = Vec::new();
+    let mut current = target;
+
+    loop {
+        let mut upstream =
+            graph.edges.iter().filter(|edge| edge.to == current).filter_map(|edge| match graph
+                .node(&edge.from)
+            {
+                Some(Node::Transform { id, provider }) => {
+                    Some((id.as_str(), provider.as_str()))
+                }
+                _ => None,
+            });
+
+        let Some(found) = upstream.next() else {
+            break;
+        };
+        if upstream.next().is_some() {
+            return Err(Error::Config(format!(
+                "node `{current}` is fed by more than one `transform`, so which rewrite \
+                 runs last is undecided; chain them instead"
+            )));
+        }
+        // A graph is acyclic by the time it is resolved, so this only guards
+        // against resolving one that was never validated.
+        if chain.iter().any(|(id, _)| *id == found.0) {
+            break;
+        }
+        chain.push(found);
+        current = found.0;
+    }
+
+    chain.reverse();
+    chain
+        .into_iter()
+        .map(|(id, provider)| {
+            Ok(Rewriter {
+                provider: providers.transform().require(provider)?,
+                node: id.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Whether two chains name the same transforms in the same order.
+fn same_chain(left: &[Rewriter], right: &[Rewriter]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| left.node == right.node)
+}
+
+/// A chain as `node (provider)` pairs, for a plan an operator is reading.
+fn node_names(chain: &[Rewriter]) -> Vec<String> {
+    chain
+        .iter()
+        .map(|rewriter| format!("{} ({})", rewriter.node, rewriter.provider.name()))
+        .collect()
+}
+
+/// Whether `id` appears in `chain`.
+fn applied(chain: &[Rewriter], id: &str) -> bool {
+    chain.iter().any(|rewriter| rewriter.node == id)
 }
 
 /// A memory store a core uses, and how it uses it.
@@ -444,6 +607,8 @@ impl std::fmt::Debug for Plan {
                 &self.tts.as_ref().map(|tts| format!("{} ({})", tts.node, tts.provider.name())),
             )
             .field("voice", &self.tts.as_ref().and_then(|tts| tts.voice.as_deref()))
+            .field("spoken through", &node_names(&self.transforms.speech))
+            .field("written through", &node_names(&self.transforms.text))
             .field("tools", &self.core.tools.keys().collect::<Vec<_>>())
             .finish()
     }

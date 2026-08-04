@@ -36,6 +36,7 @@ describe("formFromGraph", () => {
 
     expect(form.stt).toBeNull();
     expect(form.tts).toBeNull();
+    expect(form.transform).toBeNull();
     expect(form.wakeWord).toBeNull();
     expect(form.speakerId).toBeNull();
     expect(form.source.modality).toBe("text");
@@ -112,6 +113,27 @@ describe("graphFromForm", () => {
       { from: "mic", to: "core" },
       { from: "core", to: "speaker" },
     ]);
+  });
+
+  it("wires an added transform between the model and what speaks it", () => {
+    // The stage exists because a model writes for a reader: the rewrite has
+    // to sit after reasoning and before anything renders it, or it changes
+    // the wrong words.
+    const form = formFromGraph(voiceLoop());
+    form.transform = { id: "clean", provider: "speech-cleanup" };
+
+    const graph = graphFromForm(form);
+
+    expect(graph.nodes.map((node) => node.id)).toEqual([
+      "mic",
+      "stt",
+      "core",
+      "clean",
+      "tts",
+      "speaker",
+    ]);
+    expect(graph.edges).toContainEqual({ from: "core", to: "clean" });
+    expect(graph.edges).toContainEqual({ from: "clean", to: "tts" });
   });
 
   it("splices an added stage into the chain in run order", () => {

@@ -63,6 +63,15 @@ node named.
 implementing [`TextToSpeech`](crates/conduit-provider/src/tts.rs) and registering
 it under a name. It never means editing the pipeline.
 
+**What is spoken is the pipeline's decision, not the model's.** A model writes
+for a reader — emphasis in asterisks, emoji as punctuation, links as brackets —
+and "do not use emoji" holds until it does not. A `transform` node sits between
+the core and whatever renders what it said, applying named rewrites
+([`markdown_to_speech`, `strip_emoji`, `collapse_whitespace`](docs/configuration.md#rewriting-what-is-spoken))
+to each sentence on its way out. Because it is a node, its edges say which
+rendering it reaches: wire it to `tts` alone and the voice is cleaned up while
+the transcript keeps the markdown the model actually wrote.
+
 A consequence worth spelling out: the runtime speaks each sentence as soon as
 the model completes it, rather than waiting for the full response. A reply of
 "Turning on the light. Anything else?" begins playing while the second sentence

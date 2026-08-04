@@ -12,6 +12,7 @@ pub mod llm;
 pub mod speaker;
 pub mod stt;
 pub mod tool;
+pub mod transform;
 pub mod tts;
 pub mod wake;
 
@@ -19,6 +20,7 @@ pub use llm::LlmVariant;
 pub use speaker::SpeakerIdVariant;
 pub use stt::SttVariant;
 pub use tool::{McpTransport, ToolVariant};
+pub use transform::{Rule, TransformVariant};
 pub use tts::TtsVariant;
 pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 
@@ -135,6 +137,8 @@ pub enum ProviderCapability {
     Llm,
     /// Speech synthesis.
     Tts,
+    /// Rewriting an utterance before it is rendered.
+    Transform,
     /// Tool invocation.
     Tool,
     /// Wake word detection.
@@ -311,6 +315,11 @@ pub enum ProviderDefinitionVariant {
         /// Provider-specific settings.
         variant: TtsVariant,
     },
+    /// Rewriting an utterance before it is rendered.
+    Transform {
+        /// Provider-specific settings.
+        variant: TransformVariant,
+    },
     /// Tool invocation.
     Tool {
         /// Provider-specific settings.
@@ -336,6 +345,7 @@ impl ProviderDefinitionVariant {
             Self::Llm { .. } => ProviderCapability::Llm,
             Self::Stt { .. } => ProviderCapability::Stt,
             Self::Tts { .. } => ProviderCapability::Tts,
+            Self::Transform { .. } => ProviderCapability::Transform,
             Self::Tool { .. } => ProviderCapability::Tool,
             Self::Wake { .. } => ProviderCapability::Wake,
             Self::SpeakerId { .. } => ProviderCapability::SpeakerId,
@@ -349,6 +359,7 @@ impl ProviderDefinitionVariant {
             Self::Llm { variant } => Self::Llm { variant: variant.redacted() },
             Self::Stt { variant } => Self::Stt { variant: variant.redacted() },
             Self::Tts { variant } => Self::Tts { variant: variant.redacted() },
+            Self::Transform { variant } => Self::Transform { variant: variant.redacted() },
             Self::Tool { variant } => Self::Tool { variant: variant.redacted() },
             Self::Wake { variant } => Self::Wake { variant: variant.redacted() },
             Self::SpeakerId { variant } => Self::SpeakerId { variant: variant.redacted() },
@@ -431,6 +442,7 @@ enum WireProviderDefinitionVariant {
     Llm { variant: LlmVariant },
     Stt { variant: SttVariant },
     Tts { variant: TtsVariant },
+    Transform { variant: TransformVariant },
     Tool { variant: ToolVariant },
     Wake { variant: WakeVariant },
     SpeakerId { variant: SpeakerIdVariant },
@@ -442,6 +454,7 @@ impl From<WireProviderDefinitionVariant> for ProviderDefinitionVariant {
             WireProviderDefinitionVariant::Llm { variant } => Self::Llm { variant },
             WireProviderDefinitionVariant::Stt { variant } => Self::Stt { variant },
             WireProviderDefinitionVariant::Tts { variant } => Self::Tts { variant },
+            WireProviderDefinitionVariant::Transform { variant } => Self::Transform { variant },
             WireProviderDefinitionVariant::Tool { variant } => Self::Tool { variant },
             WireProviderDefinitionVariant::Wake { variant } => Self::Wake { variant },
             WireProviderDefinitionVariant::SpeakerId { variant } => Self::SpeakerId { variant },

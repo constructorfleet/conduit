@@ -8,6 +8,16 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added `transform` pipeline nodes, which rewrite what a model said on its way
+  to being rendered. What reaches a synthesizer is now the pipeline's decision
+  rather than the model's willingness to honour "do not use emoji". Three rules
+  ship built in — `markdown_to_speech`, `strip_emoji`, `collapse_whitespace` —
+  applied in the order a definition lists them.
+- Because a transform is a node, its edges say which rendering it changes: one
+  wired only to the `tts` node cleans up what is spoken while a text sink keeps
+  the markdown the model wrote. Transforms chain, a transform nothing renders
+  through is refused at prepare time, and one that fails ends the turn rather
+  than delivering what it was configured to prevent.
 - Added wake word detection as a runnable pipeline stage. A wake stage holds
   captured audio back until a phrase is accepted, and publishes both
   activations and near misses.

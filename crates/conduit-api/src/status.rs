@@ -211,6 +211,8 @@ pub enum ProviderKind {
     Tool,
     /// Text-to-speech provider.
     Tts,
+    /// Utterance transform.
+    Transform,
     /// Wake word detector.
     Wake,
     /// Speaker identification provider.
@@ -1022,6 +1024,7 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
         // bindings rather than nodes, and are reported from the core plan.
         NodeKind::Core => Some(ProviderKind::Llm),
         NodeKind::Tts => Some(ProviderKind::Tts),
+        NodeKind::Transform => Some(ProviderKind::Transform),
         NodeKind::WakeWord => Some(ProviderKind::Wake),
         NodeKind::SpeakerId => Some(ProviderKind::SpeakerId),
         _ => None,
@@ -1034,6 +1037,7 @@ fn provider_kind_for_capability(capability: ProviderCapability) -> ProviderKind 
         ProviderCapability::Llm => ProviderKind::Llm,
         ProviderCapability::Tool => ProviderKind::Tool,
         ProviderCapability::Tts => ProviderKind::Tts,
+        ProviderCapability::Transform => ProviderKind::Transform,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
     }
@@ -1049,6 +1053,7 @@ fn unavailable_slot_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Llm => "llm",
         ProviderKind::Tool => "tool",
         ProviderKind::Tts => "tts",
+        ProviderKind::Transform => "transform",
         ProviderKind::Wake => "wake",
         ProviderKind::SpeakerId => "speaker_id",
     }
@@ -1060,6 +1065,7 @@ fn unavailable_message(kind: ProviderKind) -> &'static str {
         ProviderKind::Llm => "no language-model provider is registered",
         ProviderKind::Tool => "no tool provider is registered",
         ProviderKind::Tts => "no text-to-speech provider is registered",
+        ProviderKind::Transform => "no utterance transform provider is registered",
         ProviderKind::Wake => "no wake word provider is registered",
         ProviderKind::SpeakerId => "no speaker identification provider is registered",
     }

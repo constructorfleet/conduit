@@ -277,6 +277,7 @@ dependencies = [
  "conduit-runtime",
  "conduit-speaker",
  "conduit-store",
+ "conduit-transform",
  "conduit-wake",
  "conduit-wyoming",
  "futures-util",
@@ -417,6 +418,17 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "conduit-transform"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "conduit-core",
+ "conduit-provider",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

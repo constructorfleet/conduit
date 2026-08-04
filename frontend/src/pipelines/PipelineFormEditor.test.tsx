@@ -36,18 +36,22 @@ const providers: ProviderOptions = {
     { id: "okay-nabu", label: "On-device (okay nabu)" },
   ],
   speakerId: [{ id: "voices", label: "SpeechBrain" }],
+  /// Nothing configured, which is the state most deployments are in: the
+  /// stage should not be offered at all.
+  transform: [],
 };
 
 function renderEditor(
   form: PipelineForm,
   readOnly = false,
   voices: VoiceCatalog = null,
+  options: ProviderOptions = providers,
 ) {
   const onChange = vi.fn();
   render(
     <PipelineFormEditor
       form={form}
-      providers={providers}
+      providers={options}
       voices={voices}
       readOnly={readOnly}
       onChange={onChange}
@@ -74,6 +78,52 @@ describe("PipelineFormEditor", () => {
 
     expect(screen.getByLabelText("Add Wake word")).toBeInTheDocument();
     expect(screen.getByLabelText("Add Speaker ID")).toBeInTheDocument();
+  });
+
+  it("does not offer a stage no configured provider can serve", () => {
+    // Adding one would name a provider that does not exist, and the backend
+    // refuses a pipeline that does — so the row would invite an operator to
+    // write something unsaveable.
+    renderEditor(voiceForm());
+
+    expect(screen.queryByLabelText("Add Rewrite before output")).toBeNull();
+  });
+
+  it("offers the rewrite stage once a transform provider is configured", () => {
+    renderEditor(voiceForm(), false, null, {
+      ...providers,
+      transform: [{ id: "speech-cleanup", label: "Speech cleanup" }],
+    });
+
+    expect(
+      screen.getByLabelText("Add Rewrite before output"),
+    ).toBeInTheDocument();
+  });
+
+  it("binds the configured transform when the rewrite stage is added", async () => {
+    const onChange = renderEditor(voiceForm(), false, null, {
+      ...providers,
+      transform: [{ id: "speech-cleanup", label: "Speech cleanup" }],
+    });
+
+    await userEvent.click(screen.getByLabelText("Add Rewrite before output"));
+
+    const next = onChange.mock.calls[0][0] as PipelineForm;
+    expect(next.transform).toMatchObject({ provider: "speech-cleanup" });
+  });
+
+  it("keeps showing a stage whose provider has since been deleted", () => {
+    // A pipeline should show what it says rather than quietly lose a stage:
+    // the fix is to configure the provider again, which needs the stage to be
+    // visible in the first place.
+    const form = voiceForm();
+    form.transform = { id: "clean", provider: "speech-cleanup" };
+
+    renderEditor(form);
+
+    expect(screen.getByLabelText("Rewrite before output provider")).toHaveValue(
+      "speech-cleanup",
+    );
   });
 
   it("removes a stage without leaving the chain broken", async () => {

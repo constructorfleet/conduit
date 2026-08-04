@@ -31,6 +31,7 @@ export interface ProviderOptions {
   llm: readonly ProviderOption[];
   tts: readonly ProviderOption[];
   tool: readonly ProviderOption[];
+  transform: readonly ProviderOption[];
   wake: readonly ProviderOption[];
   speakerId: readonly ProviderOption[];
 }
@@ -69,22 +70,33 @@ export function PipelineFormEditor({
   }
 
   /// A row for a stage the pipeline may or may not run.
+  ///
+  /// A stage nothing can serve is not offered. Adding one would name a
+  /// provider that does not exist, and a pipeline that names one is refused on
+  /// save — so the row would be an invitation to write something unsaveable.
+  /// Configure a provider of that capability and the stage appears.
+  ///
+  /// A stage the pipeline *already* runs is always shown, even with nothing to
+  /// choose between: its provider may have been deleted since, and a pipeline
+  /// should show what it says rather than quietly lose a stage.
   function optionalStage({
     label,
     stage,
     fallbackId,
     options,
-    fallbackProvider,
     onStageChange,
   }: {
     label: string;
     stage: StageField | null;
     fallbackId: string;
     options: readonly ProviderOption[];
-    fallbackProvider: string;
     onStageChange: (next: StageField | null) => void;
   }) {
     if (!stage) {
+      const first = options[0];
+      if (!first) {
+        return null;
+      }
       return (
         <div className="pipeline-form-row absent" key={label}>
           <span className="pipeline-form-label">{label}</span>
@@ -94,10 +106,7 @@ export function PipelineFormEditor({
             aria-label={`Add ${label}`}
             disabled={readOnly}
             onClick={() =>
-              onStageChange({
-                id: fallbackId,
-                provider: options[0]?.id ?? fallbackProvider,
-              })
+              onStageChange({ id: fallbackId, provider: first.id })
             }
           >
             <Plus size={16} aria-hidden="true" />
@@ -205,7 +214,6 @@ export function PipelineFormEditor({
           stage: form.wakeWord,
           fallbackId: "wake_word",
           options: providers.wake,
-          fallbackProvider: "openwakeword",
           onStageChange: (wakeWord) => update({ wakeWord }),
         })}
         {optionalStage({
@@ -213,7 +221,6 @@ export function PipelineFormEditor({
           stage: form.stt,
           fallbackId: "stt",
           options: providers.stt,
-          fallbackProvider: "whisper",
           onStageChange: (stt) => update({ stt }),
         })}
         {optionalStage({
@@ -221,7 +228,6 @@ export function PipelineFormEditor({
           stage: form.speakerId,
           fallbackId: "speaker_id",
           options: providers.speakerId,
-          fallbackProvider: "speechbrain",
           onStageChange: (speakerId) => update({ speakerId }),
         })}
       </section>
@@ -480,6 +486,17 @@ export function PipelineFormEditor({
           <h3>Output</h3>
         </header>
 
+        {/* Between the model and what renders it: a model writes for a
+            reader, and this is where a pipeline says what a listener should
+            hear instead. */}
+        {optionalStage({
+          label: "Rewrite before output",
+          stage: form.transform,
+          fallbackId: "transform",
+          options: providers.transform,
+          onStageChange: (transform) => update({ transform }),
+        })}
+
         {form.tts ? (
           <div className="pipeline-form-row">
             <label className="pipeline-form-label" htmlFor="tts-provider">
@@ -556,7 +573,7 @@ export function PipelineFormEditor({
               <Trash2 size={17} aria-hidden="true" />
             </button>
           </div>
-        ) : (
+        ) : providers.tts[0] ? (
           <div className="pipeline-form-row absent">
             <span className="pipeline-form-label">Text to speech</span>
             <button
@@ -566,10 +583,7 @@ export function PipelineFormEditor({
               disabled={readOnly}
               onClick={() =>
                 update({
-                  tts: {
-                    id: "tts",
-                    provider: providers.tts[0]?.id ?? "piper",
-                  },
+                  tts: { id: "tts", provider: providers.tts[0].id },
                 })
               }
             >
@@ -577,7 +591,7 @@ export function PipelineFormEditor({
               Add
             </button>
           </div>
-        )}
+        ) : null}
 
         <div className="pipeline-form-row">
           <label className="pipeline-form-label" htmlFor="sink-provider">

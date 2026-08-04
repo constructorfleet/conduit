@@ -1,0 +1,21 @@
+[package]
+name = "conduit-transform"
+description = "Built-in utterance transforms for Conduit, rewriting what a model wrote into what a voice should say."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

@@ -51,6 +51,7 @@ export interface PipelineForm {
   stt: StageField | null;
   speakerId: StageField | null;
   core: CoreField;
+  transform: StageField | null;
   tts: SynthesisField | null;
   sink: EndpointField;
 }
@@ -63,6 +64,7 @@ const DEFAULT_STAGE_IDS = {
   stt: "stt",
   speaker_id: "speaker_id",
   core: "core",
+  transform: "transform",
   tts: "tts",
   sink: "speaker",
 } as const;
@@ -78,6 +80,7 @@ export function formFromGraph(graph: PipelineGraph): PipelineForm {
   const wakeWord = find("wake_word");
   const stt = find("stt");
   const speakerId = find("speaker_id");
+  const transform = find("transform");
   const tts = find("tts");
 
   return {
@@ -102,6 +105,9 @@ export function formFromGraph(graph: PipelineGraph): PipelineForm {
       memory: core?.core.memory ? [...core.core.memory] : [],
       maxRounds: core?.core.max_rounds ?? DEFAULT_MAX_ROUNDS,
     },
+    transform: transform
+      ? { id: transform.id, provider: transform.provider }
+      : null,
     tts: tts ? { id: tts.id, provider: tts.provider, voice: tts.voice } : null,
     sink: {
       id: sink?.id ?? DEFAULT_STAGE_IDS.sink,
@@ -164,6 +170,15 @@ export function graphFromForm(form: PipelineForm): PipelineGraph {
         max_rounds: form.core.maxRounds,
       },
     },
+    ...(form.transform
+      ? [
+          {
+            id: form.transform.id,
+            kind: "transform" as const,
+            provider: form.transform.provider,
+          },
+        ]
+      : []),
     ...(form.tts
       ? [
           {

@@ -11,6 +11,7 @@ export type NodeKind =
   | "stt"
   | "speaker_id"
   | "core"
+  | "transform"
   | "tts"
   | "sink";
 
@@ -55,6 +56,7 @@ export type PipelineNode =
   | (PipelineNodeBase & { kind: "wake_word" })
   | (PipelineNodeBase & { kind: "stt" })
   | (PipelineNodeBase & { kind: "speaker_id" })
+  | (PipelineNodeBase & { kind: "transform" })
   | (PipelineNodeBase & { kind: "tts"; voice?: string })
   | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
   | { kind: "core"; id: IdString; core: ReasoningCore };
@@ -135,6 +137,7 @@ export type ProviderCapability =
   | "stt"
   | "llm"
   | "tts"
+  | "transform"
   | "tool"
   | "wake"
   | "speaker_id";
@@ -144,6 +147,7 @@ export type ProviderDefinitionVariantType =
   | "openai"
   | "wyoming"
   | "mcp"
+  | "builtin"
   | "openwakeword"
   | "nanowakeword"
   | "microwakeword"
@@ -206,6 +210,18 @@ export type ToolVariant = {
   transport: McpTransport;
 };
 
+/// One rewriting rule that ships with Conduit. Named rather than configurable
+/// because each is a statement about how speech differs from writing.
+export type TransformRule =
+  | "strip_emoji"
+  | "markdown_to_speech"
+  | "collapse_whitespace";
+
+export type TransformVariant = {
+  type: "builtin";
+  rules: TransformRule[];
+};
+
 /// Where a detector Conduit can score itself is running.
 export type WakeRuntime =
   | {
@@ -265,6 +281,7 @@ export type ProviderDefinitionVariant =
   | { type: "llm"; variant: LlmVariant }
   | { type: "stt"; variant: SttVariant }
   | { type: "tts"; variant: TtsVariant }
+  | { type: "transform"; variant: TransformVariant }
   | { type: "tool"; variant: ToolVariant }
   | { type: "wake"; variant: WakeVariant }
   | { type: "speaker_id"; variant: SpeakerIdVariant };
