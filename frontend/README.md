@@ -45,6 +45,13 @@ loop graph, invokes reusable Provider Settings inline, lets optional tool setup
 be skipped, validates required fields, and transitions back to Overview after
 the pipeline graph is saved.
 
+The Providers section lists providers as one table per stage, all sharing one
+set of column widths so the groups read as one list under headings. Clicking a
+row expands it into the editor for that provider, in place and under the row it
+belongs to, so the state and the pipelines using it stay readable while it is
+changed. Only "Add provider" opens a dialog, because a provider being created
+has no row to expand yet.
+
 The Events section defaults to Turn Reconstruction, which renders the ordered
 component story for a conversation turn from generated event envelopes. Raw
 event inspection is secondary and filterable, while stale or disconnected event

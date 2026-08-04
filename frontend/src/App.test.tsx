@@ -1245,12 +1245,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const openAiRow = screen.getByRole("row", { name: /OpenAI Primary/ });
-    await user.click(
-      within(openAiRow).getByRole("button", {
-        name: "Edit openai",
-      }),
-    );
+    await expandProviderRow(user, "openai");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
@@ -1264,12 +1259,7 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const whisperRow = screen.getByRole("row", { name: /Whisper Local/ });
-    await user.click(
-      within(whisperRow).getByRole("button", {
-        name: "Edit whisper",
-      }),
-    );
+    await expandProviderRow(user, "whisper");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming",
@@ -1283,12 +1273,7 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const piperRow = screen.getByRole("row", { name: /Piper Local/ });
-    await user.click(
-      within(piperRow).getByRole("button", {
-        name: "Edit piper-local",
-      }),
-    );
+    await expandProviderRow(user, "piper-local");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
@@ -1325,14 +1310,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const piperRow = screen
-      .getByRole("button", { name: "Edit piper" })
-      .closest("tr") as HTMLElement;
-    await user.click(
-      within(piperRow).getByRole("button", {
-        name: "Edit piper",
-      }),
-    );
+    await expandProviderRow(user, "piper");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
@@ -2132,12 +2110,7 @@ describe("Providers workspace", () => {
 
     // Nothing to ask until a detector is registered, so the suggestions only
     // arrive once the definition has been saved and is being edited again.
-    const card = screen.getByRole("row", { name: /openWakeWord/ });
-    await user.click(
-      within(card).getByRole("button", {
-        name: "Edit openwakeword",
-      }),
-    );
+    await expandProviderRow(user, "openwakeword");
 
     const field = await screen.findByLabelText("Phrases (comma separated)");
     const list = field.getAttribute("list");
@@ -2176,11 +2149,7 @@ describe("Providers workspace", () => {
     expect(providerRow).toHaveTextContent("openai-primary");
     expect(providerRow).toHaveTextContent("OpenAI Responses");
 
-    await user.click(
-      within(providerRow).getByRole("button", {
-        name: "Edit openai-primary",
-      }),
-    );
+    await expandProviderRow(user, "openai-primary");
     expect(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     ).toBeInTheDocument();
@@ -2204,14 +2173,7 @@ describe("Providers workspace", () => {
       screen.getByRole("row", { name: /OpenAI Primary/ }),
     ).toBeInTheDocument();
 
-    const restoredProviderRow = screen.getByRole("row", {
-      name: /OpenAI Primary/,
-    });
-    await user.click(
-      within(restoredProviderRow).getByRole("button", {
-        name: "Edit openai-primary",
-      }),
-    );
+    await expandProviderRow(user, "openai-primary");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "OpenAI Main");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2222,12 +2184,92 @@ describe("Providers workspace", () => {
     expect(screen.queryByText("OpenAI Primary")).not.toBeInTheDocument();
   });
 
+  it("edits a provider in the row it belongs to and leaves the modal to new ones", async () => {
+    // A dialog over the table hid what the operator was working from — the
+    // state, the pipelines that use it, the other providers in the stage — and
+    // asked them to remember it while filling the form in. Editing happens in
+    // the row now; only a provider that has no row yet needs a dialog.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "openai",
+            label: "OpenAI Primary",
+            component: "openai.responses",
+            config: {
+              base_url: "https://api.openai.com/v1",
+              model: "gpt-5",
+            },
+          }),
+          providerDefinitionFixture({
+            id: "whisper",
+            label: "Whisper Local",
+            kind: "stt",
+            component: "wyoming",
+            config: { url: "tcp://whisper.local:10300", model: "tiny-int8" },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    // The gear is gone: the row itself is what opens the editor.
+    expect(
+      screen.queryByRole("button", { name: "Edit openai" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    const openAiToggle = await expandProviderRow(user, "openai");
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue("openai");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt-5");
+    // The editor is part of the table it was opened from, not a layer over it.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const editor = screen.getByRole("region", {
+      name: "openai configuration",
+    });
+    expect(openAiToggle.closest("table")).toContainElement(editor);
+    expect(openAiToggle).toHaveAttribute("aria-expanded", "true");
+
+    // What the row was already showing is still readable beside the form.
+    expect(
+      screen.getByRole("row", { name: /Whisper Local/ }),
+    ).toHaveTextContent("whisper");
+
+    // Opening another row is a move, not a second form.
+    await expandProviderRow(user, "whisper");
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue("whisper");
+    expect(
+      screen.queryByRole("region", { name: "openai configuration" }),
+    ).not.toBeInTheDocument();
+
+    // And the row that is open closes on the next click.
+    await collapseProviderRow(user, "whisper");
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    // An action in the row acts, rather than opening the editor under it.
+    await user.click(screen.getByRole("button", { name: "Test whisper" }));
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    // A provider with no row yet is still configured in the dialog.
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Add provider" }),
+    ).toContainElement(screen.getByLabelText("Provider id"));
+  });
+
   it("starts a new provider card from a kind menu and closes the active editor", async () => {
     const user = userEvent.setup();
     render(<App initialComponentCatalog={componentCatalog()} />);
 
     await enterProvidersSection(user);
-    await user.click(screen.getByRole("button", { name: "Edit openai" }));
+    await expandProviderRow(user, "openai");
     expect(screen.getAllByDisplayValue("openai").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Add provider" }));
@@ -2287,7 +2329,7 @@ describe("Providers workspace", () => {
     );
 
     await enterProvidersSection(user);
-    await user.click(screen.getByRole("button", { name: "Edit openai" }));
+    await expandProviderRow(user, "openai");
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "openai-main");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2878,6 +2920,23 @@ describe("Speakers workspace", () => {
 async function enterProvidersSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
   await user.click(screen.getByRole("tab", { name: "Providers" }));
+}
+
+/// Opens a provider's row for editing and answers with the row itself.
+async function expandProviderRow(
+  user: ReturnType<typeof userEvent.setup>,
+  id: string,
+) {
+  const row = screen.getByRole("button", { name: `Configure ${id}` });
+  await user.click(row);
+  return row;
+}
+
+async function collapseProviderRow(
+  user: ReturnType<typeof userEvent.setup>,
+  id: string,
+) {
+  await user.click(screen.getByRole("button", { name: `Configure ${id}` }));
 }
 
 async function enterSpeakersSection(user: ReturnType<typeof userEvent.setup>) {

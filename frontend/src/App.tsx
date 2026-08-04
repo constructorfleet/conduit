@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Boxes,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   KeyRound,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  Fragment,
   type FormEvent,
   type ReactNode,
   useEffect,
@@ -1200,11 +1202,21 @@ function ProvidersPanel({
     setSelectedProviderKind(null);
   }
 
+  /// Opens a card's row for editing, or closes it if it is the one already open.
+  ///
+  /// The editor belongs to the row rather than to a dialog over the table: what
+  /// an operator is deciding from — the state, the pipelines that use it, the
+  /// other providers in the stage — stays readable while they change it.
   function editProviderCard(card: ProviderCardView) {
+    if (editingProviderId === card.id) {
+      cancelDraftProvider();
+      return;
+    }
+
     if (card.definition) {
       setDraftProvider(cloneProviderDefinition(card.definition));
       setEditingProviderId(card.id);
-      setAddProviderDialogOpen(true);
+      setAddProviderDialogOpen(false);
       setSelectedProviderKind(null);
       return;
     }
@@ -1225,7 +1237,7 @@ function ProvidersPanel({
       source: "local",
     });
     setEditingProviderId(card.id);
-    setAddProviderDialogOpen(true);
+    setAddProviderDialogOpen(false);
     setSelectedProviderKind(null);
   }
 
@@ -1470,47 +1482,79 @@ function ProvidersPanel({
             </thead>
             <tbody>
               {group.cards.map((provider) => (
-                <tr
-                  className={`provider-row ${providerCardStateClass(provider)}`}
-                  key={provider.id}
-                >
-                  <td>
-                    <div className="provider-name">
-                      <strong>{provider.label}</strong>
-                      <span>{provider.id}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-impl">
-                      <strong>
-                        {providerImplementationLabel(
-                          componentCatalog,
-                          provider,
-                        )}
-                      </strong>
-                      {provider.status?.version ? (
-                        <span>v{provider.status.version}</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-state">
-                      <span
-                        className={`state-dot ${providerStateTone(provider.status)}`}
-                        aria-hidden="true"
-                      />
-                      <span>{provider.status?.state ?? "not configured"}</span>
-                      {provider.status?.message ? (
-                        <span className="provider-state-message">
-                          {provider.status.message}
+                <Fragment key={provider.id}>
+                  <tr
+                    className={`provider-row ${providerCardStateClass(provider)}${
+                      editingProviderId === provider.id ? " expanded" : ""
+                    }`}
+                    // The whole row is the target, because the whole row is
+                    // what an operator reads before deciding to change it. The
+                    // name cell holds the control that says so, and carries the
+                    // keyboard path; this only widens where a pointer may land.
+                    onClick={(event) => {
+                      if (
+                        event.target instanceof Element &&
+                        event.target.closest("button, a, input, select")
+                      ) {
+                        return;
+                      }
+                      editProviderCard(provider);
+                    }}
+                  >
+                    <td>
+                      <button
+                        className="provider-name-toggle"
+                        type="button"
+                        aria-label={`Configure ${provider.id}`}
+                        aria-expanded={editingProviderId === provider.id}
+                        onClick={() => editProviderCard(provider)}
+                      >
+                        <ChevronRight
+                          className="provider-disclosure"
+                          size={15}
+                          aria-hidden="true"
+                        />
+                        <span className="provider-name">
+                          <strong>{provider.label}</strong>
+                          <span>{provider.id}</span>
                         </span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-used-by">
-                      {providerPipelineUsesForCard(provider, providerUses).map(
-                        (use) => (
+                      </button>
+                    </td>
+                    <td>
+                      <div className="provider-impl">
+                        <strong>
+                          {providerImplementationLabel(
+                            componentCatalog,
+                            provider,
+                          )}
+                        </strong>
+                        {provider.status?.version ? (
+                          <span>v{provider.status.version}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="provider-state">
+                        <span
+                          className={`state-dot ${providerStateTone(provider.status)}`}
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {provider.status?.state ?? "not configured"}
+                        </span>
+                        {provider.status?.message ? (
+                          <span className="provider-state-message">
+                            {provider.status.message}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="provider-used-by">
+                        {providerPipelineUsesForCard(
+                          provider,
+                          providerUses,
+                        ).map((use) => (
                           <span
                             className="usage-chip"
                             key={`${use.pipeline} ${use.stage ?? ""}`}
@@ -1520,48 +1564,79 @@ function ProvidersPanel({
                               <span className="usage-stage">· {use.stage}</span>
                             ) : null}
                           </span>
-                        ),
-                      )}
-                      {providerPipelineUsesForCard(provider, providerUses)
-                        .length === 0 ? (
-                        <span className="muted">none</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="provider-actions-cell">
-                    <div className="provider-actions">
-                      {provider.status || provider.definition ? (
-                        <button
-                          className="secondary-action provider-test-action"
-                          type="button"
-                          aria-label={`Test ${provider.id}`}
-                          onClick={() => testProvider(provider)}
+                        ))}
+                        {providerPipelineUsesForCard(provider, providerUses)
+                          .length === 0 ? (
+                          <span className="muted">none</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="provider-actions-cell">
+                      <div className="provider-actions">
+                        {provider.status || provider.definition ? (
+                          <button
+                            className="secondary-action provider-test-action"
+                            type="button"
+                            aria-label={`Test ${provider.id}`}
+                            onClick={() => testProvider(provider)}
+                          >
+                            <Play size={17} aria-hidden="true" />
+                            Test
+                          </button>
+                        ) : null}
+                        {provider.definition?.source === "local" ? (
+                          <button
+                            className="icon-action danger"
+                            type="button"
+                            aria-label={`Delete ${provider.id}`}
+                            onClick={() => deleteProviderDefinition(provider)}
+                          >
+                            <Trash2 size={17} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                  {editingProviderId === provider.id && draftProvider ? (
+                    <tr className="provider-editor-row">
+                      <td colSpan={PROVIDER_COLUMNS.length}>
+                        <section
+                          className="provider-inline-editor"
+                          aria-label={`${provider.id} configuration`}
                         >
-                          <Play size={17} aria-hidden="true" />
-                          Test
-                        </button>
-                      ) : null}
-                      <button
-                        className="icon-action"
-                        type="button"
-                        aria-label={`Edit ${provider.id}`}
-                        onClick={() => editProviderCard(provider)}
-                      >
-                        <Settings size={17} aria-hidden="true" />
-                      </button>
-                      {provider.definition?.source === "local" ? (
-                        <button
-                          className="icon-action danger"
-                          type="button"
-                          aria-label={`Delete ${provider.id}`}
-                          onClick={() => deleteProviderDefinition(provider)}
-                        >
-                          <Trash2 size={17} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
+                          <div className="provider-inline-editor-actions">
+                            <button
+                              className="icon-action success"
+                              type="button"
+                              aria-label="Save provider"
+                              disabled={!draftProviderValidation.ok}
+                              onClick={saveDraftProvider}
+                            >
+                              <Save size={17} aria-hidden="true" />
+                            </button>
+                            <button
+                              className="icon-action danger"
+                              type="button"
+                              aria-label="Cancel provider edit"
+                              onClick={cancelDraftProvider}
+                            >
+                              <X size={17} aria-hidden="true" />
+                            </button>
+                          </div>
+                          <ProviderEditorFields
+                            componentCatalog={componentCatalog}
+                            draftProvider={draftProvider}
+                            selectedComponent={selectedDraftComponent}
+                            validation={draftProviderValidation}
+                            suggestions={draftProviderSuggestions}
+                            onConfigChange={updateDraftConfig}
+                            onDraftChange={updateDraftProvider}
+                          />
+                        </section>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>

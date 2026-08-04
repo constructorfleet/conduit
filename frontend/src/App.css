@@ -1178,7 +1178,7 @@ label.icon-action {
   border-top: 0;
 }
 
-.provider-table tbody tr:hover {
+.provider-table tbody tr.provider-row:hover {
   background: var(--selected);
 }
 
@@ -1189,6 +1189,53 @@ label.icon-action {
 
 .provider-row.healthy td:first-child {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+/* The row is what a pointer clicks; the name cell holds the control that says
+   so, which is also the keyboard path to it. */
+.provider-row {
+  cursor: pointer;
+}
+
+.provider-name-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.provider-disclosure {
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.provider-row.expanded .provider-disclosure {
+  transform: rotate(90deg);
+  color: var(--strong);
+}
+
+/* The editor is a row of the same table, so it stays under the provider it
+   belongs to while the rest of the stage keeps its place. */
+.provider-editor-row td {
+  padding: 0;
+  background: var(--selected);
+}
+
+.provider-inline-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.provider-inline-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .provider-name,
