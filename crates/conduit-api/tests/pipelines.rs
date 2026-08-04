@@ -906,6 +906,43 @@ async fn a_detector_that_scores_in_process_registers_from_its_models() {
 }
 
 #[tokio::test]
+async fn a_registered_provider_carries_the_label_the_operator_typed() {
+    // The definition id is the selector a pipeline names and the identity the
+    // provider calls itself; the label is a separate string, and a screen
+    // reading the registry should get the one an operator wrote rather than
+    // the id repeated back at them.
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/kitchen-piper",
+            serde_json::json!({
+                "id": "kitchen-piper",
+                "label": "Piper (kitchen)",
+                "variant": {
+                    "type": "tts",
+                    "variant": {
+                        "type": "wyoming",
+                        "url": "tcp://localhost:10200",
+                        "streaming": false,
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let providers = state.providers().expect("a snapshot was built");
+    let synthesizer = providers.tts().get("kitchen-piper").expect("the synthesizer registered");
+    let descriptor = synthesizer.descriptor();
+
+    assert_eq!(descriptor.id, "kitchen-piper", "what the provider calls itself");
+    assert_eq!(descriptor.label, "Piper (kitchen)", "what an operator screen shows");
+}
+
+#[tokio::test]
 async fn a_model_directory_that_holds_nothing_is_refused_when_it_is_saved() {
     // Not at the first turn, with someone standing there speaking to it.
     let state = AppState::new(EventBus::default());

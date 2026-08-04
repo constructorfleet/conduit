@@ -41,6 +41,17 @@ impl Builtin {
         Self { descriptor: Descriptor::new(name, Capability::Transform), rules }
     }
 
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
+    }
+
     /// The rules this transform applies, in order.
     #[must_use]
     pub fn rules(&self) -> &[Rule] {

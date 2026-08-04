@@ -156,6 +156,17 @@ impl HttpSpeakerId {
         })
     }
 
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
+    }
+
     /// Sets the format the audio handed to this provider is captured in.
     #[must_use]
     pub const fn with_format(mut self, format: AudioFormat) -> Self {

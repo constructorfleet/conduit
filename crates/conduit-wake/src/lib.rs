@@ -128,6 +128,17 @@ impl OpenWakeWord {
             Ok(Self { descriptor, models_dir, phrases: loaded, threshold, models })
         }
     }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
+    }
 }
 
 #[async_trait::async_trait]

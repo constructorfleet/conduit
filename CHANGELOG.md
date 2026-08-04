@@ -32,7 +32,9 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   itself, and `Descriptor::label` is what an operator screen shows.
   `Registry::register` keys a provider by its own identity, and
   `RegistryHandle::descriptors` lists every registration as a selector paired
-  with a descriptor.
+  with a descriptor. The label an operator typed on a provider definition now
+  reaches the registered provider's descriptor for every capability, so a
+  screen reading the registry shows that rather than the id repeated back.
 - The runtime provider bundle (`Providers`) is now capability-indexed rather
   than one hand-written registry field per capability. Registering and
   enumerating a wake, speaker, or memory provider goes through the exact same

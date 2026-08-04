@@ -97,6 +97,17 @@ impl DeviceWake {
         Self { descriptor: Descriptor::new(name, Capability::Wake).with_metadata(metadata) }
     }
 
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
+    }
+
     /// The phrases the satellite is flashed with.
     fn phrases(&self) -> &[WakePhrase] {
         &self.descriptor.metadata.phrases
