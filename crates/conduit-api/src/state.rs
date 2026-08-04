@@ -330,37 +330,48 @@ impl AppState {
                 }
             };
             for id in ids {
-                let health = if let Some(provider) = providers.stt().get(&id) {
-                    provider.health().await
-                } else if let Some(provider) = providers.llm().get(&id) {
-                    provider.health().await
-                } else if let Some(provider) = providers.tts().get(&id) {
-                    provider.health().await
-                } else if let Some(provider) = providers.tools().get(&id) {
-                    provider.health().await
-                } else if let Some(provider) = providers.wake().get(&id) {
-                    provider.health().await
-                } else if let Some(provider) = providers.speaker().get(&id) {
-                    provider.health().await
-                } else {
+                // Every non-MCP factory registers its provider under the
+                // definition id, so whichever registry lists the id is the
+                // capability the provider supplies. Asking through the
+                // registry rather than naming capabilities one at a time is
+                // the whole point: a capability added after this loop was
+                // written is probed without editing it — the named chain it
+                // replaced skipped transforms until a regression test caught
+                // it.
+                let health = match providers
+                    .capabilities()
+                    .into_iter()
+                    .find(|(_, names)| names.iter().any(|name| name == &id))
+                {
+                    Some((capability, _)) => providers.health(capability, &id).await,
                     // The registry holds no provider under the definition id.
                     // An MCP definition registers its tools as
                     // `<definition id>.<tool name>` rather than under the id
                     // itself — and none at all while its server is down — so it
-                    // can never be found by the lookups above. Probe the server
+                    // can never be found by the listing above. Probe the server
                     // through its transport, exactly as the explicit test
                     // endpoint does.
-                    let Some(definition) = state.provider_definition(&id).await.ok().flatten()
-                    else {
-                        continue;
-                    };
-                    let ProviderDefinitionVariant::Tool {
-                        variant: ToolVariant::Mcp { transport },
-                    } = &definition.variant
-                    else {
-                        continue;
-                    };
-                    probe_mcp(transport).await
+                    None => {
+                        let Some(definition) =
+                            state.provider_definition(&id).await.ok().flatten()
+                        else {
+                            continue;
+                        };
+                        let ProviderDefinitionVariant::Tool {
+                            variant: ToolVariant::Mcp { transport },
+                        } = &definition.variant
+                        else {
+                            continue;
+                        };
+                        Some(probe_mcp(transport).await)
+                    }
+                };
+                // A definition whose provider registered nothing under its id
+                // reads as unprobed rather than unhealthy: "no successful
+                // reachability check yet" is the honest answer for a provider
+                // that is not in the runtime.
+                let Some(health) = health else {
+                    continue;
                 };
                 tracing::debug!(provider = %id, ?health, "probed provider reachability");
                 state.record_provider_reachability(&id, health);

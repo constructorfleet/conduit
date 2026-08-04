@@ -1452,6 +1452,48 @@ async fn a_saved_provider_definition_is_probed_without_being_asked() {
 }
 
 #[tokio::test]
+async fn a_saved_transform_definition_is_probed_without_being_asked() {
+    // Reachability used to be written only by the explicit test endpoint, and
+    // the probe that follows a definition write asked stt, llm, tts, tools,
+    // wake, and speaker providers but skipped transforms, so a speech cleanup
+    // provider read "no successful reachability check yet" however healthy it
+    // was — and said so again after every restart.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "speech-cleanup",
+        "label": "Speech cleanup",
+        "variant": {
+            "type": "transform",
+            "variant": {
+                "type": "builtin",
+                "rules": ["markdown_to_speech", "strip_emoji"]
+            }
+        }
+    });
+    call(&state, put_json("/v1/providers/speech-cleanup", definition)).await;
+
+    let mut provider = serde_json::Value::Null;
+    for _ in 0..50 {
+        let (status, body) = call(&state, get("/v1/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        provider = body["providers"]
+            .as_array()
+            .expect("providers")
+            .iter()
+            .find(|provider| provider["id"] == "speech-cleanup")
+            .expect("provider status")
+            .clone();
+        if provider["reachable"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(provider["reachable"], true, "a healthy transform must be probed: {provider}");
+    assert_eq!(provider["state"], "reachable");
+}
+
+#[tokio::test]
 async fn successful_provider_reachability_test_updates_provider_status() {
     let server = MockOpenAiServer::healthy().await;
     let state = AppState::new(EventBus::default());
