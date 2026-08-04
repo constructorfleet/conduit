@@ -10,8 +10,8 @@ use conduit_core::Result;
 use conduit_mcp::McpClient;
 use conduit_metrics::Metrics;
 use conduit_provider::storage::{
-    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    ProviderDefinitionVariant, ToolVariant,
+    McpTransport, PipelineStore, ProviderCapability, ProviderDefinition,
+    ProviderDefinitionStore, ProviderDefinitionVariant, ToolVariant,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
@@ -290,6 +290,12 @@ impl AppState {
                 continue;
             };
             snapshot = self.factories.register(snapshot, &definition).await?;
+            // Checked here rather than at the store because the schema lives on
+            // the provider that was just built: a definition's default settings
+            // must be ones the provider it configures said it accepts, or the
+            // write that stored them — and the startup that loaded them — fails
+            // loudly instead of a mistyped setting reaching a request.
+            validate_definition_settings(&snapshot, &definition)?;
         }
         *self.provider_lock() = Some(Arc::new(snapshot));
         self.spawn_reachability_probe();
@@ -370,6 +376,66 @@ impl AppState {
     pub async fn reload_provider_definitions(&self) -> Result<()> {
         self.rebuild_provider_snapshot().await
     }
+}
+
+/// Checks a definition's default settings against the schema the provider it
+/// built declares.
+///
+/// The settings live on the definition but the schema lives on the provider, so
+/// this runs after the provider is built and looks it up by the id it was
+/// registered under. A definition with no default settings has nothing to
+/// check. A capability whose provider is not registered under the definition id
+/// — an MCP tool server registers each tool as `<id>.<tool>` — is skipped: its
+/// per-tool schemas are a request-time concern, not a default on the definition.
+///
+/// # Errors
+///
+/// Returns [`conduit_core::Error::Config`] naming the offending setting.
+fn validate_definition_settings(
+    providers: &Providers,
+    definition: &ProviderDefinition,
+) -> Result<()> {
+    if definition.settings.is_empty() {
+        return Ok(());
+    }
+    let values = serde_json::Value::Object(definition.settings.clone());
+    let id = &definition.id;
+    match definition.capability() {
+        ProviderCapability::Stt => {
+            if let Some(provider) = providers.stt().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        ProviderCapability::Llm => {
+            if let Some(provider) = providers.llm().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        ProviderCapability::Tts => {
+            if let Some(provider) = providers.tts().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        ProviderCapability::Transform => {
+            if let Some(provider) = providers.transform().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        ProviderCapability::Wake => {
+            if let Some(provider) = providers.wake().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        ProviderCapability::SpeakerId => {
+            if let Some(provider) = providers.speaker().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
+        // An MCP tool server registers no provider under the definition id, so
+        // there is no single descriptor to check default settings against.
+        ProviderCapability::Tool => {}
+    }
+    Ok(())
 }
 
 /// Lists an MCP server's tools: the narrowest check that proves the server is

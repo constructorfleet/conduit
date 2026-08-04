@@ -114,6 +114,14 @@ pub struct OpenAiConfig {
     /// deployment says what this server should be, and every pipeline pointing
     /// at it inherits it.
     pub system_prompt: Option<String>,
+    /// Default request settings this configured provider applies.
+    ///
+    /// The reusable settings an operator saved on the Configured Provider —
+    /// sampling controls, model options — checked against this provider's
+    /// declared schema before they were stored. They form the base of every
+    /// request; a setting the request itself carries overrides the default of
+    /// the same name.
+    pub default_settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl OpenAiConfig {
@@ -144,6 +152,24 @@ impl Default for OpenAiConfig {
             read_timeout: Some(DEFAULT_READ_TIMEOUT),
             models: Vec::new(),
             system_prompt: None,
+            default_settings: serde_json::Map::new(),
         }
     }
+}
+
+/// A request's settings layered over the provider's configured defaults.
+///
+/// The Configured Provider's stored settings are the base; a setting the
+/// request carries of the same name wins, so a pipeline can still override what
+/// the operator set as a default. Both were checked against the same schema, so
+/// the result is too.
+pub(crate) fn layered_settings(
+    defaults: &serde_json::Map<String, serde_json::Value>,
+    request: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut merged = defaults.clone();
+    for (name, value) in request {
+        merged.insert(name.clone(), value.clone());
+    }
+    merged
 }

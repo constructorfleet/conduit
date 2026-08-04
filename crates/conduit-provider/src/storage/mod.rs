@@ -7,6 +7,7 @@
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 pub mod llm;
 pub mod speaker;
@@ -243,7 +244,11 @@ pub enum ProviderSecret {
 }
 
 /// Server-owned provider configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is not derived because [`settings`](ProviderDefinition::settings) is a
+/// `serde_json::Value`, which is only `PartialEq` — two definitions still
+/// compare, but not by an equivalence relation `Eq` would promise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderDefinition {
     /// Stable provider id referenced by pipeline graph nodes.
     pub id: String,
@@ -251,6 +256,21 @@ pub struct ProviderDefinition {
     pub label: String,
     /// Typed provider-specific settings.
     pub variant: ProviderDefinitionVariant,
+    /// Default request settings this configured provider carries.
+    ///
+    /// The reusable settings an operator sets once on the Configured Provider
+    /// — sampling controls, model options — rather than on every pipeline that
+    /// names it. Distinct from [`variant`](ProviderDefinition::variant), which
+    /// is the connection: where the provider is and how to authenticate to it.
+    /// These are the request-time options a provider declares through its
+    /// [`Descriptor`](crate::Descriptor)'s settings schema, and they are
+    /// checked against that schema before a definition is accepted.
+    ///
+    /// Absent in storage written before this field existed, and omitted from
+    /// serialization when empty, so a definition that sets none is byte-for-byte
+    /// what it was.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub settings: Map<String, Value>,
 }
 
 impl ProviderDefinition {
@@ -267,6 +287,9 @@ impl ProviderDefinition {
             id: self.id.clone(),
             label: self.label.clone(),
             variant: self.variant.redacted(),
+            // Request settings are not secret: they are sampling controls and
+            // model options, and an operator screen needs to read them back.
+            settings: self.settings.clone(),
         }
     }
 
@@ -811,5 +834,66 @@ mod tests {
     fn the_error_names_the_offending_character() {
         let error = validate_name("kitchen light").expect_err("spaces are not allowed");
         assert!(error.to_string().contains('`'), "{error}");
+    }
+
+    fn openai_llm_definition() -> ProviderDefinition {
+        ProviderDefinition {
+            id: "cloud".to_owned(),
+            label: "Cloud".to_owned(),
+            variant: ProviderDefinitionVariant::Llm {
+                variant: LlmVariant::OpenAi {
+                    base_url: "https://api.openai.example/v1".to_owned(),
+                    api_key: None,
+                    models: Vec::new(),
+                    streaming: false,
+                    system_prompt: None,
+                },
+            },
+            settings: Map::new(),
+        }
+    }
+
+    #[test]
+    fn a_definition_without_settings_reads_and_writes_without_the_field() {
+        // Storage written before this field existed has no `settings` key, and a
+        // definition that sets none must serialize the same way, so nothing
+        // already stored changes shape underneath an operator.
+        let value = serde_json::json!({
+            "id": "cloud",
+            "label": "Cloud",
+            "variant": { "type": "llm", "variant": { "type": "openai",
+                "base_url": "https://api.openai.example/v1" } },
+        });
+        let definition: ProviderDefinition =
+            serde_json::from_value(value).expect("no settings key still reads");
+        assert!(definition.settings.is_empty());
+
+        let written = serde_json::to_value(&definition).expect("serialize");
+        assert!(
+            written.get("settings").is_none(),
+            "an empty settings map is omitted rather than written as `{{}}`: {written}"
+        );
+    }
+
+    #[test]
+    fn stored_settings_round_trip() {
+        let mut definition = openai_llm_definition();
+        definition.settings.insert("top_p".to_owned(), serde_json::json!(0.2));
+
+        let back: ProviderDefinition =
+            serde_json::from_value(serde_json::to_value(&definition).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(back, definition);
+        assert_eq!(back.settings.get("top_p"), Some(&serde_json::json!(0.2)));
+    }
+
+    #[test]
+    fn redaction_preserves_request_settings() {
+        // Settings are not secret, so a read response still carries them; only
+        // the credential in the variant is hidden.
+        let mut definition = openai_llm_definition();
+        definition.settings.insert("top_p".to_owned(), serde_json::json!(0.2));
+
+        assert_eq!(definition.redacted().settings, definition.settings);
     }
 }

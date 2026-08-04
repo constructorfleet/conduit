@@ -77,6 +77,10 @@ fn config(
         // provider is registered under the definition id and calls itself by
         // it, and this is only what a screen shows.
         label: Some(definition.label.clone()),
+        // The reusable default settings the operator saved on this Configured
+        // Provider, already validated against the provider's schema when the
+        // definition was stored. Every request through it starts from these.
+        default_settings: definition.settings.clone(),
         ..OpenAiConfig::default()
     }
 }

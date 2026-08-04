@@ -8,6 +8,20 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- A provider definition can now carry default request settings — the reusable
+  sampling controls and model options an operator sets once on the Configured
+  Provider rather than on every pipeline that names it. They are stored beside
+  the connection variant, survive a restart through the same file and
+  PostgreSQL backends pipeline definitions use, and are omitted from storage
+  when empty so definitions written before the field are byte-for-byte
+  unchanged. Each default is checked against the schema the provider it
+  configures declares (`Descriptor`'s settings schema) when a definition is
+  saved and again when definitions are loaded at startup, so a mistyped or
+  out-of-range setting fails the write that stored it instead of reaching a
+  request and being ignored. The OpenAI-compatible providers apply these
+  defaults to every request they serve — a request that names a setting of the
+  same value overrides the default, so a pipeline can still overrule what the
+  operator configured.
 - Turning stored provider definitions into running providers is now a list of
   registered vendor factories rather than one `match` in the middle of the
   server's configuration path. A `conduit_api::factory::ProviderFactory` says

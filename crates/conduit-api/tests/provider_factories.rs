@@ -9,7 +9,12 @@ use conduit_provider::storage::{
 };
 
 fn definition(id: &str, variant: ProviderDefinitionVariant) -> ProviderDefinition {
-    ProviderDefinition { id: id.to_owned(), label: format!("{id} label"), variant }
+    ProviderDefinition {
+        id: id.to_owned(),
+        label: format!("{id} label"),
+        variant,
+        settings: Default::default(),
+    }
 }
 
 fn openai_llm() -> ProviderDefinitionVariant {
@@ -69,6 +74,61 @@ async fn vendors_coexist_in_one_server_under_distinct_names() {
     assert_eq!(providers.stt().names().collect::<Vec<_>>(), ["whisper"]);
     assert_eq!(providers.wake().names().collect::<Vec<_>>(), ["satellite"]);
     assert_eq!(providers.transform().names().collect::<Vec<_>>(), ["tidy"]);
+}
+
+#[tokio::test]
+async fn default_settings_the_provider_accepts_are_stored() {
+    // The reusable half of a Configured Provider: settings an operator sets once
+    // on the definition, checked against what the provider says it accepts, and
+    // read back intact.
+    let state = AppState::new(EventBus::new(16));
+    let mut definition = definition("cloud", openai_llm());
+    definition.settings.insert("top_p".to_owned(), serde_json::json!(0.2));
+
+    state
+        .put_provider_definition("cloud", definition)
+        .await
+        .expect("settings the schema accepts are stored");
+
+    let stored = state
+        .provider_definition("cloud")
+        .await
+        .expect("read")
+        .expect("the definition is there");
+    assert_eq!(stored.settings.get("top_p"), Some(&serde_json::json!(0.2)));
+}
+
+#[tokio::test]
+async fn default_settings_the_provider_schema_rejects_fail_the_write() {
+    // The point of validating against the descriptor: a setting the provider
+    // never had used to travel to a request and be ignored. `top_p` is bounded
+    // at 1.0, so 5.0 is refused, and the definition is named.
+    let state = AppState::new(EventBus::new(16));
+    let mut definition = definition("cloud", openai_llm());
+    definition.settings.insert("top_p".to_owned(), serde_json::json!(5.0));
+
+    let error = state
+        .put_provider_definition("cloud", definition)
+        .await
+        .expect_err("out of the schema's bounds");
+
+    assert!(error.to_string().contains("top_p"), "{error}");
+}
+
+#[tokio::test]
+async fn a_default_setting_the_provider_never_declared_fails_the_write() {
+    // A typo — `top-p` for `top_p` — is a mistake to report, not a value to
+    // carry silently, so an unknown setting is refused too.
+    let state = AppState::new(EventBus::new(16));
+    let mut definition = definition("cloud", openai_llm());
+    definition.settings.insert("top-p".to_owned(), serde_json::json!(0.2));
+
+    let error = state
+        .put_provider_definition("cloud", definition)
+        .await
+        .expect_err("an unknown setting");
+
+    assert!(error.to_string().contains("top-p"), "{error}");
 }
 
 #[tokio::test]

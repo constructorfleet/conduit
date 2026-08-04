@@ -45,6 +45,7 @@ pub struct OpenAiTts {
     http: Http,
     model: String,
     descriptor: Descriptor,
+    default_settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The encodings the speech endpoint produces.
@@ -89,7 +90,12 @@ impl OpenAiTts {
                     .with_encodings(ENCODINGS.to_vec()),
             )
             .with_settings(settings_schema());
-        Ok(Self { http: Http::new(config)?, model, descriptor })
+        Ok(Self {
+            http: Http::new(config)?,
+            model,
+            descriptor,
+            default_settings: config.default_settings.clone(),
+        })
     }
 
     /// Replaces the advertised voice catalogue.
@@ -162,7 +168,10 @@ impl TextToSpeech for OpenAiTts {
             voice: self.voice_for(request.voice),
             response_format: response_format(request.format.encoding)?,
             speed: request.rate,
-            settings: request.settings.as_map().clone(),
+            settings: crate::layered_settings(
+                &self.default_settings,
+                request.settings.as_map(),
+            ),
         };
         tracing::debug!(model = %body.model, voice = %body.voice, "synthesizing");
 
