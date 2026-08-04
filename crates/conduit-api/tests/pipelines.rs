@@ -872,6 +872,73 @@ async fn a_model_directory_that_holds_nothing_is_refused_when_it_is_saved() {
 }
 
 #[tokio::test]
+async fn a_detector_lists_the_phrases_it_has_so_the_console_can_offer_them() {
+    let Some(models) = wake_models_dir() else { return };
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": { "where": "local", "models_dir": models.to_string_lossy() },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/openwakeword/phrases")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["provider"], "openwakeword");
+    assert_eq!(body["phrases"], serde_json::json!(["hey jarvis"]));
+}
+
+#[tokio::test]
+async fn a_provider_that_hears_nothing_has_no_phrases_to_offer() {
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/speech",
+            serde_json::json!({
+                "id": "speech",
+                "label": "Whisper",
+                "variant": {
+                    "type": "stt",
+                    "variant": { "type": "wyoming", "url": "tcp://whisper:10300" },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/speech/phrases")).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().unwrap_or_default().contains("not a wake word provider"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn phrases_for_a_definition_that_does_not_exist_are_a_404() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(&state, get("/v1/providers/ghost/phrases")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn nanowakeword_in_process_is_refused_with_the_reason() {
     // It is ONNX like openWakeWord, so the refusal has to say what is actually
     // different — recurrent models — or it reads as an arbitrary restriction.

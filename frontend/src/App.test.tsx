@@ -2008,6 +2008,49 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("offers the phrases a saved detector reports having models for", async () => {
+    // A detector scoring models in this process knows exactly which phrases it
+    // loaded. Suggestions rather than a menu: the field holds several values,
+    // and a detector that enumerates some has not forbidden the rest.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderPhrases={async () => ["hey jarvis", "alexa"]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
+    await user.click(screen.getByRole("menuitem", { name: "openWakeWord" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openwakeword");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
+    await user.selectOptions(screen.getByLabelText("where required"), "local");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    // Nothing to ask until a detector is registered, so the suggestions only
+    // arrive once the definition has been saved and is being edited again.
+    const card = screen
+      .getByRole("heading", { name: "openWakeWord" })
+      .closest("article");
+    await user.click(
+      within(card as HTMLElement).getByRole("button", {
+        name: "Edit openwakeword",
+      }),
+    );
+
+    const field = await screen.findByLabelText("phrases (comma separated)");
+    const list = field.getAttribute("list");
+    expect(list).toBeTruthy();
+    const options = Array.from(
+      document.getElementById(list as string)?.querySelectorAll("option") ?? [],
+    ).map((option) => option.getAttribute("value"));
+    expect(options).toEqual(["hey jarvis", "alexa"]);
+  });
+
   it("creates and edits schema-backed provider instances from provider cards", async () => {
     const user = userEvent.setup();
     render(<App initialComponentCatalog={componentCatalog()} />);

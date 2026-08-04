@@ -296,6 +296,16 @@ export interface ProviderVoices {
   voices: Voice[];
 }
 
+/// The phrases a wake word detector offers.
+///
+/// An empty list is a real answer, for the same reason: a Wyoming server
+/// scores whatever it loaded and enumerates nothing, and a satellite knows
+/// only what it was flashed with.
+export interface ProviderPhrases {
+  provider: string;
+  phrases: string[];
+}
+
 export interface ProviderDefinitionView {
   id: string;
   label: string;
@@ -405,6 +415,7 @@ export interface ConduitApiClient {
   deleteProviderDefinition: (id: string) => Promise<void>;
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
   listProviderVoices: (id: string) => Promise<ProviderVoices>;
+  listProviderPhrases: (id: string) => Promise<ProviderPhrases>;
   getPipeline: (name: string) => Promise<PipelineView>;
   putPipeline: (name: string, graph: PipelineGraph) => Promise<PipelineView>;
   deletePipeline: (name: string) => Promise<void>;
@@ -430,6 +441,7 @@ export const conduitApiRoutes = {
   provider: "/v1/providers/{id}",
   providerTest: "/v1/providers/{id}/test",
   providerVoices: "/v1/providers/{id}/voices",
+  providerPhrases: "/v1/providers/{id}/phrases",
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{name}",
   pipelineTest: "/v1/pipelines/{name}/test-turn",
@@ -473,6 +485,8 @@ export function createConduitApiClient(
       }),
     listProviderVoices: (id) =>
       requestJson<ProviderVoices>(request, config, providerVoicesRoute(id)),
+    listProviderPhrases: (id) =>
+      requestJson<ProviderPhrases>(request, config, providerPhrasesRoute(id)),
     getPipeline: (name) =>
       requestJson<PipelineView>(request, config, pipelineRoute(name)),
     putPipeline: (name, graph) =>
@@ -513,6 +527,13 @@ function providerRoute(id: string): string {
 
 function providerVoicesRoute(id: string): string {
   return conduitApiRoutes.providerVoices.replace(
+    "{id}",
+    encodeURIComponent(id),
+  );
+}
+
+function providerPhrasesRoute(id: string): string {
+  return conduitApiRoutes.providerPhrases.replace(
     "{id}",
     encodeURIComponent(id),
   );

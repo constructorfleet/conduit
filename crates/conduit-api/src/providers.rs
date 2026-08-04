@@ -172,6 +172,58 @@ pub async fn voices(
     Ok(Json(ProviderVoices { provider: id, voices }))
 }
 
+/// The phrases a wake word detector offers.
+#[derive(Debug, Serialize)]
+pub struct ProviderPhrases {
+    /// Provider definition the phrases belong to.
+    pub provider: String,
+    /// Phrases the detector reported, in the order it reported them.
+    ///
+    /// Empty is a real answer, for the same reason it is for voices: a Wyoming
+    /// server scores whatever it loaded and enumerates nothing, and a satellite
+    /// knows only what it was flashed with. The console falls back to typing,
+    /// which is what an operator had before this endpoint existed.
+    pub phrases: Vec<String>,
+}
+
+/// `GET /v1/providers/{id}/phrases` — the phrases one detector offers.
+///
+/// A detector that scores models in process knows exactly which phrases it has,
+/// because they are the files it loaded. Asking is what lets the console offer
+/// them rather than making an operator type a phrase and find out whether the
+/// model exists when someone speaks to it.
+///
+/// # Errors
+///
+/// Returns 404 if there is no such definition, and 422 if the definition is not
+/// a wake word detector.
+pub async fn phrases(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderPhrases>, ApiError> {
+    let definition = state
+        .provider_definition(&id)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
+    if definition.capability() != ProviderCapability::Wake {
+        return Err(ApiError::unprocessable(format!(
+            "provider definition `{id}` is not a wake word provider, so it has no phrases"
+        )));
+    }
+
+    // A definition saved but not registered — its models would not load, or its
+    // service was down when the snapshot was built — has nothing to enumerate.
+    let Some(provider) = state.providers().and_then(|providers| providers.wake().get(&id))
+    else {
+        return Ok(Json(ProviderPhrases { provider: id, phrases: Vec::new() }));
+    };
+
+    let phrases = provider.available_phrases().to_vec();
+    Ok(Json(ProviderPhrases { provider: id, phrases }))
+}
+
 /// `POST /v1/providers/{id}/test` — active reachability check for one provider.
 pub async fn test(
     _caller: ManagementCaller,
