@@ -145,7 +145,10 @@ comply.
 
 Rules run in the order they are listed, and the order matters: flattening
 markdown before stripping emoji means an emoji inside a link's text is seen as
-text rather than as part of an address.
+text rather than as part of an address. The console offers the rules that are
+left to add and shows the chosen ones as tags in that order, each removable on
+its own, so the list is built by picking from the set rather than by spelling
+the names out.
 
 A transform runs per sentence, because synthesis begins before the model has
 finished writing. A construct spanning several sentences — most obviously a

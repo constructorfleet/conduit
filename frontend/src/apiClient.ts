@@ -240,6 +240,7 @@ function createMockSnapshotClient(
             type: "openai",
             base_url: "https://api.openai.com/v1",
             models: [],
+            streaming: false,
           },
         },
       },

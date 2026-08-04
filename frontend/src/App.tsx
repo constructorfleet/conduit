@@ -3511,16 +3511,86 @@ function ComponentConfigFields({
           );
         }
 
+        // Several of a closed set: a menu of what is left, and a tag for each
+        // one taken. A single text box offered the set only while it was
+        // empty, so an operator adding a second entry was retyping a name from
+        // memory and learned they had misremembered it when the save was
+        // refused. The tags keep the order they were added, which for a
+        // transform's rules is the order they are applied.
+        if (
+          property.type === "string_list" &&
+          property.options &&
+          property.options.length > 0
+        ) {
+          const chosen = listEntries(config[field]);
+          const remaining = property.options.filter(
+            (option) => !chosen.includes(option),
+          );
+          const selectId = `${component.id}-${field}`;
+          const choose = (entries: readonly string[]) =>
+            onChange(field, property, entries.join(", "));
+          return (
+            <div className="field" key={field}>
+              <label htmlFor={selectId}>{label}</label>
+              {chosen.length > 0 ? (
+                <ul className="tag-list">
+                  {chosen.map((entry) => (
+                    <li className="tag" key={entry}>
+                      {entry}
+                      <button
+                        type="button"
+                        className="tag-remove"
+                        aria-label={`Remove ${entry}`}
+                        onClick={() =>
+                          choose(chosen.filter((held) => held !== entry))
+                        }
+                      >
+                        <X size={12} aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <select
+                id={selectId}
+                // Required until something is chosen: the menu itself is left
+                // empty once there are tags, and a control that both holds no
+                // value and must have one would refuse a filled-in form.
+                required={required.has(field) && chosen.length === 0}
+                aria-invalid={isMissing(field, property) || undefined}
+                // Always empty: the menu is how an entry is added, not where
+                // the answer is kept, and leaving the last pick selected would
+                // read as though it were the whole answer.
+                value=""
+                disabled={remaining.length === 0}
+                onChange={(event) => choose([...chosen, event.target.value])}
+              >
+                <option value="">
+                  {remaining.length === 0
+                    ? "all added"
+                    : chosen.length > 0
+                      ? "add another"
+                      : "choose one or more"}
+                </option>
+                {remaining.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+
         // Held as the text an operator is typing, and split into a list when
         // the definition is built. Splitting on every keystroke would trim the
         // space they just typed and run the words together.
         if (property.type === "string_list") {
           // Suggestions rather than a menu: the field holds several values,
           // and a provider that enumerates some of them has not thereby
-          // forbidden the rest. A field that *does* close the set — a
-          // transform's rules — offers them the same way, and the entries are
-          // checked before the definition is saved.
-          const known = suggestions?.[field] ?? property.options ?? [];
+          // forbidden the rest — a wake detector reporting the phrases it has
+          // models for has not forbidden the ones it does not.
+          const known = suggestions?.[field] ?? [];
           const listId =
             known.length > 0 ? `${component.id}-${field}` : undefined;
           return (
@@ -4020,11 +4090,7 @@ function variantFromProviderDefinition(
     typeof config[field] === "string" ? config[field].trim() : "";
   const flag = (field: string) => config[field] === true;
   /// A comma-separated field, as the form holds it while it is being typed.
-  const list = (field: string) =>
-    text(field)
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+  const list = (field: string) => listEntries(config[field]);
   /// A number field. The default is the server's own, so a definition saved
   /// without one behaves as the API documents rather than as zero — which
   /// would be a detector that accepts everything it hears.
@@ -4072,12 +4138,7 @@ function variantFromProviderDefinition(
         base_url: text("base_url") || "https://api.openai.com/v1",
         model: text("model"),
         ...(apiKey ? { api_key: apiKey } : {}),
-        voices: text("voices")
-          ? text("voices")
-              .split(",")
-              .map((voice) => voice.trim())
-              .filter(Boolean)
-          : [],
+        voices: list("voices"),
       },
     };
   }
@@ -4365,12 +4426,7 @@ function validateProviderDefinitionConfig(
       // A list field holds several of the closed set, so each entry is checked
       // rather than the text as a whole.
       const entries =
-        property.type === "string_list"
-          ? value
-              .split(",")
-              .map((entry) => entry.trim())
-              .filter(Boolean)
-          : [value];
+        property.type === "string_list" ? listEntries(value) : [value];
       const unknown = entries.find(
         (entry) => !property.options?.includes(entry),
       );
@@ -4414,6 +4470,23 @@ function updateConfigValue(
   }
   next[field] = value;
   return next;
+}
+
+/// The entries a list field holds, read from the text the form keeps it as.
+///
+/// A list is held as the comma-separated text an operator types, because
+/// splitting on every keystroke would trim the space they just typed. That one
+/// representation serves every list field, open or closed, so everything that
+/// needs the entries themselves — the tag list, validation, the definition
+/// being built — reads them through here.
+function listEntries(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function pruneEmptyConfig(

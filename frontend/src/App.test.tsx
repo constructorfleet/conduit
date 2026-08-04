@@ -1993,11 +1993,14 @@ describe("Providers workspace", () => {
     expect(screen.getByRole("button", { name: "Save provider" })).toBeEnabled();
   });
 
-  it("builds a speech cleanup definition from the rules it was given", async () => {
-    // The rules are a closed set held several at a time, so the field is a
-    // list with the set as suggestions rather than a menu — a menu picks one,
-    // and the order the operator wrote is what decides whether an emoji inside
-    // a link is seen as text.
+  it("collects the rules a speech cleanup applies as tags", async () => {
+    // The rules are a closed set held several at a time. Typing them into one
+    // comma separated box meant the set was only offered while the box was
+    // empty: an operator adding a second rule was retyping a name from memory,
+    // and a misremembered one was refused long after they wrote it. So the
+    // field offers what is left and shows each choice as a pill, keeping the
+    // order they were added — that order decides whether an emoji inside a
+    // link is seen as text.
     const user = userEvent.setup();
     const saved: ProviderDefinition[] = [];
     render(
@@ -2013,10 +2016,42 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("menuitem", { name: "Speech cleanup" }));
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "speech-cleanup");
-    await user.type(
-      screen.getByLabelText("Rules (comma separated)"),
-      "markdown_to_speech, strip_emoji",
+
+    await user.selectOptions(
+      screen.getByLabelText("Rules"),
+      "markdown_to_speech",
     );
+    // Chosen once, it is a pill and no longer on offer.
+    expect(
+      screen.getByRole("button", { name: "Remove markdown_to_speech" }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Rules")).queryByRole("option", {
+        name: "markdown_to_speech",
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByLabelText("Rules"),
+      "collapse_whitespace",
+    );
+    await user.selectOptions(screen.getByLabelText("Rules"), "strip_emoji");
+    // Nothing left to add, so there is nothing to open.
+    expect(screen.getByLabelText("Rules")).toBeDisabled();
+
+    // A pill is removed by its own x, and what it held is offered again.
+    await user.click(
+      screen.getByRole("button", { name: "Remove collapse_whitespace" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Remove collapse_whitespace" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Rules")).getByRole("option", {
+        name: "collapse_whitespace",
+      }),
+    ).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(saved[0]?.variant).toMatchObject({

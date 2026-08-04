@@ -119,6 +119,49 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* What a closed-set list field already holds. Each entry is its own tag with
+   its own remove button, so an operator can take one back without retyping the
+   rest — and the tags read in the order they were added, which for a
+   transform's rules is the order they are applied. */
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 999px;
+  padding: 3px 4px 3px 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tag-remove {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tag-remove:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
 .check-row {
   display: flex;
   align-items: center;
