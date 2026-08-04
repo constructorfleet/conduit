@@ -1450,15 +1450,22 @@ function ProvidersPanel({
             <span>{group.cards.length}</span>
           </header>
           <table className="provider-table">
+            <colgroup>
+              {PROVIDER_COLUMNS.map((column) => (
+                <col key={column.label} style={{ width: column.width }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th scope="col">Provider</th>
-                <th scope="col">Implementation</th>
-                <th scope="col">State</th>
-                <th scope="col">Used by</th>
-                <th scope="col">
-                  <span className="visually-hidden">Actions</span>
-                </th>
+                {PROVIDER_COLUMNS.map((column) => (
+                  <th scope="col" key={column.label}>
+                    {column.label === "Actions" ? (
+                      <span className="visually-hidden">{column.label}</span>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -3731,6 +3738,24 @@ const PROVIDER_STAGE_ORDER: readonly ProviderKind[] = [
   "wake",
   "speaker_id",
   "memory",
+];
+
+/// The columns every provider stage table shows, and how wide each one is.
+///
+/// Stated here rather than left to the browser because there is one table per
+/// stage: each would size its own columns from its own rows, so a group holding
+/// one long provider id put its Provider column somewhere no other group's was,
+/// and the page read as several unrelated tables instead of one list under
+/// headings. Fixed widths line them up — the cells wrap rather than widen, which
+/// is why every one of them already handles overflow.
+const PROVIDER_COLUMNS: readonly { label: string; width: string }[] = [
+  { label: "Provider", width: "24%" },
+  { label: "Implementation", width: "20%" },
+  { label: "State", width: "22%" },
+  { label: "Used by", width: "20%" },
+  // Two or three buttons of a known size, so this is the one column whose
+  // content decides its width rather than the other way round.
+  { label: "Actions", width: "14%" },
 ];
 
 /// Where each provider is bound, as "pipeline · stage", read from the stored

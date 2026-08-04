@@ -1103,6 +1103,10 @@ label.icon-action {
 
 .provider-table {
   width: 100%;
+  /* Every stage is its own table, so without this each one sizes its columns
+     from its own rows and no two groups line up. The widths are the
+     `<colgroup>` the panel renders. */
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--border);
@@ -1231,9 +1235,12 @@ label.icon-action {
   border-radius: 999px;
   padding: 3px 9px;
   background: var(--surface);
+  max-width: 100%;
   color: var(--strong);
   font-size: 11px;
-  white-space: nowrap;
+  /* A fixed-width column cannot promise to be wide enough, so a pipeline name
+     longer than the column breaks instead of jutting into the Actions one. */
+  overflow-wrap: anywhere;
 }
 
 .usage-stage {

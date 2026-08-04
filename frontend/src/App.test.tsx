@@ -2339,6 +2339,50 @@ describe("Providers workspace", () => {
     ).toBeInTheDocument();
   });
 
+  it("gives every provider stage table the same column widths", async () => {
+    // One table per stage, so each one sized its own columns from its own
+    // rows: the Provider column landed somewhere different in every group and
+    // the page read as five tables rather than one list under headings.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: { base_url: "https://api.openai.com/v1", model: "gpt-5" },
+      }),
+      // Deliberately far wider than the row above, which is what used to pull
+      // this group's columns out of line with every other group's.
+      providerDefinitionFixture({
+        id: "a-rather-long-recognizer-provider-id",
+        label: "Whisper Local, running on the box under the desk",
+        component: "wyoming",
+        config: { url: "tcp://whisper.local:10300", model: "tiny-int8" },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+
+    const tables = screen.getAllByRole("table");
+    expect(tables.length).toBeGreaterThan(1);
+    const widthsPerTable = tables.map((table) =>
+      [...table.querySelectorAll("col")].map((column) => column.style.width),
+    );
+    for (const widths of widthsPerTable) {
+      expect(widths).toEqual(widthsPerTable[0]);
+      // One per column, so a column added to the header without one here would
+      // be the one that sizes itself.
+      expect(widths).toHaveLength(5);
+    }
+  });
+
   it("filters providers by search and narrows to issues only", async () => {
     const user = userEvent.setup();
     render(<App />);
