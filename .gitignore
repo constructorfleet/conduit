@@ -10,6 +10,10 @@ __pycache__/
 .playwright-cli/
 output/playwright/
 
+# openWakeWord models, fetched by scripts/fetch-wake-models.sh. Upstream
+# release artifacts rather than ours, so they are downloaded and not carried.
+/crates/conduit-wake/tests/models/
+
 # ESPHome build output and credentials (Wi-Fi password, API encryption key).
 .esphome/
 secrets.yaml
