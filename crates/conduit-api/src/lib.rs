@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/providers/{id}",
             get(providers::get).put(providers::put).delete(providers::delete),
         )
+        .route("/v1/providers/{id}/rename", post(providers::rename))
         .route("/v1/providers/{id}/voices", get(providers::voices))
         .route("/v1/providers/{id}/phrases", get(providers::phrases))
         .route("/v1/providers/{id}/test", post(providers::test))

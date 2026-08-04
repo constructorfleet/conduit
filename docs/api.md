@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/test`, `/v1/providers/{id}/voices`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/rename`, `/v1/providers/{id}/test`, `/v1/providers/{id}/voices`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -407,6 +407,55 @@ Success body:
   ]
 }
 ```
+
+### `POST /v1/providers/{id}/rename`
+
+Moves a Provider Definition to a new id and rewrites every stored pipeline that
+referenced the old one, then rebuilds the active Runtime Provider Registry
+Snapshot.
+
+Renaming is its own operation because a provider id is not private to its
+definition: pipeline nodes name it. A `PUT` under a new id creates a second
+definition and leaves every pipeline pointing at the first, and the follow-up
+`DELETE` would be refused for exactly that reason.
+
+Request body:
+
+```json
+{ "id": "openai-main" }
+```
+
+Success body — the definition as it now reads, with the pipelines whose
+references were rewritten:
+
+```json
+{
+  "provider": {
+    "id": "openai-main",
+    "label": "OpenAI Primary",
+    "kind": "llm",
+    "variant": {
+      "type": "llm",
+      "variant": {
+        "type": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": { "type": "redacted" },
+        "models": ["gpt-4.1"]
+      }
+    }
+  },
+  "renamed_pipelines": ["kitchen"]
+}
+```
+
+For an MCP definition the `<definition id>.<tool name>` references a core's tool
+bindings hold are rewritten too, keeping the tool name: renaming `weather-tools`
+to `forecasting` turns `weather-tools.forecast` into `forecasting.forecast`.
+
+Renaming to the id the definition already has succeeds and changes nothing.
+Returns `404` when there is no such definition, `409 conflict` when the new id
+is already taken — the definition in the way is never overwritten — and `422`
+when the new id is not one the store can use.
 
 ### `DELETE /v1/providers/{id}`
 

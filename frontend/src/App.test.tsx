@@ -2224,6 +2224,61 @@ describe("Providers workspace", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renames a provider rather than creating a second one, and moves the pipelines with it", async () => {
+    // Changing the id used to save under the new one and leave the old
+    // definition where it was, so an operator correcting a name got two
+    // providers and a pipeline still pointing at the one they meant to
+    // replace. An id is not private to its definition: pipelines name it, so
+    // it moves with them.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Edit openai" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-main");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      await screen.findByText("Provider openai renamed to openai-main"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: /openai-main/ }),
+    ).toBeInTheDocument();
+    // No definition is left under the old id — the card that remains is the
+    // one the runtime snapshot reports, which has nothing local to delete.
+    expect(
+      screen.queryByRole("button", { name: "Delete openai" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete openai-main" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent(
+      "llmcore / openai-main",
+    );
+  });
+
   it("deletes configured provider cards", async () => {
     const user = userEvent.setup();
     const providerDefinitions = [
@@ -3165,6 +3220,35 @@ function mockOperatorApi({
 
       if (route.startsWith("/v1/providers/")) {
         const id = route.slice("/v1/providers/".length);
+        if (id.endsWith("/rename") && method === "POST") {
+          const providerId = id.replace(/\/rename$/, "");
+          const definition = savedProviderDefinitions.get(providerId);
+          if (!definition) {
+            return jsonResponse({ error: "not_found" }, { status: 404 });
+          }
+          const { id: newId } = JSON.parse(String(init?.body)) as {
+            id: string;
+          };
+          savedProviderDefinitions.delete(providerId);
+          savedProviderDefinitions.set(newId, { ...definition, id: newId });
+          // The server rewrites the graphs, so the mock has to as well: the
+          // console reloads them rather than patching them, and a mock that
+          // left them alone would let a broken reference pass as a pass.
+          const renamedPipelines: string[] = [];
+          for (const [name, view] of pipelines) {
+            const nodes = view.graph.nodes.map((node) =>
+              renameNodeProvider(node, providerId, newId),
+            );
+            if (nodes.some((node, index) => node !== view.graph.nodes[index])) {
+              pipelines.set(name, { ...view, graph: { ...view.graph, nodes } });
+              renamedPipelines.push(name);
+            }
+          }
+          return jsonResponse({
+            provider: { ...definition, id: newId },
+            renamed_pipelines: renamedPipelines,
+          });
+        }
         if (id.endsWith("/test") && method === "POST") {
           const providerId = id.replace(/\/test$/, "");
           currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
@@ -3266,6 +3350,28 @@ function mockOperatorApi({
 
   vi.stubGlobal("fetch", fetchMock);
   return Object.assign(fetchMock, { enrollments, roster });
+}
+
+/// Points a node's provider reference at `to` when it named `from`, returning
+/// the node itself when it did not.
+///
+/// Identity is what the caller uses to tell whether anything moved, so an
+/// untouched node has to be the same object rather than a copy of it.
+function renameNodeProvider(
+  node: PipelineGraph["nodes"][number],
+  from: string,
+  to: string,
+): PipelineGraph["nodes"][number] {
+  if (node.kind === "core") {
+    if (node.core.model.provider !== from) {
+      return node;
+    }
+    return {
+      ...node,
+      core: { ...node.core, model: { ...node.core.model, provider: to } },
+    };
+  }
+  return node.provider === from ? { ...node, provider: to } : node;
 }
 
 /// The outer provider definition variant is the capability itself.

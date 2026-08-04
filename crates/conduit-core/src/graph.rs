@@ -629,6 +629,54 @@ impl Node {
     pub const fn is_reasoning(&self) -> bool {
         matches!(self, Self::Core { .. })
     }
+
+    /// Points every reference to provider `from` at `to`, answering whether
+    /// anything moved.
+    ///
+    /// The mirror of [`Node::provider_references`], and it has to cover the
+    /// same references: a core names one provider for its model and one per
+    /// tool and memory binding, so renaming through [`Node::provider`] alone
+    /// would leave a core's bindings pointing at an id nothing answers to.
+    pub fn rename_provider(&mut self, from: &str, to: &str) -> bool {
+        match self {
+            Self::Core { core, .. } => {
+                let mut renamed = rename_reference(&mut core.model.provider, from, to);
+                for tool in &mut core.tools {
+                    renamed |= rename_reference(&mut tool.provider, from, to);
+                }
+                for store in &mut core.memory {
+                    renamed |= rename_reference(&mut store.provider, from, to);
+                }
+                renamed
+            }
+            Self::Source { provider, .. }
+            | Self::WakeWord { provider, .. }
+            | Self::Stt { provider, .. }
+            | Self::SpeakerId { provider, .. }
+            | Self::Transform { provider, .. }
+            | Self::Tts { provider, .. }
+            | Self::Sink { provider, .. } => rename_reference(provider, from, to),
+        }
+    }
+}
+
+/// Rewrites one provider reference, answering whether it named `from`.
+///
+/// A tool binding may name a tool a server advertises rather than the server
+/// itself — `weather-tools.forecast` for the `weather-tools` definition — so a
+/// reference qualified by the old id is rewritten with its tool name kept. That
+/// is the reference the delete refusal already recognizes, and a rename that
+/// missed it would break exactly the pipelines the refusal exists to protect.
+fn rename_reference(reference: &mut String, from: &str, to: &str) -> bool {
+    if reference == from {
+        *reference = to.to_owned();
+        return true;
+    }
+    if let Some(tool) = reference.strip_prefix(from).and_then(|rest| rest.strip_prefix('.')) {
+        *reference = format!("{to}.{tool}");
+        return true;
+    }
+    false
 }
 
 /// A directed connection between two nodes.
@@ -703,6 +751,21 @@ impl PipelineGraph {
     #[must_use]
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| node.id() == id)
+    }
+
+    /// Points every reference to provider `from` at `to`, answering whether
+    /// this pipeline referenced it at all.
+    ///
+    /// Renaming a provider definition is a rename of an id that graphs point
+    /// at, so the graphs have to move with it — otherwise the rename reads as
+    /// deleting one provider and creating another, and every pipeline that
+    /// named the old id is left referencing nothing.
+    pub fn rename_provider(&mut self, from: &str, to: &str) -> bool {
+        let mut renamed = false;
+        for node in &mut self.nodes {
+            renamed |= node.rename_provider(from, to);
+        }
+        renamed
     }
 
     /// Checks that the graph is executable.
@@ -1828,6 +1891,93 @@ mod tests {
         .expect_err("`limit` is a memory setting, not a tool one");
 
         assert!(error.to_string().contains("limit"), "{error}");
+    }
+
+    #[test]
+    fn renaming_a_provider_moves_every_reference_to_it() {
+        // The reason a rename is not a delete plus a create: a graph names the
+        // provider it uses, so the graph has to move with the id.
+        let mut graph = linear();
+        assert!(graph.rename_provider("whisper", "whisper-local"));
+
+        assert_eq!(graph.node("stt").expect("the stt node").provider(), "whisper-local");
+        assert_eq!(
+            graph.node("wake").expect("the wake node").provider(),
+            "openwakeword",
+            "a provider nobody renamed stays where it was"
+        );
+    }
+
+    #[test]
+    fn renaming_a_provider_moves_a_cores_bindings_too() {
+        // A core names one provider per tool and memory binding, and those are
+        // exactly the references the delete refusal counts. A rename that only
+        // moved the model would leave them pointing at nothing.
+        let mut graph = PipelineGraph::new("bound").with_node(Node::Core {
+            id: "core".to_owned(),
+            core: ReasoningCore {
+                model: ModelBinding {
+                    provider: "openai".to_owned(),
+                    model: None,
+                    settings: Map::new(),
+                },
+                system: None,
+                tools: vec![
+                    ToolBinding {
+                        provider: "weather-tools".to_owned(),
+                        confirm: ConfirmPolicy::Never,
+                    },
+                    // A tool the server advertises, named as the runtime
+                    // registers it.
+                    ToolBinding {
+                        provider: "weather-tools.forecast".to_owned(),
+                        confirm: ConfirmPolicy::Never,
+                    },
+                ],
+                memory: vec![MemoryBinding {
+                    provider: "recall".to_owned(),
+                    mode: MemoryMode::Read,
+                    scope: None,
+                    limit: DEFAULT_MEMORY_LIMIT,
+                }],
+                max_rounds: DEFAULT_MAX_ROUNDS,
+            },
+        });
+
+        assert!(graph.rename_provider("weather-tools", "forecasting"));
+
+        let Some(Node::Core { core, .. }) = graph.node("core") else {
+            panic!("the core node is a core");
+        };
+        assert_eq!(core.model.provider, "openai");
+        assert_eq!(
+            core.tools.iter().map(|tool| tool.provider.as_str()).collect::<Vec<_>>(),
+            ["forecasting", "forecasting.forecast"],
+            "a qualified tool reference keeps its tool name"
+        );
+        assert_eq!(core.memory[0].provider, "recall");
+    }
+
+    #[test]
+    fn renaming_a_provider_no_pipeline_names_changes_nothing() {
+        let mut graph = linear();
+        let before = graph.clone();
+
+        assert!(!graph.rename_provider("vosk", "vosk-local"));
+        assert_eq!(graph, before);
+    }
+
+    #[test]
+    fn a_provider_whose_name_merely_starts_with_the_old_one_is_left_alone() {
+        // `whisper-large` is a different definition, not a tool `whisper`
+        // advertises: only a `.` makes a reference a qualified one.
+        let mut graph = PipelineGraph::new("similar")
+            .with_node(Node::stt("stt", "whisper-large"))
+            .with_node(Node::core("core", "ollama"))
+            .with_edge(Edge::new("stt", "core"));
+
+        assert!(!graph.rename_provider("whisper", "faster-whisper"));
+        assert_eq!(graph.node("stt").expect("the stt node").provider(), "whisper-large");
     }
 
     #[test]

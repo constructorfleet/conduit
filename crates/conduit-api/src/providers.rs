@@ -128,6 +128,75 @@ pub async fn delete(
     }
 }
 
+/// The new id a provider definition should be stored under.
+#[derive(Debug, serde::Deserialize)]
+pub struct ProviderRenameRequest {
+    /// Id to move the definition to.
+    pub id: String,
+}
+
+/// What a rename moved.
+#[derive(Debug, Serialize)]
+pub struct ProviderRenameResult {
+    /// The definition as it now reads, under its new id.
+    pub provider: ProviderDefinitionView,
+    /// Pipelines whose references were rewritten, in listing order.
+    ///
+    /// Reported rather than counted so the console can tell an operator which
+    /// of their pipelines their edit touched — a rename of a shared provider
+    /// changes graphs they were not looking at.
+    pub renamed_pipelines: Vec<String>,
+}
+
+/// `POST /v1/providers/{id}/rename` — moves one definition to a new id.
+///
+/// Renaming is its own operation because a provider id is not private to the
+/// definition: pipelines name it. A `PUT` under the new id would leave the old
+/// definition in place and every pipeline still pointing at it, which is what an
+/// operator editing the id field experienced as their edit creating a second
+/// provider.
+///
+/// # Errors
+///
+/// Returns 404 if there is no such definition, 409 if the new id is already
+/// taken, and 422 if the new id is not one the store can use.
+pub async fn rename(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    JsonBody(request): JsonBody<ProviderRenameRequest>,
+) -> Result<Json<ProviderRenameResult>, ApiError> {
+    let definition = state
+        .provider_definition(&id)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
+
+    if request.id == id {
+        return Ok(Json(ProviderRenameResult {
+            provider: definition.into(),
+            renamed_pipelines: Vec::new(),
+        }));
+    }
+    // Checked before anything moves: a rename onto an occupied id would replace
+    // a provider the operator did not mean to touch, and what it overwrote is
+    // not recoverable.
+    if state.provider_definition(&request.id).await.map_err(store_failure)?.is_some() {
+        return Err(ApiError::conflict(format!(
+            "a provider definition `{}` already exists",
+            request.id
+        )));
+    }
+
+    let renamed_pipelines =
+        state.rename_provider_definition(&id, &request.id).await.map_err(store_failure)?;
+    let renamed =
+        state.provider_definition(&request.id).await.map_err(store_failure)?.ok_or_else(
+            || ApiError::unavailable("renamed provider definition cannot be read"),
+        )?;
+    Ok(Json(ProviderRenameResult { provider: renamed.into(), renamed_pipelines }))
+}
+
 /// The voices a synthesizer offers.
 #[derive(Debug, Serialize)]
 pub struct ProviderVoices {

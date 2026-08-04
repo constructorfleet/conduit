@@ -9,6 +9,7 @@ import type {
   ProviderDefinition,
   ProviderDefinitionView,
   ProviderPhrases,
+  ProviderRenameResult,
   ProviderVoices,
   RawTurnEvents,
   TurnList,
@@ -75,6 +76,11 @@ export interface SnapshotClient {
   saveProviderDefinition: (
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinitionView>;
+  /// Moves a definition to a new id, rewriting the pipelines that named it.
+  renameProviderDefinition: (
+    id: string,
+    newId: string,
+  ) => Promise<ProviderRenameResult>;
   deleteProviderDefinition: (id: string) => Promise<void>;
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
   loadProviderVoices: (id: string) => Promise<ProviderVoices>;
@@ -149,6 +155,8 @@ export function createSnapshotClient(
     runPipelineTest: (name, request) => client.testPipeline(name, request),
     saveProviderDefinition: (definition) =>
       client.putProviderDefinition(definition.id, definition),
+    renameProviderDefinition: (id, newId) =>
+      client.renameProviderDefinition(id, newId),
     deleteProviderDefinition: (id) => client.deleteProviderDefinition(id),
     testProviderDefinition: (id) => client.testProviderDefinition(id),
     loadProviderVoices: (id) => client.listProviderVoices(id),
@@ -220,6 +228,22 @@ function createMockSnapshotClient(
     saveProviderDefinition: async (definition) => ({
       ...definition,
       kind: providerKindFromVariant(definition.variant.type),
+    }),
+    renameProviderDefinition: async (id, newId) => ({
+      provider: {
+        id: newId,
+        label: id,
+        kind: "llm",
+        variant: {
+          type: "llm",
+          variant: {
+            type: "openai",
+            base_url: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      renamed_pipelines: [],
     }),
     deleteProviderDefinition: async () => {},
     testProviderDefinition: async (id) => ({

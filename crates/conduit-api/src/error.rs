@@ -37,6 +37,17 @@ impl ApiError {
         }
     }
 
+    /// The request cannot be applied to the resource as it currently stands.
+    ///
+    /// Distinct from [`ApiError::unprocessable`]: the request is one the API
+    /// would accept, and would accept again once whatever is in the way is
+    /// gone. Retrying it unchanged is meaningful, which is why the status is
+    /// not 422.
+    #[must_use]
+    pub fn conflict(detail: impl Into<String>) -> Self {
+        Self { status: StatusCode::CONFLICT, kind: "conflict", detail: detail.into() }
+    }
+
     /// The request was well-formed JSON but semantically invalid.
     #[must_use]
     pub fn unprocessable(detail: impl Into<String>) -> Self {

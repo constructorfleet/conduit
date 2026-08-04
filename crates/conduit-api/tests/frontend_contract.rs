@@ -700,6 +700,16 @@ export interface ProviderDefinitionView {{
   settings?: ProviderSettings;
 }}
 
+/// What a rename moved.
+///
+/// The pipelines are reported rather than counted because a rename of a shared
+/// provider rewrites graphs the operator was not looking at, and they should be
+/// told which.
+export interface ProviderRenameResult {{
+  provider: ProviderDefinitionView;
+  renamed_pipelines: string[];
+}}
+
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
 export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
 export type ToolCallStatus =
@@ -815,6 +825,15 @@ export interface ConduitApiClient {{
     id: string,
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinitionView>;
+  /// Moves a definition to a new id, rewriting every pipeline that named it.
+  ///
+  /// A provider id is not private to its definition, so changing it is an
+  /// operation rather than a save under the new name: a save would leave the
+  /// old definition in place and every pipeline still pointing at it.
+  renameProviderDefinition: (
+    id: string,
+    newId: string,
+  ) => Promise<ProviderRenameResult>;
   deleteProviderDefinition: (id: string) => Promise<void>;
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
   listProviderVoices: (id: string) => Promise<ProviderVoices>;
@@ -853,6 +872,7 @@ export const conduitApiRoutes = {{
   providerCatalog: "/v1/catalog/providers",
   providers: "/v1/providers",
   provider: "/v1/providers/{{id}}",
+  providerRename: "/v1/providers/{{id}}/rename",
   providerTest: "/v1/providers/{{id}}/test",
   providerVoices: "/v1/providers/{{id}}/voices",
   providerPhrases: "/v1/providers/{{id}}/phrases",
@@ -890,6 +910,11 @@ export function createConduitApiClient(
       requestJson<ProviderDefinitionView>(request, config, providerRoute(id), {{
         method: "PUT",
         body: JSON.stringify(definition),
+      }}),
+    renameProviderDefinition: (id, newId) =>
+      requestJson<ProviderRenameResult>(request, config, providerRenameRoute(id), {{
+        method: "POST",
+        body: JSON.stringify({{ id: newId }}),
       }}),
     deleteProviderDefinition: async (id) => {{
       await requestJson<void>(request, config, providerRoute(id), {{
@@ -981,6 +1006,13 @@ function pipelineRoute(name: string): string {{
 
 function providerRoute(id: string): string {{
   return conduitApiRoutes.provider.replace("{{id}}", encodeURIComponent(id));
+}}
+
+function providerRenameRoute(id: string): string {{
+  return conduitApiRoutes.providerRename.replace(
+    "{{id}}",
+    encodeURIComponent(id),
+  );
 }}
 
 function providerVoicesRoute(id: string): string {{

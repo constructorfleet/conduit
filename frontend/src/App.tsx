@@ -496,9 +496,36 @@ function OperatorWorkspace({
     }
   }
 
+  /// Saves a definition, moving it first when `previousId` names a different
+  /// one.
+  ///
+  /// An id is not private to its definition — pipeline nodes name it — so
+  /// changing it is a rename rather than a save under the new name: saving
+  /// alone would leave the old definition in place and every pipeline still
+  /// pointing at it, which reads as the edit having created a second provider.
+  /// The rename goes first so the settings that follow are written to the
+  /// definition that now exists.
   async function saveProviderDefinition(
     definition: ProviderDefinition,
+    previousId?: string,
   ): Promise<ProviderDefinition> {
+    if (previousId && previousId !== definition.id) {
+      const { renamed_pipelines } =
+        await snapshotClient.renameProviderDefinition(
+          previousId,
+          definition.id,
+        );
+      setProviderDefinitions((current) =>
+        current.filter((provider) => provider.id !== previousId),
+      );
+      // Reloaded rather than rewritten here: the server is what rewrote the
+      // graphs, and a stage's reference may be qualified by a tool name the
+      // console would have to reconstruct to patch in place.
+      if (renamed_pipelines.length > 0) {
+        const { views } = await snapshotClient.loadPipelineViews();
+        setPipelineViews(views);
+      }
+    }
     const request = toApiProviderDefinition(definition);
     onProviderDefinitionSaved?.(request);
     const saved = await snapshotClient.saveProviderDefinition(request);
@@ -870,8 +897,12 @@ function SectionPanel({
   onProviderTest: ProviderTester;
   onProviderVoices: VoiceLoader;
   onProviderPhrases: PhraseLoader;
+  /// Saves a definition. `previousId` is the id it was stored under, when it
+  /// was stored at all: a save that changes it is a rename, and the server has
+  /// to be told which definition moved.
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
+    previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
@@ -1037,8 +1068,12 @@ function ProvidersPanel({
   providers: readonly ProviderStatus[];
   onProviderTest: ProviderTester;
   onProviderPhrases: PhraseLoader;
+  /// Saves a definition. `previousId` is the id it was stored under, when it
+  /// was stored at all: a save that changes it is a rename, and the server has
+  /// to be told which definition moved.
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
+    previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
@@ -1245,11 +1280,23 @@ function ProvidersPanel({
       config: pruneEmptyConfig(draftProvider.config),
       source: "local",
     };
+    // The id the definition is stored under, when it is stored at all: only a
+    // saved definition can be moved, and a card standing for a provider the
+    // runtime holds without one has nothing on the server to rename.
+    const storedId = providerDefinitions.some(
+      (provider) =>
+        provider.id === editingProviderId && provider.source === "local",
+    )
+      ? (editingProviderId ?? undefined)
+      : undefined;
     try {
-      const saved = await onProviderDefinitionSave(next);
+      const saved = await onProviderDefinitionSave(next, storedId);
       setProviderNotices((current) => ({
         ...current,
-        [saved.id]: `Provider ${saved.id} saved`,
+        [saved.id]:
+          storedId && storedId !== saved.id
+            ? `Provider ${storedId} renamed to ${saved.id}`
+            : `Provider ${saved.id} saved`,
       }));
       setDraftProvider(null);
       setEditingProviderId(null);

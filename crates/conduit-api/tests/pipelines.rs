@@ -2031,6 +2031,181 @@ async fn provider_delete_is_refused_when_pipelines_still_reference_it() {
     assert_eq!(body["affected_pipelines"], serde_json::json!(["kitchen"]));
 }
 
+#[tokio::test]
+async fn renaming_a_provider_moves_it_and_rewrites_every_pipeline_that_names_it() {
+    // The reason a rename is an operation rather than a save under a new id:
+    // saving under a new id leaves the old definition and every pipeline that
+    // referenced it behind, which reads to an operator as their edit having
+    // created a second provider.
+    let state = AppState::new(EventBus::default());
+    store_llm_provider_definition(&state, "openai-primary").await;
+    let graph = PipelineGraph::new("kitchen").with_node(Node::core("llm", "openai-primary"));
+    let (status, body) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(
+        &state,
+        post_json(
+            "/v1/providers/openai-primary/rename",
+            &serde_json::json!({ "id": "openai-main" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["provider"]["id"], "openai-main");
+    assert_eq!(body["renamed_pipelines"], serde_json::json!(["kitchen"]));
+
+    let (status, body) = call(&state, get("/v1/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!(["openai-main"]), "the old id is gone, not duplicated");
+
+    let (status, body) = call(&state, get("/v1/pipelines/kitchen")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["graph"]["nodes"][0]["core"]["model"]["provider"], "openai-main");
+
+    assert_eq!(
+        state.providers().expect("snapshot").llm().names().collect::<Vec<_>>(),
+        ["openai-main"],
+        "the runtime snapshot is rebuilt under the new id"
+    );
+}
+
+#[tokio::test]
+async fn renaming_an_mcp_provider_rewrites_its_qualified_tool_references() {
+    // An MCP definition registers each discovered tool as `<id>.<tool>`, and a
+    // pipeline binds the tool rather than the server. Those are references to
+    // the definition — the delete refusal already counts them — so a rename
+    // that missed them would break the pipelines that refusal protects.
+    let server = MockMcpServer::exposing(&["forecast", "history"]).await;
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/weather-tools",
+            serde_json::json!({
+                "id": "weather-tools",
+                "label": "Weather Tools",
+                "variant": {
+                    "type": "tool",
+                    "variant": {
+                        "type": "mcp",
+                        "transport": { "type": "streamable_http", "url": server.url() }
+                    }
+                }
+            }),
+        ),
+    )
+    .await;
+    store_llm_provider_definition(&state, "ollama").await;
+    let graph = PipelineGraph::new("tools").with_node(core_with_tools(
+        "llm",
+        "ollama",
+        &["weather-tools.forecast"],
+    ));
+    let (status, body) = call(&state, put(&graph)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(
+        &state,
+        post_json(
+            "/v1/providers/weather-tools/rename",
+            &serde_json::json!({ "id": "forecasting" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["renamed_pipelines"], serde_json::json!(["tools"]));
+
+    let (status, body) = call(&state, get("/v1/pipelines/tools")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["graph"]["nodes"][0]["core"]["tools"][0]["provider"],
+        "forecasting.forecast"
+    );
+}
+
+#[tokio::test]
+async fn renaming_a_provider_onto_an_id_already_taken_is_refused() {
+    // Otherwise the rename silently replaces a provider the operator did not
+    // mean to touch, and the definition it overwrote is not recoverable.
+    let state = AppState::new(EventBus::default());
+    store_llm_provider_definition(&state, "openai-primary").await;
+    store_llm_provider_definition(&state, "openai-secondary").await;
+
+    let (status, body) = call(
+        &state,
+        post_json(
+            "/v1/providers/openai-primary/rename",
+            &serde_json::json!({ "id": "openai-secondary" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "conflict");
+    let (status, body) = call(&state, get("/v1/providers/openai-secondary")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["label"], "openai-secondary", "the provider in the way is untouched");
+}
+
+#[tokio::test]
+async fn renaming_a_provider_to_the_id_it_already_has_changes_nothing() {
+    let state = AppState::new(EventBus::default());
+    store_llm_provider_definition(&state, "openai-primary").await;
+
+    let (status, body) = call(
+        &state,
+        post_json(
+            "/v1/providers/openai-primary/rename",
+            &serde_json::json!({ "id": "openai-primary" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["provider"]["id"], "openai-primary");
+    assert_eq!(body["renamed_pipelines"], serde_json::json!([]));
+    let (status, _) = call(&state, get("/v1/providers/openai-primary")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn renaming_a_missing_provider_is_a_404() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(
+        &state,
+        post_json("/v1/providers/ghost/rename", &serde_json::json!({ "id": "spectre" })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn renaming_a_provider_to_an_id_the_store_cannot_use_is_refused() {
+    // The new id becomes a file name in some backends, so it is checked before
+    // anything is written rather than after the old definition is gone.
+    let state = AppState::new(EventBus::default());
+    store_llm_provider_definition(&state, "openai-primary").await;
+
+    let (status, body) = call(
+        &state,
+        post_json(
+            "/v1/providers/openai-primary/rename",
+            &serde_json::json!({ "id": "../escape" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, _) = call(&state, get("/v1/providers/openai-primary")).await;
+    assert_eq!(status, StatusCode::OK, "the definition is left where it was");
+}
+
 fn assert_component(
     components: &[serde_json::Value],
     id: &str,
