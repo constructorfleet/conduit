@@ -471,6 +471,24 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             schema: openai_llm_schema(),
         },
         ProviderComponentDescriptor {
+            id: "anthropic.messages",
+            label: "Anthropic Messages",
+            kind: ProviderCapability::Llm,
+            definition_variant: "anthropic",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("api_key", string_property(None, None)),
+                    ("model", string_property(None, Some("[A-Za-z0-9._:/-]+"))),
+                    ("streaming", boolean_property()),
+                ]),
+                // No `base_url`: the public API is the one an operator who
+                // typed nothing meant, unlike an OpenAI-compatible server,
+                // which could be anywhere.
+                required: vec!["model"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: ProviderCapability::Stt,

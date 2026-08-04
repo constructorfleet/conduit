@@ -1931,6 +1931,46 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("saves a Claude model under its own variant without asking for a base URL", async () => {
+    // Two language model components that write different definitions. Sending
+    // an Anthropic endpoint as an `openai` variant would build a provider that
+    // authenticates with a bearer token the API does not read, and the form is
+    // where the operator would never see why.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Anthropic Messages" }),
+    );
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "claude");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "Claude");
+    await user.type(screen.getByLabelText("Model"), "claude-opus-5");
+    await user.type(screen.getByLabelText("API Key"), "sk-ant-test");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider claude saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toMatchObject({
+      type: "llm",
+      variant: {
+        type: "anthropic",
+        base_url: "https://api.anthropic.com/v1",
+        models: ["claude-opus-5"],
+        api_key: { type: "inline", value: "sk-ant-test" },
+      },
+    });
+  });
+
   it("names config fields the way a person reads them and enforces the required ones", async () => {
     // The wire spelling belongs on the wire. A form that showed `base_url` and
     // the word "required" beside it was asking the operator to translate, and
@@ -3016,6 +3056,23 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "anthropic.messages",
+        label: "Anthropic Messages",
+        kind: "llm",
+        definition_variant: "anthropic",
+        schema: {
+          properties: {
+            base_url: { type: "string", format: "url" },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._:/-]+" },
+            streaming: { type: "boolean" },
+          },
+          // The public API is the default, so an operator who names no base URL
+          // has still described a reachable server.
+          required: ["model"],
+        },
+      },
+      {
         id: "openwakeword",
         label: "openWakeWord",
         kind: "wake",
@@ -3554,6 +3611,23 @@ function providerDefinitionFixture({
     ? ({ type: "inline", value: text("api_key") } as const)
     : undefined;
 
+  if (component === "anthropic.messages") {
+    return {
+      id,
+      label,
+      kind: "llm",
+      variant: {
+        type: "llm",
+        variant: {
+          type: "anthropic",
+          base_url: text("base_url") || "https://api.anthropic.com/v1",
+          ...(apiKey ? { api_key: apiKey } : {}),
+          models: text("model") ? [text("model")] : [],
+          streaming: flag("streaming"),
+        },
+      },
+    };
+  }
   if (component === "openai.responses" || component === "openai.completions") {
     return {
       id,

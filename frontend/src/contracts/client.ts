@@ -155,6 +155,7 @@ export type ProviderCapability =
 /// to name the full two-level provider definition variant.
 export type ProviderDefinitionVariantType =
   | "openai"
+  | "anthropic"
   | "wyoming"
   | "mcp"
   | "builtin"
@@ -176,8 +177,10 @@ export type ProviderSecret =
   | { type: "external"; reference: string }
   | { type: "redacted" };
 
+/// A language model endpoint. The two wire formats take the same settings, so
+/// they differ only in the tag that says which one to speak.
 export type LlmVariant = {
-  type: "openai";
+  type: "openai" | "anthropic";
   base_url: string;
   api_key?: ProviderSecret;
   models: string[];

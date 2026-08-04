@@ -287,6 +287,7 @@ dependencies = [
  "base64 0.23.0",
  "bytes",
  "chrono",
+ "conduit-anthropic",
  "conduit-core",
  "conduit-mcp",
  "conduit-metrics",

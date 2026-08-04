@@ -258,10 +258,31 @@ Success body:
         },
         "required": ["base_url", "model"]
       }
+    },
+    {
+      "id": "anthropic.messages",
+      "label": "Anthropic Messages",
+      "kind": "llm",
+      "definition_variant": "anthropic",
+      "schema": {
+        "properties": {
+          "base_url": { "type": "string", "format": "url" },
+          "api_key": { "type": "string" },
+          "model": { "type": "string", "pattern": "[A-Za-z0-9._:/-]+" },
+          "streaming": { "type": "boolean" }
+        },
+        "required": ["model"]
+      }
     }
   ]
 }
 ```
+
+Two components can share a `kind` and differ in `definition_variant`, as the two
+language model entries above do: a component is a shape to fill in, and the
+variant is the wire format the saved definition names. `base_url` is required
+for an OpenAI-compatible endpoint, which could be anywhere, and optional for
+Anthropic's, which defaults to the public API.
 
 ### `GET /v1/providers`
 

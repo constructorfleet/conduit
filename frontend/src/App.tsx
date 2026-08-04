@@ -4175,6 +4175,23 @@ function variantFromProviderDefinition(
       : DEFAULT_THRESHOLD_PERCENT;
   const apiKey = secretFromConfig(text("api_key"));
 
+  if (definition.component === "anthropic.messages") {
+    return {
+      type: "llm",
+      variant: {
+        type: "anthropic",
+        // The public API is what an operator who typed nothing meant, unlike an
+        // OpenAI-compatible server, which could be anywhere.
+        base_url: text("base_url") || "https://api.anthropic.com/v1",
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+        ...(text("system_prompt")
+          ? { system_prompt: text("system_prompt") }
+          : {}),
+      },
+    };
+  }
   if (
     definition.component === "openai.responses" ||
     definition.component === "openai.completions"

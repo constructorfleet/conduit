@@ -721,12 +721,24 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
         body["components"][1]["schema"]["properties"]["streaming"],
         serde_json::json!({ "type": "boolean" })
     );
-    assert_eq!(body["components"][2]["id"], "wyoming");
+    let components = body["components"].as_array().expect("component list");
+    let wyoming = components
+        .iter()
+        .find(|component| component["id"] == "wyoming")
+        .expect("missing component wyoming");
     assert_eq!(
-        body["components"][2]["schema"]["properties"]["url"],
+        wyoming["schema"]["properties"]["url"],
         serde_json::json!({ "type": "string", "format": "url" })
     );
-    let components = body["components"].as_array().expect("component list");
+    assert_component(
+        components,
+        "anthropic.messages",
+        "llm",
+        &["base_url", "api_key", "model", "streaming"],
+        // The public API is the default, so an operator naming no base URL has
+        // still described a reachable server.
+        &["model"],
+    );
     assert_component(components, "openai.speech", "tts", &["base_url", "model"], &["model"]);
     assert_component(
         components,
