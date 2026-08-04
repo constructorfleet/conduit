@@ -483,6 +483,10 @@ export interface ComponentConfigProperty {{
   /// The only values this field accepts, when it is a closed set — a wake
   /// word engine, for instance. Absent means the field is open.
   options?: string[];
+  /// What the field starts as when a form is opened fresh. A suggestion rather
+  /// than a constraint: an operator can replace it, and a definition that omits
+  /// the field is not filled in behind their back.
+  default?: string;
 }}
 
 export interface ComponentConfigSchema {{

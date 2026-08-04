@@ -760,6 +760,41 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
 }
 
 #[tokio::test]
+async fn the_catalog_offers_the_servers_that_speak_openai_by_name() {
+    // A local Ollama is an OpenAI-compatible endpoint, and an operator who
+    // knows that still has to know its port and its `/v1` suffix. Naming the
+    // servers and filling their URLs in is the whole difference between
+    // "supported" and "configurable".
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+
+    for (id, base_url) in [
+        ("ollama", "http://localhost:11434/v1"),
+        ("vllm", "http://localhost:8000/v1"),
+        ("lmstudio", "http://localhost:1234/v1"),
+        ("openrouter", "https://openrouter.ai/api/v1"),
+    ] {
+        let component = components
+            .iter()
+            .find(|component| component["id"] == id)
+            .unwrap_or_else(|| panic!("missing preset {id}"));
+
+        assert_eq!(component["kind"], "llm");
+        assert_eq!(
+            component["definition_variant"], "openai",
+            "a preset is a filled-in form, not a new wire format"
+        );
+        assert_eq!(
+            component["schema"]["properties"]["base_url"]["default"], base_url,
+            "the form arrives with the endpoint already typed"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_speech_cleanup_definition_is_stored_and_read_back_with_its_rules() {
     let state = AppState::new(EventBus::default());
     let definition = serde_json::json!({

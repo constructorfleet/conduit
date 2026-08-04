@@ -1931,6 +1931,44 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("opens a named server's form with its endpoint already filled in", async () => {
+    // A local Ollama is an OpenAI-compatible endpoint, which does not help
+    // anyone who has to know it listens on 11434 and wants a `/v1` suffix. The
+    // preset is the catalogue saying so, and it stays editable.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(screen.getByRole("menuitem", { name: "Ollama" }));
+
+    expect(screen.getByLabelText("Base URL")).toHaveDisplayValue(
+      "http://localhost:11434/v1",
+    );
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "ollama");
+    await user.type(screen.getByLabelText("Model"), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(saved[0]?.variant).toMatchObject({
+      type: "llm",
+      variant: {
+        type: "openai",
+        base_url: "http://localhost:11434/v1",
+        // A tag carries a colon, which is why the model pattern admits one.
+        models: ["qwen3:8b"],
+      },
+    });
+  });
+
   it("saves a Claude model under its own variant without asking for a base URL", async () => {
     // Two language model components that write different definitions. Sending
     // an Anthropic endpoint as an `openai` variant would build a provider that
@@ -3050,6 +3088,25 @@ function componentCatalog(): ProviderComponentCatalog {
             base_url: { type: "string", format: "url" },
             api_key: { type: "string" },
             model: { type: "string", pattern: "[a-z0-9.]+" },
+            streaming: { type: "boolean" },
+          },
+          required: ["base_url", "model"],
+        },
+      },
+      {
+        id: "ollama",
+        label: "Ollama",
+        kind: "llm",
+        definition_variant: "openai",
+        schema: {
+          properties: {
+            base_url: {
+              type: "string",
+              format: "url",
+              default: "http://localhost:11434/v1",
+            },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._:/-]+" },
             streaming: { type: "boolean" },
           },
           required: ["base_url", "model"],

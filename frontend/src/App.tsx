@@ -1195,7 +1195,7 @@ function ProvidersPanel({
       label: component.label,
       kind: component.kind,
       component: component.id,
-      config: {},
+      config: configDefaults(component),
       source: "local",
     });
     setEditingProviderId("new");
@@ -1865,7 +1865,7 @@ function ProviderEditorFields({
                     ...current,
                     component: component.id,
                     kind: component.kind,
-                    config: {},
+                    config: configDefaults(component),
                   }
                 : current,
             );
@@ -3776,6 +3776,21 @@ function componentForNode(
   );
 }
 
+/// What a fresh form for `component` starts as.
+///
+/// Only the fields whose schema names a default, so a component that suggests
+/// nothing still opens empty. A suggestion rather than a constraint: every one
+/// of them is a field the operator can clear or replace before saving.
+function configDefaults(
+  component: ProviderComponentDescriptor,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(component.schema.properties).flatMap(([field, property]) =>
+      property.default === undefined ? [] : [[field, property.default]],
+    ),
+  );
+}
+
 function componentForProviderStatus(
   catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
@@ -4192,10 +4207,13 @@ function variantFromProviderDefinition(
       },
     };
   }
-  if (
-    definition.component === "openai.responses" ||
-    definition.component === "openai.completions"
-  ) {
+  // Every remaining language model component is an OpenAI-compatible endpoint,
+  // including the named presets, which are that form with a URL already in it.
+  // Keyed on the capability rather than on a list of component ids, so adding a
+  // preset to the catalogue does not mean adding an arm here — and a component
+  // this forgot would otherwise fall through to the Wyoming default and save a
+  // model as a transcriber.
+  if (definition.kind === "llm") {
     return {
       type: "llm",
       variant: {

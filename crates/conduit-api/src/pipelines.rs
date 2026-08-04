@@ -81,6 +81,14 @@ pub struct ComponentConfigProperty {
     /// the server then refuses. Empty means the field is open.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<&'static str>,
+    /// What the field starts as when a form is opened fresh.
+    ///
+    /// A suggestion rather than a constraint: an operator can replace it, and a
+    /// definition that omits the field is not filled in behind their back. It
+    /// exists so a component that knows its own endpoint — a local Ollama on
+    /// `11434` — does not make someone look the port up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<&'static str>,
 }
 
 /// Primitive config field value types.
@@ -470,6 +478,10 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             definition_variant: "openai",
             schema: openai_llm_schema(),
         },
+        preset("ollama", "Ollama", "http://localhost:11434/v1"),
+        preset("vllm", "vLLM", "http://localhost:8000/v1"),
+        preset("lmstudio", "LM Studio", "http://localhost:1234/v1"),
+        preset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
         ProviderComponentDescriptor {
             id: "anthropic.messages",
             label: "Anthropic Messages",
@@ -684,6 +696,29 @@ fn scored_wake_schema() -> ComponentConfigSchema {
     }
 }
 
+/// A named server that speaks the OpenAI chat completions API.
+///
+/// The same variant and the same fields as `openai.responses`, with the
+/// endpoint already filled in. Nothing new is registered: `conduit-openai`
+/// reaches all of these, and what an operator was missing was not a provider
+/// but the knowledge that a local Ollama listens on `11434` and wants a `/v1`
+/// suffix. A preset is the catalogue telling them.
+fn preset(
+    id: &'static str,
+    label: &'static str,
+    base_url: &'static str,
+) -> ProviderComponentDescriptor {
+    let mut schema = openai_llm_schema();
+    schema.properties.insert("base_url", defaulted_url(base_url));
+    ProviderComponentDescriptor {
+        id,
+        label,
+        kind: ProviderCapability::Llm,
+        definition_variant: "openai",
+        schema,
+    }
+}
+
 fn openai_llm_schema() -> ComponentConfigSchema {
     ComponentConfigSchema {
         properties: properties([
@@ -708,6 +743,15 @@ fn string_property(
         format,
         pattern,
         options: Vec::new(),
+        default: None,
+    }
+}
+
+/// The same field, arriving with `default` already in the box.
+fn defaulted_url(default: &'static str) -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        default: Some(default),
+        ..string_property(Some(ComponentConfigFormat::Url), None)
     }
 }
 
@@ -717,6 +761,7 @@ fn boolean_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 
@@ -727,6 +772,7 @@ fn choice_property(options: Vec<&'static str>) -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options,
+        default: None,
     }
 }
 
@@ -737,6 +783,7 @@ fn choice_list_property(options: Vec<&'static str>) -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options,
+        default: None,
     }
 }
 
@@ -746,6 +793,7 @@ fn integer_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 
@@ -756,6 +804,7 @@ fn string_list_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 

@@ -567,6 +567,12 @@ side — a local model and a hosted one — though today only one of them can be
 reached from a given pipeline, because the runtime executes a single `llm` node
 per turn.
 
+The Providers page names the common ones — Ollama, vLLM, LM Studio, and
+OpenRouter — as presets: the same `openai` variant with the endpoint already
+filled in, and still editable. Knowing that a local Ollama is OpenAI-compatible
+does not tell anyone it listens on `11434` and wants a `/v1` suffix, and a
+preset is the catalogue saying so. No provider code is involved.
+
 `conduit-anthropic` is a second implementation rather than another base URL,
 because Anthropic's Messages API differs in the three places that matter: it
 authenticates with an `x-api-key` header instead of a bearer token, requires a

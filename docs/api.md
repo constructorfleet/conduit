@@ -284,6 +284,13 @@ variant is the wire format the saved definition names. `base_url` is required
 for an OpenAI-compatible endpoint, which could be anywhere, and optional for
 Anthropic's, which defaults to the public API.
 
+Two components can also share a `definition_variant` and differ only in what
+their schema suggests. `ollama`, `vllm`, `lmstudio`, and `openrouter` are
+`openai` components whose `base_url` carries a `default`, so the console opens
+their forms with the endpoint already typed. A `default` is a suggestion, not a
+constraint: the console seeds a fresh form with it, an operator may replace it,
+and a stored definition that omits the field is never filled in on the server.
+
 ### `GET /v1/providers`
 
 Lists saved Provider Definition ids.
