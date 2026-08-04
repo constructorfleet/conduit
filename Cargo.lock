@@ -277,6 +277,7 @@ dependencies = [
  "conduit-runtime",
  "conduit-speaker",
  "conduit-store",
+ "conduit-wake",
  "conduit-wyoming",
  "futures-util",
  "http-body-util",

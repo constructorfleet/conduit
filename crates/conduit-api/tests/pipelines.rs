@@ -802,6 +802,82 @@ async fn each_wake_engine_offers_only_the_places_it_runs() {
     }
 }
 
+#[tokio::test]
+async fn a_detector_that_scores_in_process_registers_from_its_models() {
+    let Some(models) = wake_models_dir() else { return };
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": {
+                            "where": "local",
+                            "models_dir": models.to_string_lossy(),
+                            "threshold_percent": 50,
+                        },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let providers = state.providers().expect("a snapshot was built");
+    let detector = providers.wake().get("openwakeword").expect("the detector registered");
+    assert_eq!(
+        detector.available_phrases(),
+        ["hey jarvis"],
+        "the phrases are whatever models are on disk, with no service to ask"
+    );
+}
+
+#[tokio::test]
+async fn a_model_directory_that_holds_nothing_is_refused_when_it_is_saved() {
+    // Not at the first turn, with someone standing there speaking to it.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": { "where": "local", "models_dir": "/nonexistent/models" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().unwrap_or_default().contains("/nonexistent/models"),
+        "the refusal names the directory: {body}"
+    );
+}
+
+/// The models `scripts/fetch-wake-models.sh` downloads, when they are present.
+fn wake_models_dir() -> Option<std::path::PathBuf> {
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../conduit-wake/tests/models");
+    directory.join("melspectrogram.onnx").exists().then_some(directory)
+}
+
 /// The places one wake component offers.
 fn places(components: &[serde_json::Value], id: &str) -> serde_json::Value {
     components

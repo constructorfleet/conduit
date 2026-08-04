@@ -7,6 +7,7 @@ use axum::Json;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
     ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
+    WakeEngine,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -298,7 +299,12 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
             if let Some(url) = variant.wyoming_url() {
                 validate_tcp_url("url", url)?;
             }
-            if variant.local_models_dir().is_some() {
+            // Detecting in process is openWakeWord's alone for now. The models
+            // are checked when the detector is built, not here: whether a
+            // directory holds them is not something a definition can say.
+            if variant.local_models_dir().is_some()
+                && variant.engine() != WakeEngine::OpenWakeWord
+            {
                 return Err(ApiError::unprocessable(local_wake_unavailable(
                     variant.engine().name(),
                 )));
