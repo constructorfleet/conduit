@@ -81,6 +81,14 @@ pub struct ComponentConfigProperty {
     /// the server then refuses. Empty means the field is open.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<&'static str>,
+    /// What the field starts as when a form is opened fresh.
+    ///
+    /// A suggestion rather than a constraint: an operator can replace it, and a
+    /// definition that omits the field is not filled in behind their back. It
+    /// exists so a component that knows its own endpoint — a local Ollama on
+    /// `11434` — does not make someone look the port up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<&'static str>,
 }
 
 /// Primitive config field value types.
@@ -470,6 +478,50 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             definition_variant: "openai",
             schema: openai_llm_schema(),
         },
+        preset("ollama", "Ollama", "http://localhost:11434/v1"),
+        preset("vllm", "vLLM", "http://localhost:8000/v1"),
+        preset("lmstudio", "LM Studio", "http://localhost:1234/v1"),
+        preset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+        ProviderComponentDescriptor {
+            id: "anthropic.messages",
+            label: "Anthropic Messages",
+            kind: ProviderCapability::Llm,
+            definition_variant: "anthropic",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("base_url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("api_key", string_property(None, None)),
+                    ("model", string_property(None, Some("[A-Za-z0-9._:/-]+"))),
+                    ("streaming", boolean_property()),
+                ]),
+                // No `base_url`: the public API is the one an operator who
+                // typed nothing meant, unlike an OpenAI-compatible server,
+                // which could be anywhere.
+                required: vec!["model"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "bedrock.converse",
+            label: "Amazon Bedrock",
+            kind: ProviderCapability::Llm,
+            definition_variant: "bedrock",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("region", string_property(None, Some("[a-z0-9-]+"))),
+                    ("profile", string_property(None, None)),
+                    ("api_key", string_property(None, None)),
+                    // Bedrock names a model by inference profile as often as by
+                    // model id, and a profile carries the `us.` region prefix
+                    // the plain id does not.
+                    ("model", string_property(None, Some("[A-Za-z0-9._:-]+"))),
+                    ("streaming", boolean_property()),
+                ]),
+                // Only the region: the usual deployment names no credential
+                // because a task role or an instance profile already supplies
+                // one, and no URL because the region is the endpoint.
+                required: vec!["region", "model"],
+            },
+        },
         ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
@@ -666,6 +718,29 @@ fn scored_wake_schema() -> ComponentConfigSchema {
     }
 }
 
+/// A named server that speaks the OpenAI chat completions API.
+///
+/// The same variant and the same fields as `openai.responses`, with the
+/// endpoint already filled in. Nothing new is registered: `conduit-openai`
+/// reaches all of these, and what an operator was missing was not a provider
+/// but the knowledge that a local Ollama listens on `11434` and wants a `/v1`
+/// suffix. A preset is the catalogue telling them.
+fn preset(
+    id: &'static str,
+    label: &'static str,
+    base_url: &'static str,
+) -> ProviderComponentDescriptor {
+    let mut schema = openai_llm_schema();
+    schema.properties.insert("base_url", defaulted_url(base_url));
+    ProviderComponentDescriptor {
+        id,
+        label,
+        kind: ProviderCapability::Llm,
+        definition_variant: "openai",
+        schema,
+    }
+}
+
 fn openai_llm_schema() -> ComponentConfigSchema {
     ComponentConfigSchema {
         properties: properties([
@@ -690,6 +765,15 @@ fn string_property(
         format,
         pattern,
         options: Vec::new(),
+        default: None,
+    }
+}
+
+/// The same field, arriving with `default` already in the box.
+fn defaulted_url(default: &'static str) -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        default: Some(default),
+        ..string_property(Some(ComponentConfigFormat::Url), None)
     }
 }
 
@@ -699,6 +783,7 @@ fn boolean_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 
@@ -709,6 +794,7 @@ fn choice_property(options: Vec<&'static str>) -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options,
+        default: None,
     }
 }
 
@@ -719,6 +805,7 @@ fn choice_list_property(options: Vec<&'static str>) -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options,
+        default: None,
     }
 }
 
@@ -728,6 +815,7 @@ fn integer_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 
@@ -738,6 +826,7 @@ fn string_list_property() -> ComponentConfigProperty {
         format: None,
         pattern: None,
         options: Vec::new(),
+        default: None,
     }
 }
 

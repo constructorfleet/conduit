@@ -12,8 +12,8 @@ use conduit_provider::{
 use futures_util::StreamExt;
 use serde::Deserialize;
 
-use crate::http::Http;
 use crate::OpenAiConfig;
+use conduit_http::Http;
 
 /// The API's response to a transcription request.
 #[derive(Debug, Deserialize)]
@@ -81,7 +81,7 @@ impl OpenAiStt {
             )
             .with_settings(settings_schema());
         Ok(Self {
-            http: Http::new(config)?,
+            http: Http::new(config.http())?,
             model,
             descriptor,
             default_settings: config.default_settings.clone(),

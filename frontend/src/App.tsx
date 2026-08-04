@@ -1195,7 +1195,7 @@ function ProvidersPanel({
       label: component.label,
       kind: component.kind,
       component: component.id,
-      config: {},
+      config: configDefaults(component),
       source: "local",
     });
     setEditingProviderId("new");
@@ -1865,7 +1865,7 @@ function ProviderEditorFields({
                     ...current,
                     component: component.id,
                     kind: component.kind,
-                    config: {},
+                    config: configDefaults(component),
                   }
                 : current,
             );
@@ -3776,6 +3776,21 @@ function componentForNode(
   );
 }
 
+/// What a fresh form for `component` starts as.
+///
+/// Only the fields whose schema names a default, so a component that suggests
+/// nothing still opens empty. A suggestion rather than a constraint: every one
+/// of them is a field the operator can clear or replace before saving.
+function configDefaults(
+  component: ProviderComponentDescriptor,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(component.schema.properties).flatMap(([field, property]) =>
+      property.default === undefined ? [] : [[field, property.default]],
+    ),
+  );
+}
+
 function componentForProviderStatus(
   catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
@@ -4058,6 +4073,19 @@ function configFromProviderVariant(
   variant: ProviderDefinitionVariant,
 ): Record<string, unknown> {
   if (variant.type === "llm") {
+    // Bedrock is the one model variant named by region rather than by URL: the
+    // region *is* the endpoint, and the credential usually comes from the
+    // deployment rather than from the form.
+    if (variant.variant.type === "bedrock") {
+      return {
+        region: variant.variant.region,
+        profile: variant.variant.profile ?? "",
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.models[0] ?? "",
+        streaming: variant.variant.streaming,
+        system_prompt: variant.variant.system_prompt ?? "",
+      };
+    }
     return {
       base_url: variant.variant.base_url,
       api_key: secretToConfigValue(variant.variant.api_key),
@@ -4175,10 +4203,46 @@ function variantFromProviderDefinition(
       : DEFAULT_THRESHOLD_PERCENT;
   const apiKey = secretFromConfig(text("api_key"));
 
-  if (
-    definition.component === "openai.responses" ||
-    definition.component === "openai.completions"
-  ) {
+  if (definition.component === "anthropic.messages") {
+    return {
+      type: "llm",
+      variant: {
+        type: "anthropic",
+        // The public API is what an operator who typed nothing meant, unlike an
+        // OpenAI-compatible server, which could be anywhere.
+        base_url: text("base_url") || "https://api.anthropic.com/v1",
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+        ...(text("system_prompt")
+          ? { system_prompt: text("system_prompt") }
+          : {}),
+      },
+    };
+  }
+  if (definition.component === "bedrock.converse") {
+    return {
+      type: "llm",
+      variant: {
+        type: "bedrock",
+        region: text("region"),
+        ...(text("profile") ? { profile: text("profile") } : {}),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+        ...(text("system_prompt")
+          ? { system_prompt: text("system_prompt") }
+          : {}),
+      },
+    };
+  }
+  // Every remaining language model component is an OpenAI-compatible endpoint,
+  // including the named presets, which are that form with a URL already in it.
+  // Keyed on the capability rather than on a list of component ids, so adding a
+  // preset to the catalogue does not mean adding an arm here — and a component
+  // this forgot would otherwise fall through to the Wyoming default and save a
+  // model as a transcriber.
+  if (definition.kind === "llm") {
     return {
       type: "llm",
       variant: {

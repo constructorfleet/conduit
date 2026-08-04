@@ -124,6 +124,10 @@ export interface ComponentConfigProperty {
   /// The only values this field accepts, when it is a closed set — a wake
   /// word engine, for instance. Absent means the field is open.
   options?: string[];
+  /// What the field starts as when a form is opened fresh. A suggestion rather
+  /// than a constraint: an operator can replace it, and a definition that omits
+  /// the field is not filled in behind their back.
+  default?: string;
 }
 
 export interface ComponentConfigSchema {
@@ -155,6 +159,8 @@ export type ProviderCapability =
 /// to name the full two-level provider definition variant.
 export type ProviderDefinitionVariantType =
   | "openai"
+  | "anthropic"
+  | "bedrock"
   | "wyoming"
   | "mcp"
   | "builtin"
@@ -176,14 +182,30 @@ export type ProviderSecret =
   | { type: "external"; reference: string }
   | { type: "redacted" };
 
-export type LlmVariant = {
-  type: "openai";
-  base_url: string;
-  api_key?: ProviderSecret;
-  models: string[];
-  streaming: boolean;
-  system_prompt?: string;
-};
+/// A language model endpoint.
+///
+/// The two HTTP wire formats take the same settings, so they differ only in the
+/// tag that says which one to speak. Bedrock is a case of its own: it is named
+/// by region rather than by URL, because the region is the endpoint, and its
+/// credential is usually the deployment's rather than one an operator typed.
+export type LlmVariant =
+  | {
+      type: "openai" | "anthropic";
+      base_url: string;
+      api_key?: ProviderSecret;
+      models: string[];
+      streaming: boolean;
+      system_prompt?: string;
+    }
+  | {
+      type: "bedrock";
+      region: string;
+      profile?: string;
+      api_key?: ProviderSecret;
+      models: string[];
+      streaming: boolean;
+      system_prompt?: string;
+    };
 
 export type SttVariant =
   | {

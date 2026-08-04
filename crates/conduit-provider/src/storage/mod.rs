@@ -392,63 +392,51 @@ impl ProviderDefinitionVariant {
     }
 
     /// Applies update secret semantics against an existing definition.
+    ///
+    /// Written against the credential slot rather than per variant: every
+    /// keyed variant merges its key the same way, and spelling that out arm by
+    /// arm meant a new keyed variant silently kept whatever the update sent —
+    /// including the `Redacted` placeholder a read response hands back.
     #[must_use]
-    fn with_secret_updates_from(self, existing: Option<&Self>) -> Self {
-        match self {
-            Self::Llm {
-                variant:
-                    LlmVariant::OpenAi { base_url, api_key, models, streaming, system_prompt },
-            } => Self::Llm {
-                variant: LlmVariant::OpenAi {
-                    base_url,
-                    api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
-                    models,
-                    streaming,
-                    system_prompt,
-                },
-            },
-            Self::Stt { variant: SttVariant::OpenAi { base_url, model, api_key, stream } } => {
-                Self::Stt {
-                    variant: SttVariant::OpenAi {
-                        base_url,
-                        model,
-                        api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
-                        stream,
-                    },
-                }
-            }
-            Self::Tts { variant: TtsVariant::OpenAi { base_url, model, api_key, voices } } => {
-                Self::Tts {
-                    variant: TtsVariant::OpenAi {
-                        base_url,
-                        model,
-                        api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
-                        voices,
-                    },
-                }
-            }
-            Self::SpeakerId {
-                variant: SpeakerIdVariant::Http { base_url, api_key, engine, threshold_percent },
-            } => Self::SpeakerId {
-                variant: SpeakerIdVariant::Http {
-                    base_url,
-                    api_key: merge_secret(api_key, existing.and_then(Self::api_key)),
-                    engine,
-                    threshold_percent,
-                },
-            },
-            other => other,
+    fn with_secret_updates_from(mut self, existing: Option<&Self>) -> Self {
+        let existing_key = existing.and_then(Self::api_key).cloned();
+        if let Some(slot) = self.api_key_mut() {
+            *slot = merge_secret(slot.take(), existing_key.as_ref());
         }
+        self
     }
 
     /// The inline-or-external secret a keyed provider carries, if any.
     fn api_key(&self) -> Option<&ProviderSecret> {
         match self {
-            Self::Llm { variant: LlmVariant::OpenAi { api_key, .. } }
+            Self::Llm {
+                variant:
+                    LlmVariant::OpenAi { api_key, .. }
+                    | LlmVariant::Anthropic { api_key, .. }
+                    | LlmVariant::Bedrock { api_key, .. },
+            }
             | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
             | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
             | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
                 api_key.as_ref()
+            }
+            _ => None,
+        }
+    }
+
+    /// The credential slot a keyed provider carries, for rewriting in place.
+    fn api_key_mut(&mut self) -> Option<&mut Option<ProviderSecret>> {
+        match self {
+            Self::Llm {
+                variant:
+                    LlmVariant::OpenAi { api_key, .. }
+                    | LlmVariant::Anthropic { api_key, .. }
+                    | LlmVariant::Bedrock { api_key, .. },
+            }
+            | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
+            | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
+            | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
+                Some(api_key)
             }
             _ => None,
         }
@@ -887,6 +875,82 @@ mod tests {
                 .expect("deserialize");
         assert_eq!(back, definition);
         assert_eq!(back.settings.get("top_p"), Some(&serde_json::json!(0.2)));
+    }
+
+    #[test]
+    fn every_keyed_variant_keeps_its_existing_key_on_a_redacted_update() {
+        // `api_key` falls through to `None` for variants it does not name, so a
+        // keyed variant that is not listed there loses its credential the first
+        // time an operator saves the form back without retyping it. That is
+        // silent, so it is asserted for each keyed variant rather than trusted.
+        let keyed: Vec<ProviderDefinitionVariant> = vec![
+            ProviderDefinitionVariant::Llm {
+                variant: LlmVariant::OpenAi {
+                    base_url: "https://api.openai.example/v1".to_owned(),
+                    api_key: None,
+                    models: Vec::new(),
+                    streaming: false,
+                    system_prompt: None,
+                },
+            },
+            ProviderDefinitionVariant::Llm {
+                variant: LlmVariant::Anthropic {
+                    base_url: "https://api.anthropic.com/v1".to_owned(),
+                    api_key: None,
+                    models: Vec::new(),
+                    streaming: false,
+                    system_prompt: None,
+                },
+            },
+            ProviderDefinitionVariant::Llm {
+                variant: LlmVariant::Bedrock {
+                    region: "us-west-2".to_owned(),
+                    profile: None,
+                    api_key: None,
+                    models: Vec::new(),
+                    streaming: false,
+                    system_prompt: None,
+                },
+            },
+        ];
+
+        for variant in keyed {
+            let stored =
+                with_key(&variant, Some(ProviderSecret::Inline { value: "k".to_owned() }));
+            let update = with_key(&variant, Some(ProviderSecret::Redacted));
+
+            let merged = update.with_secret_updates_from(Some(&stored));
+            assert_eq!(
+                merged.api_key(),
+                Some(&ProviderSecret::Inline { value: "k".to_owned() }),
+                "a redacted update keeps the stored key for {:?}",
+                variant.capability()
+            );
+        }
+    }
+
+    /// Rewrites the credential on a keyed variant, whatever variant it is.
+    fn with_key(
+        variant: &ProviderDefinitionVariant,
+        key: Option<ProviderSecret>,
+    ) -> ProviderDefinitionVariant {
+        let mut value = serde_json::to_value(variant).expect("serialize");
+        let inner = value
+            .get_mut("variant")
+            .and_then(Value::as_object_mut)
+            .expect("a two-level variant has an inner object");
+        match key {
+            Some(key) => {
+                inner.insert(
+                    "api_key".to_owned(),
+                    serde_json::to_value(key).expect("serialize"),
+                );
+            }
+            None => {
+                inner.remove("api_key");
+            }
+        }
+        serde_json::from_value(value).expect("deserialize")
     }
 
     #[test]

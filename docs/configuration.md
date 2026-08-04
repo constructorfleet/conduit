@@ -105,6 +105,8 @@ capability and an inner `variant.type` names the vendor.
 | Capability (`type`) | Vendor (`variant.type`) | Runtime provider | Endpoint |
 | --- | --- | --- | --- |
 | `llm` / `stt` / `tts` | `openai` | `conduit-openai` | `base_url`, `http` or `https` |
+| `llm` | `anthropic` | `conduit-anthropic` | `base_url`, defaulting to the public API |
+| `llm` | `bedrock` | `conduit-bedrock` | `region`: the AWS region is the endpoint |
 | `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
 | `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |

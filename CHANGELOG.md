@@ -8,6 +8,33 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added three ways to reach a language model that were not reachable by changing
+  a base URL. `conduit-anthropic` speaks the Messages API, which authenticates
+  with `x-api-key`, pins a version header, takes system framing as a top-level
+  field, requires `max_tokens`, and streams typed content blocks rather than
+  uniform chunks. `conduit-bedrock` speaks Amazon's Converse API, where there is
+  no URL to configure at all — a definition names a region, and the AWS
+  credential chain resolves whatever the deployment already holds. And Ollama,
+  vLLM, LM Studio, and OpenRouter are catalogue presets rather than new provider
+  code: the same `openai` variant with the endpoint already typed, because
+  knowing a local Ollama is OpenAI-compatible does not tell anyone it listens on
+  11434 and wants a `/v1` suffix.
+- Bedrock's differences from the Messages API are handled at the edges where an
+  operator can see them. Converse insists a conversation alternate between user
+  and assistant, which the runtime's history does not — a memory recall, a tool
+  result, and a spoken utterance arrive as three consecutive user-side turns — so
+  they are joined rather than letting the API refuse the request. `temperature`
+  and `max_tokens` are read from the request rather than offered as settings,
+  because Converse takes them in a field of its own and declaring them would send
+  each control twice. Token counts arrive after the stop reason, so the stop is
+  held and one `Finished` is built when they land.
+- The AWS SDK is ~40 transitive crates, so it sits behind the `bedrock` feature,
+  on by default. A build without it still registers the provider and refuses by
+  name, so an operator learns which feature is missing when they save the
+  definition rather than when someone speaks to it. The SDK's own `rustls`
+  feature would have linked `aws-lc-rs` beside the ring every other provider
+  uses; the TLS client is built from `aws-smithy-http-client` with `rustls-ring`
+  and handed over instead, so the workspace still links one crypto provider.
 - Added the speaker roster: a Speakers page in the operator console, and
   `/v1/speakers` behind it. Identification has been a pipeline stage for a
   while, but a stage that matches a voice against enrolled prints is useless

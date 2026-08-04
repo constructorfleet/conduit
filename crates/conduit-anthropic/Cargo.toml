@@ -1,6 +1,6 @@
 [package]
-name = "conduit-openai"
-description = "OpenAI-compatible language model provider for Conduit, usable with OpenAI, Ollama, vLLM, and other compatible servers."
+name = "conduit-anthropic"
+description = "Anthropic Messages API language model provider for Conduit."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,6 @@ bytes.workspace = true
 futures-util.workspace = true
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
-    "multipart",
     "stream",
     "rustls-tls",
 ] }
@@ -27,7 +26,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-bytes.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 
 [lints]

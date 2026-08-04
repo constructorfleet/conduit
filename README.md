@@ -22,7 +22,10 @@ echoes described under [Running](#running).
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
+| [`conduit-http`](crates/conduit-http) | Shared HTTP plumbing every HTTP-backed provider uses: sending, failure classification, SSE framing |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
+| [`conduit-anthropic`](crates/conduit-anthropic) | Language models over Anthropic's Messages API |
+| [`conduit-bedrock`](crates/conduit-bedrock) | Language models over Amazon Bedrock's Converse API |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
@@ -564,6 +567,59 @@ the provider name, differently configured servers can be registered side by
 side — a local model and a hosted one — though today only one of them can be
 reached from a given pipeline, because the runtime executes a single `llm` node
 per turn.
+
+The Providers page names the common ones — Ollama, vLLM, LM Studio, and
+OpenRouter — as presets: the same `openai` variant with the endpoint already
+filled in, and still editable. Knowing that a local Ollama is OpenAI-compatible
+does not tell anyone it listens on `11434` and wants a `/v1` suffix, and a
+preset is the catalogue saying so. No provider code is involved.
+
+`conduit-anthropic` is a second implementation rather than another base URL,
+because Anthropic's Messages API differs in the three places that matter: it
+authenticates with an `x-api-key` header instead of a bearer token, requires a
+pinned `anthropic-version`, and streams typed events that open and close content
+blocks rather than uniform chunks. It also rejects `temperature` outright on
+current models, so the provider does not offer that setting at all — an operator
+is told when they save the definition instead of when a conversation fails.
+
+```rust
+Anthropic::new(AnthropicConfig {
+    api_key: Some(std::env::var("ANTHROPIC_API_KEY")?),
+    name: "claude".to_owned(),
+    ..AnthropicConfig::default()
+})?;
+```
+
+`conduit-bedrock` reaches the same vendor models through Amazon's Converse API,
+and is a third implementation for a different reason: not the wire format but
+the *credential*. Nobody types a Bedrock key. A definition names a region — the
+region is the endpoint — and the AWS default chain resolves whatever the
+deployment already holds: a task role, an instance profile, a named profile,
+`AWS_ACCESS_KEY_ID`. An operator who types one anyway gets a bearer token used
+in preference, which is what naming it was for.
+
+```rust
+Bedrock::new(BedrockConfig {
+    region: "us-west-2".to_owned(),
+    name: "claude-bedrock".to_owned(),
+    ..BedrockConfig::default()
+})
+.await?;
+```
+
+Two differences worth knowing before configuring it. Converse insists that a
+conversation alternate between user and assistant, which the runtime's history
+does not — a memory recall, a tool result, and a spoken utterance arrive as
+three consecutive user-side turns — so the provider joins them rather than
+letting the API refuse the request. And it takes `temperature` and `maxTokens`
+in a field of its own, so those are read from the request and are not offered as
+settings; `top_k`, `thinking`, and `anthropic_beta` are, and travel as
+additional model request fields.
+
+The AWS SDK is ~40 transitive crates, so it sits behind the `bedrock` feature.
+The feature is on by default; a build without it still registers the provider
+and refuses by name, so an operator learns which feature is missing when they
+save the definition rather than when someone speaks to it.
 
 Two honest limits. Transcription takes a complete recording rather than a
 stream, so `OpenAiStt` buffers the utterance and reports no partial

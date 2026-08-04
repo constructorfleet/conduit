@@ -1,5 +1,5 @@
-//! Why a request to an OpenAI-compatible server failed, in enough detail to
-//! decide what to do about it.
+//! Why a request to a provider's server failed, in enough detail to decide
+//! what to do about it.
 //!
 //! A caller facing a failure has three sensible responses: retry the same
 //! provider, fail over to another, or give up. Telling them apart needs more
@@ -8,7 +8,7 @@
 //! [`Failure::of`]:
 //!
 //! ```no_run
-//! # use conduit_openai::Failure;
+//! # use conduit_http::Failure;
 //! # fn example(error: &conduit_core::Error) {
 //! match Failure::of(error) {
 //!     Some(failure) if failure.is_retryable() => { /* wait and try again */ }
@@ -108,6 +108,46 @@ impl Failure {
             FailureKind::Transport
         };
         Self { kind, status: None, retry_after: None, detail: error.to_string() }
+    }
+
+    /// Classifies a server that accepted the request and stopped answering.
+    ///
+    /// The counterpart to [`Self::transport`] for a provider whose client is
+    /// not `reqwest` — a vendor SDK reports its own error types, and a stalled
+    /// stream means the same thing whichever client noticed it.
+    #[must_use]
+    pub fn timeout(detail: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::Timeout,
+            status: None,
+            retry_after: None,
+            detail: detail.into(),
+        }
+    }
+
+    /// Classifies a request that never completed at the transport layer.
+    #[must_use]
+    pub fn unreachable(detail: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::Transport,
+            status: None,
+            retry_after: None,
+            detail: detail.into(),
+        }
+    }
+
+    /// Classifies a request that could not be assembled, so was never sent.
+    ///
+    /// The cause is on this side — a missing region, an unusable credential —
+    /// so sending it again cannot help.
+    #[must_use]
+    pub fn unsendable(detail: impl Into<String>) -> Self {
+        Self {
+            kind: FailureKind::Request,
+            status: None,
+            retry_after: None,
+            detail: detail.into(),
+        }
     }
 
     /// Classifies a response this provider could not interpret.
@@ -225,6 +265,25 @@ mod tests {
     #[test]
     fn a_malformed_response_is_never_retryable() {
         assert!(!Failure::malformed("not json").is_retryable());
+    }
+
+    #[test]
+    fn a_stall_classifies_the_same_whether_or_not_reqwest_reported_it() {
+        // A provider on a vendor SDK has no `reqwest::Error` to hand over, and
+        // a stalled Bedrock stream is the same kind of thing as a stalled HTTP
+        // one. Retryability must not depend on which client noticed.
+        assert!(Failure::timeout("no event for 60s").is_retryable());
+        assert_eq!(Failure::timeout("no event for 60s").kind(), FailureKind::Timeout);
+        assert!(Failure::unreachable("dispatch failure").is_retryable());
+        assert_eq!(Failure::unreachable("dispatch failure").kind(), FailureKind::Transport);
+    }
+
+    #[test]
+    fn a_request_that_was_never_sent_is_not_worth_sending_again() {
+        // Nothing reached the server, and the reason is on this side.
+        let failure = Failure::unsendable("no region configured");
+        assert_eq!(failure.kind(), FailureKind::Request);
+        assert!(!failure.is_retryable());
     }
 
     #[test]

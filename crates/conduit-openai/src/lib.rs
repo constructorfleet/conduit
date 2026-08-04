@@ -42,19 +42,19 @@
 //! # Ok::<(), conduit_core::Error>(())
 //! ```
 
-pub mod failure;
 pub mod llm;
-pub mod sse;
 pub mod stt;
 pub mod tts;
 pub mod wire;
 
-mod http;
 mod stream;
 
 use std::time::Duration;
 
-pub use failure::{Failure, FailureKind};
+// Re-exported rather than re-implemented: a caller classifying a failure from
+// this provider should not have to know which crate the classification lives
+// in, and it is the same classification either way.
+pub use conduit_http::{Failure, FailureKind};
 pub use llm::OpenAi;
 pub use stt::OpenAiStt;
 pub use tts::OpenAiTts;
@@ -125,6 +125,22 @@ pub struct OpenAiConfig {
 }
 
 impl OpenAiConfig {
+    /// How to reach this server, as the shared client wants it.
+    ///
+    /// OpenAI-compatible servers authenticate with a bearer token and pin no
+    /// version header, which is the whole of the difference between this and
+    /// any other vendor's client.
+    fn http(&self) -> conduit_http::HttpConfig {
+        conduit_http::HttpConfig {
+            base_url: self.base_url.clone(),
+            name: self.name.clone(),
+            credential: conduit_http::Credential::bearer(self.api_key.clone()),
+            headers: Vec::new(),
+            connect_timeout: self.connect_timeout,
+            read_timeout: self.read_timeout,
+        }
+    }
+
     /// The identity half of a descriptor for one capability this server
     /// serves.
     ///
