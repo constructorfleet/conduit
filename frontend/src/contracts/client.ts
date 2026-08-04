@@ -160,6 +160,7 @@ export type ProviderCapability =
 export type ProviderDefinitionVariantType =
   | "openai"
   | "anthropic"
+  | "bedrock"
   | "wyoming"
   | "mcp"
   | "builtin"
@@ -181,16 +182,30 @@ export type ProviderSecret =
   | { type: "external"; reference: string }
   | { type: "redacted" };
 
-/// A language model endpoint. The two wire formats take the same settings, so
-/// they differ only in the tag that says which one to speak.
-export type LlmVariant = {
-  type: "openai" | "anthropic";
-  base_url: string;
-  api_key?: ProviderSecret;
-  models: string[];
-  streaming: boolean;
-  system_prompt?: string;
-};
+/// A language model endpoint.
+///
+/// The two HTTP wire formats take the same settings, so they differ only in the
+/// tag that says which one to speak. Bedrock is a case of its own: it is named
+/// by region rather than by URL, because the region is the endpoint, and its
+/// credential is usually the deployment's rather than one an operator typed.
+export type LlmVariant =
+  | {
+      type: "openai" | "anthropic";
+      base_url: string;
+      api_key?: ProviderSecret;
+      models: string[];
+      streaming: boolean;
+      system_prompt?: string;
+    }
+  | {
+      type: "bedrock";
+      region: string;
+      profile?: string;
+      api_key?: ProviderSecret;
+      models: string[];
+      streaming: boolean;
+      system_prompt?: string;
+    };
 
 export type SttVariant =
   | {

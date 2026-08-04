@@ -25,6 +25,7 @@ use conduit_provider::storage::{ProviderDefinition, ProviderSecret};
 use conduit_runtime::Providers;
 
 mod anthropic;
+mod bedrock;
 mod mcp;
 mod openai;
 mod speaker;
@@ -33,6 +34,10 @@ mod wake;
 mod wyoming;
 
 pub use anthropic::Anthropic;
+// Named for the factory's role rather than for the vendor, because
+// `conduit_bedrock::Bedrock` is the provider it builds and the two would collide
+// wherever both are in scope.
+pub use bedrock::Bedrock as BedrockRuntime;
 pub use mcp::Mcp;
 pub use openai::OpenAi;
 pub use speaker::{DiarizationServer, HttpSpeaker};
@@ -100,6 +105,7 @@ impl Factories {
         Self::new()
             .with(OpenAi)
             .with(Anthropic)
+            .with(BedrockRuntime)
             .with(Wyoming)
             .with(OpenWakeWord)
             .with(DeviceWake)
@@ -234,6 +240,19 @@ mod tests {
         }
     }
 
+    fn bedrock_llm() -> ProviderDefinitionVariant {
+        ProviderDefinitionVariant::Llm {
+            variant: LlmVariant::Bedrock {
+                region: "us-west-2".to_owned(),
+                profile: None,
+                api_key: None,
+                models: vec!["us.anthropic.claude-opus-4-5-20251101-v1:0".to_owned()],
+                streaming: true,
+                system_prompt: None,
+            },
+        }
+    }
+
     /// One definition of every shape a factory dispatches on.
     ///
     /// Written out rather than derived because dispatch is what is under test:
@@ -243,6 +262,7 @@ mod tests {
         vec![
             openai_llm(),
             anthropic_llm(),
+            bedrock_llm(),
             ProviderDefinitionVariant::Stt {
                 variant: SttVariant::OpenAi {
                     base_url: "https://api.openai.com/v1".to_owned(),

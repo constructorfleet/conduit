@@ -273,16 +273,37 @@ Success body:
         },
         "required": ["model"]
       }
+    },
+    {
+      "id": "bedrock.converse",
+      "label": "Amazon Bedrock",
+      "kind": "llm",
+      "definition_variant": "bedrock",
+      "schema": {
+        "properties": {
+          "region": { "type": "string", "pattern": "[a-z0-9-]+" },
+          "profile": { "type": "string" },
+          "api_key": { "type": "string" },
+          "model": { "type": "string", "pattern": "[A-Za-z0-9._:-]+" },
+          "streaming": { "type": "boolean" }
+        },
+        "required": ["region", "model"]
+      }
     }
   ]
 }
 ```
 
-Two components can share a `kind` and differ in `definition_variant`, as the two
-language model entries above do: a component is a shape to fill in, and the
-variant is the wire format the saved definition names. `base_url` is required
-for an OpenAI-compatible endpoint, which could be anywhere, and optional for
-Anthropic's, which defaults to the public API.
+Two components can share a `kind` and differ in `definition_variant`, as the
+three language model entries above do: a component is a shape to fill in, and
+the variant is the wire format the saved definition names. `base_url` is
+required for an OpenAI-compatible endpoint, which could be anywhere, and
+optional for Anthropic's, which defaults to the public API.
+
+Bedrock's schema names no `base_url` at all, because the region is the endpoint,
+and its `api_key` is one an operator rarely fills in: the usual deployment
+already holds a credential — a task role, an instance profile, a named profile,
+`AWS_ACCESS_KEY_ID` — and naming one here would override it.
 
 Two components can also share a `definition_variant` and differ only in what
 their schema suggests. `ollama`, `vllm`, `lmstudio`, and `openrouter` are

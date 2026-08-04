@@ -2009,6 +2009,55 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("saves a Bedrock model by region, with no base URL to answer for", async () => {
+    // The form has to ask a different question for this vendor. A region is not
+    // a URL, and offering a URL field would invite an endpoint the SDK ignores;
+    // asking for a key would invite one that overrides the task role the
+    // deployment already has.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(screen.getByRole("menuitem", { name: "Amazon Bedrock" }));
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Region")).toBeRequired();
+    expect(screen.getByLabelText("API Key")).not.toBeRequired();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "claude-bedrock");
+    await user.type(screen.getByLabelText("Region"), "us-west-2");
+    await user.type(
+      screen.getByLabelText("Model"),
+      "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    );
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByText("Provider claude-bedrock saved"),
+    ).toBeInTheDocument();
+    expect(saved[0]?.variant).toMatchObject({
+      type: "llm",
+      variant: {
+        type: "bedrock",
+        region: "us-west-2",
+        models: ["us.anthropic.claude-opus-4-5-20251101-v1:0"],
+      },
+    });
+    // No credential named means the environment's, not an empty string that
+    // would override it.
+    expect(saved[0]?.variant).not.toHaveProperty("variant.api_key");
+    expect(saved[0]?.variant).not.toHaveProperty("variant.base_url");
+  });
+
   it("names config fields the way a person reads them and enforces the required ones", async () => {
     // The wire spelling belongs on the wire. A form that showed `base_url` and
     // the word "required" beside it was asking the operator to translate, and
@@ -3130,6 +3179,24 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "bedrock.converse",
+        label: "Amazon Bedrock",
+        kind: "llm",
+        definition_variant: "bedrock",
+        schema: {
+          properties: {
+            region: { type: "string", pattern: "[a-z0-9-]+" },
+            profile: { type: "string" },
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._:-]+" },
+            streaming: { type: "boolean" },
+          },
+          // No URL, because the region is the endpoint, and no credential,
+          // because the deployment usually supplies one.
+          required: ["region", "model"],
+        },
+      },
+      {
         id: "openwakeword",
         label: "openWakeWord",
         kind: "wake",
@@ -3678,6 +3745,24 @@ function providerDefinitionFixture({
         variant: {
           type: "anthropic",
           base_url: text("base_url") || "https://api.anthropic.com/v1",
+          ...(apiKey ? { api_key: apiKey } : {}),
+          models: text("model") ? [text("model")] : [],
+          streaming: flag("streaming"),
+        },
+      },
+    };
+  }
+  if (component === "bedrock.converse") {
+    return {
+      id,
+      label,
+      kind: "llm",
+      variant: {
+        type: "llm",
+        variant: {
+          type: "bedrock",
+          region: text("region"),
+          ...(text("profile") ? { profile: text("profile") } : {}),
           ...(apiKey ? { api_key: apiKey } : {}),
           models: text("model") ? [text("model")] : [],
           streaming: flag("streaming"),

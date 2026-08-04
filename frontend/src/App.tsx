@@ -4073,6 +4073,19 @@ function configFromProviderVariant(
   variant: ProviderDefinitionVariant,
 ): Record<string, unknown> {
   if (variant.type === "llm") {
+    // Bedrock is the one model variant named by region rather than by URL: the
+    // region *is* the endpoint, and the credential usually comes from the
+    // deployment rather than from the form.
+    if (variant.variant.type === "bedrock") {
+      return {
+        region: variant.variant.region,
+        profile: variant.variant.profile ?? "",
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.models[0] ?? "",
+        streaming: variant.variant.streaming,
+        system_prompt: variant.variant.system_prompt ?? "",
+      };
+    }
     return {
       base_url: variant.variant.base_url,
       api_key: secretToConfigValue(variant.variant.api_key),
@@ -4198,6 +4211,22 @@ function variantFromProviderDefinition(
         // The public API is what an operator who typed nothing meant, unlike an
         // OpenAI-compatible server, which could be anywhere.
         base_url: text("base_url") || "https://api.anthropic.com/v1",
+        ...(apiKey ? { api_key: apiKey } : {}),
+        models: text("model") ? [text("model")] : [],
+        streaming: flag("streaming"),
+        ...(text("system_prompt")
+          ? { system_prompt: text("system_prompt") }
+          : {}),
+      },
+    };
+  }
+  if (definition.component === "bedrock.converse") {
+    return {
+      type: "llm",
+      variant: {
+        type: "bedrock",
+        region: text("region"),
+        ...(text("profile") ? { profile: text("profile") } : {}),
         ...(apiKey ? { api_key: apiKey } : {}),
         models: text("model") ? [text("model")] : [],
         streaming: flag("streaming"),

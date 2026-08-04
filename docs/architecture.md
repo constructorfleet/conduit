@@ -14,6 +14,7 @@ runtime progress is published as events.
 | `conduit-http` | Shared plumbing for HTTP-backed providers: authenticated request sending, failure classification, and server-sent event framing. |
 | `conduit-openai` | OpenAI-compatible provider implementations for chat completions, audio transcriptions, and audio speech. |
 | `conduit-anthropic` | Language models over Anthropic's Messages API, which authenticates and frames its stream differently from chat completions. |
+| `conduit-bedrock` | Language models over Amazon Bedrock's Converse API, reached by region with the deployment's own AWS credential. Behind the `bedrock` feature, on by default. |
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |
 | `services/speaker-id` | The reference implementation of that contract, published as `conduit-speaker-id` with CPU and GPU tags. |

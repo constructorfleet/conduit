@@ -501,6 +501,28 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "bedrock.converse",
+            label: "Amazon Bedrock",
+            kind: ProviderCapability::Llm,
+            definition_variant: "bedrock",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("region", string_property(None, Some("[a-z0-9-]+"))),
+                    ("profile", string_property(None, None)),
+                    ("api_key", string_property(None, None)),
+                    // Bedrock names a model by inference profile as often as by
+                    // model id, and a profile carries the `us.` region prefix
+                    // the plain id does not.
+                    ("model", string_property(None, Some("[A-Za-z0-9._:-]+"))),
+                    ("streaming", boolean_property()),
+                ]),
+                // Only the region: the usual deployment names no credential
+                // because a task role or an instance profile already supplies
+                // one, and no URL because the region is the endpoint.
+                required: vec!["region", "model"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "wyoming",
             label: "Wyoming",
             kind: ProviderCapability::Stt,
