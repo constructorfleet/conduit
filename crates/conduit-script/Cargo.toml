@@ -1,0 +1,23 @@
+[package]
+name = "conduit-script"
+description = "Operator-written utterance transforms for Conduit, run on a sandboxed Rhai interpreter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+rhai.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true
