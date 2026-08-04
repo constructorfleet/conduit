@@ -30,7 +30,7 @@ use conduit_core::Result;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
-pub use registry::Registry;
+pub use registry::{Capability, Registry, RegistryHandle};
 
 /// A boxed stream of fallible items, the shape every streaming provider
 /// method returns.

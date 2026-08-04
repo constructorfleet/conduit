@@ -37,6 +37,7 @@ pub mod tools;
 mod turn;
 pub mod wake;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,7 +54,7 @@ use conduit_provider::tool::Tool;
 use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::wake::WakeWordDetector;
-use conduit_provider::{ChunkStream, Registry};
+use conduit_provider::{Capability, ChunkStream, Provider, Registry, RegistryHandle};
 use futures_util::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
@@ -72,57 +73,112 @@ pub use turn::TurnInput;
 const OUTPUT_BUFFER: usize = 16;
 
 /// The providers available to a pipeline, one registry per capability.
-#[derive(Default)]
+///
+/// Capability-indexed rather than one hand-written field per capability: the
+/// bundle holds a [`Registry`] behind a type-erased [`RegistryHandle`] for
+/// every [`Capability`], so registering and enumerating wake, speaker, or
+/// memory providers goes through the exact same path recognition, reasoning,
+/// synthesis, and tools always have. Supporting a new capability is adding a
+/// [`Capability`] variant and one typed accessor pair — never an edit to this
+/// struct, [`Providers::new`], or [`Providers`]'s [`Debug`](std::fmt::Debug)
+/// output.
 pub struct Providers {
-    stt: Registry<dyn SpeechToText>,
-    llm: Registry<dyn LanguageModel>,
-    tts: Registry<dyn TextToSpeech>,
-    transforms: Registry<dyn UtteranceTransform>,
-    tools: Registry<dyn Tool>,
-    memory: Registry<dyn Memory>,
-    wake: Registry<dyn WakeWordDetector>,
-    speaker: Registry<dyn SpeakerIdentifier>,
+    registries: BTreeMap<Capability, Box<dyn RegistryHandle>>,
 }
 
 impl Providers {
     /// An empty set of providers.
+    ///
+    /// Every capability gets an empty registry up front — from
+    /// [`Capability::ALL`], which is the one place that lists them — so a
+    /// typed accessor never has to handle "this capability was never touched"
+    /// as a special case; it reads as an ordinary empty [`Registry`].
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let registries = Capability::ALL
+            .into_iter()
+            .map(|capability| (capability, empty_registry(capability)))
+            .collect();
+        Self { registries }
+    }
+
+    /// The registry for `capability`, downcast to its concrete type.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: [`Providers::new`] seeds every [`Capability`], and
+    /// [`empty_registry`] and every typed accessor agree on which
+    /// [`Registry`] type backs each one.
+    fn registry<T: Provider + ?Sized>(&self, capability: Capability) -> &Registry<T> {
+        self.registries
+            .get(&capability)
+            .expect("Providers::new seeds every capability")
+            .as_any()
+            .downcast_ref::<Registry<T>>()
+            .expect("empty_registry agrees with the typed accessor on the registry's type")
+    }
+
+    /// The registry for `capability`, downcast to its concrete type, mutably.
+    ///
+    /// # Panics
+    ///
+    /// See [`Providers::registry`].
+    fn registry_mut<T: Provider + ?Sized>(
+        &mut self,
+        capability: Capability,
+    ) -> &mut Registry<T> {
+        self.registries
+            .get_mut(&capability)
+            .expect("Providers::new seeds every capability")
+            .as_any_mut()
+            .downcast_mut::<Registry<T>>()
+            .expect("empty_registry agrees with the typed accessor on the registry's type")
+    }
+
+    /// Registers a provider of any capability under `name`.
+    ///
+    /// The single uniform path every `with_*` builder routes through: what
+    /// differs between registering a recognizer and registering a wake word
+    /// detector is only which [`Capability`] and which registry type the
+    /// caller names, not the mechanism.
+    fn with<T: Provider + ?Sized>(
+        mut self,
+        capability: Capability,
+        name: impl Into<String>,
+        provider: Arc<T>,
+    ) -> Self {
+        self.registry_mut::<T>(capability).insert(name, provider);
+        self
     }
 
     /// Registers a recognizer under its own [`Provider::name`].
     ///
     /// [`Provider::name`]: conduit_provider::Provider::name
     #[must_use]
-    pub fn with_stt<P: SpeechToText>(mut self, provider: P) -> Self {
+    pub fn with_stt<P: SpeechToText>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.stt.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn SpeechToText>(Capability::Stt, name, Arc::new(provider))
     }
 
     /// Registers a language model under its own name.
     #[must_use]
-    pub fn with_llm<P: LanguageModel>(mut self, provider: P) -> Self {
+    pub fn with_llm<P: LanguageModel>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.llm.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn LanguageModel>(Capability::Llm, name, Arc::new(provider))
     }
 
     /// Registers a synthesizer under its own name.
     #[must_use]
-    pub fn with_tts<P: TextToSpeech>(mut self, provider: P) -> Self {
+    pub fn with_tts<P: TextToSpeech>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.tts.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn TextToSpeech>(Capability::Tts, name, Arc::new(provider))
     }
 
     /// Registers an utterance transform under its own name.
     #[must_use]
-    pub fn with_transform<P: UtteranceTransform>(mut self, provider: P) -> Self {
+    pub fn with_transform<P: UtteranceTransform>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.transforms.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn UtteranceTransform>(Capability::Transform, name, Arc::new(provider))
     }
 
     /// Registers a tool under its own name.
@@ -130,99 +186,136 @@ impl Providers {
     /// The name a graph node refers to is the provider name; the name the
     /// model calls it by comes from the tool's own schema.
     #[must_use]
-    pub fn with_tool<P: Tool>(mut self, provider: P) -> Self {
+    pub fn with_tool<P: Tool>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.tools.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn Tool>(Capability::Tool, name, Arc::new(provider))
     }
 
     /// Registers a memory store under its own name.
     #[must_use]
-    pub fn with_memory<P: Memory>(mut self, provider: P) -> Self {
+    pub fn with_memory<P: Memory>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.memory.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn Memory>(Capability::Memory, name, Arc::new(provider))
     }
 
     /// Registers a wake word detector under its own name.
     #[must_use]
-    pub fn with_wake<P: WakeWordDetector>(mut self, provider: P) -> Self {
+    pub fn with_wake<P: WakeWordDetector>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.wake.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn WakeWordDetector>(Capability::Wake, name, Arc::new(provider))
     }
 
     /// Registers a speaker identifier under its own name.
     #[must_use]
-    pub fn with_speaker<P: SpeakerIdentifier>(mut self, provider: P) -> Self {
+    pub fn with_speaker<P: SpeakerIdentifier>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
-        self.speaker.insert(name, Arc::new(provider));
-        self
+        self.with::<dyn SpeakerIdentifier>(Capability::SpeakerId, name, Arc::new(provider))
     }
 
     /// The registered recognizers.
     #[must_use]
-    pub const fn stt(&self) -> &Registry<dyn SpeechToText> {
-        &self.stt
+    pub fn stt(&self) -> &Registry<dyn SpeechToText> {
+        self.registry(Capability::Stt)
     }
 
     /// The registered language models.
     #[must_use]
-    pub const fn llm(&self) -> &Registry<dyn LanguageModel> {
-        &self.llm
+    pub fn llm(&self) -> &Registry<dyn LanguageModel> {
+        self.registry(Capability::Llm)
     }
 
     /// The registered synthesizers.
     #[must_use]
-    pub const fn tts(&self) -> &Registry<dyn TextToSpeech> {
-        &self.tts
+    pub fn tts(&self) -> &Registry<dyn TextToSpeech> {
+        self.registry(Capability::Tts)
     }
 
     /// The registered utterance transforms.
     #[must_use]
-    pub const fn transform(&self) -> &Registry<dyn UtteranceTransform> {
-        &self.transforms
+    pub fn transform(&self) -> &Registry<dyn UtteranceTransform> {
+        self.registry(Capability::Transform)
     }
 
     /// The registered tools.
     #[must_use]
-    pub const fn tools(&self) -> &Registry<dyn Tool> {
-        &self.tools
+    pub fn tools(&self) -> &Registry<dyn Tool> {
+        self.registry(Capability::Tool)
     }
 
     /// The registered memory stores.
     #[must_use]
-    pub const fn memory(&self) -> &Registry<dyn Memory> {
-        &self.memory
+    pub fn memory(&self) -> &Registry<dyn Memory> {
+        self.registry(Capability::Memory)
     }
 
     /// The registered wake word detectors.
     #[must_use]
-    pub const fn wake(&self) -> &Registry<dyn WakeWordDetector> {
-        &self.wake
+    pub fn wake(&self) -> &Registry<dyn WakeWordDetector> {
+        self.registry(Capability::Wake)
     }
 
     /// The registered speaker identifiers.
     #[must_use]
-    pub const fn speaker(&self) -> &Registry<dyn SpeakerIdentifier> {
-        &self.speaker
+    pub fn speaker(&self) -> &Registry<dyn SpeakerIdentifier> {
+        self.registry(Capability::SpeakerId)
+    }
+
+    /// Every capability with at least one registered provider, and the names
+    /// registered under it — in capability order, then name order.
+    ///
+    /// The generic listing a status page or a diagnostic reads from: it walks
+    /// every [`Capability`] uniformly rather than naming stt, llm, tts, and so
+    /// on one at a time, so a capability registered after this was written
+    /// still shows up in it.
+    #[must_use]
+    pub fn capabilities(&self) -> Vec<(Capability, Vec<String>)> {
+        self.registries
+            .iter()
+            .filter(|(_, registry)| !registry.is_empty())
+            .map(|(capability, registry)| (*capability, registry.names()))
+            .collect()
+    }
+}
+
+impl Default for Providers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The empty, typed registry behind a fresh capability slot.
+///
+/// The one place that names every capability's registry type. Adding a
+/// capability means adding a match arm here and the typed accessor pair on
+/// [`Providers`] — [`Providers::new`] itself stays exactly as it is, because it
+/// only knows [`Capability::ALL`], not which registry type answers for which
+/// variant.
+fn empty_registry(capability: Capability) -> Box<dyn RegistryHandle> {
+    match capability {
+        Capability::Stt => Box::new(Registry::<dyn SpeechToText>::new()),
+        Capability::Llm => Box::new(Registry::<dyn LanguageModel>::new()),
+        Capability::Tts => Box::new(Registry::<dyn TextToSpeech>::new()),
+        Capability::Transform => Box::new(Registry::<dyn UtteranceTransform>::new()),
+        Capability::Tool => Box::new(Registry::<dyn Tool>::new()),
+        Capability::Memory => Box::new(Registry::<dyn Memory>::new()),
+        Capability::Wake => Box::new(Registry::<dyn WakeWordDetector>::new()),
+        Capability::SpeakerId => Box::new(Registry::<dyn SpeakerIdentifier>::new()),
     }
 }
 
 /// Written by hand because the registries hold trait objects, which are not
 /// `Debug`. Lists what is registered, which is what anyone printing this wants.
+///
+/// Walks [`Providers::capabilities`] rather than naming each field, so a
+/// capability registered after this was written is printed without an edit
+/// here.
 impl std::fmt::Debug for Providers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Providers")
-            .field("stt", &self.stt.names().collect::<Vec<_>>())
-            .field("llm", &self.llm.names().collect::<Vec<_>>())
-            .field("tts", &self.tts.names().collect::<Vec<_>>())
-            .field("transforms", &self.transforms.names().collect::<Vec<_>>())
-            .field("tools", &self.tools.names().collect::<Vec<_>>())
-            .field("memory", &self.memory.names().collect::<Vec<_>>())
-            .field("wake", &self.wake.names().collect::<Vec<_>>())
-            .field("speaker", &self.speaker.names().collect::<Vec<_>>())
-            .finish()
+        let mut debug = f.debug_struct("Providers");
+        for (capability, names) in self.capabilities() {
+            debug.field(capability.as_str(), &names);
+        }
+        debug.finish()
     }
 }
 
@@ -505,5 +598,146 @@ impl Runner {
             stop,
             turn: running,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conduit_core::id::SpeakerId;
+    use conduit_provider::memory::{Match, Memory, Query, Record};
+    use conduit_provider::speaker::{Identification, SpeakerIdentifier};
+    use conduit_provider::wake::{Detection, WakePhrase, WakeWordDetector};
+
+    /// A memory store that answers nothing, standing in for a real backend in
+    /// tests that only care whether it can be registered and enumerated.
+    #[derive(Default)]
+    struct NoMemory;
+
+    impl Provider for NoMemory {
+        fn name(&self) -> &str {
+            "no-memory"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Memory for NoMemory {
+        async fn store(&self, _record: Record) -> Result<()> {
+            Ok(())
+        }
+
+        async fn search(&self, _query: Query) -> Result<Vec<Match>> {
+            Ok(Vec::new())
+        }
+
+        async fn forget_conversation(&self, _conversation: ConversationId) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A detector that never activates, standing in for a real one in tests
+    /// that only care whether it can be registered and enumerated.
+    #[derive(Default)]
+    struct NoWake;
+
+    impl Provider for NoWake {
+        fn name(&self) -> &str {
+            "no-wake"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl WakeWordDetector for NoWake {
+        async fn detect(
+            &self,
+            _audio: ChunkStream<AudioChunk>,
+            _phrases: Vec<WakePhrase>,
+        ) -> Result<ChunkStream<Detection>> {
+            Ok(Box::pin(futures_util::stream::empty()))
+        }
+    }
+
+    /// An identifier that never resolves a speaker, standing in for a real
+    /// one in tests that only care whether it can be registered and
+    /// enumerated.
+    #[derive(Default)]
+    struct NoSpeaker;
+
+    impl Provider for NoSpeaker {
+        fn name(&self) -> &str {
+            "no-speaker"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SpeakerIdentifier for NoSpeaker {
+        async fn identify(&self, _audio: ChunkStream<AudioChunk>) -> Result<Identification> {
+            Ok(Identification { speaker: None, confidence: 0.0 })
+        }
+
+        async fn enroll(
+            &self,
+            _speaker: SpeakerId,
+            _samples: ChunkStream<AudioChunk>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn forget(&self, _speaker: SpeakerId) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_empty_bundle_has_no_capabilities_to_report() {
+        assert!(Providers::new().capabilities().is_empty());
+    }
+
+    #[test]
+    fn wake_speaker_and_memory_register_through_the_same_path_as_every_other_capability() {
+        // These three were the point of the ticket: nothing in the bundle
+        // treats them differently from stt, llm, or tts.
+        let providers =
+            Providers::new().with_wake(NoWake).with_speaker(NoSpeaker).with_memory(NoMemory);
+
+        assert_eq!(providers.wake().names().collect::<Vec<_>>(), ["no-wake"]);
+        assert_eq!(providers.speaker().names().collect::<Vec<_>>(), ["no-speaker"]);
+        assert_eq!(providers.memory().names().collect::<Vec<_>>(), ["no-memory"]);
+    }
+
+    #[test]
+    fn capabilities_enumerates_only_what_was_registered() {
+        let providers = Providers::new().with_wake(NoWake).with_memory(NoMemory);
+        let capabilities = providers.capabilities();
+
+        assert_eq!(
+            capabilities,
+            vec![
+                (Capability::Memory, vec!["no-memory".to_owned()]),
+                (Capability::Wake, vec!["no-wake".to_owned()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn debug_output_names_every_registered_capability_generically() {
+        let providers = Providers::new().with_wake(NoWake).with_speaker(NoSpeaker);
+        let rendered = format!("{providers:?}");
+
+        assert!(rendered.contains("wake"), "{rendered}");
+        assert!(rendered.contains("no-wake"), "{rendered}");
+        assert!(rendered.contains("speaker_id"), "{rendered}");
+        assert!(rendered.contains("no-speaker"), "{rendered}");
+    }
+
+    #[test]
+    fn an_unregistered_capability_is_a_real_empty_registry_not_a_missing_slot() {
+        // A bundle that never registered a recognizer must still answer
+        // `stt()` with something usable, rather than panicking: a graph with
+        // no `stt` node never calls it, but one that does should fail with
+        // `UnknownProvider`, not a panic over an absent registry.
+        let providers = Providers::new();
+        assert!(providers.stt().is_empty());
+        assert!(providers.stt().require("whisper").is_err());
     }
 }

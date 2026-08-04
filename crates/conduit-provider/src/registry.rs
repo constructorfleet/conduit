@@ -3,11 +3,100 @@
 //! Pipeline graphs refer to providers by string — `"whisper"`, `"piper"` —
 //! and the registry is what turns those strings into implementations. One
 //! registry holds one capability, e.g. `Registry<dyn SpeechToText>`.
+//!
+//! A [`Registry`] of any capability strips down to the [`RegistryHandle`]
+//! interface, so a collection of registries — a provider bundle — can enumerate
+//! every capability uniformly without knowing each registry's type.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use conduit_core::{Error, Result};
+
+use crate::Provider;
+
+/// A capability a provider supplies, and the dimension a bundle is indexed by.
+///
+/// Adding a capability is data: a new variant (and a `name`, and a slot on
+/// whichever bundle constructs one [`Registry`] per capability). Nothing that
+/// *enumerates* capabilities — a registry, a bundle, its debug output — changes
+/// structure to accommodate it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Capability {
+    /// Speech recognition.
+    Stt,
+    /// Language model reasoning.
+    Llm,
+    /// Speech synthesis.
+    Tts,
+    /// Rewriting an utterance before it is rendered.
+    Transform,
+    /// Tool invocation.
+    Tool,
+    /// Long-term memory.
+    Memory,
+    /// Wake word detection.
+    Wake,
+    /// Speaker identification.
+    SpeakerId,
+}
+
+impl Capability {
+    /// Every capability, in registry order.
+    ///
+    /// The single list that must grow when a capability is added. It lives on
+    /// the enum rather than in a bundle so that a bundle builds itself from
+    /// this rather than naming each capability on its own.
+    pub const ALL: [Self; 8] = [
+        Self::Stt,
+        Self::Llm,
+        Self::Tts,
+        Self::Transform,
+        Self::Tool,
+        Self::Memory,
+        Self::Wake,
+        Self::SpeakerId,
+    ];
+
+    /// The word this capability is written as in diagnostics and listings.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stt => "stt",
+            Self::Llm => "llm",
+            Self::Tts => "tts",
+            Self::Transform => "transform",
+            Self::Tool => "tool",
+            Self::Memory => "memory",
+            Self::Wake => "wake",
+            Self::SpeakerId => "speaker_id",
+        }
+    }
+}
+
+/// What a registry of any capability looks like through a type-erasing handle.
+///
+/// A runtime bundle holds one registry per [`Capability`] behind a boxed
+/// handle, so it can enumerate a wake store next to a recognizer without
+/// caring which is which, and hand the caller the typed registry back through
+/// `Any`.
+pub trait RegistryHandle: Send + Sync {
+    /// Registered names, in order.
+    fn names(&self) -> Vec<String>;
+
+    /// Number of registered providers.
+    fn len(&self) -> usize;
+
+    /// Whether nothing is registered.
+    fn is_empty(&self) -> bool;
+
+    /// The typed [`Registry`] behind this handle, for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// The typed [`Registry`] behind this handle, mutably, for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
 
 /// A name-to-implementation map for one provider capability.
 ///
@@ -128,6 +217,28 @@ impl<T: ?Sized> Clone for Registry<T> {
     }
 }
 
+impl<T: Provider + ?Sized> RegistryHandle for Registry<T> {
+    fn names(&self) -> Vec<String> {
+        Registry::names(self).map(str::to_owned).collect()
+    }
+
+    fn len(&self) -> usize {
+        Registry::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        Registry::is_empty(self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +300,67 @@ mod tests {
     fn resolving_an_empty_registry_is_a_config_error() {
         let registry = Registry::<dyn Greeter>::new();
         assert!(matches!(registry.resolve(None), Err(Error::Config(_))));
+    }
+
+    trait Speaks: Provider {
+        fn greet(&self) -> String;
+    }
+
+    struct FixedSpeaker(&'static str);
+
+    impl Provider for FixedSpeaker {
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    impl Speaks for FixedSpeaker {
+        fn greet(&self) -> String {
+            self.0.to_owned()
+        }
+    }
+
+    #[test]
+    fn every_capability_is_listed_once() {
+        assert_eq!(Capability::ALL.len(), 8);
+        assert_eq!(
+            Capability::ALL.iter().copied().collect::<std::collections::BTreeSet<_>>().len(),
+            8,
+            "no capability is listed twice"
+        );
+    }
+
+    #[test]
+    fn a_capability_writes_as_a_stable_word() {
+        assert_eq!(Capability::Wake.as_str(), "wake");
+        assert_eq!(Capability::SpeakerId.as_str(), "speaker_id");
+        assert_eq!(Capability::Memory.as_str(), "memory");
+    }
+
+    #[test]
+    fn a_registry_is_usable_as_a_type_erased_handle() {
+        let mut registry = Registry::<dyn Speaks>::new();
+        registry.insert("okay-nabu", Arc::new(FixedSpeaker("okay-nabu")) as Arc<dyn Speaks>);
+        let handle: Box<dyn RegistryHandle> = Box::new(registry);
+
+        assert_eq!(handle.names(), ["okay-nabu"]);
+        assert_eq!(handle.len(), 1);
+        assert!(!handle.is_empty());
+
+        let typed =
+            handle.as_any().downcast_ref::<Registry<dyn Speaks>>().expect("same concrete type");
+        assert_eq!(typed.require("okay-nabu").expect("registered").greet(), "okay-nabu");
+    }
+
+    #[test]
+    fn a_handles_registry_downcasts_mutably_for_further_registration() {
+        let mut handle: Box<dyn RegistryHandle> = Box::new(Registry::<dyn Speaks>::new());
+        handle
+            .as_any_mut()
+            .downcast_mut::<Registry<dyn Speaks>>()
+            .expect("same concrete type")
+            .insert("okay-nabu", Arc::new(FixedSpeaker("okay-nabu")) as Arc<dyn Speaks>);
+
+        assert_eq!(handle.names(), ["okay-nabu"]);
     }
 }
