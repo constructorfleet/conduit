@@ -808,3 +808,74 @@ impl conduit_provider::speaker::SpeakerIdentifier for FakeSpeaker {
         Ok(())
     }
 }
+
+/// A transform that rewrites every segment the same way and records what it
+/// was given.
+#[derive(Clone)]
+pub struct FakeTransform {
+    name: String,
+    /// What every segment becomes, or `None` to pass it through unchanged.
+    replacement: Option<String>,
+    /// Text to strip out of every segment, when it appears.
+    remove: Option<String>,
+    seen: Arc<Mutex<Vec<String>>>,
+    failing: bool,
+}
+
+impl FakeTransform {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            replacement: None,
+            remove: None,
+            seen: Arc::new(Mutex::new(Vec::new())),
+            failing: false,
+        }
+    }
+
+    /// Rewrites every segment to `text`.
+    pub fn replacing_with(mut self, text: &str) -> Self {
+        self.replacement = Some(text.to_owned());
+        self
+    }
+
+    /// Removes every occurrence of `text`.
+    pub fn removing(mut self, text: &str) -> Self {
+        self.remove = Some(text.to_owned());
+        self
+    }
+
+    /// Refuses every segment, as a transform whose backend is down would.
+    pub fn failing(mut self) -> Self {
+        self.failing = true;
+        self
+    }
+
+    /// Every segment this transform was given, in order.
+    pub fn seen(&self) -> Vec<String> {
+        self.seen.lock().expect("lock").clone()
+    }
+}
+
+impl Provider for FakeTransform {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::transform::UtteranceTransform for FakeTransform {
+    async fn transform(&self, segment: &str) -> Result<String> {
+        self.seen.lock().expect("lock").push(segment.to_owned());
+        if self.failing {
+            return Err(Error::Config("the rewriting service is down".to_owned()));
+        }
+        if let Some(replacement) = &self.replacement {
+            return Ok(replacement.clone());
+        }
+        match &self.remove {
+            Some(text) => Ok(segment.replace(text, "").trim().to_owned()),
+            None => Ok(segment.to_owned()),
+        }
+    }
+}

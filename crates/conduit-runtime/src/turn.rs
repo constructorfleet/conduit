@@ -28,7 +28,7 @@ use tokio::sync::mpsc::Sender;
 use crate::confirm::Confirmations;
 use crate::deadline::{until_idle, Progress};
 use crate::emit::Emitter;
-use crate::plan::Plan;
+use crate::plan::{Plan, Rewriter};
 use crate::sentences;
 use crate::stop::{until_stopped, Stop};
 use crate::tools;
@@ -594,30 +594,58 @@ impl Turn {
         }
     }
 
+    /// Runs one rendering's transforms over `segment`.
+    ///
+    /// Returns `None` when a transform failed, which ends the turn. Passing
+    /// the original text through instead would deliver exactly what the
+    /// transform was put in the graph to prevent — a redaction that silently
+    /// stops redacting is worse than a turn that stops.
+    async fn rewrite(&mut self, chain: &[Rewriter], segment: &str) -> Option<String> {
+        let mut text = segment.to_owned();
+        for rewriter in chain {
+            match rewriter.provider.transform(&text).await {
+                Ok(rewritten) => text = rewritten,
+                Err(error) => return self.fail(&rewriter.node.clone(), error).await,
+            }
+        }
+        Some(text)
+    }
+
     /// Renders one sentence and forwards it, as speech or as text.
     ///
     /// Returns `false` when the turn should stop, either because synthesis
     /// failed or because the caller stopped listening.
     async fn speak(&mut self, sentence: String, role: UtteranceSegmentRole) -> bool {
+        // Held for the rest of the call because rewriting borrows the turn
+        // mutably to report a failed stage.
+        let plan = Arc::clone(&self.plan);
+
         // A graph may ask for both renderings. The segment is one fact
         // whichever way it is delivered, so it is announced once, named by
-        // the rendering the pipeline leads with.
-        if self.plan.writes_text {
-            if self.plan.tts.is_none() {
-                self.spoken_segments = self.spoken_segments.saturating_add(1);
-                self.emitter.emit(Event::UtteranceSegmentStarted {
-                    segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
-                    role,
-                    modality: Modality::Text,
-                    text: sentence.clone(),
-                });
-            }
-            if self.output.send(Ok(Reply::Text(sentence.clone()))).await.is_err() {
+        // the rendering the pipeline leads with — but each rendering is
+        // announced with the words that rendering actually delivered, which is
+        // the point of transforms being per-rendering.
+        if plan.writes_text {
+            let Some(written) = self.rewrite(&plan.transforms.text, &sentence).await else {
                 return false;
+            };
+            if !written.is_empty() {
+                if plan.tts.is_none() {
+                    self.spoken_segments = self.spoken_segments.saturating_add(1);
+                    self.emitter.emit(Event::UtteranceSegmentStarted {
+                        segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
+                        role,
+                        modality: Modality::Text,
+                        text: written.clone(),
+                    });
+                }
+                if self.output.send(Ok(Reply::Text(written))).await.is_err() {
+                    return false;
+                }
             }
         }
 
-        let Some(synthesizer) = self.plan.tts.as_ref() else {
+        let Some(synthesizer) = plan.tts.as_ref() else {
             // Nothing synthesizes, so the written segment above was the whole
             // delivery. A pipeline with neither is refused at resolution.
             return true;
@@ -627,6 +655,16 @@ impl Turn {
             synthesizer.node.clone(),
             synthesizer.voice.clone(),
         );
+
+        let Some(spoken) = self.rewrite(&plan.transforms.speech, &sentence).await else {
+            return false;
+        };
+        // A sentence that was nothing but an emoji has no spoken form. Sending
+        // it on would ask a synthesizer for the audio of nothing, and the
+        // pipeline is still speaking: the next sentence is the one to wait for.
+        if spoken.is_empty() {
+            return true;
+        }
 
         if !self.speaking {
             self.emitter.emit(Event::TtsStarted {
@@ -639,13 +677,13 @@ impl Turn {
             segment: format!("{}-segment-{}", self.turn, self.spoken_segments),
             role,
             modality: Modality::Audio,
-            text: sentence.clone(),
+            text: spoken.clone(),
         });
 
         let request = SynthesisRequest {
             voice: voice.clone(),
             format: self.format,
-            ..SynthesisRequest::new(sentence)
+            ..SynthesisRequest::new(spoken)
         };
 
         let mut chunks = match provider.synthesize(request).await {

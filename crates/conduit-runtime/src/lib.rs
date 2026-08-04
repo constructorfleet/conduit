@@ -50,6 +50,7 @@ use conduit_provider::memory::Memory;
 use conduit_provider::speaker::SpeakerIdentifier;
 use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
+use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
 use conduit_provider::wake::WakeWordDetector;
 use conduit_provider::{ChunkStream, Registry};
@@ -76,6 +77,7 @@ pub struct Providers {
     stt: Registry<dyn SpeechToText>,
     llm: Registry<dyn LanguageModel>,
     tts: Registry<dyn TextToSpeech>,
+    transforms: Registry<dyn UtteranceTransform>,
     tools: Registry<dyn Tool>,
     memory: Registry<dyn Memory>,
     wake: Registry<dyn WakeWordDetector>,
@@ -112,6 +114,14 @@ impl Providers {
     pub fn with_tts<P: TextToSpeech>(mut self, provider: P) -> Self {
         let name = provider.name().to_owned();
         self.tts.insert(name, Arc::new(provider));
+        self
+    }
+
+    /// Registers an utterance transform under its own name.
+    #[must_use]
+    pub fn with_transform<P: UtteranceTransform>(mut self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.transforms.insert(name, Arc::new(provider));
         self
     }
 
@@ -168,6 +178,12 @@ impl Providers {
         &self.tts
     }
 
+    /// The registered utterance transforms.
+    #[must_use]
+    pub const fn transform(&self) -> &Registry<dyn UtteranceTransform> {
+        &self.transforms
+    }
+
     /// The registered tools.
     #[must_use]
     pub const fn tools(&self) -> &Registry<dyn Tool> {
@@ -201,6 +217,7 @@ impl std::fmt::Debug for Providers {
             .field("stt", &self.stt.names().collect::<Vec<_>>())
             .field("llm", &self.llm.names().collect::<Vec<_>>())
             .field("tts", &self.tts.names().collect::<Vec<_>>())
+            .field("transforms", &self.transforms.names().collect::<Vec<_>>())
             .field("tools", &self.tools.names().collect::<Vec<_>>())
             .field("memory", &self.memory.names().collect::<Vec<_>>())
             .field("wake", &self.wake.names().collect::<Vec<_>>())
