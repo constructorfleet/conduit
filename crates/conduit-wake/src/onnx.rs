@@ -126,6 +126,18 @@ impl Models {
         }
 
         let embedding = compile(&embedding_path, &[1, frames, bins, 1])?;
+        // How wide an embedding is comes from the classifier, which is a
+        // different file — so the two have to be checked against each other.
+        // Left unchecked, a mismatched pair drifts the rolling buffer out of
+        // shape and fails on every chunk instead of once, here.
+        let produced = run(&embedding, &[1, frames, bins, 1], &vec![0.0; frames * bins])?.len();
+        if produced != dim {
+            return Err(Error::Config(format!(
+                "`{}` produces {produced} values per embedding, but the phrase models want \
+                 {dim}",
+                embedding_path.display()
+            )));
+        }
         let mut loaded = Vec::with_capacity(discovered.len());
         for (phrase, path) in discovered {
             loaded.push(PhraseModel { phrase, plan: compile(&path, &[1, embeddings, dim])? });
