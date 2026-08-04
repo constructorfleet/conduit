@@ -620,6 +620,14 @@ turn. Nothing substitutes the device or the conversation for a speaker, and
 nothing should: those name which satellite is connected, and a policy satisfied
 by the wrong identity is worse than one satisfied by none.
 
+**A voice has to be enrolled before it can be identified.** The Speakers page
+in the operator console is where that happens: name somebody, then record a
+sample in the browser or upload a WAV. Conduit generates the speaker id and the
+identification service stores it as an opaque label, so the service never holds
+anyone's name and a deployment can change embedding models without every
+enrolled voice becoming a stranger. Until a voice is enrolled, a `speaker_id`
+stage matches nobody and every turn reaches a tool with no speaker.
+
 **Speaker identification is remote only.** The embedding models that recognize
 a voice are Python and want more memory than an ESP32 has, so there is no
 on-device counterpart to a wake definition's `device` runtime. A satellite can

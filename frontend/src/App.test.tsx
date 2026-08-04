@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { OverviewPanel } from "./App";
 import type {
+  EnrolledSpeaker,
   ProviderComponentCatalog,
   PipelineGraph,
   PipelineView,
@@ -67,7 +68,7 @@ describe("Operator Console shell", () => {
     expect(sessionStorage.getItem("conduit.operator.access")).toBeNull();
   });
 
-  it("enters explicit anonymous mode and exposes the five top-level sections", async () => {
+  it("enters explicit anonymous mode and exposes every top-level section", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -79,6 +80,7 @@ describe("Operator Console shell", () => {
       "Overview",
       "Pipelines",
       "Providers",
+      "Speakers",
       "Events",
       "Settings",
     ]) {
@@ -2579,9 +2581,174 @@ async function enterPipelinesSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 }
 
+describe("Speakers workspace", () => {
+  /// Somebody named but never recorded, which is the state every speaker
+  /// starts in.
+  function named(id: string, name: string): EnrolledSpeaker {
+    return { id, name, samples: 0, created_at: "2025-01-01T00:00:00Z" };
+  }
+
+  it("says plainly that an empty roster identifies nobody", async () => {
+    // The stage exists whether or not anyone is enrolled, and a pipeline that
+    // identifies nobody reaches every tool's permission check with no
+    // speaker. An empty page that did not say so would look like it worked.
+    const user = userEvent.setup();
+    mockOperatorApi({ speakers: [] });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+
+    expect(
+      await screen.findByText(/Nobody is enrolled yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("names somebody before anyone has recorded them", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({ speakers: [] });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.type(await screen.findByLabelText("Name"), "Ada");
+    await user.click(screen.getByRole("button", { name: "Add speaker" }));
+
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("no voice yet")).toBeInTheDocument();
+    expect([...api.roster.values()].map((speaker) => speaker.name)).toEqual([
+      "Ada",
+    ]);
+  });
+
+  it("sends an uploaded sample as a file and shows what came back", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    const upload = await screen.findByLabelText("Upload a sample for Ada");
+    const file = new File([new Uint8Array([1, 2, 3])], "ada.wav", {
+      type: "audio/wav",
+    });
+    await user.upload(upload.querySelector("input") as HTMLInputElement, file);
+
+    expect(
+      await screen.findByText("Sample accepted — 1 on file"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 on file")).toBeInTheDocument();
+    expect(screen.getByText("voices")).toBeInTheDocument();
+    expect(api.enrollments).toHaveLength(1);
+    expect(api.enrollments[0].body).toBe(file);
+  });
+
+  it("reports what the identification service said when it refused", async () => {
+    // The service's own words are the only thing that tells an operator
+    // whether to record again or go fix a deployment.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+      enrollmentFails: "the audio is too short to build a voice print",
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    const upload = await screen.findByLabelText("Upload a sample for Ada");
+    await user.upload(
+      upload.querySelector("input") as HTMLInputElement,
+      new File([new Uint8Array([1])], "short.wav", { type: "audio/wav" }),
+    );
+
+    expect(
+      await screen.findByText("the audio is too short to build a voice print"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("no voice yet")).toBeInTheDocument();
+  });
+
+  it("renames somebody without disturbing the voice behind the name", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [
+        {
+          ...named("00000000-0000-4000-8000-000000000001", "Ada"),
+          samples: 2,
+          provider: "voices",
+        },
+      ],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Rename Ada"));
+    const field = screen.getByLabelText("New name for Ada");
+    await user.clear(field);
+    await user.type(field, "Ada Lovelace{Enter}");
+
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("2 on file")).toBeInTheDocument();
+    expect(api.roster.get("00000000-0000-4000-8000-000000000001")?.name).toBe(
+      "Ada Lovelace",
+    );
+  });
+
+  it("removes somebody from the roster", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Remove Ada"));
+
+    expect(
+      await screen.findByText(/Nobody is enrolled yet/),
+    ).toBeInTheDocument();
+    expect(api.roster.size).toBe(0);
+  });
+
+  it("offers to record when the browser will give the page a microphone", async () => {
+    // The button is the whole point of the page for a household that has no
+    // WAV files lying about.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+
+    expect(
+      await screen.findByLabelText("Record a sample for Ada"),
+    ).toBeEnabled();
+  });
+
+  it("says so when the browser will not give the page a microphone", async () => {
+    // jsdom has no `getUserMedia`, which is exactly the case a locked-down
+    // browser presents: the operator needs to be told to upload instead.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Record a sample for Ada"));
+
+    expect(
+      await screen.findByText(/upload a WAV file instead/),
+    ).toBeInTheDocument();
+  });
+});
+
 async function enterProvidersSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
   await user.click(screen.getByRole("tab", { name: "Providers" }));
+}
+
+async function enterSpeakersSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Speakers" }));
 }
 
 async function enterSettingsSection(user: ReturnType<typeof userEvent.setup>) {
@@ -2884,6 +3051,8 @@ function mockOperatorApi({
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
   providerDefinitions = [],
+  speakers = [],
+  enrollmentFails,
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
@@ -2891,6 +3060,10 @@ function mockOperatorApi({
   pipelineViews?: PipelineView[];
   componentCatalog?: ProviderComponentCatalog;
   providerDefinitions?: ProviderDefinitionView[];
+  speakers?: EnrolledSpeaker[];
+  /// What the identification service says when it refuses a sample, if it
+  /// does. Refusal is the case the console has to report faithfully.
+  enrollmentFails?: string;
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
@@ -2903,6 +3076,10 @@ function mockOperatorApi({
       (definition) => [definition.id, definition] as const,
     ),
   );
+  const roster = new Map(speakers.map((speaker) => [speaker.id, speaker]));
+  /// Every enrollment body the console sent, so a test can assert it was a
+  /// WAV file rather than whatever the browser felt like producing.
+  const enrollments: { id: string; body: BodyInit | null | undefined }[] = [];
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof URL ? input : new URL(input.toString());
@@ -2912,6 +3089,66 @@ function mockOperatorApi({
       if (route === "/v1/status" && method === "GET") {
         currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
         return jsonResponse(currentSnapshot);
+      }
+
+      if (route === "/v1/speakers" && method === "GET") {
+        return jsonResponse([...roster.values()]);
+      }
+
+      if (route === "/v1/speakers" && method === "POST") {
+        const { name } = JSON.parse(String(init?.body)) as { name: string };
+        const created: EnrolledSpeaker = {
+          id: `00000000-0000-4000-8000-00000000000${roster.size + 1}`,
+          name,
+          samples: 0,
+          created_at: "2025-01-01T00:00:00Z",
+        };
+        roster.set(created.id, created);
+        return jsonResponse(created, { status: 201 });
+      }
+
+      if (route.startsWith("/v1/speakers/")) {
+        const rest = route.slice("/v1/speakers/".length);
+        const id = rest.replace(/\/enroll$/, "");
+        const speaker = roster.get(id);
+        if (!speaker) {
+          return jsonResponse(
+            { error: "not_found", detail: `no speaker ${id}` },
+            { status: 404 },
+          );
+        }
+
+        if (rest.endsWith("/enroll") && method === "POST") {
+          enrollments.push({ id, body: init?.body });
+          if (enrollmentFails) {
+            return jsonResponse(
+              { error: "unavailable", detail: enrollmentFails },
+              { status: 503 },
+            );
+          }
+          const enrolled: EnrolledSpeaker = {
+            ...speaker,
+            samples: speaker.samples + 1,
+            provider: "voices",
+            enrolled_at: "2025-01-02T00:00:00Z",
+          };
+          roster.set(id, enrolled);
+          return jsonResponse(enrolled);
+        }
+
+        if (method === "PUT") {
+          const { name } = JSON.parse(String(init?.body)) as { name: string };
+          const renamed = { ...speaker, name };
+          roster.set(id, renamed);
+          return jsonResponse(renamed);
+        }
+
+        if (method === "DELETE") {
+          roster.delete(id);
+          return new Response(null, { status: 204 });
+        }
+
+        return jsonResponse(speaker);
       }
 
       if (route === "/v1/pipelines" && method === "GET") {
@@ -3028,7 +3265,7 @@ function mockOperatorApi({
   );
 
   vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
+  return Object.assign(fetchMock, { enrollments, roster });
 }
 
 /// The outer provider definition variant is the capability itself.

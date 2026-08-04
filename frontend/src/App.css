@@ -979,6 +979,36 @@ button {
   font-weight: 750;
 }
 
+/* Naming somebody is one field and one button, so it sits on one line. */
+.speaker-add {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.speaker-add .field {
+  flex: 1 1 260px;
+  max-width: 360px;
+}
+
+/* Sits under the name it belongs to: what the identification service said
+   about this person is only meaningful beside this person. */
+.speaker-notice {
+  margin: 6px 0 0;
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* The upload control is a label wrapping a hidden file input, so it needs the
+   affordances the buttons beside it get for free. */
+label.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 .test-turn-reply {
   width: 100%;
   margin-top: 10px;

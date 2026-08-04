@@ -1,5 +1,6 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
+  EnrolledSpeaker,
   PipelineGraph,
   PipelineTestRequest,
   PipelineTestResult,
@@ -57,6 +58,11 @@ export interface SnapshotClient {
   deletePipeline: (name: string) => Promise<void>;
   loadComponentCatalog: () => Promise<ProviderComponentCatalog>;
   loadProviderDefinitions: () => Promise<ProviderDefinitionView[]>;
+  loadSpeakers: () => Promise<EnrolledSpeaker[]>;
+  createSpeaker: (name: string) => Promise<EnrolledSpeaker>;
+  renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
+  enrollSpeaker: (id: string, audio: Blob) => Promise<EnrolledSpeaker>;
+  deleteSpeaker: (id: string) => Promise<void>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -130,6 +136,11 @@ export function createSnapshotClient(
       const ids = await client.listProviderDefinitions();
       return Promise.all(ids.map((id) => client.getProviderDefinition(id)));
     },
+    loadSpeakers: () => client.listSpeakers(),
+    createSpeaker: (name) => client.createSpeaker(name),
+    renameSpeaker: (id, name) => client.renameSpeaker(id, name),
+    enrollSpeaker: (id, audio) => client.enrollSpeaker(id, audio),
+    deleteSpeaker: (id) => client.deleteSpeaker(id),
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
@@ -166,6 +177,28 @@ function createMockSnapshotClient(
     deletePipeline: async () => {},
     loadComponentCatalog: async () => ({ components: [] }),
     loadProviderDefinitions: async () => [],
+    loadSpeakers: async () => [],
+    createSpeaker: async (name) => ({
+      id: "00000000-0000-0000-0000-0000000000aa",
+      name,
+      samples: 0,
+      created_at: "2025-01-01T00:00:00Z",
+    }),
+    renameSpeaker: async (id, name) => ({
+      id,
+      name,
+      samples: 0,
+      created_at: "2025-01-01T00:00:00Z",
+    }),
+    enrollSpeaker: async (id) => ({
+      id,
+      name: "Recorded",
+      samples: 1,
+      provider: "mock-speaker",
+      created_at: "2025-01-01T00:00:00Z",
+      enrolled_at: "2025-01-01T00:00:00Z",
+    }),
+    deleteSpeaker: async () => {},
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
     loadTurn: async () => turnSnapshotFixture,
     loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),
