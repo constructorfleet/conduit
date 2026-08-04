@@ -10,12 +10,24 @@
 //! openWakeWord installation ships. Nothing is downloaded: the models are the
 //! operator's to place, and the compose file mounts a volume for them.
 //!
-//! # microWakeWord
+//! # The other two engines
 //!
-//! Not here, and not by omission. microWakeWord's models are tflite-micro
-//! streaming graphs that need the TFLM micro-frontend operator, which no Rust
-//! runtime implements — so it detects on the satellite that was built for it,
-//! or on a Wyoming server. The provider definition says so in its type.
+//! **microWakeWord** is absent because it cannot be here: its models are
+//! tflite-micro streaming graphs needing the TFLM micro-frontend operator,
+//! which no Rust runtime implements. It detects on the satellite that was
+//! built for it, or on a Wyoming server, and the provider definition says so
+//! in its type — there is no `local` runtime to name.
+//!
+//! **nanoWakeWord** is absent because it is a different detector wearing a
+//! similar name. It is ONNX too, and it borrows openWakeWord's mel and
+//! embedding front end, but its phrase models are recurrent: each one takes a
+//! `hidden_in` and a `cell_in` and returns the updated pair, so scoring a
+//! chunk means threading LSTM state from the chunk before it. openWakeWord's
+//! classifiers are stateless and score a fixed window of embeddings, which is
+//! what [`onnx::Scorer`] is built around. Adding nanoWakeWord means a second
+//! scorer that carries state, not a flag on this one — so until that exists
+//! its definitions are refused with the reason, rather than quietly handed to
+//! a chain that would score them as silence.
 
 #![cfg_attr(not(feature = "onnx"), allow(unused_imports))]
 

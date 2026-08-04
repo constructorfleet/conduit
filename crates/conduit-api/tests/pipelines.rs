@@ -871,6 +871,63 @@ async fn a_model_directory_that_holds_nothing_is_refused_when_it_is_saved() {
     );
 }
 
+#[tokio::test]
+async fn nanowakeword_in_process_is_refused_with_the_reason() {
+    // It is ONNX like openWakeWord, so the refusal has to say what is actually
+    // different — recurrent models — or it reads as an arbitrary restriction.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(
+        &state,
+        put_json(
+            "/v1/providers/nanowakeword",
+            serde_json::json!({
+                "id": "nanowakeword",
+                "label": "nanoWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "nanowakeword",
+                        "runtime": { "where": "local" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = body["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("recurrent"), "the refusal says why: {detail}");
+    assert!(detail.contains("Wyoming"), "and what to do instead: {detail}");
+}
+
+#[tokio::test]
+async fn nanowakeword_on_a_wyoming_server_is_accepted() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/nanowakeword",
+            serde_json::json!({
+                "id": "nanowakeword",
+                "label": "nanoWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "nanowakeword",
+                        "runtime": { "where": "wyoming", "url": "tcp://nanowakeword:10400" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+}
+
 /// The models `scripts/fetch-wake-models.sh` downloads, when they are present.
 fn wake_models_dir() -> Option<std::path::PathBuf> {
     let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

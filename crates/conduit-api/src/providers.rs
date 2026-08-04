@@ -263,10 +263,19 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
 ///
 /// Shared by validation and by registration so that an operator saving one and
 /// a server loading one already stored are told the same thing.
+///
+/// Only nanoWakeWord reaches this: microWakeWord has no `local` runtime to
+/// name, and openWakeWord is implemented. nanoWakeWord runs in process
+/// perfectly well — the reason it does not run in *this* process is that its
+/// phrase models are recurrent, threading an LSTM hidden and cell state from
+/// one chunk to the next, where openWakeWord's score a fixed window of
+/// embeddings and keep nothing. That is a second detector, not a setting on
+/// this one, and a definition should hear the difference now rather than
+/// discover it as a detector that never fires.
 pub(crate) fn local_wake_unavailable(engine: &str) -> String {
     format!(
-        "`{engine}` cannot yet detect in process; point the definition at a Wyoming server \
-         instead"
+        "`{engine}` cannot yet detect in process: its models are recurrent and Conduit only \
+         scores openWakeWord's in-process. Point the definition at a Wyoming server instead."
     )
 }
 
