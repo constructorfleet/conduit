@@ -99,6 +99,7 @@ capability and an inner `variant.type` names the vendor.
 | --- | --- | --- | --- |
 | `llm` / `stt` / `tts` | `openai` | `conduit-openai` | `base_url`, `http` or `https` |
 | `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 | `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
 | `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
@@ -106,6 +107,43 @@ capability and an inner `variant.type` names the vendor.
 
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
+
+### Rewriting What Is Spoken
+
+A model writes for a reader. It emphasises with asterisks, punctuates with
+emoji, and links with brackets, and asking it not to works until it does not.
+A `transform` definition names the rewrites to apply instead, so what reaches a
+synthesizer is the pipeline's decision rather than the model's willingness to
+comply.
+
+```json
+{
+  "id": "speech-cleanup",
+  "label": "Speech cleanup",
+  "variant": {
+    "type": "transform",
+    "variant": {
+      "type": "builtin",
+      "rules": ["markdown_to_speech", "strip_emoji"]
+    }
+  }
+}
+```
+
+| Rule | What it does |
+| --- | --- |
+| `markdown_to_speech` | Headings, emphasis, lists, tables, links and code spans become the words they wrap. A link reads as its text and not its address. |
+| `strip_emoji` | Removes pictographs and respaces what is left, so the sentence reads as though the emoji was never written. Currency, arithmetic and degree signs stay: a voice reads those aloud and is meant to. |
+| `collapse_whitespace` | Runs of whitespace, including line breaks, become single spaces. |
+
+Rules run in the order they are listed, and the order matters: flattening
+markdown before stripping emoji means an emoji inside a link's text is seen as
+text rather than as part of an address.
+
+A transform runs per sentence, because synthesis begins before the model has
+finished writing. A construct spanning several sentences — most obviously a
+fenced code block — is therefore judged one line at a time rather than
+recognised as one thing.
 
 ### Wake Word Detection Without A Service
 

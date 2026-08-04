@@ -2210,6 +2210,7 @@ function PipelinesPanel({
     llm: providerOptionsFor("llm"),
     tts: providerOptionsFor("tts"),
     tool: providerOptionsFor("tool"),
+    transform: providerOptionsFor("transform"),
     wake: providerOptionsFor("wake"),
     speakerId: providerOptionsFor("speaker_id"),
   };

@@ -14,7 +14,7 @@ use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
     LlmVariant, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
     ProviderDefinitionVariant, ProviderSecret, SpeakerIdVariant, SttVariant, ToolVariant,
-    TtsVariant, WakeEngine, WakeVariant, DEFAULT_THRESHOLD_PERCENT,
+    TransformVariant, TtsVariant, WakeEngine, WakeVariant, DEFAULT_THRESHOLD_PERCENT,
 };
 use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
@@ -22,6 +22,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_speaker::diarization_server::DiarizationServerSpeakerId;
 use conduit_speaker::HttpSpeakerId;
 use conduit_store::MemoryStore;
+use conduit_transform::Builtin;
 use conduit_wake::OpenWakeWord;
 use conduit_wyoming::stt::WyomingStt;
 use conduit_wyoming::tts::WyomingTts;
@@ -464,6 +465,9 @@ async fn register_definition(
             secret_value(api_key),
             f32::from(*threshold_percent) / 100.0,
         )?)),
+        ProviderDefinitionVariant::Transform {
+            variant: TransformVariant::Builtin { rules },
+        } => Ok(providers.with_transform(Builtin::new(&definition.id, rules.clone()))),
     }
 }
 

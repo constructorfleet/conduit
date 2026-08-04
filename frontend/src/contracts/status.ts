@@ -15,6 +15,7 @@ export type ProviderKind =
   | "llm"
   | "tool"
   | "tts"
+  | "transform"
   | "wake"
   | "speaker_id";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";

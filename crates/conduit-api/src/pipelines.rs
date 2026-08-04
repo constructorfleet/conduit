@@ -410,6 +410,8 @@ fn runtime_provider_capability(
         Some(ProviderCapability::Tool)
     } else if providers.tts().get(id).is_some() {
         Some(ProviderCapability::Tts)
+    } else if providers.transform().get(id).is_some() {
+        Some(ProviderCapability::Transform)
     } else {
         None
     }
@@ -424,6 +426,7 @@ fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
     match kind {
         NodeKind::Stt => Some(ProviderCapability::Stt),
         NodeKind::Tts => Some(ProviderCapability::Tts),
+        NodeKind::Transform => Some(ProviderCapability::Transform),
         NodeKind::WakeWord => Some(ProviderCapability::Wake),
         NodeKind::SpeakerId => Some(ProviderCapability::SpeakerId),
         _ => None,
@@ -436,10 +439,15 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
         ProviderCapability::Llm => "llm",
         ProviderCapability::Tool => "tool",
         ProviderCapability::Tts => "tts",
+        ProviderCapability::Transform => "transform",
         ProviderCapability::Wake => "wake",
         ProviderCapability::SpeakerId => "speaker_id",
     }
 }
+
+/// The rewriting rules a built-in transform can apply, in the order the form
+/// offers them.
+const TRANSFORM_RULES: [&str; 3] = ["markdown_to_speech", "strip_emoji", "collapse_whitespace"];
 
 /// The embedding models a speaker identification service may be running.
 const SPEAKER_ENGINES: [&str; 3] = ["speechbrain", "resemblyzer", "pyannote"];
@@ -610,6 +618,23 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "transform.builtin",
+            label: "Speech cleanup",
+            kind: ProviderCapability::Transform,
+            definition_variant: "builtin",
+            schema: ComponentConfigSchema {
+                // Rules rather than free text: each one is a statement about
+                // how speech differs from writing, and an operator typing a
+                // name this build does not implement would save a definition
+                // that quietly rewrites nothing.
+                properties: properties([(
+                    "rules",
+                    choice_list_property(TRANSFORM_RULES.to_vec()),
+                )]),
+                required: vec!["rules"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "mcp.stdio",
             label: "MCP STDIO",
             kind: ProviderCapability::Tool,
@@ -681,6 +706,16 @@ fn boolean_property() -> ComponentConfigProperty {
 fn choice_property(options: Vec<&'static str>) -> ComponentConfigProperty {
     ComponentConfigProperty {
         value_type: ComponentConfigValueType::String,
+        format: None,
+        pattern: None,
+        options,
+    }
+}
+
+/// A field holding any number of values, each one of `options`.
+fn choice_list_property(options: Vec<&'static str>) -> ComponentConfigProperty {
+    ComponentConfigProperty {
+        value_type: ComponentConfigValueType::StringList,
         format: None,
         pattern: None,
         options,

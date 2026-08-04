@@ -6,8 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
-    ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
-    WakeEngine,
+    ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TransformVariant,
+    TtsVariant, WakeEngine,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -271,6 +271,10 @@ pub async fn test(
             Some(provider) => Some(provider.health().await),
             None => None,
         },
+        ProviderCapability::Transform => match providers.transform().get(&id) {
+            Some(provider) => Some(provider.health().await),
+            None => None,
+        },
         ProviderCapability::Tool => match providers.tools().get(&id) {
             Some(provider) => Some(provider.health().await),
             None => None,
@@ -305,6 +309,7 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Stt => ProviderKind::Stt,
         ProviderCapability::Llm => ProviderKind::Llm,
         ProviderCapability::Tts => ProviderKind::Tts,
+        ProviderCapability::Transform => ProviderKind::Transform,
         ProviderCapability::Tool => ProviderKind::Tool,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
@@ -374,6 +379,11 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             validate_mcp_transport(transport)?;
         }
+        // Built-in rules name nothing outside the process: no endpoint to
+        // reach, no credential to check. An empty rule list is a definition an
+        // operator is still filling in, and refusing to save one would be the
+        // form arguing with them mid-edit.
+        ProviderDefinitionVariant::Transform { variant: TransformVariant::Builtin { .. } } => {}
     }
     Ok(())
 }

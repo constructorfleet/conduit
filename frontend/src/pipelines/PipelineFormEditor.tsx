@@ -31,6 +31,7 @@ export interface ProviderOptions {
   llm: readonly ProviderOption[];
   tts: readonly ProviderOption[];
   tool: readonly ProviderOption[];
+  transform: readonly ProviderOption[];
   wake: readonly ProviderOption[];
   speakerId: readonly ProviderOption[];
 }
@@ -479,6 +480,18 @@ export function PipelineFormEditor({
           <p className="eyebrow">Stage 3</p>
           <h3>Output</h3>
         </header>
+
+        {/* Between the model and what renders it: a model writes for a
+            reader, and this is where a pipeline says what a listener should
+            hear instead. */}
+        {optionalStage({
+          label: "Rewrite before output",
+          stage: form.transform,
+          fallbackId: "transform",
+          options: providers.transform,
+          fallbackProvider: "speech-cleanup",
+          onStageChange: (transform) => update({ transform }),
+        })}
 
         {form.tts ? (
           <div className="pipeline-form-row">

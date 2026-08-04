@@ -61,8 +61,8 @@ Edges are typed by modality — `audio`, `text`, or `utterance`. A `source` and 
 `sink` declare theirs, because nothing about a websocket says whether it carries
 microphone samples or typed words; every other kind derives one from what it
 does. Recognition reads audio and writes text, a model reads text and produces
-an utterance, synthesis speaks an utterance or plain text, and a text sink
-writes an utterance down. An utterance is what a model said before anything
+an utterance, a transform reads an utterance and produces one, synthesis speaks
+an utterance or plain text, and a text sink writes an utterance down. An utterance is what a model said before anything
 decided how to render it, which is what keeps a model unaware of whether it will
 be heard or read. A graph wired `tts -> llm -> stt` therefore fails validation
 naming the offending edge, rather than failing a stage-order assertion in the
@@ -79,6 +79,23 @@ compatible edges and still drops the model's answer on the floor, which is why
 `Plan::resolve` still asks whether each stage is reachable from the one before
 it. Core reachability replaces that check once a graph has exactly one core to
 state the rule about.
+
+A `transform` node sits between a core and whatever renders what it said. It
+reads an utterance and produces one, so transforms chain and either rendering
+can read the result — and which renderings a rewrite reaches is a property of
+its edges. A transform wired only to the `tts` node cleans up what is spoken
+and leaves a text sink showing the markdown the model actually wrote, which is
+usually what a transcript is for. Accepting only an utterance is what keeps one
+out of the input path: rewriting what a person said to the assistant is a
+different proposition from rewriting what it says back.
+
+`Plan::resolve` walks back from each renderer to collect its chain, rather than
+forward from the core, because that is the question being asked — not which
+transforms exist but what happens to what this one speaks. A transform nothing
+renders through is refused there: one edge is the difference between a rewrite
+that runs and one that never will. A transform that fails ends the turn rather
+than passing the segment through, because a redaction that silently stops
+redacting is worse than a turn that stops.
 
 A node is a typed variant rather than a generic record, tagged by `kind`, and
 carries the configuration belonging to that kind: an `llm` node names its

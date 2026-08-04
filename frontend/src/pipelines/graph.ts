@@ -27,6 +27,7 @@ export const LINEAR_STAGE_ORDER: NodeKind[] = [
   "stt",
   "speaker_id",
   "core",
+  "transform",
   "tts",
   "sink",
 ];
