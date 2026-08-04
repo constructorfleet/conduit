@@ -1220,10 +1220,15 @@ label.icon-action {
 }
 
 /* The editor is a row of the same table, so it stays under the provider it
-   belongs to while the rest of the stage keeps its place. */
+   belongs to while the rest of the stage keeps its place. It is recessed rather
+   than tinted: `--selected` is the accent the row hover already uses, so an
+   editor drawn in it read as one more hovered row instead of as the panel that
+   opened underneath one. A neutral gray raised off the table's own background
+   says the same thing without borrowing the accent. */
 .provider-editor-row td {
   padding: 0;
-  background: var(--selected);
+  background: var(--surface-raised);
+  box-shadow: inset 0 1px 0 var(--border);
 }
 
 .provider-inline-editor {
