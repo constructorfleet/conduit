@@ -415,7 +415,10 @@ pub(crate) fn local_wake_unavailable(engine: &str) -> String {
 
 fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), ApiError> {
     match &definition.variant {
-        ProviderDefinitionVariant::Llm { variant: LlmVariant::OpenAi { base_url, .. } }
+        ProviderDefinitionVariant::Llm {
+            variant:
+                LlmVariant::OpenAi { base_url, .. } | LlmVariant::Anthropic { base_url, .. },
+        }
         | ProviderDefinitionVariant::Stt { variant: SttVariant::OpenAi { base_url, .. } }
         | ProviderDefinitionVariant::Tts { variant: TtsVariant::OpenAi { base_url, .. } } => {
             validate_http_url("base_url", base_url)?;
