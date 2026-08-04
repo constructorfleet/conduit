@@ -116,6 +116,7 @@ pub fn provider_definition(id: &str) -> ProviderDefinition {
     ProviderDefinition {
         id: id.to_owned(),
         label: format!("{id} Provider"),
+        settings: Default::default(),
         variant: ProviderDefinitionVariant::Llm {
             variant: LlmVariant::OpenAi {
                 base_url: "https://api.openai.example/v1".to_owned(),
@@ -129,9 +130,14 @@ pub fn provider_definition(id: &str) -> ProviderDefinition {
 }
 
 fn replacement_provider_definition(id: &str) -> ProviderDefinition {
+    // Carries a default setting so the round-trip below proves a backend keeps
+    // stored settings across a restart, not just the connection variant.
+    let mut settings = serde_json::Map::new();
+    settings.insert("temperature".to_owned(), serde_json::json!(0.4));
     ProviderDefinition {
         id: id.to_owned(),
         label: format!("{id} Tools"),
+        settings,
         variant: ProviderDefinitionVariant::Tool {
             variant: ToolVariant::Mcp {
                 transport: McpTransport::StreamableHttp {

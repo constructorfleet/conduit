@@ -199,7 +199,12 @@ mod tests {
     use conduit_provider::testing::EchoStt;
 
     fn definition(variant: ProviderDefinitionVariant) -> ProviderDefinition {
-        ProviderDefinition { id: "kitchen".to_owned(), label: "Kitchen".to_owned(), variant }
+        ProviderDefinition {
+            id: "kitchen".to_owned(),
+            label: "Kitchen".to_owned(),
+            variant,
+            settings: Default::default(),
+        }
     }
 
     fn openai_llm() -> ProviderDefinitionVariant {
