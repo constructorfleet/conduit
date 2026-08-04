@@ -36,6 +36,7 @@ pub struct OpenAiStt {
     http: Http,
     model: String,
     descriptor: Descriptor,
+    default_settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The encodings the transcriptions endpoint accepts, via the WAV container
@@ -79,7 +80,12 @@ impl OpenAiStt {
                     .with_encodings(ENCODINGS.to_vec()),
             )
             .with_settings(settings_schema());
-        Ok(Self { http: Http::new(config)?, model, descriptor })
+        Ok(Self {
+            http: Http::new(config)?,
+            model,
+            descriptor,
+            default_settings: config.default_settings.clone(),
+        })
     }
 }
 
@@ -126,14 +132,18 @@ impl SpeechToText for OpenAiStt {
         if let Some(language) = options.language {
             form = form.text("language", language);
         }
-        // Already checked against this provider's declared schema, so each one
-        // is a field the endpoint has rather than a blob forwarded on trust.
-        for (name, value) in options.settings.as_map() {
+        // The provider's stored defaults, overridden by anything the request
+        // carries. Already checked against this provider's declared schema, so
+        // each one is a field the endpoint has rather than a blob forwarded on
+        // trust.
+        for (name, value) in
+            crate::layered_settings(&self.default_settings, options.settings.as_map())
+        {
             let rendered = match value {
-                serde_json::Value::String(text) => text.clone(),
+                serde_json::Value::String(text) => text,
                 other => other.to_string(),
             };
-            form = form.text(name.clone(), rendered);
+            form = form.text(name, rendered);
         }
 
         let response =

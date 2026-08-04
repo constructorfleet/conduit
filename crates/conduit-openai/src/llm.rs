@@ -52,6 +52,7 @@ pub struct OpenAi {
     http: Http,
     descriptor: Descriptor,
     system_prompt: Option<String>,
+    default_settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl OpenAi {
@@ -66,7 +67,12 @@ impl OpenAi {
             .descriptor(Capability::Llm)
             .with_metadata(Metadata::default().with_models(config.models.clone()).with_tools())
             .with_settings(settings_schema());
-        Ok(Self { http: Http::new(&config)?, descriptor, system_prompt: config.system_prompt })
+        Ok(Self {
+            http: Http::new(&config)?,
+            descriptor,
+            system_prompt: config.system_prompt,
+            default_settings: config.default_settings,
+        })
     }
 }
 
@@ -87,7 +93,7 @@ impl Provider for OpenAi {
 #[async_trait::async_trait]
 impl LanguageModel for OpenAi {
     async fn complete(&self, request: CompletionRequest) -> Result<ChunkStream<Completion>> {
-        let body = crate::wire::Request::from_completion(request);
+        let body = crate::wire::Request::from_completion(request, &self.default_settings);
         tracing::debug!(model = %body.model, tools = body.tools.len(), "requesting completion");
 
         let response = self.http.send(self.http.post("chat/completions").json(&body)).await?;
@@ -138,11 +144,13 @@ mod tests {
             .descriptor()
             .validate_settings(&serde_json::json!({ "top_p": 0.2 }))
             .expect("a declared setting");
-        let request =
-            crate::wire::Request::from_completion(conduit_provider::llm::CompletionRequest {
+        let request = crate::wire::Request::from_completion(
+            conduit_provider::llm::CompletionRequest {
                 settings,
                 ..conduit_provider::llm::CompletionRequest::new("llama3.1:8b", Vec::new())
-            });
+            },
+            &serde_json::Map::new(),
+        );
         assert_eq!(request.settings.get("top_p"), Some(&serde_json::json!(0.2)));
 
         assert!(

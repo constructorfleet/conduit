@@ -36,7 +36,13 @@ pub struct Request {
 
 impl Request {
     /// Translates a Conduit request into the vendor's shape.
-    pub fn from_completion(request: CompletionRequest) -> Self {
+    ///
+    /// `defaults` are the Configured Provider's stored settings; the request's
+    /// own settings override them, so a pipeline can still overrule a default.
+    pub fn from_completion(
+        request: CompletionRequest,
+        defaults: &serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
         Self {
             model: request.model,
             messages: request.messages.into_iter().map(WireMessage::from_message).collect(),
@@ -44,7 +50,7 @@ impl Request {
             tools: request.tools.into_iter().map(WireTool::from_spec).collect(),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
-            settings: request.settings.as_map().clone(),
+            settings: crate::layered_settings(defaults, request.settings.as_map()),
         }
     }
 }
@@ -233,5 +239,24 @@ mod tests {
         assert_eq!(finish_reason("stop"), FinishReason::Stop);
         // An unfamiliar reason still means the response ended.
         assert_eq!(finish_reason("something_new"), FinishReason::Stop);
+    }
+
+    #[test]
+    fn configured_defaults_reach_the_wire_and_a_request_overrides_them() {
+        // A Configured Provider's stored settings apply to a request that names
+        // none, and a request that names one wins — so a pipeline can still
+        // overrule the operator's default.
+        let mut defaults = serde_json::Map::new();
+        defaults.insert("top_p".to_owned(), serde_json::json!(0.1));
+        defaults.insert("seed".to_owned(), serde_json::json!(7));
+
+        let mut request = CompletionRequest::new("llama3.1:8b", Vec::new());
+        request.settings = serde_json::from_value(serde_json::json!({ "top_p": 0.9 }))
+            .expect("a settings value");
+
+        let body = Request::from_completion(request, &defaults);
+
+        assert_eq!(body.settings.get("top_p"), Some(&serde_json::json!(0.9)), "request wins");
+        assert_eq!(body.settings.get("seed"), Some(&serde_json::json!(7)), "default carries");
     }
 }
