@@ -12,6 +12,7 @@ conduit-core.workspace = true
 
 async-trait.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 futures-core.workspace = true
 futures-util = { workspace = true, optional = true }
 serde.workspace = true

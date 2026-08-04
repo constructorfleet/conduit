@@ -21,8 +21,8 @@ use conduit_store::PostgresStore;
 use sqlx::AssertSqlSafe;
 
 use conformance::{
-    behaves_like_a_store, graph, provider_definition, provider_definitions_behave_like_a_store,
-    UNUSABLE_NAMES,
+    a_roster_behaves_like_a_store, behaves_like_a_store, graph, provider_definition,
+    provider_definitions_behave_like_a_store, UNUSABLE_NAMES,
 };
 
 /// The database to test against, if one was named.
@@ -94,6 +94,13 @@ async fn it_behaves_like_a_provider_definition_store() {
     let store: Arc<dyn conduit_provider::storage::ProviderDefinitionStore> =
         Arc::new(store_or_skip!("provider_contract"));
     provider_definitions_behave_like_a_store(store).await;
+}
+
+#[tokio::test]
+async fn it_behaves_like_a_roster() {
+    let store: Arc<dyn conduit_provider::storage::SpeakerRosterStore> =
+        Arc::new(store_or_skip!("roster_contract"));
+    a_roster_behaves_like_a_store(store).await;
 }
 
 #[tokio::test]

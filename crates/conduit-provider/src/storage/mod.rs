@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub mod llm;
+pub mod roster;
 pub mod speaker;
 pub mod stt;
 pub mod tool;
@@ -18,6 +19,7 @@ pub mod tts;
 pub mod wake;
 
 pub use llm::LlmVariant;
+pub use roster::{EnrolledSpeaker, SpeakerRosterStore};
 pub use speaker::SpeakerIdVariant;
 pub use stt::SttVariant;
 pub use tool::{McpTransport, ToolVariant};

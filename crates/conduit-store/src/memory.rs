@@ -9,7 +9,8 @@ use std::sync::{Mutex, PoisonError};
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_provider::storage::{
-    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    SpeakerRosterStore,
 };
 
 use crate::is_listable;
@@ -19,6 +20,7 @@ use crate::is_listable;
 pub struct MemoryStore {
     pipelines: Mutex<BTreeMap<String, PipelineGraph>>,
     providers: Mutex<BTreeMap<String, ProviderDefinition>>,
+    speakers: Mutex<BTreeMap<String, EnrolledSpeaker>>,
 }
 
 impl MemoryStore {
@@ -41,6 +43,10 @@ impl MemoryStore {
         &self,
     ) -> std::sync::MutexGuard<'_, BTreeMap<String, ProviderDefinition>> {
         self.providers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_speakers(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, EnrolledSpeaker>> {
+        self.speakers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -97,5 +103,33 @@ impl ProviderDefinitionStore for MemoryStore {
     async fn remove(&self, id: &str) -> Result<bool> {
         validate_name(id)?;
         Ok(self.lock_providers().remove(id).is_some())
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeakerRosterStore for MemoryStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        Ok(self.lock_speakers().keys().filter(|id| is_listable(id)).cloned().collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<EnrolledSpeaker>> {
+        validate_name(id)?;
+        Ok(self.lock_speakers().get(id).cloned())
+    }
+
+    async fn put(&self, id: &str, speaker: EnrolledSpeaker) -> Result<bool> {
+        validate_name(id)?;
+        if speaker.id.to_string() != id {
+            return Err(conduit_core::Error::Config(format!(
+                "speaker id `{}` does not match route id `{id}`",
+                speaker.id
+            )));
+        }
+        Ok(self.lock_speakers().insert(id.to_owned(), speaker).is_some())
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        validate_name(id)?;
+        Ok(self.lock_speakers().remove(id).is_some())
     }
 }

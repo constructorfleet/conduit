@@ -12,6 +12,7 @@ conduit-core.workspace = true
 conduit-provider.workspace = true
 
 async-trait.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
@@ -31,6 +32,7 @@ postgres = ["dep:sqlx"]
 
 [dev-dependencies]
 conduit-core = { workspace = true, features = ["testing"] }
+uuid.workspace = true
 conduit-store = { workspace = true, features = ["postgres"] }
 sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
