@@ -1,0 +1,22 @@
+[package]
+name = "conduit-http"
+description = "Shared HTTP plumbing for Conduit's HTTP-backed providers: request sending, failure classification, and server-sent event framing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "multipart",
+    "stream",
+    "rustls-tls",
+] }
+tracing.workspace = true
+
+[lints]
+workspace = true

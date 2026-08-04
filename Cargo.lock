@@ -316,6 +316,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit-http"
+version = "0.1.0"
+dependencies = [
+ "conduit-core",
+ "reqwest 0.12.28",
+ "tracing",
+]
+
+[[package]]
 name = "conduit-mcp"
 version = "0.1.0"
 dependencies = [
@@ -349,6 +358,7 @@ dependencies = [
  "axum",
  "bytes",
  "conduit-core",
+ "conduit-http",
  "conduit-provider",
  "futures-util",
  "reqwest 0.12.28",

@@ -13,9 +13,9 @@ use conduit_provider::{
 use futures_util::StreamExt;
 use serde::Serialize;
 
-use crate::failure::Failure;
-use crate::http::Http;
 use crate::OpenAiConfig;
+use conduit_http::Failure;
+use conduit_http::Http;
 
 /// The default voice when a pipeline names none.
 const DEFAULT_VOICE: &str = "alloy";
@@ -91,7 +91,7 @@ impl OpenAiTts {
             )
             .with_settings(settings_schema());
         Ok(Self {
-            http: Http::new(config)?,
+            http: Http::new(config.http())?,
             model,
             descriptor,
             default_settings: config.default_settings.clone(),

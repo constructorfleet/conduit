@@ -6,8 +6,8 @@ use conduit_provider::{
     Capability, ChunkStream, Descriptor, Health, Metadata, Provider, SettingsSchema,
 };
 
-use crate::http::Http;
 use crate::{stream, OpenAiConfig};
+use conduit_http::Http;
 
 /// The sampling controls the chat completions API accepts beyond the ones
 /// every model has.
@@ -68,7 +68,7 @@ impl OpenAi {
             .with_metadata(Metadata::default().with_models(config.models.clone()).with_tools())
             .with_settings(settings_schema());
         Ok(Self {
-            http: Http::new(&config)?,
+            http: Http::new(config.http())?,
             descriptor,
             system_prompt: config.system_prompt,
             default_settings: config.default_settings,

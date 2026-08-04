@@ -1,5 +1,5 @@
-//! Why a request to an OpenAI-compatible server failed, in enough detail to
-//! decide what to do about it.
+//! Why a request to a provider's server failed, in enough detail to decide
+//! what to do about it.
 //!
 //! A caller facing a failure has three sensible responses: retry the same
 //! provider, fail over to another, or give up. Telling them apart needs more
@@ -8,7 +8,7 @@
 //! [`Failure::of`]:
 //!
 //! ```no_run
-//! # use conduit_openai::Failure;
+//! # use conduit_http::Failure;
 //! # fn example(error: &conduit_core::Error) {
 //! match Failure::of(error) {
 //!     Some(failure) if failure.is_retryable() => { /* wait and try again */ }

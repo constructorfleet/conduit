@@ -13,9 +13,9 @@ use conduit_provider::llm::{Completion, Usage};
 use conduit_provider::ChunkStream;
 use futures_util::{Stream, StreamExt};
 
-use crate::failure::Failure;
-use crate::sse::Decoder;
 use crate::wire;
+use conduit_http::sse::Decoder;
+use conduit_http::Failure;
 
 /// A tool call being assembled from fragments.
 #[derive(Debug, Default)]

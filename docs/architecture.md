@@ -11,6 +11,7 @@ runtime progress is published as events.
 | `conduit-core` | Shared identifiers, audio formats, device protocol types, event vocabulary, event bus, errors, and the serializable pipeline graph. |
 | `conduit-provider` | Object-safe provider traits for speech recognition, language models, synthesis, tools, storage, wake word, speaker identification, and memory. |
 | `conduit-runtime` | Resolves a graph against registered providers and runs one conversation turn from captured audio to synthesized speech. |
+| `conduit-http` | Shared plumbing for HTTP-backed providers: authenticated request sending, failure classification, and server-sent event framing. |
 | `conduit-openai` | OpenAI-compatible provider implementations for chat completions, audio transcriptions, and audio speech. |
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 conduit-core.workspace = true
+conduit-http.workspace = true
 conduit-provider.workspace = true
 
 async-trait.workspace = true

@@ -22,6 +22,7 @@ echoes described under [Running](#running).
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
 | [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
+| [`conduit-http`](crates/conduit-http) | Shared HTTP plumbing every HTTP-backed provider uses: sending, failure classification, SSE framing |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
