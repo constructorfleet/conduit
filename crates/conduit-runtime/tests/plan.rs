@@ -302,6 +302,58 @@ fn a_tool_bound_to_the_core_resolves() {
 }
 
 #[test]
+fn binding_an_mcp_server_offers_every_tool_it_registered() {
+    // An MCP definition registers what its server advertises as
+    // `<definition id>.<tool name>`, and the console offers the definition
+    // itself as a tool to add. Naming it used to resolve to nothing, so a
+    // pipeline built the obvious way failed with "no provider registered as
+    // `weather`" — and the way around it was to list every tool by hand and
+    // come back whenever the server grew one.
+    let mut core = ReasoningCore::new("fake-llm");
+    core.tools
+        .push(ToolBinding { provider: "weather".to_owned(), confirm: ConfirmPolicy::Never });
+    let graph = PipelineGraph::new("umbrella")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "llm".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let providers = providers()
+        .with_tool(FakeTool::new("weather.forecast", serde_json::json!({})))
+        .with_tool(FakeTool::new("weather.alerts", serde_json::json!({})))
+        // A different server, which the binding must not sweep in.
+        .with_tool(FakeTool::new("weatherhouse.lights", serde_json::json!({})));
+    let plan = Plan::resolve(&graph, &providers).expect("executable");
+
+    let mut offered: Vec<_> = plan.core.tool_specs().into_iter().map(|s| s.name).collect();
+    offered.sort();
+    assert_eq!(offered, vec!["weather.alerts", "weather.forecast"]);
+}
+
+#[test]
+fn binding_a_name_that_is_neither_a_tool_nor_a_server_is_still_refused() {
+    // Group expansion must not turn a typo into a pipeline that silently
+    // offers the model nothing.
+    let mut core = ReasoningCore::new("fake-llm");
+    core.tools
+        .push(ToolBinding { provider: "wether".to_owned(), confirm: ConfirmPolicy::Never });
+    let graph = PipelineGraph::new("typo")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::Core { id: "llm".to_owned(), core })
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let providers =
+        providers().with_tool(FakeTool::new("weather.forecast", serde_json::json!({})));
+    assert!(matches!(
+        refusal(&graph, &providers),
+        Error::UnknownProvider(name) if name == "wether"
+    ));
+}
+
+#[test]
 fn a_second_model_is_refused_by_validation_rather_than_by_this_runtime() {
     // This used to be a runtime limitation — "one `llm` per turn" — which said
     // the graph was fine and Conduit was not up to it. A pipeline that reasons

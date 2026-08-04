@@ -56,10 +56,12 @@ impl ProviderFactory for Mcp {
 /// than failing the write. A later reachability test or provider write
 /// rediscovers them.
 ///
-/// Every tool is registered as `<definition id>.<tool name>`. A server that
-/// advertises exactly one tool is also registered under the definition id
-/// itself, because the provider component catalog offers one MCP component per
-/// definition and a graph node written from it names the definition.
+/// Every tool is registered as `<definition id>.<tool name>`. The definition
+/// id itself names the whole server rather than any one tool: a pipeline that
+/// binds it is offered everything the server advertised, which is what an
+/// operator adding "the weather server" to a core meant, and it keeps saying
+/// so as the server grows tools. Resolution does that expansion — see
+/// `conduit_runtime::plan` — so nothing is registered under the bare id here.
 async fn register_tools(providers: Providers, id: &str, transport: &McpTransport) -> Providers {
     let client = Arc::new(McpClient::new(transport.clone()));
     let discovery = timeout(DISCOVERY_TIMEOUT, client.list_tools()).await;
@@ -85,14 +87,9 @@ async fn register_tools(providers: Providers, id: &str, transport: &McpTransport
         }
     };
 
-    let only_tool = tools.len() == 1;
     let mut providers = providers;
     for tool in tools {
         let qualified = format!("{id}.{}", tool.name);
-        if only_tool {
-            providers =
-                providers.with_tool(McpTool::new(id, tool.clone(), Arc::clone(&client)));
-        }
         providers = providers.with_tool(McpTool::new(qualified, tool, Arc::clone(&client)));
     }
     providers

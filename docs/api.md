@@ -378,8 +378,9 @@ the speaker id and the service stores it as an opaque label, so a deployment
 can change embedding models without every enrolled voice becoming a stranger.
 
 A `tool` definition with the `mcp` variant registers the tools its server
-currently advertises, each as `<definition id>.<tool name>`. A server
-advertising exactly one tool is also registered under the definition id itself.
+currently advertises, each as `<definition id>.<tool name>`. A core's tool
+binding may name one of those, or the definition id itself — which names the
+whole server, and offers the model every tool that definition registered.
 Discovery needs the server, but saving does not: a server that cannot be
 reached within five seconds saves the definition and registers no tools, and
 `POST /v1/providers/{id}/test` rediscovers them once it answers.

@@ -173,10 +173,14 @@ LSTM state between chunks, which is a different scorer from the one Conduit has
 — for now it runs on a Wyoming server, and a `local` runtime is refused with
 that reason.
 
-An MCP definition describes a *server*, which may advertise several tools, and
-a graph tool node runs one tool. Each advertised tool is therefore registered as
-`<definition id>.<tool name>`; a server advertising exactly one tool is also
-registered under the definition id itself.
+An MCP definition describes a *server*, which may advertise several tools. Each
+advertised tool is registered as `<definition id>.<tool name>`, so a core can
+bind one of them by name.
+
+A core may instead bind the definition id itself, which names the whole server:
+every tool it registered is offered to the model. That is what to write when a
+pipeline should have whatever the server does — it keeps saying so when the
+server grows a tool, where a list of names would have to be revisited.
 
 Discovering those tools needs the server to answer, but saving a definition
 does not require it: discovery is given five seconds, and a server that does not
