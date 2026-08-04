@@ -8,6 +8,13 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The runtime provider bundle (`Providers`) is now capability-indexed rather
+  than one hand-written registry field per capability. Registering and
+  enumerating a wake, speaker, or memory provider goes through the exact same
+  path recognition, reasoning, synthesis, and tools always have, and adding a
+  capability is a new `conduit_provider::Capability` variant and a typed
+  accessor pair rather than an edit to the bundle's fields, its constructor, or
+  its debug output.
 - Added `transform` pipeline nodes, which rewrite what a model said on its way
   to being rendered. What reaches a synthesizer is now the pipeline's decision
   rather than the model's willingness to honour "do not use emoji". Three rules
