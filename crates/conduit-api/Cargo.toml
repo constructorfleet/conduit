@@ -20,6 +20,7 @@ conduit-transform.workspace = true
 conduit-runtime.workspace = true
 conduit-wyoming.workspace = true
 
+async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true

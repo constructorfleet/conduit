@@ -8,6 +8,15 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Turning stored provider definitions into running providers is now a list of
+  registered vendor factories rather than one `match` in the middle of the
+  server's configuration path. A `conduit_api::factory::ProviderFactory` says
+  what it is called, which definitions it builds, and how; `Factories`
+  enumerates whatever is registered, so supporting a new vendor is a new type
+  and one line in `Factories::builtin` instead of an edit to the code that
+  loads every provider a deployment has. A definition no factory claims fails
+  the load loudly rather than being skipped, and an embedder can supply its own
+  vendor set with `AppState::with_factories`.
 - Every provider now describes itself through one `Descriptor`: a stable
   identity distinct from its display label and from the registry key, a
   version, capability metadata, and a declared settings schema. The per-trait

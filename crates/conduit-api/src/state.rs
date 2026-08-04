@@ -1,42 +1,26 @@
 //! Shared application state.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
-use conduit_mcp::{McpClient, McpTool};
+use conduit_mcp::McpClient;
 use conduit_metrics::Metrics;
-use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
-    LlmVariant, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    ProviderDefinitionVariant, ProviderSecret, SpeakerIdVariant, SttVariant, ToolVariant,
-    TransformVariant, TtsVariant, WakeEngine, WakeVariant, DEFAULT_THRESHOLD_PERCENT,
+    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    ProviderDefinitionVariant, ToolVariant,
 };
-use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
-use conduit_speaker::diarization_server::DiarizationServerSpeakerId;
-use conduit_speaker::HttpSpeakerId;
 use conduit_store::MemoryStore;
-use conduit_transform::Builtin;
-use conduit_wake::OpenWakeWord;
-use conduit_wyoming::stt::WyomingStt;
-use conduit_wyoming::tts::WyomingTts;
-use conduit_wyoming::wake::WyomingWake;
-use tokio::time::timeout;
 
 use crate::auth::Access;
+use crate::factory::Factories;
 use crate::status::RuntimeStatus;
 use crate::turns::{TurnHistory, TurnHistoryRetention};
-
-/// How long MCP tool discovery may take while rebuilding the runtime provider
-/// registry snapshot. A provider write waits on this, so it is far shorter
-/// than the client's own per-request budget.
-const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// State shared by every request handler. Cheap to clone.
 #[derive(Clone)]
@@ -60,6 +44,8 @@ pub struct AppState {
     access: Arc<Access>,
     /// How long a turn may publish nothing before it is abandoned.
     turn_idle_timeout: Option<Duration>,
+    /// What turns stored provider definitions into running providers.
+    factories: Arc<Factories>,
 }
 
 impl AppState {
@@ -95,7 +81,21 @@ impl AppState {
             turns,
             access: Arc::new(Access::anonymous()),
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            factories: Arc::new(Factories::builtin()),
         }
+    }
+
+    /// Builds provider definitions with `factories` rather than with the
+    /// vendors compiled into Conduit.
+    ///
+    /// What an embedder registers a vendor of its own through: the built-in
+    /// list is the default, not the only one. A definition no factory here
+    /// claims fails the load, so replacing the list narrows what a deployment
+    /// can store.
+    #[must_use]
+    pub fn with_factories(mut self, factories: Factories) -> Self {
+        self.factories = Arc::new(factories);
+        self
     }
 
     /// Bounds how long a conversation may publish nothing before it is given up
@@ -289,7 +289,7 @@ impl AppState {
             let Some(definition) = self.provider_definition(&id).await? else {
                 continue;
             };
-            snapshot = register_definition(snapshot, &definition).await?;
+            snapshot = self.factories.register(snapshot, &definition).await?;
         }
         *self.provider_lock() = Some(Arc::new(snapshot));
         self.spawn_reachability_probe();
@@ -378,203 +378,6 @@ pub(crate) async fn probe_mcp(transport: &McpTransport) -> Health {
     match McpClient::new(transport.clone()).list_tools().await {
         Ok(_) => Health::Healthy,
         Err(error) => Health::Unhealthy { reason: error.to_string() },
-    }
-}
-
-async fn register_definition(
-    providers: Providers,
-    definition: &ProviderDefinition,
-) -> Result<Providers> {
-    let config = |base_url: &str, api_key: &Option<ProviderSecret>| OpenAiConfig {
-        base_url: base_url.to_owned(),
-        api_key: secret_value(api_key),
-        name: definition.id.clone(),
-        // The label an operator typed, kept distinct from the identity: the
-        // provider is registered under the definition id and calls itself by
-        // it, and this is only what a screen shows.
-        label: Some(definition.label.clone()),
-        ..OpenAiConfig::default()
-    };
-
-    match &definition.variant {
-        ProviderDefinitionVariant::Llm {
-            variant: LlmVariant::OpenAi { base_url, api_key, models, system_prompt, .. },
-        } => {
-            let mut config = config(base_url, api_key);
-            config.models = models.clone();
-            config.system_prompt = system_prompt.clone();
-            Ok(providers.with_llm(OpenAi::new(config)?))
-        }
-        ProviderDefinitionVariant::Stt {
-            variant: SttVariant::OpenAi { base_url, model, api_key, .. },
-        } => {
-            let config = config(base_url, api_key);
-            Ok(providers.with_stt(OpenAiStt::new(&config, model)?))
-        }
-        ProviderDefinitionVariant::Tts {
-            variant: TtsVariant::OpenAi { base_url, model, api_key, voices },
-        } => {
-            let config = config(base_url, api_key);
-            let provider = OpenAiTts::new(&config, model)?;
-            let provider = if voices.is_empty() {
-                provider
-            } else {
-                provider.with_voices(
-                    voices
-                        .iter()
-                        .map(|voice| conduit_provider::tts::Voice {
-                            id: voice.clone(),
-                            name: voice.clone(),
-                            language: "en-US".to_owned(),
-                        })
-                        .collect(),
-                )
-            };
-            Ok(providers.with_tts(provider))
-        }
-        ProviderDefinitionVariant::Stt {
-            variant: SttVariant::Wyoming { url, model, streaming },
-        } => Ok(providers.with_stt(
-            WyomingStt::new(&definition.id, url, model.clone(), *streaming)?
-                .with_label(&definition.label),
-        )),
-        ProviderDefinitionVariant::Tts {
-            variant: TtsVariant::Wyoming { url, voice, streaming },
-        } => Ok(providers.with_tts(
-            WyomingTts::new(&definition.id, url, voice.clone(), *streaming)?
-                .with_label(&definition.label),
-        )),
-        ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
-            Ok(register_mcp_tools(providers, &definition.id, transport).await)
-        }
-        ProviderDefinitionVariant::Wake { variant } => {
-            register_wake(providers, &definition.id, &definition.label, variant)
-        }
-        ProviderDefinitionVariant::SpeakerId {
-            variant: SpeakerIdVariant::DiarizationServer { base_url, threshold_percent },
-        } => Ok(providers.with_speaker(
-            DiarizationServerSpeakerId::new(
-                &definition.id,
-                base_url,
-                f32::from(*threshold_percent) / 100.0,
-            )?
-            .with_label(&definition.label),
-        )),
-        ProviderDefinitionVariant::SpeakerId {
-            variant: SpeakerIdVariant::Http { base_url, api_key, threshold_percent, .. },
-        } => Ok(providers.with_speaker(HttpSpeakerId::new(
-            &definition.id,
-            base_url,
-            secret_value(api_key),
-            f32::from(*threshold_percent) / 100.0,
-        )?)),
-        ProviderDefinitionVariant::Transform {
-            variant: TransformVariant::Builtin { rules },
-        } => Ok(providers.with_transform(
-            Builtin::new(&definition.id, rules.clone()).with_label(&definition.label),
-        )),
-    }
-}
-
-/// Registers the detector a wake definition describes.
-///
-/// The engine says which detector is listening and the runtime says where, so
-/// what gets registered follows from the runtime alone: a Wyoming server gets a
-/// client, models on disk get one that scores them here, and a satellite that
-/// wakes itself still gets a detector — one that scores nothing, because the
-/// device already decided — so that a pipeline naming the stage resolves and
-/// the activation reaches the event stream.
-fn register_wake(
-    providers: Providers,
-    id: &str,
-    label: &str,
-    variant: &WakeVariant,
-) -> Result<Providers> {
-    let phrases = variant.phrases().to_vec();
-    let threshold =
-        f32::from(variant.threshold_percent().unwrap_or(DEFAULT_THRESHOLD_PERCENT)) / 100.0;
-
-    if let Some(url) = variant.wyoming_url() {
-        return Ok(providers
-            .with_wake(WyomingWake::new(id, url, phrases, threshold)?.with_label(label)));
-    }
-    if let Some(models_dir) = variant.local_models_dir() {
-        if variant.engine() != WakeEngine::OpenWakeWord {
-            return Err(conduit_core::Error::Config(crate::providers::local_wake_unavailable(
-                variant.engine().name(),
-            )));
-        }
-        // A definition that named no directory means the conventional one under
-        // the data directory, which is the volume the compose file mounts.
-        let directory = match models_dir {
-            Some(named) => PathBuf::from(named),
-            None => crate::config::wake_models_dir_from_env()?,
-        };
-        return Ok(providers.with_wake(
-            OpenWakeWord::load(id, directory, phrases, threshold)?.with_label(label),
-        ));
-    }
-    Ok(providers.with_wake(DeviceWake::new(id, phrases).with_label(label)))
-}
-
-/// Registers whatever tools an MCP server currently advertises.
-///
-/// Discovery needs the server, but saving a provider definition must not: an
-/// operator can configure an endpoint before the service behind it is running.
-/// So a server that cannot be reached registers no tools and is logged, rather
-/// than failing the write. A later reachability test or provider write
-/// rediscovers them.
-///
-/// Every tool is registered as `<definition id>.<tool name>`. A server that
-/// advertises exactly one tool is also registered under the definition id
-/// itself, because the provider component catalog offers one MCP component per
-/// definition and a graph node written from it names the definition.
-async fn register_mcp_tools(
-    providers: Providers,
-    id: &str,
-    transport: &McpTransport,
-) -> Providers {
-    let client = Arc::new(McpClient::new(transport.clone()));
-    let discovery = timeout(MCP_DISCOVERY_TIMEOUT, client.list_tools()).await;
-    let tools = match discovery {
-        Ok(Ok(tools)) => tools,
-        Ok(Err(error)) => {
-            tracing::warn!(
-                provider = id,
-                error = %error,
-                "MCP tool discovery failed; the provider definition is saved but registers \
-                 no tools until the server can be reached"
-            );
-            return providers;
-        }
-        Err(_) => {
-            tracing::warn!(
-                provider = id,
-                timeout_secs = MCP_DISCOVERY_TIMEOUT.as_secs(),
-                "MCP tool discovery timed out; the provider definition is saved but \
-                 registers no tools until the server answers"
-            );
-            return providers;
-        }
-    };
-
-    let only_tool = tools.len() == 1;
-    let mut providers = providers;
-    for tool in tools {
-        let qualified = format!("{id}.{}", tool.name);
-        if only_tool {
-            providers =
-                providers.with_tool(McpTool::new(id, tool.clone(), Arc::clone(&client)));
-        }
-        providers = providers.with_tool(McpTool::new(qualified, tool, Arc::clone(&client)));
-    }
-    providers
-}
-
-fn secret_value(secret: &Option<ProviderSecret>) -> Option<String> {
-    match secret {
-        Some(ProviderSecret::Inline { value }) => Some(value.clone()),
-        Some(ProviderSecret::External { .. } | ProviderSecret::Redacted) | None => None,
     }
 }
 

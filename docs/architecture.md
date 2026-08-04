@@ -191,6 +191,21 @@ The runtime stores providers behind trait objects in registries. Dropping a
 returned stream is the cancellation mechanism for provider work that is no
 longer needed.
 
+### Vendor Factories
+
+A stored provider definition becomes a running provider through a
+`ProviderFactory`: one per vendor, each saying what it is called, which
+definitions it claims, and how it builds them. `Factories` enumerates the
+registered factories and hands each definition to the one that claims it, so
+supporting a new vendor is a new type and one line in `Factories::builtin`
+rather than an edit to the code that loads every provider a deployment has.
+
+Claims are disjoint — no two factories may claim the same definition — and a
+definition nothing claims fails the load rather than being skipped, because a
+provider silently missing from the registry surfaces later as a pipeline error
+about the graph instead of about the definition. A deployment that embeds
+Conduit supplies its own vendor set with `AppState::with_factories`.
+
 ## Events And Metrics
 
 The event bus is a bounded broadcast channel. Publishers never wait for slow
