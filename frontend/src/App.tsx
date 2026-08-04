@@ -12,6 +12,7 @@ import {
   Radio,
   RotateCcw,
   Save,
+  Search,
   Settings,
   ShieldCheck,
   Trash2,
@@ -925,14 +926,26 @@ type ProviderFilter = "all" | ProviderKind;
 /// Written out rather than upper-cased, because `SPEAKER_ID` names a field in
 /// a JSON document and not a thing a house does.
 function providerKindLabel(kind: ProviderFilter): string {
-  if (kind === "speaker_id") {
-    return "Speaker ID";
+  if (kind === "stt") {
+    return "Speech-to-text";
+  }
+  if (kind === "llm") {
+    return "Language model";
+  }
+  if (kind === "tool") {
+    return "Tools";
+  }
+  if (kind === "tts") {
+    return "Text-to-speech";
+  }
+  if (kind === "transform") {
+    return "Transform";
   }
   if (kind === "wake") {
     return "Wake word";
   }
-  if (kind === "transform") {
-    return "Transform";
+  if (kind === "speaker_id") {
+    return "Speaker ID";
   }
   if (kind === "memory") {
     return "Memory";
@@ -986,7 +999,8 @@ function ProvidersPanel({
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
-  const [filter, setFilter] = useState<ProviderFilter>("all");
+  const [query, setQuery] = useState("");
+  const [issuesOnly, setIssuesOnly] = useState(false);
   const [draftProvider, setDraftProvider] = useState<ProviderDefinition | null>(
     null,
   );
@@ -1027,9 +1041,35 @@ function ProvidersPanel({
   const draftProviderSuggestions =
     draftPhrases.length > 0 ? { phrases: draftPhrases } : undefined;
   const providerCards = providerCardViews(providerDefinitions, providers);
-  const visibleProviderCards = providerCards.filter(
-    (provider) => filter === "all" || provider.kind === filter,
-  );
+  const providerIds = new Set([
+    ...providers.map((provider) => provider.id),
+    ...providerDefinitions.map((provider) => provider.id),
+  ]);
+  const providerUses = providerPipelineUses(providerIds, pipelineViews);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleProviderCards = providerCards.filter((provider) => {
+    if (issuesOnly && !providerNeedsAttention(provider)) {
+      return false;
+    }
+    if (
+      normalizedQuery &&
+      !`${provider.label} ${provider.id}`
+        .toLowerCase()
+        .includes(normalizedQuery)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const providerStageGroups: {
+    kind: ProviderKind;
+    label: string;
+    cards: readonly ProviderCardView[];
+  }[] = PROVIDER_STAGE_ORDER.map((kind) => ({
+    kind,
+    label: providerKindLabel(kind),
+    cards: visibleProviderCards.filter((provider) => provider.kind === kind),
+  })).filter((group) => group.cards.length > 0);
   const providerKinds: ProviderFilter[] = [
     "all",
     "stt",
@@ -1041,10 +1081,6 @@ function ProvidersPanel({
     "speaker_id",
     "memory",
   ];
-  const providerIds = new Set([
-    ...providers.map((provider) => provider.id),
-    ...providerDefinitions.map((provider) => provider.id),
-  ]);
   const referencedProviderCount = new Set(
     pipelineViews.flatMap((view) =>
       view.graph.nodes
@@ -1259,42 +1295,44 @@ function ProvidersPanel({
     <div className="providers-stack">
       <section className="summary-grid" aria-label="Provider summary">
         <MetricTile
-          label="Visible providers"
-          value={`${visibleProviderCards.length} visible`}
+          label="Total providers"
+          value={providerCards.length.toString()}
         />
         <MetricTile
           label="Provider configs"
           value={providerDefinitions.length.toString()}
         />
         <MetricTile
-          label="Configured in graphs"
+          label="Used in graphs"
           value={referencedProviderCount.toString()}
         />
         <MetricTile
-          label="Warnings"
-          value={providers
-            .filter((provider) => !provider.reachable)
+          label="Needs attention"
+          value={providerCards
+            .filter((provider) => providerNeedsAttention(provider))
             .length.toString()}
         />
       </section>
 
       <div className="providers-controls">
-        <div
-          className="segmented-control"
-          role="toolbar"
-          aria-label="Provider stage filter"
-        >
-          {providerKinds.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={filter === kind ? "selected" : ""}
-              onClick={() => setFilter(kind)}
-            >
-              {kind === "all" ? "All" : kind.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <label className="provider-search">
+          <Search size={16} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Filter providers"
+            placeholder="Filter providers"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <label className="provider-issues-toggle">
+          <input
+            type="checkbox"
+            checked={issuesOnly}
+            onChange={(event) => setIssuesOnly(event.target.checked)}
+          />
+          Show issues only
+        </label>
         <button
           className="secondary-action"
           type="button"
@@ -1311,98 +1349,133 @@ function ProvidersPanel({
         </p>
       ))}
 
-      <section className="provider-card-grid" aria-label="Provider cards">
-        {visibleProviderCards.map((provider) => (
-          <article
-            className={`provider-card ${providerCardStateClass(provider)}`}
-            key={provider.id}
-          >
-            <div className="provider-card-header">
-              <span className="provider-kind">
-                {provider.kind.toUpperCase()}
-              </span>
-              <div className="provider-card-controls">
-                {showsProviderStatusPill(provider) ? (
-                  <StatusPill
-                    label="Status"
-                    value={provider.status?.state ?? "configured"}
-                    tone="caution"
-                  />
-                ) : null}
-                <button
-                  className="icon-action"
-                  type="button"
-                  aria-label={`Edit ${provider.id}`}
-                  onClick={() => editProviderCard(provider)}
+      {providerStageGroups.map((group) => (
+        <section
+          className="provider-stage"
+          aria-label={`${group.label} providers`}
+          key={group.kind}
+        >
+          <header className="provider-stage-header">
+            <h2>{group.label}</h2>
+            <span>{group.cards.length}</span>
+          </header>
+          <table className="provider-table">
+            <thead>
+              <tr>
+                <th scope="col">Provider</th>
+                <th scope="col">Implementation</th>
+                <th scope="col">State</th>
+                <th scope="col">Used by</th>
+                <th scope="col">
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.cards.map((provider) => (
+                <tr
+                  className={`provider-row ${providerCardStateClass(provider)}`}
+                  key={provider.id}
                 >
-                  <Settings size={17} aria-hidden="true" />
-                </button>
-                {provider.definition?.source === "local" ? (
-                  <button
-                    className="icon-action danger"
-                    type="button"
-                    aria-label={`Delete ${provider.id}`}
-                    onClick={() => deleteProviderDefinition(provider)}
-                  >
-                    <Trash2 size={17} aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            <h2>{provider.label}</h2>
-            <p>
-              {provider.status?.message ??
-                provider.definition?.id ??
-                "Provider has no runtime status yet"}
-            </p>
-
-            <div className="provider-facts">
-              <div>
-                <span>Component</span>
-                <strong>{provider.component ?? "unknown"}</strong>
-              </div>
-              <div>
-                <span>Configured</span>
-                <strong>
-                  {provider.status?.configured || provider.definition
-                    ? "yes"
-                    : "no"}
-                </strong>
-              </div>
-              <div>
-                <span>Reachable</span>
-                <strong>{provider.status?.reachable ? "yes" : "no"}</strong>
-              </div>
-              <div>
-                <span>Pipelines</span>
-                <strong>
-                  {provider.status?.affects_pipelines.join(", ") || "none"}
-                </strong>
-              </div>
-            </div>
-
-            {provider.status || provider.definition ? (
-              <div className="provider-actions">
-                <button
-                  className="secondary-action provider-test-action"
-                  type="button"
-                  aria-label={`Test ${provider.id}`}
-                  onClick={() => testProvider(provider)}
-                >
-                  <Play size={17} aria-hidden="true" />
-                  Test
-                </button>
-              </div>
-            ) : null}
-          </article>
-        ))}
-        {visibleProviderCards.length === 0 ? (
-          <div className="overview-empty" role="status">
-            <Boxes size={18} aria-hidden="true" />
-            <span>No providers match this stage filter</span>
-          </div>
-        ) : null}
-      </section>
+                  <td>
+                    <div className="provider-name">
+                      <strong>{provider.label}</strong>
+                      <span>{provider.id}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="provider-impl">
+                      <strong>
+                        {providerImplementationLabel(
+                          componentCatalog,
+                          provider,
+                        )}
+                      </strong>
+                      {provider.status?.version ? (
+                        <span>v{provider.status.version}</span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="provider-state">
+                      <span
+                        className={`state-dot ${providerStateTone(provider.status)}`}
+                        aria-hidden="true"
+                      />
+                      <span>{provider.status?.state ?? "not configured"}</span>
+                      {provider.status?.message ? (
+                        <span className="provider-state-message">
+                          {provider.status.message}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="provider-used-by">
+                      {providerPipelineUsesForCard(provider, providerUses).map(
+                        (use) => (
+                          <span
+                            className="usage-chip"
+                            key={`${use.pipeline} ${use.stage ?? ""}`}
+                          >
+                            {use.pipeline}
+                            {use.stage ? (
+                              <span className="usage-stage">· {use.stage}</span>
+                            ) : null}
+                          </span>
+                        ),
+                      )}
+                      {providerPipelineUsesForCard(provider, providerUses)
+                        .length === 0 ? (
+                        <span className="muted">none</span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="provider-actions-cell">
+                    <div className="provider-actions">
+                      {provider.status || provider.definition ? (
+                        <button
+                          className="secondary-action provider-test-action"
+                          type="button"
+                          aria-label={`Test ${provider.id}`}
+                          onClick={() => testProvider(provider)}
+                        >
+                          <Play size={17} aria-hidden="true" />
+                          Test
+                        </button>
+                      ) : null}
+                      <button
+                        className="icon-action"
+                        type="button"
+                        aria-label={`Edit ${provider.id}`}
+                        onClick={() => editProviderCard(provider)}
+                      >
+                        <Settings size={17} aria-hidden="true" />
+                      </button>
+                      {provider.definition?.source === "local" ? (
+                        <button
+                          className="icon-action danger"
+                          type="button"
+                          aria-label={`Delete ${provider.id}`}
+                          onClick={() => deleteProviderDefinition(provider)}
+                        >
+                          <Trash2 size={17} aria-hidden="true" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+      {providerStageGroups.length === 0 ? (
+        <div className="overview-empty" role="status">
+          <Boxes size={18} aria-hidden="true" />
+          <span>No providers match this filter</span>
+        </div>
+      ) : null}
       {addProviderDialogOpen ? (
         <ProviderAddDialog
           componentCatalog={componentCatalog}
@@ -3162,8 +3235,109 @@ function providerCardStateClass(provider: ProviderCardView): string {
   return provider.status?.state ?? "configured";
 }
 
-function showsProviderStatusPill(provider: ProviderCardView): boolean {
-  return !providerStatusIsGood(provider.status);
+/// The order provider stages are presented in, mirroring the pipeline's.
+const PROVIDER_STAGE_ORDER: readonly ProviderKind[] = [
+  "stt",
+  "llm",
+  "tool",
+  "tts",
+  "transform",
+  "wake",
+  "speaker_id",
+  "memory",
+];
+
+/// Where each provider is bound, as "pipeline · stage", read from the stored
+/// graphs rather than from runtime status: the graphs know the stage a binding
+/// feeds, while `affects_pipelines` only names the pipeline.
+function providerPipelineUses(
+  providerIds: Set<string>,
+  pipelineViews: readonly PipelineView[],
+): Map<string, { pipeline: string; stage: string | null }[]> {
+  const uses = new Map<string, { pipeline: string; stage: string | null }[]>();
+  const add = (provider: string, pipeline: string, stage: string) => {
+    if (!providerIds.has(provider)) {
+      return;
+    }
+    const list = uses.get(provider) ?? [];
+    if (!list.some((use) => use.pipeline === pipeline && use.stage === stage)) {
+      list.push({ pipeline, stage });
+      uses.set(provider, list);
+    }
+  };
+
+  for (const view of pipelineViews) {
+    const pipeline = view.graph.name;
+    for (const node of view.graph.nodes) {
+      const capability = capabilityForNodeKind(node.kind);
+      if (capability) {
+        add(nodeProvider(node), pipeline, providerKindLabel(capability));
+      }
+      if (node.kind === "core") {
+        for (const tool of node.core.tools ?? []) {
+          add(tool.provider, pipeline, "Tools");
+        }
+        for (const store of node.core.memory ?? []) {
+          add(store.provider, pipeline, "Memory");
+        }
+      }
+    }
+  }
+  return uses;
+}
+
+/// The places a provider is used, preferring the graph-derived bindings and
+/// falling back to runtime status when a pipeline names the provider but no
+/// stored graph is detailed enough to say which stage it feeds.
+function providerPipelineUsesForCard(
+  provider: ProviderCardView,
+  uses: Map<string, { pipeline: string; stage: string | null }[]>,
+): { pipeline: string; stage: string | null }[] {
+  const fromGraphs = uses.get(provider.id) ?? [];
+  if (fromGraphs.length > 0 || provider.status === null) {
+    return fromGraphs;
+  }
+  return provider.status.affects_pipelines.map((pipeline) => ({
+    pipeline,
+    stage: null,
+  }));
+}
+
+/// Whether an operator needs to look at a provider: it has runtime status and
+/// that status is not healthy. A definition nobody has ever checked stays out
+/// until the runtime has something to say about it.
+function providerNeedsAttention(provider: ProviderCardView): boolean {
+  return provider.status !== null && !providerStatusIsGood(provider.status);
+}
+
+function providerStateTone(
+  status: ProviderStatus | null,
+): "success" | "caution" | "danger" | "neutral" {
+  if (status === null) {
+    return "neutral";
+  }
+  if (status.state === "unavailable") {
+    return "danger";
+  }
+  if (status.state === "configured") {
+    return "caution";
+  }
+  return "success";
+}
+
+/// What the operator configured or the runtime registered, by the name the
+/// catalog gives the component — the implementation column of the table.
+function providerImplementationLabel(
+  catalog: ProviderComponentCatalog,
+  provider: ProviderCardView,
+): string {
+  if (provider.definition) {
+    return (
+      componentForProviderDefinition(catalog, provider.definition)?.label ??
+      provider.definition.component
+    );
+  }
+  return provider.status?.provider ?? provider.id;
 }
 
 function loadProviderDefinitions(

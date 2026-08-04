@@ -370,7 +370,6 @@ button {
 .settings-card,
 .settings-identity,
 .metric-tile,
-.provider-card,
 .stage-timeline {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1023,41 +1022,200 @@ button {
   color: var(--strong);
 }
 
-.provider-card-grid {
+.provider-stage {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  align-items: start;
-  gap: 12px;
+  gap: 8px;
 }
 
-.provider-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
+.provider-stage-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.provider-card.configured,
-.provider-card.unavailable {
-  border-color: var(--warning-border);
-}
-
-.provider-card.healthy {
-  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
-}
-
-.provider-card h2,
-.provider-card p {
+.provider-stage-header h2 {
   margin: 0;
-}
-
-.provider-card h2 {
   color: var(--strong);
-  font-size: 17px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.provider-card p {
-  color: var(--text);
+.provider-stage-header > span {
+  color: var(--muted);
+  font:
+    800 12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+}
+
+.provider-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.provider-table th {
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.provider-table td {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.provider-table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.provider-table tbody tr:hover {
+  background: var(--selected);
+}
+
+.provider-row.configured td:first-child,
+.provider-row.unavailable td:first-child {
+  box-shadow: inset 3px 0 0 var(--warning-border);
+}
+
+.provider-row.healthy td:first-child {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+.provider-name,
+.provider-impl {
+  display: grid;
+  gap: 2px;
+}
+
+.provider-name strong,
+.provider-impl strong {
+  color: var(--strong);
   font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.provider-name span,
+.provider-impl span {
+  color: var(--muted);
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.provider-state {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 7px;
+  align-items: center;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.provider-state .state-dot {
+  margin-right: 0;
+}
+
+.provider-state-message {
+  grid-column: 1 / -1;
+  max-width: 340px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.state-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+}
+
+.state-dot.success {
+  background: var(--success);
+}
+
+.state-dot.caution {
+  background: var(--warning-text);
+}
+
+.state-dot.danger {
+  background: var(--danger);
+}
+
+.state-dot.neutral {
+  background: var(--muted);
+}
+
+.provider-used-by {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.usage-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--surface);
+  color: var(--strong);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.usage-stage {
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-actions-cell {
+  text-align: right;
+}
+
+.provider-actions-cell .provider-actions {
+  justify-content: flex-end;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .provider-card-header,
@@ -1080,44 +1238,40 @@ button {
   gap: 8px;
 }
 
-.provider-kind {
+.provider-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 7px 9px;
-  background: var(--accent-quiet);
-  color: var(--accent-hover);
-  font:
-    800 11px ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    monospace;
-}
-
-.provider-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.provider-facts div {
-  display: grid;
-  gap: 4px;
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
-}
-
-.provider-facts span {
+  padding: 0 10px;
+  background: var(--surface);
   color: var(--muted);
-  font-size: 11px;
 }
 
-.provider-facts strong {
-  min-width: 0;
+.provider-search:focus-within {
+  border-color: var(--accent-hover);
+}
+
+.provider-search input {
+  min-width: 180px;
+  border: 0;
+  padding: 8px 0;
+  background: transparent;
+  outline: none;
   color: var(--strong);
-  font-size: 12px;
-  overflow-wrap: anywhere;
+}
+
+.provider-search input::placeholder {
+  color: var(--muted);
+}
+
+.provider-issues-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
 }
 
 .provider-actions {

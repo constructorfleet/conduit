@@ -1060,7 +1060,7 @@ describe("Pipelines graph editor", () => {
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Add provider" }));
-    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
     await user.click(
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
     );
@@ -1243,12 +1243,9 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const openAiCard = screen
-      .getByRole("heading", { name: "OpenAI Primary" })
-      .closest("article");
-    expect(openAiCard).not.toBeNull();
+    const openAiRow = screen.getByRole("row", { name: /OpenAI Primary/ });
     await user.click(
-      within(openAiCard as HTMLElement).getByRole("button", {
+      within(openAiRow).getByRole("button", {
         name: "Edit openai",
       }),
     );
@@ -1265,12 +1262,9 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const whisperCard = screen
-      .getByRole("heading", { name: "Whisper Local" })
-      .closest("article");
-    expect(whisperCard).not.toBeNull();
+    const whisperRow = screen.getByRole("row", { name: /Whisper Local/ });
     await user.click(
-      within(whisperCard as HTMLElement).getByRole("button", {
+      within(whisperRow).getByRole("button", {
         name: "Edit whisper",
       }),
     );
@@ -1287,12 +1281,9 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const piperCard = screen
-      .getByRole("heading", { name: "Piper Local" })
-      .closest("article");
-    expect(piperCard).not.toBeNull();
+    const piperRow = screen.getByRole("row", { name: /Piper Local/ });
     await user.click(
-      within(piperCard as HTMLElement).getByRole("button", {
+      within(piperRow).getByRole("button", {
         name: "Edit piper-local",
       }),
     );
@@ -1332,12 +1323,11 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const piperCard = screen
-      .getByRole("heading", { name: "piper" })
-      .closest("article");
-    expect(piperCard).not.toBeNull();
+    const piperRow = screen
+      .getByRole("button", { name: "Edit piper" })
+      .closest("tr") as HTMLElement;
     await user.click(
-      within(piperCard as HTMLElement).getByRole("button", {
+      within(piperRow).getByRole("button", {
         name: "Edit piper",
       }),
     );
@@ -1360,7 +1350,7 @@ describe("Pipelines graph editor", () => {
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Add provider" }));
-    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
     await user.click(
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
     );
@@ -1390,7 +1380,7 @@ describe("Pipelines graph editor", () => {
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(
-      screen.getByRole("heading", { name: "Broken OpenAI" }),
+      screen.getByRole("row", { name: /Broken OpenAI/ }),
     ).toBeInTheDocument();
   });
 
@@ -2068,11 +2058,9 @@ describe("Providers workspace", () => {
 
     // Nothing to ask until a detector is registered, so the suggestions only
     // arrive once the definition has been saved and is being edited again.
-    const card = screen
-      .getByRole("heading", { name: "openWakeWord" })
-      .closest("article");
+    const card = screen.getByRole("row", { name: /openWakeWord/ });
     await user.click(
-      within(card as HTMLElement).getByRole("button", {
+      within(card).getByRole("button", {
         name: "Edit openwakeword",
       }),
     );
@@ -2092,7 +2080,7 @@ describe("Providers workspace", () => {
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Add provider" }));
-    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
     await user.click(
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
     );
@@ -2110,15 +2098,12 @@ describe("Providers workspace", () => {
     expect(
       screen.getByText("Provider openai-primary saved"),
     ).toBeInTheDocument();
-    const providerCard = screen
-      .getByRole("heading", { name: "OpenAI Primary" })
-      .closest("article");
-    expect(providerCard).not.toBeNull();
-    expect(providerCard).toHaveTextContent("openai-primary");
-    expect(providerCard).toHaveTextContent("openai.responses");
+    const providerRow = screen.getByRole("row", { name: /OpenAI Primary/ });
+    expect(providerRow).toHaveTextContent("openai-primary");
+    expect(providerRow).toHaveTextContent("OpenAI Responses");
 
     await user.click(
-      within(providerCard as HTMLElement).getByRole("button", {
+      within(providerRow).getByRole("button", {
         name: "Edit openai-primary",
       }),
     );
@@ -2142,15 +2127,14 @@ describe("Providers workspace", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
     expect(
-      screen.getByRole("heading", { name: "OpenAI Primary" }),
+      screen.getByRole("row", { name: /OpenAI Primary/ }),
     ).toBeInTheDocument();
 
-    const restoredProviderCard = screen
-      .getByRole("heading", { name: "OpenAI Primary" })
-      .closest("article");
-    expect(restoredProviderCard).not.toBeNull();
+    const restoredProviderRow = screen.getByRole("row", {
+      name: /OpenAI Primary/,
+    });
     await user.click(
-      within(restoredProviderCard as HTMLElement).getByRole("button", {
+      within(restoredProviderRow).getByRole("button", {
         name: "Edit openai-primary",
       }),
     );
@@ -2159,7 +2143,7 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(
-      screen.getByRole("heading", { name: "OpenAI Main" }),
+      screen.getByRole("row", { name: /OpenAI Main/ }),
     ).toBeInTheDocument();
     expect(screen.queryByText("OpenAI Primary")).not.toBeInTheDocument();
   });
@@ -2173,7 +2157,7 @@ describe("Providers workspace", () => {
     expect(screen.getAllByDisplayValue("openai").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Add provider" }));
-    await user.click(screen.getByRole("menuitem", { name: "LLM" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
     expect(screen.queryByRole("menuitem", { name: "All kinds" })).toBeNull();
     expect(
       screen.getByRole("menuitem", { name: "← Provider types" }),
@@ -2226,18 +2210,15 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("button", { name: "Delete openai" }));
 
     expect(screen.getByText("Provider openai deleted")).toBeInTheDocument();
-    const openAiCard = screen
-      .getByRole("heading", { name: "openai" })
-      .closest("article");
-    expect(openAiCard).not.toBeNull();
+    const openAiRow = screen.getByRole("row", { name: /openai/ });
     expect(
-      within(openAiCard as HTMLElement).queryByRole("button", {
+      within(openAiRow).queryByRole("button", {
         name: "Delete openai",
       }),
     ).not.toBeInTheDocument();
   });
 
-  it("renders provider status from the snapshot and filters by stage", async () => {
+  it("renders provider status from the snapshot grouped by stage", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -2246,19 +2227,43 @@ describe("Providers workspace", () => {
     expect(
       screen.getByRole("heading", { name: "Providers" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("row", { name: /piper-local/ }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("no successful reachability check yet"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Configured in graphs")).toBeInTheDocument();
-    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+    expect(screen.getByText("Used in graphs")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "TTS" }));
-    expect(screen.getByText("1 visible")).toBeInTheDocument();
+    // Providers sit under their stage rather than behind a stage filter, so a
+    // TTS provider is found in the Text-to-speech section.
+    const ttsSection = screen.getByRole("region", {
+      name: "Text-to-speech providers",
+    });
+    expect(
+      within(ttsSection).getByRole("row", { name: /piper-local/ }),
+    ).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: "LLM" }));
-    expect(screen.getByText("1 visible")).toBeInTheDocument();
-    expect(screen.queryByText("piper-local")).not.toBeInTheDocument();
+  it("filters providers by search and narrows to issues only", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await enterProvidersSection(user);
+
+    await user.type(screen.getByLabelText("Filter providers"), "piper");
+    expect(
+      screen.getByRole("row", { name: /piper-local/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("openai")).not.toBeInTheDocument();
+    expect(screen.queryByText("whisper")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Filter providers"));
+    await user.click(screen.getByLabelText("Show issues only"));
+    expect(
+      screen.getByRole("row", { name: /piper-local/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("openai")).not.toBeInTheDocument();
   });
 
   it("refreshes provider status from the API when testing a provider", async () => {
@@ -2283,32 +2288,21 @@ describe("Providers workspace", () => {
     expect(
       await screen.findByText("Provider piper-local is reachable"),
     ).toBeInTheDocument();
-    const piperCard = screen
-      .getByRole("heading", { name: "piper-local" })
-      .closest("article");
-    expect(piperCard).not.toBeNull();
-    expect(piperCard).toHaveClass("healthy");
+    const piperRow = screen.getByRole("row", { name: /piper-local/ });
+    expect(piperRow).toHaveClass("healthy");
     expect(
-      within(piperCard as HTMLElement).queryByText("reachable"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(piperCard as HTMLElement).getByText(
-        "provider health check passed",
-      ),
+      within(piperRow).getByText("provider health check passed"),
     ).toBeInTheDocument();
+    expect(within(piperRow).getByText("reachable")).toBeInTheDocument();
 
     expect(
-      within(piperCard as HTMLElement).queryByRole("button", {
-        name: "Use fallback",
-      }),
+      within(piperRow).queryByRole("button", { name: "Use fallback" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("Fallback selected for piper-local"),
     ).not.toBeInTheDocument();
     expect(
-      within(piperCard as HTMLElement).getByRole("button", {
-        name: "Test piper-local",
-      }),
+      within(piperRow).getByRole("button", { name: "Test piper-local" }),
     ).toHaveTextContent("Test");
   });
 
@@ -2330,13 +2324,10 @@ describe("Providers workspace", () => {
     render(<App />);
 
     await enterProvidersSection(user);
-    const piperCard = screen
-      .getByRole("heading", { name: "piper-local" })
-      .closest("article");
-    expect(piperCard).not.toBeNull();
+    const piperRow = screen.getByRole("row", { name: /piper-local/ });
 
     await user.click(
-      within(piperCard as HTMLElement).getByRole("button", {
+      within(piperRow).getByRole("button", {
         name: "Delete piper-local",
       }),
     );
@@ -2347,10 +2338,10 @@ describe("Providers workspace", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "piper-local" }),
+      screen.getByRole("row", { name: /piper-local/ }),
     ).toBeInTheDocument();
     expect(
-      within(piperCard as HTMLElement).getByRole("button", {
+      within(piperRow).getByRole("button", {
         name: "Delete piper-local",
       }),
     ).toBeInTheDocument();
@@ -2361,12 +2352,9 @@ describe("Providers workspace", () => {
     render(<App />);
 
     await enterProvidersSection(user);
-    const piperCard = screen
-      .getByRole("heading", { name: "piper-local" })
-      .closest("article");
-    expect(piperCard).not.toBeNull();
+    const piperRow = screen.getByRole("row", { name: /piper-local/ });
     expect(
-      within(piperCard as HTMLElement).queryByRole("button", {
+      within(piperRow).queryByRole("button", {
         name: "Delete piper-local",
       }),
     ).not.toBeInTheDocument();
@@ -2402,21 +2390,18 @@ describe("Providers workspace", () => {
     render(<App />);
 
     await enterProvidersSection(user);
-    const llmCard = screen
-      .getByRole("heading", { name: "llm" })
-      .closest("article");
-    expect(llmCard).not.toBeNull();
+    const llmRow = screen.getByRole("row", { name: /llm/ });
 
     await user.click(
-      within(llmCard as HTMLElement).getByRole("button", {
+      within(llmRow).getByRole("button", {
         name: "Delete llm",
       }),
     );
 
     expect(screen.getByText("Provider llm deleted")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "llm" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /llm/ })).toBeInTheDocument();
     expect(
-      within(llmCard as HTMLElement).queryByRole("button", {
+      within(llmRow).queryByRole("button", {
         name: "Delete llm",
       }),
     ).not.toBeInTheDocument();
