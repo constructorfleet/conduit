@@ -8,6 +8,44 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The operator status snapshot now reports every registered provider of every
+  capability. It enumerated stt, llm, tts and tool one at a time, so a
+  transform, a wake word detector, a speaker identifier or a memory store an
+  operator had configured was simply absent from the Providers page. It is now
+  one walk over the provider bundle's descriptors — `Providers::descriptors` and
+  `Providers::health`, both capability-generic — so a capability added later
+  appears without an edit here. `ProviderKind` gains `memory` to match.
+- A provider's status now carries the identity, label and version its descriptor
+  states, beside the selector a pipeline names. The two were conflated, so a
+  diagnostic could not say which implementation or which build was behind a
+  configured provider. A selector that names a provider the runtime never built
+  reports no identity rather than an invented one.
+- Proven is now derived per provider rather than per pipeline, and a failed turn
+  takes a provider's proof back until a later turn proves recovery. A turn that
+  failed at synthesis used to un-prove every provider in the graph, including
+  the model that had answered successfully in it; and a provider that answered a
+  health check while failing every real turn still read as reachable with no
+  failure recorded against it. A failure now outranks a health check that
+  answered, and names the pipelines it affects, so the exception-first overview
+  can warn before the next turn fails.
+- A pipeline node can now override the request settings of the Configured
+  Provider it names, rather than either accepting the provider's defaults or
+  needing a provider of its own. An `stt` node, a `tts` node, and a core's model
+  binding each take a `settings` map holding only what that pipeline wants
+  different; everything it leaves out stays with the Configured Provider, which
+  layers the request over its own stored defaults. Overrides are checked against
+  the provider's declared settings schema when the pipeline is prepared, naming
+  both the offending setting and the node to fix it on, so a mistyped setting is
+  a graph to correct rather than a turn that fails. They are checked as
+  *overrides* — declared defaults are not filled in and `required` is not
+  enforced (`Descriptor::validate_overrides`) — because a node that names one
+  setting must not displace every stored default beside it. An empty map is
+  omitted from storage, so pipelines written before this are byte-for-byte
+  unchanged.
+- A configured provider's default request settings are now returned by the
+  management API. They were stored and applied but never read back, so an
+  operator editing a provider saw an empty form over settings that were still in
+  force. Credentials remain redacted; settings are not secret.
 - A provider definition can now carry default request settings — the reusable
   sampling controls and model options an operator sets once on the Configured
   Provider rather than on every pipeline that names it. They are stored beside

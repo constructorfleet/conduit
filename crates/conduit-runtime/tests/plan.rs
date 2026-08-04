@@ -333,6 +333,7 @@ fn cored() -> PipelineGraph {
         model: ModelBinding {
             provider: "fake-llm".to_owned(),
             model: Some("qwen3:8b".to_owned()),
+            settings: serde_json::Map::new(),
         },
         system: Some("Be brief.".to_owned()),
         tools: vec![ToolBinding {
@@ -383,6 +384,7 @@ fn a_core_names_the_model_it_asks_for_rather_than_taking_the_providers_first() {
         model: ModelBinding {
             provider: "fake-llm".to_owned(),
             model: Some("llama3.2:3b".to_owned()),
+            settings: serde_json::Map::new(),
         },
         ..ReasoningCore::new("fake-llm")
     };
@@ -508,4 +510,115 @@ fn a_missing_stage_is_reported_before_a_wiring_complaint() {
 
     let message = config_message(&refusal(&no_synthesis, &providers())).to_owned();
     assert!(!message.contains("downstream"), "{message}");
+}
+
+/// A node's overrides, from the JSON an operator would have written.
+fn settings(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    value.as_object().expect("an object").clone()
+}
+
+/// The same wired pipeline, with each stage overriding one setting.
+fn overriding() -> PipelineGraph {
+    let core = ReasoningCore {
+        model: ModelBinding {
+            provider: "fake-llm".to_owned(),
+            model: None,
+            settings: settings(serde_json::json!({ "style": "warm" })),
+        },
+        ..ReasoningCore::new("fake-llm")
+    };
+
+    PipelineGraph::new("overriding")
+        .with_node(Node::Stt {
+            id: "stt".to_owned(),
+            provider: "fake-stt".to_owned(),
+            settings: settings(serde_json::json!({ "style": "plain" })),
+        })
+        .with_node(Node::Core { id: "llm".to_owned(), core })
+        .with_node(Node::Tts {
+            id: "tts".to_owned(),
+            provider: "fake-tts".to_owned(),
+            voice: None,
+            settings: settings(serde_json::json!({ "style": "warm" })),
+        })
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"))
+}
+
+/// Providers that all declare the same one-setting schema.
+fn providers_accepting_settings() -> Providers {
+    Providers::new()
+        .with_stt(FakeStt::new(vec![]).accepting_settings(fakes::style_schema()))
+        .with_llm(FakeLlm::new(vec![]).accepting_settings(fakes::style_schema()))
+        .with_tts(FakeTts::new().accepting_settings(fakes::style_schema()))
+}
+
+#[test]
+fn a_nodes_overrides_reach_the_plan_for_every_stage_that_takes_them() {
+    // Overriding is what lets two pipelines share one Configured Provider and
+    // still ask it for different things, so an override that does not arrive
+    // here is one the operator wrote and the pipeline ignored.
+    let plan =
+        Plan::resolve(&overriding(), &providers_accepting_settings()).expect("executable");
+
+    assert_eq!(
+        plan.stt.as_ref().expect("a recognizer").settings.string("style"),
+        Some("plain")
+    );
+    assert_eq!(plan.core.settings.string("style"), Some("warm"));
+    assert_eq!(
+        plan.tts.as_ref().expect("a synthesizer").settings.string("style"),
+        Some("warm")
+    );
+}
+
+#[test]
+fn a_node_that_overrides_nothing_leaves_the_configured_provider_in_charge() {
+    // The reason resolution checks overrides rather than whole settings
+    // objects: filling in the schema's declared defaults here would displace
+    // whatever the operator configured on the Configured Provider itself.
+    let plan = Plan::resolve(&wired(), &providers_accepting_settings()).expect("executable");
+
+    assert!(plan.stt.as_ref().expect("a recognizer").settings.is_empty());
+    assert!(plan.core.settings.is_empty());
+    assert!(plan.tts.as_ref().expect("a synthesizer").settings.is_empty());
+}
+
+#[test]
+fn an_override_the_provider_does_not_accept_is_refused_at_prepare_time() {
+    // A setting the provider never declared used to travel to the backend and
+    // be ignored there. Refusing it here names the node, which is where the
+    // operator has to go to fix it.
+    let graph = PipelineGraph::new("mistyped")
+        .with_node(Node::Stt {
+            id: "stt".to_owned(),
+            provider: "fake-stt".to_owned(),
+            settings: settings(serde_json::json!({ "styl": "plain" })),
+        })
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers_accepting_settings())).to_owned();
+    assert!(message.contains("styl"), "the setting that is wrong: {message}");
+    assert!(message.contains("stt"), "and the node to fix it on: {message}");
+}
+
+#[test]
+fn an_override_outside_a_declared_enum_is_refused() {
+    let graph = PipelineGraph::new("out of range")
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(llm_node("llm", "fake-llm"))
+        .with_node(Node::Tts {
+            id: "tts".to_owned(),
+            provider: "fake-tts".to_owned(),
+            voice: None,
+            settings: settings(serde_json::json!({ "style": "shouty" })),
+        })
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "tts"));
+
+    let message = config_message(&refusal(&graph, &providers_accepting_settings())).to_owned();
+    assert!(message.contains("shouty"), "{message}");
 }

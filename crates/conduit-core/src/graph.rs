@@ -8,6 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::error::GraphError;
 use crate::memory::Scope;
@@ -166,7 +167,11 @@ pub enum ConfirmPolicy {
 }
 
 /// Which language model a reasoning core reasons with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is not derived because [`settings`](ModelBinding::settings) holds
+/// `serde_json::Value`s, which are only `PartialEq` — two bindings still
+/// compare, but not by an equivalence relation `Eq` would promise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelBinding {
     /// Provider definition id, e.g. `"ollama"`.
@@ -178,6 +183,15 @@ pub struct ModelBinding {
     /// and still reason with different models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Request settings this pipeline overrides on the Configured Provider it
+    /// names, and nothing else.
+    ///
+    /// The same reason [`model`](ModelBinding::model) is here: the provider is
+    /// shared, so what this pipeline wants different about it belongs to the
+    /// pipeline. Only the settings named are overridden — everything the
+    /// Configured Provider was configured with still applies.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub settings: Map<String, Value>,
 }
 
 /// A tool a reasoning core may call.
@@ -252,7 +266,11 @@ impl ReasoningCore {
     #[must_use]
     pub fn new(provider: impl Into<String>) -> Self {
         Self {
-            model: ModelBinding { provider: provider.into(), model: None },
+            model: ModelBinding {
+                provider: provider.into(),
+                model: None,
+                settings: Map::new(),
+            },
             system: None,
             tools: Vec::new(),
             memory: Vec::new(),
@@ -296,6 +314,9 @@ pub enum Node {
         id: NodeId,
         /// Provider definition id, e.g. `"whisper"`.
         provider: String,
+        /// Request settings this node overrides on the Configured Provider.
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        settings: Map<String, Value>,
     },
     /// Speaker identification.
     SpeakerId {
@@ -333,6 +354,9 @@ pub enum Node {
         /// Voice to request, or `None` for the provider's own default.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         voice: Option<String>,
+        /// Request settings this node overrides on the Configured Provider.
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        settings: Map<String, Value>,
     },
     /// Egress to a device.
     Sink {
@@ -368,6 +392,12 @@ const fn default_memory_limit() -> usize {
     DEFAULT_MEMORY_LIMIT
 }
 
+/// The empty override map a node with nothing to override answers with.
+fn no_settings() -> &'static Map<String, Value> {
+    static NONE: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
+    NONE.get_or_init(Map::new)
+}
+
 impl Node {
     /// Creates a `source` node producing `modality`.
     #[must_use]
@@ -385,10 +415,10 @@ impl Node {
         Self::WakeWord { id: id.into(), provider: provider.into() }
     }
 
-    /// Creates an `stt` node.
+    /// Creates an `stt` node overriding none of its provider's settings.
     #[must_use]
     pub fn stt(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Stt { id: id.into(), provider: provider.into() }
+        Self::Stt { id: id.into(), provider: provider.into(), settings: Map::new() }
     }
 
     /// Creates a `speaker_id` node.
@@ -415,10 +445,16 @@ impl Node {
         Self::Transform { id: id.into(), provider: provider.into() }
     }
 
-    /// Creates a `tts` node using the provider's default voice.
+    /// Creates a `tts` node using the provider's default voice and overriding
+    /// none of its settings.
     #[must_use]
     pub fn tts(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
-        Self::Tts { id: id.into(), provider: provider.into(), voice: None }
+        Self::Tts {
+            id: id.into(),
+            provider: provider.into(),
+            voice: None,
+            settings: Map::new(),
+        }
     }
 
     /// Creates a `sink` node rendering `modality`.
@@ -462,6 +498,28 @@ impl Node {
             | Self::Transform { provider, .. }
             | Self::Tts { provider, .. }
             | Self::Sink { provider, .. } => provider,
+        }
+    }
+
+    /// The request settings this node overrides on the provider it selects.
+    ///
+    /// Empty for a node with nothing to override, and empty for a kind that
+    /// makes no provider request at all: a `source` and a `sink` are where
+    /// audio enters and leaves, and a detector, an identifier and a transform
+    /// take no request settings, so a setting written on one could never reach
+    /// anything. A `core` answers with its model's, matching
+    /// [`Node::provider`] — its tool and memory bindings configure providers of
+    /// their own.
+    #[must_use]
+    pub fn settings(&self) -> &Map<String, Value> {
+        match self {
+            Self::Stt { settings, .. } | Self::Tts { settings, .. } => settings,
+            Self::Core { core, .. } => &core.model.settings,
+            Self::Source { .. }
+            | Self::WakeWord { .. }
+            | Self::SpeakerId { .. }
+            | Self::Transform { .. }
+            | Self::Sink { .. } => no_settings(),
         }
     }
 
@@ -948,6 +1006,11 @@ impl PipelineGraph {
 mod tests {
     use super::*;
 
+    /// The override map a JSON object spells.
+    fn settings(value: Value) -> Map<String, Value> {
+        value.as_object().expect("an object").clone()
+    }
+
     /// mic -> wake -> stt -> core -> tts
     fn linear() -> PipelineGraph {
         PipelineGraph::new("linear")
@@ -1165,6 +1228,7 @@ mod tests {
             id: "tts".to_owned(),
             provider: "piper".to_owned(),
             voice: Some("alba".to_owned()),
+            settings: Map::new(),
         };
 
         assert_eq!(
@@ -1200,6 +1264,81 @@ mod tests {
             panic!("a `tts` tag deserializes to a `tts` node");
         };
         assert_eq!(voice, None, "no voice named means the provider's own");
+    }
+
+    #[test]
+    fn a_node_that_overrides_nothing_is_written_exactly_as_it_was() {
+        // Overrides are what a node adds to a Configured Provider it shares
+        // with other pipelines. A pipeline that overrides nothing must be
+        // byte-for-byte what it was before nodes could override anything, or
+        // every stored graph changes shape underneath its operator.
+        for node in [Node::stt("stt", "whisper"), Node::tts("tts", "piper")] {
+            let written = serde_json::to_value(&node).expect("serialize");
+            assert!(
+                written.get("settings").is_none(),
+                "an empty override map is omitted rather than written as `{{}}`: {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_node_carries_the_settings_it_overrides() {
+        let node = Node::Stt {
+            id: "stt".to_owned(),
+            provider: "whisper".to_owned(),
+            settings: settings(serde_json::json!({ "prompt": "home automation" })),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&node).expect("serialize"),
+            serde_json::json!({
+                "kind": "stt",
+                "id": "stt",
+                "provider": "whisper",
+                "settings": { "prompt": "home automation" },
+            })
+        );
+
+        let back: Node =
+            serde_json::from_value(serde_json::to_value(&node).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(back, node, "an override round-trips");
+        assert_eq!(back.settings().get("prompt"), Some(&serde_json::json!("home automation")));
+    }
+
+    #[test]
+    fn a_core_overrides_its_models_settings_on_its_model_binding() {
+        // The override belongs beside the model it changes rather than on the
+        // node, because a core's tools and memory name providers of their own.
+        let core = ReasoningCore {
+            model: ModelBinding {
+                provider: "ollama".to_owned(),
+                model: None,
+                settings: settings(serde_json::json!({ "temperature": 0.2 })),
+            },
+            ..ReasoningCore::new("ollama")
+        };
+        let node = Node::Core { id: "core".to_owned(), core };
+
+        let written = serde_json::to_value(&node).expect("serialize");
+        assert_eq!(
+            written["core"]["model"],
+            serde_json::json!({ "provider": "ollama", "settings": { "temperature": 0.2 } })
+        );
+        assert_eq!(
+            serde_json::from_value::<Node>(written).expect("deserialize"),
+            node,
+            "a core's override round-trips"
+        );
+    }
+
+    #[test]
+    fn a_node_that_names_no_provider_of_its_own_overrides_nothing() {
+        // A source or a sink is where audio enters and leaves; the caller
+        // supplies both, so there is no provider request for a setting to
+        // reach and answering with an override would be a promise nothing keeps.
+        assert!(Node::source("mic", "websocket", Modality::Audio).settings().is_empty());
+        assert!(Node::sink("out", "websocket", Modality::Audio).settings().is_empty());
     }
 
     #[test]
@@ -1594,6 +1733,7 @@ mod tests {
             model: ModelBinding {
                 provider: "ollama".to_owned(),
                 model: Some("qwen3:8b".to_owned()),
+                settings: Map::new(),
             },
             system: Some("Be brief.".to_owned()),
             tools: vec![ToolBinding {

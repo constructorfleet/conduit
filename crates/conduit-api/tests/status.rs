@@ -801,3 +801,174 @@ async fn readable_pipelines_still_project_alongside_an_unreadable_one() {
     assert_eq!(kitchen["usable"], true);
     assert_eq!(body["runtime"]["launch_state"], "operations_workspace");
 }
+
+/// The same pipeline, plus a transform between the model and synthesis.
+///
+/// A transform is a capability the snapshot used to omit entirely, so it is
+/// what a test about enumerating every capability has to include.
+fn transforming_graph() -> PipelineGraph {
+    PipelineGraph::new("kitchen")
+        .with_node(Node::source("mic", "websocket", Modality::Audio))
+        .with_node(Node::stt("stt", "configured-stt"))
+        .with_node(Node::core("llm", "configured-llm"))
+        .with_node(Node::transform("clean", "speech-cleanup"))
+        .with_node(Node::tts("tts", "configured-tts"))
+        .with_edge(Edge::new("mic", "stt"))
+        .with_edge(Edge::new("stt", "llm"))
+        .with_edge(Edge::new("llm", "clean"))
+        .with_edge(Edge::new("clean", "tts"))
+}
+
+#[tokio::test]
+async fn every_registered_capability_appears_with_its_identity_and_version() {
+    // The snapshot used to enumerate stt, llm, tts and tool one at a time, so a
+    // transform an operator had configured was simply absent from the Providers
+    // page — and so would be a detector, an identifier, or a memory store.
+    let state = with_status_providers(guarded(), Health::Healthy).with_providers(
+        Providers::new()
+            .with_stt(StatusStt::new("configured-stt", Health::Healthy))
+            .with_llm(StatusLlm::new("configured-llm", Health::Healthy))
+            .with_tts(StatusTts::new("configured-tts", Health::Healthy))
+            .with_transform(conduit_transform::Builtin::new("speech-cleanup", Vec::new())),
+    );
+    let (status, body) = call(&state, put(&transforming_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let providers = body["providers"].as_array().expect("providers");
+    let transform = providers
+        .iter()
+        .find(|provider| provider["id"] == "speech-cleanup")
+        .unwrap_or_else(|| panic!("the transform is reported: {body}"));
+    assert_eq!(transform["kind"], "transform");
+    assert_eq!(transform["state"], "reachable");
+    assert_eq!(
+        transform["affects_pipelines"],
+        serde_json::json!(["kitchen"]),
+        "and names the pipeline it affects"
+    );
+
+    // Identity, label and version come off the descriptor rather than off the
+    // selector, so a diagnostic can say which implementation and which build.
+    for id in ["configured-stt", "configured-llm", "configured-tts", "speech-cleanup"] {
+        let provider = providers.iter().find(|provider| provider["id"] == id).unwrap();
+        assert!(provider["provider"].is_string(), "{id} states an identity: {provider}");
+        assert!(provider["label"].is_string(), "{id} states a label: {provider}");
+        assert!(provider["version"].is_string(), "{id} states a version: {provider}");
+    }
+}
+
+#[tokio::test]
+async fn a_provider_never_built_reports_no_identity_to_state() {
+    // The other half of the same contract: identity comes from the running
+    // implementation, so a selector naming one that was never built has an id
+    // and nothing else. Reporting a made-up identity would be worse than none.
+    let state = guarded();
+    state.put_pipeline("kitchen", provider_status_graph()).await.expect("stores graph");
+
+    let (status, body) = call(&state, bearer("/v1/status", MANAGEMENT_TOKEN)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let providers = body["providers"].as_array().expect("providers");
+    let llm = providers.iter().find(|provider| provider["id"] == "configured-llm").unwrap();
+    assert_eq!(llm["state"], "unavailable");
+    assert!(llm.get("provider").is_none(), "{llm}");
+    assert!(llm.get("version").is_none(), "{llm}");
+}
+
+#[tokio::test]
+async fn a_failed_turn_takes_back_a_providers_proof_until_a_later_success() {
+    // `reachable` says a health check answered; `proven` says the provider did
+    // the job in a real pipeline. A provider that answers a health check while
+    // failing every turn must not read as proven — the failure is the more
+    // recent and more expensive evidence, and it stands until a later success.
+    let state = with_status_providers(guarded(), Health::Healthy);
+    let (status, body) = call(&state, put(&provider_status_graph())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation = ConversationId::new();
+    let proving = TurnId::new();
+
+    // A successful turn first, so there is a proof to take back.
+    publish(&state, "kitchen", conversation, Event::TurnStarted { turn: proving });
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::SpeechFinal { text: "hello".to_owned(), confidence: None, language: None },
+    );
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::LlmRequestStarted { model: "echo".to_owned() },
+    );
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::LlmFinished {
+            reason: FinishReason::Stop,
+            prompt_tokens: None,
+            completion_tokens: None,
+        },
+    );
+    publish(&state, "kitchen", conversation, Event::TtsStarted { voice: "echo".to_owned() });
+    publish(&state, "kitchen", conversation, Event::TtsFinished { duration_ms: 20 });
+    publish(&state, "kitchen", conversation, Event::ConversationCompleted);
+
+    wait_for_status(&state, |body| {
+        body["providers"].as_array().is_some_and(|providers| {
+            providers.iter().any(|provider| {
+                provider["id"] == "configured-tts" && provider["state"] == "proven"
+            })
+        })
+    })
+    .await;
+
+    // Then a turn that fails at synthesis.
+    let failing = TurnId::new();
+    let conversation = ConversationId::new();
+    publish(&state, "kitchen", conversation, Event::TurnStarted { turn: failing });
+    publish(&state, "kitchen", conversation, Event::TtsStarted { voice: "echo".to_owned() });
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::StageFailed {
+            node: "tts".to_owned(),
+            error: "connection refused".to_owned(),
+            recovered: false,
+        },
+    );
+    publish(
+        &state,
+        "kitchen",
+        conversation,
+        Event::ConversationCancelled { reason: CancelReason::Error },
+    );
+
+    let body = wait_for_status(&state, |body| {
+        body["providers"].as_array().is_some_and(|providers| {
+            providers.iter().any(|provider| {
+                provider["id"] == "configured-tts" && provider["state"] != "proven"
+            })
+        })
+    })
+    .await;
+
+    let providers = body["providers"].as_array().expect("providers");
+    let tts = providers.iter().find(|provider| provider["id"] == "configured-tts").unwrap();
+    assert_ne!(tts["state"], "proven", "the failure takes the proof back: {tts}");
+    assert_eq!(tts["proven_by_turn"], serde_json::Value::Null, "{tts}");
+    assert_eq!(
+        tts["affects_pipelines"],
+        serde_json::json!(["kitchen"]),
+        "and the pipeline it affects is still named: {tts}"
+    );
+
+    // The model was not what failed, so its proof stands.
+    let llm = providers.iter().find(|provider| provider["id"] == "configured-llm").unwrap();
+    assert_eq!(llm["state"], "proven", "a failure elsewhere is not this provider's: {llm}");
+}

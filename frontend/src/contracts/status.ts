@@ -17,7 +17,8 @@ export type ProviderKind =
   | "tts"
   | "transform"
   | "wake"
-  | "speaker_id";
+  | "speaker_id"
+  | "memory";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
 export type SnapshotResource =
   | "runtime_state"
@@ -66,9 +67,17 @@ export interface ComponentHealth {
   last_turn: IdString | null;
 }
 
+/// `id` is the selector — what a pipeline node names and what the operator
+/// configured. `provider`, `label` and `version` come from the registered
+/// implementation's descriptor and are absent when nothing was built under that
+/// selector: a definition whose service would not start, or a node naming a
+/// provider nobody configured.
 export interface ProviderStatus {
   id: string;
   kind: ProviderKind;
+  provider?: string;
+  label?: string;
+  version?: string;
   state: ProviderStatusState;
   configured: boolean;
   reachable: boolean;
@@ -170,6 +179,9 @@ export const operatorStatusSnapshotFixture = {
     {
       "id": "piper-local",
       "kind": "tts",
+      "provider": "piper",
+      "label": "Piper",
+      "version": "0.1.0",
       "state": "configured",
       "configured": true,
       "reachable": false,

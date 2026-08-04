@@ -16,9 +16,21 @@ use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel, ToolSp
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::tool::{Permission, Tool, ToolContext, ToolOutput};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
-use conduit_provider::{Capability, ChunkStream, Descriptor, Metadata, Provider};
+use conduit_provider::{
+    Capability, ChunkStream, Descriptor, Metadata, Provider, SettingsSchema,
+};
 use futures_util::StreamExt;
 use tokio::sync::Notify;
+
+/// A schema declaring one optional `style` string, for tests about per-node
+/// setting overrides.
+pub fn style_schema() -> SettingsSchema {
+    SettingsSchema::new(serde_json::json!({
+        "type": "object",
+        "properties": { "style": { "type": "string", "enum": ["plain", "warm"] } },
+    }))
+    .expect("an object schema")
+}
 
 /// Builds an audio stream whose chunks carry the given payloads.
 pub fn audio_of(chunks: &[&str]) -> ChunkStream<AudioChunk> {
@@ -73,6 +85,7 @@ fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
 pub struct FakeStt {
     transcripts: Vec<Transcript>,
     descriptor: Descriptor,
+    options: Arc<Mutex<Vec<TranscribeOptions>>>,
     /// Whether being handed no audio at all is a test failure.
     demands_audio: bool,
 }
@@ -82,6 +95,7 @@ impl FakeStt {
         Self {
             transcripts,
             descriptor: Descriptor::new("fake-stt", Capability::Stt),
+            options: Arc::new(Mutex::new(Vec::new())),
             demands_audio: true,
         }
     }
@@ -89,6 +103,17 @@ impl FakeStt {
     pub fn accepting_encodings(mut self, encodings: &[Encoding]) -> Self {
         self.descriptor.metadata.encodings = encodings.to_vec();
         self
+    }
+
+    /// Declares the settings this recognizer accepts on a request.
+    pub fn accepting_settings(mut self, schema: SettingsSchema) -> Self {
+        self.descriptor = self.descriptor.with_settings(schema);
+        self
+    }
+
+    /// The options every transcription session was started with, in order.
+    pub fn options(&self) -> Vec<TranscribeOptions> {
+        self.options.lock().expect("lock").clone()
     }
 
     /// Stops asserting that audio arrived.
@@ -113,8 +138,9 @@ impl SpeechToText for FakeStt {
     async fn transcribe(
         &self,
         audio: ChunkStream<AudioChunk>,
-        _options: TranscribeOptions,
+        options: TranscribeOptions,
     ) -> Result<ChunkStream<Transcript>> {
+        self.options.lock().expect("lock").push(options);
         // Drain the input so a runtime that never forwards audio fails here.
         let received = audio.count().await;
         assert!(received > 0 || !self.demands_audio, "the recognizer was given no audio");
@@ -263,6 +289,12 @@ impl FakeLlm {
         self
     }
 
+    /// Declares the settings this model accepts on a request.
+    pub fn accepting_settings(mut self, schema: SettingsSchema) -> Self {
+        self.descriptor = self.descriptor.clone().with_settings(schema);
+        self
+    }
+
     /// Advertises a finite model catalogue.
     pub fn serving(mut self, models: &[&str]) -> Self {
         self.descriptor.metadata.models =
@@ -315,6 +347,7 @@ impl LanguageModel for FakeLlm {
 pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
     voices: Arc<Mutex<Vec<Option<String>>>>,
+    settings: Arc<Mutex<Vec<conduit_provider::Settings>>>,
     spoke: Arc<Notify>,
     descriptor: Descriptor,
     /// Rate this synthesizer speaks at, when it is not the requested one.
@@ -326,6 +359,7 @@ impl FakeTts {
         Self {
             spoken: Arc::new(Mutex::new(Vec::new())),
             voices: Arc::new(Mutex::new(Vec::new())),
+            settings: Arc::new(Mutex::new(Vec::new())),
             spoke: Arc::new(Notify::new()),
             descriptor: Descriptor::new("fake-tts", Capability::Tts).with_metadata(
                 Metadata::default().with_voices(vec![Voice {
@@ -348,6 +382,17 @@ impl FakeTts {
     pub fn producing_encodings(mut self, encodings: &[Encoding]) -> Self {
         self.descriptor.metadata.encodings = encodings.to_vec();
         self
+    }
+
+    /// Declares the settings this synthesizer accepts on a request.
+    pub fn accepting_settings(mut self, schema: SettingsSchema) -> Self {
+        self.descriptor = self.descriptor.clone().with_settings(schema);
+        self
+    }
+
+    /// The settings every synthesis request carried, in order.
+    pub fn settings_requested(&self) -> Vec<conduit_provider::Settings> {
+        self.settings.lock().expect("lock").clone()
     }
 
     /// The text of every synthesis request, in order.
@@ -379,6 +424,8 @@ impl Provider for FakeTts {
 impl TextToSpeech for FakeTts {
     async fn synthesize(&self, request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>> {
         self.spoken.lock().expect("lock").push(request.text.clone());
+        self.voices.lock().expect("lock").push(request.voice.clone());
+        self.settings.lock().expect("lock").push(request.settings.clone());
         self.spoke.notify_one();
         if let Some(sample_rate) = self.native_rate {
             let format = AudioFormat { sample_rate, ..request.format };

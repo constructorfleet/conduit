@@ -107,6 +107,18 @@ that belong to the provider live in its definition. An absent `model` means
 whichever model the provider serves first, so a node that expresses no
 preference behaves as it did before nodes could express one.
 
+The same division governs provider-specific settings. A Configured Provider
+carries the reusable ones — set once, applied to every pipeline that names it —
+and a node carries only what this pipeline wants different, on `settings`: an
+`stt` node, a `tts` node, and a core's model binding each take one. An override
+is checked against the provider's declared settings schema when the pipeline is
+prepared, so a mistyped setting is a graph the operator is told to fix rather
+than a turn that fails. Crucially it is checked as an *override* — declared
+defaults are not filled in and `required` is not enforced — because a node that
+named one setting must not thereby displace every stored default beside it. What
+a node leaves out stays with the Configured Provider, which layers the request's
+settings over its own.
+
 [ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) replaces this flat
 model with a transport pipeline plus a reasoning core;
 [docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks
@@ -205,6 +217,36 @@ definition nothing claims fails the load rather than being skipped, because a
 provider silently missing from the registry surfaces later as a pipeline error
 about the graph instead of about the definition. A deployment that embeds
 Conduit supplies its own vendor set with `AppState::with_factories`.
+
+### Provider Status
+
+The operator status snapshot reports every registered provider of every
+capability, with the selector a pipeline names, the identity, label and version
+its descriptor states, and the capability it supplies. It is assembled by
+walking the bundle's descriptors rather than by naming stt, llm and tts one at
+a time — that is what used to leave transforms, detectors, identifiers and
+memory stores out of the snapshot entirely, and would leave out the next
+capability too. A provider that was never built has a selector and no
+descriptor, so its identity and version are absent rather than invented.
+
+Three states stack, each earned by different evidence:
+
+- **Configured** — settings exist and validate. Says nothing about whether the
+  service is there.
+- **Reachable** — an active health check answered. Performed when definitions
+  change rather than when the console polls, because a probe can mean a request
+  to a paid API and the console polls.
+- **Proven** — the provider did the job inside a real pipeline turn, derived
+  from the event bus.
+
+Proof is per provider, not per pipeline: a turn that failed at synthesis says
+nothing about the model that answered in it, so each component keeps or loses
+its own proof. A failure marks the provider — outranking a health check that
+answered, since failing a real turn is the more recent and more expensive
+evidence — and stands until a later successful turn proves recovery. Because
+the failure is discovered through a pipeline's components, an unreachable or
+unproven provider can name the pipelines it affects, which is what lets the
+exception-first overview warn before the next turn fails.
 
 ## Events And Metrics
 

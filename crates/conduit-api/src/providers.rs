@@ -29,6 +29,15 @@ pub struct ProviderDefinitionView {
     pub kind: ProviderCapability,
     /// Typed provider-specific settings, with inline secrets redacted.
     pub variant: conduit_provider::storage::ProviderDefinitionVariant,
+    /// Default request settings this configured provider carries.
+    ///
+    /// Read back rather than hidden: these are sampling controls and model
+    /// options, not credentials, and an operator editing a configured provider
+    /// has to see what it is already set to. Omitted when empty, so a
+    /// definition that carries none reads exactly as it did before they
+    /// existed.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl From<ProviderDefinition> for ProviderDefinitionView {
@@ -39,6 +48,7 @@ impl From<ProviderDefinition> for ProviderDefinitionView {
             label: definition.label,
             kind: definition.variant.capability(),
             variant: definition.variant,
+            settings: definition.settings,
         }
     }
 }
@@ -258,50 +268,41 @@ pub async fn test(
             state.reload_provider_definitions().await.map_err(store_failure)?;
         }
         state.record_provider_reachability(&id, health.clone());
-        return Ok(Json(status_from_health(kind, id, health, affected_pipelines)));
+        return Ok(Json(status_from_health(kind, id, None, health, affected_pipelines)));
     }
 
     let Some(providers) = state.providers() else {
         return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
     };
 
-    let health = match definition.capability() {
-        ProviderCapability::Stt => match providers.stt().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::Llm => match providers.llm().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::Tts => match providers.tts().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::Transform => match providers.transform().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::Tool => match providers.tools().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::Wake => match providers.wake().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-        ProviderCapability::SpeakerId => match providers.speaker().get(&id) {
-            Some(provider) => Some(provider.health().await),
-            None => None,
-        },
-    };
-
-    let Some(health) = health else {
+    // Asked through the capability the definition declares rather than through
+    // a lookup per capability: which registry answers is the capability, and
+    // spelling that out seven times is seven places to forget the eighth.
+    let capability = runtime_capability(definition.capability());
+    let Some(health) = providers.health(capability, &id).await else {
         return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
     };
+    let descriptor = providers
+        .descriptors()
+        .into_iter()
+        .find(|(registered, key, _)| *registered == capability && *key == id)
+        .map(|(_, _, descriptor)| descriptor);
 
     state.record_provider_reachability(&id, health.clone());
-    Ok(Json(status_from_health(kind, id, health, affected_pipelines)))
+    Ok(Json(status_from_health(kind, id, descriptor.as_ref(), health, affected_pipelines)))
+}
+
+/// The runtime capability a stored definition's capability names.
+const fn runtime_capability(capability: ProviderCapability) -> conduit_provider::Capability {
+    match capability {
+        ProviderCapability::Stt => conduit_provider::Capability::Stt,
+        ProviderCapability::Llm => conduit_provider::Capability::Llm,
+        ProviderCapability::Tts => conduit_provider::Capability::Tts,
+        ProviderCapability::Transform => conduit_provider::Capability::Transform,
+        ProviderCapability::Tool => conduit_provider::Capability::Tool,
+        ProviderCapability::Wake => conduit_provider::Capability::Wake,
+        ProviderCapability::SpeakerId => conduit_provider::Capability::SpeakerId,
+    }
 }
 
 #[derive(Serialize)]
@@ -447,6 +448,7 @@ fn validate_absolute_url(field: &str, value: &str) -> Result<Uri, ApiError> {
 fn status_from_health(
     kind: ProviderKind,
     id: String,
+    descriptor: Option<&conduit_provider::Descriptor>,
     health: Health,
     affects_pipelines: Vec<String>,
 ) -> ProviderStatus {
@@ -459,6 +461,9 @@ fn status_from_health(
     ProviderStatus {
         id,
         kind,
+        provider: descriptor.map(|descriptor| descriptor.id.clone()),
+        label: descriptor.map(|descriptor| descriptor.label.clone()),
+        version: descriptor.map(|descriptor| descriptor.version.clone()),
         state,
         configured: true,
         reachable,
@@ -477,6 +482,11 @@ fn unregistered_status(
     ProviderStatus {
         id: id.clone(),
         kind,
+        // Nothing was built, so there is no implementation to state an
+        // identity, a label or a version.
+        provider: None,
+        label: None,
+        version: None,
         state: ProviderStatusState::Unavailable,
         configured: true,
         reachable: false,

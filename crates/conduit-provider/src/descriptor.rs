@@ -114,6 +114,26 @@ impl Descriptor {
             Error::Config(format!("provider `{}` rejected its settings: {detail}", self.id))
         })
     }
+
+    /// Checks `values` as an override of settings that are configured
+    /// elsewhere: named settings are validated, absent ones are left absent.
+    ///
+    /// What a pipeline node's per-node settings are built from. A node names
+    /// only what it wants to change about a Configured Provider it shares with
+    /// other pipelines, so [`validate_settings`](Descriptor::validate_settings)
+    /// is the wrong check twice over: filling in declared defaults would let a
+    /// node that named one setting displace every stored default beside it, and
+    /// enforcing `required` would demand a node repeat settings the Configured
+    /// Provider already carries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`] naming the offending setting.
+    pub fn validate_overrides(&self, values: &Value) -> Result<Settings> {
+        self.settings.validate_overrides(values).map_err(|detail| {
+            Error::Config(format!("provider `{}` rejected its settings: {detail}", self.id))
+        })
+    }
 }
 
 /// Defines a [`Provider::descriptor`](crate::Provider::descriptor) method for
@@ -334,22 +354,8 @@ impl SettingsSchema {
     ///
     /// Returns a message naming the offending setting.
     fn validate(&self, values: &Value) -> std::result::Result<Settings, String> {
-        // Absent settings and `{}` are the same request: the caller named
-        // nothing, so the answer is whatever the schema defaults to.
-        let given = match values {
-            Value::Null => &Map::new(),
-            Value::Object(given) => given,
-            other => return Err(format!("settings must be an object, got {}", kind_of(other))),
-        };
+        let given = self.named(values)?;
         let properties = self.properties().cloned().unwrap_or_default();
-
-        if !self.allows_unknown() {
-            for name in given.keys() {
-                if !properties.contains_key(name) {
-                    return Err(format!("unknown setting `{name}`"));
-                }
-            }
-        }
 
         let mut checked = Map::new();
         for (name, declared) in &properties {
@@ -373,10 +379,55 @@ impl SettingsSchema {
         // Unknown settings only reach here when the schema opted into them, so
         // carrying them through is what the schema asked for.
         for (name, value) in given {
-            checked.entry(name.clone()).or_insert_with(|| value.clone());
+            checked.entry(name).or_insert(value);
         }
 
         Ok(Settings { values: checked })
+    }
+
+    /// Checks `values` as an override: what it names is validated, what it
+    /// omits stays omitted.
+    ///
+    /// See [`Descriptor::validate_overrides`] for why neither declared defaults
+    /// nor `required` apply to an override.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the offending setting.
+    fn validate_overrides(&self, values: &Value) -> std::result::Result<Settings, String> {
+        let given = self.named(values)?;
+        let properties = self.properties().cloned().unwrap_or_default();
+
+        let mut checked = Map::new();
+        for (name, value) in given {
+            if let Some(declared) = properties.get(&name) {
+                check_value(&name, &value, declared)?;
+            }
+            checked.insert(name, value);
+        }
+        Ok(Settings { values: checked })
+    }
+
+    /// The settings `values` names, rejecting any this schema does not declare.
+    ///
+    /// Absent settings and `{}` are the same request — the caller named nothing
+    /// — so both answer with an empty map rather than one of them being an
+    /// error.
+    fn named(&self, values: &Value) -> std::result::Result<Map<String, Value>, String> {
+        let given = match values {
+            Value::Null => Map::new(),
+            Value::Object(given) => given.clone(),
+            other => return Err(format!("settings must be an object, got {}", kind_of(other))),
+        };
+        if !self.allows_unknown() {
+            let properties = self.properties();
+            for name in given.keys() {
+                if !properties.is_some_and(|properties| properties.contains_key(name)) {
+                    return Err(format!("unknown setting `{name}`"));
+                }
+            }
+        }
+        Ok(given)
     }
 }
 
@@ -637,6 +688,47 @@ mod tests {
             .validate_settings(&serde_json::json!({ "anything": "goes" }))
             .expect("valid settings");
         assert_eq!(settings.string("anything"), Some("goes"));
+    }
+
+    #[test]
+    fn an_override_names_only_what_it_changes() {
+        // A pipeline node overriding one setting must not silently acquire
+        // every declared default beside it: those defaults would then displace
+        // whatever the Configured Provider was configured with.
+        let overrides = descriptor()
+            .validate_overrides(&serde_json::json!({ "top_p": 0.2 }))
+            .expect("valid");
+
+        assert_eq!(overrides.number("top_p"), Some(0.2));
+        assert_eq!(overrides.get("stream"), None, "a declared default is not filled in");
+        assert_eq!(overrides.get("reasoning_effort"), None, "nor a required setting");
+    }
+
+    #[test]
+    fn an_override_is_still_checked_against_the_schema() {
+        // Naming fewer settings is the only latitude an override gets; the ones
+        // it does name are checked exactly as a full settings object is.
+        for value in [
+            serde_json::json!({ "top_p": 5.0 }),
+            serde_json::json!({ "top_p": "high" }),
+            serde_json::json!({ "reasoning_effort": "medium" }),
+            serde_json::json!({ "top-p": 0.2 }),
+        ] {
+            assert!(
+                descriptor().validate_overrides(&value).is_err(),
+                "{value} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn overriding_nothing_is_no_settings_at_all() {
+        // What a node that names no overrides resolves to, and the reason this
+        // is not `validate_settings`: the empty answer leaves the Configured
+        // Provider's stored settings entirely in charge.
+        for value in [Value::Null, serde_json::json!({})] {
+            assert!(descriptor().validate_overrides(&value).expect("valid").is_empty());
+        }
     }
 
     #[test]

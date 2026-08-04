@@ -934,6 +934,9 @@ function providerKindLabel(kind: ProviderFilter): string {
   if (kind === "transform") {
     return "Transform";
   }
+  if (kind === "memory") {
+    return "Memory";
+  }
   return kind.toUpperCase();
 }
 
@@ -1036,6 +1039,7 @@ function ProvidersPanel({
     "transform",
     "wake",
     "speaker_id",
+    "memory",
   ];
   const providerIds = new Set([
     ...providers.map((provider) => provider.id),
@@ -1058,10 +1062,12 @@ function ProvidersPanel({
           ok: false,
           message: "Choose a provider component",
         } satisfies PipelineValidationResult);
-  const selectedKindComponents = selectedProviderKind
+  const selectedKindCapability = selectedProviderKind
+    ? capabilityForProviderKind(selectedProviderKind)
+    : null;
+  const selectedKindComponents = selectedKindCapability
     ? componentCatalog.components.filter(
-        (component) =>
-          component.kind === capabilityForProviderKind(selectedProviderKind),
+        (component) => component.kind === selectedKindCapability,
       )
     : [];
 
@@ -1089,10 +1095,17 @@ function ProvidersPanel({
       return;
     }
 
+    // A card whose kind names no configurable capability — a memory store the
+    // runtime holds but no definition variant describes — has nothing to edit.
+    const capability = capabilityForProviderKind(card.kind);
+    if (!capability) {
+      return;
+    }
+
     setDraftProvider({
       id: card.id,
       label: card.label,
-      kind: capabilityForProviderKind(card.kind),
+      kind: capability,
       component: card.component ?? card.id,
       config: {},
       source: "local",
@@ -3057,6 +3070,9 @@ function componentForProviderStatus(
   provider: ProviderStatus,
 ): ProviderComponentDescriptor | null {
   const nodeKind = capabilityForProviderKind(provider.kind);
+  if (!nodeKind) {
+    return null;
+  }
   return componentForNode(catalog, {
     id: provider.id,
     kind: nodeKind,
@@ -3172,7 +3188,9 @@ function fromApiProviderDefinition(
   return {
     id: definition.id,
     label: definition.label,
-    kind: capabilityForProviderKind(definition.kind),
+    // Already a capability: a stored definition can only describe one an
+    // operator can configure, so there is nothing to narrow here.
+    kind: definition.kind,
     component: component?.id ?? definition.variant.type,
     config: configFromProviderVariant(definition.variant),
     source: "local",
@@ -3183,7 +3201,7 @@ function componentForApiProviderDefinition(
   catalog: ProviderComponentCatalog,
   definition: Pick<ProviderDefinitionView, "kind" | "variant">,
 ): ProviderComponentDescriptor | null {
-  const kind = capabilityForProviderKind(definition.kind);
+  const kind = definition.kind;
   if (definition.variant.type === "tool") {
     const transport = definition.variant.variant.transport.type;
     const componentId =
@@ -3552,30 +3570,39 @@ function defaultProviderDefinitions(
     }),
   );
   const fromStatus: ProviderDefinition[] =
-    snapshot?.providers.flatMap((provider) => [
-      {
-        id: provider.id,
-        label: provider.id,
-        kind: capabilityForProviderKind(provider.kind),
-        component:
-          componentForProviderStatus(catalog, provider)?.id ?? provider.id,
-        config: {},
-        source: "inferred" as const,
-      },
-      // A server's tools are bindable individually even though the server is
-      // one provider. They are listed under it rather than reported beside
-      // it, so this is where they become selectable — the Providers page still
-      // shows one card for the one thing that was configured.
-      ...(provider.offers_tools ?? []).map((tool) => ({
-        id: tool,
-        label: tool,
-        kind: "tool" as const,
-        component: provider.id,
-        config: {},
-        source: "inferred" as const,
-        partOf: provider.id,
-      })),
-    ]) ?? [];
+    snapshot?.providers.flatMap((provider) => {
+      // A provider whose kind names no configurable capability is reported on
+      // the status page and cannot be bound in a pipeline, so there is no
+      // definition to infer for it.
+      const capability = capabilityForProviderKind(provider.kind);
+      if (!capability) {
+        return [];
+      }
+      return [
+        {
+          id: provider.id,
+          label: provider.id,
+          kind: capability,
+          component:
+            componentForProviderStatus(catalog, provider)?.id ?? provider.id,
+          config: {},
+          source: "inferred" as const,
+        },
+        // A server's tools are bindable individually even though the server is
+        // one provider. They are listed under it rather than reported beside
+        // it, so this is where they become selectable — the Providers page still
+        // shows one card for the one thing that was configured.
+        ...(provider.offers_tools ?? []).map((tool) => ({
+          id: tool,
+          label: tool,
+          kind: "tool" as const,
+          component: provider.id,
+          config: {},
+          source: "inferred" as const,
+          partOf: provider.id,
+        })),
+      ];
+    }) ?? [];
 
   return mergeProviderDefinitions([], [...fromGraphs, ...fromStatus]);
 }
@@ -3702,10 +3729,17 @@ function pruneEmptyConfig(
   );
 }
 
-/// A provider kind and a capability are the same vocabulary; the conversion
-/// exists so call sites read as the thing they are asking for.
-function capabilityForProviderKind(kind: ProviderKind): ProviderCapability {
-  return kind;
+/// The capability a status kind names, or `null` when it names none.
+///
+/// The two vocabularies overlap but are not the same: `ProviderKind` describes
+/// what the runtime registered and `ProviderCapability` describes what an
+/// operator can configure. Memory is the difference — the runtime can hold a
+/// memory store, but there is no provider definition variant to write one down
+/// as, so it appears on the status page and has nothing to edit.
+function capabilityForProviderKind(
+  kind: ProviderKind,
+): ProviderCapability | null {
+  return kind === "memory" ? null : kind;
 }
 
 /// What a node's provider has to be able to do, when the node names one.

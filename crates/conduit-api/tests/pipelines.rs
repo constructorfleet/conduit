@@ -2176,3 +2176,59 @@ impl PipelineStore for BrokenStore {
         unreachable!("readiness only lists names")
     }
 }
+
+#[tokio::test]
+async fn a_configured_providers_default_settings_are_read_back() {
+    // A Configured Provider is a resource an operator edits, so what they saved
+    // has to come back on the next read — otherwise the console renders an
+    // empty form over settings that are still in force.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/cloud",
+            serde_json::json!({
+                "id": "cloud",
+                "label": "Cloud",
+                "variant": {
+                    "type": "llm",
+                    "variant": {
+                        "type": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": { "type": "inline", "value": "sk-secret" },
+                        "models": ["gpt-4o-mini"]
+                    }
+                },
+                "settings": { "top_p": 0.2 }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, get("/v1/providers/cloud")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["settings"],
+        serde_json::json!({ "top_p": 0.2 }),
+        "the settings the operator saved: {body}"
+    );
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" }),
+        "and never the credential beside them: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_configured_provider_with_no_default_settings_reads_without_the_field() {
+    // Omitted rather than written as `{}`, so a definition that carries none
+    // reads exactly as it did before default settings existed.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    store_llm_provider_definition(&state, "plain").await;
+
+    let (status, body) = call(&state, get("/v1/providers/plain")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("settings").is_none(), "{body}");
+}
