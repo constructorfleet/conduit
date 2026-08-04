@@ -307,8 +307,11 @@ impl Turn {
         // mismatched the two. Failing here reports which pipeline and stays on
         // the same path as any other stage failure, rather than panicking in a
         // spawned task where nothing would see it.
-        let Some(recognizer) =
-            self.plan.stt.as_ref().map(|stt| (Arc::clone(&stt.provider), stt.node.clone()))
+        let Some(recognizer) = self
+            .plan
+            .stt
+            .as_ref()
+            .map(|stt| (Arc::clone(&stt.provider), stt.node.clone(), stt.settings.clone()))
         else {
             let pipeline = self.plan.pipeline.clone();
             return self
@@ -321,9 +324,10 @@ impl Turn {
                 )
                 .await;
         };
-        let (provider, node) = recognizer;
+        let (provider, node, settings) = recognizer;
 
-        let options = TranscribeOptions { format: self.format, ..TranscribeOptions::default() };
+        let options =
+            TranscribeOptions { format: self.format, settings, ..TranscribeOptions::default() };
         let mut transcripts = match provider.transcribe(audio, options).await {
             Ok(transcripts) => transcripts,
             Err(error) => return self.fail(&node.clone(), error).await,
@@ -476,6 +480,7 @@ impl Turn {
     async fn ask(&mut self, messages: &[Message]) -> Option<Round> {
         let request = CompletionRequest {
             tools: self.plan.core.tool_specs(),
+            settings: self.plan.core.settings.clone(),
             ..CompletionRequest::new(self.plan.core.model.clone(), messages.to_vec())
         };
         self.emitter.emit(Event::LlmRequestStarted { model: self.plan.core.model.clone() });
@@ -650,10 +655,11 @@ impl Turn {
             // delivery. A pipeline with neither is refused at resolution.
             return true;
         };
-        let (provider, node, voice) = (
+        let (provider, node, voice, settings) = (
             Arc::clone(&synthesizer.provider),
             synthesizer.node.clone(),
             synthesizer.voice.clone(),
+            synthesizer.settings.clone(),
         );
 
         let Some(spoken) = self.rewrite(&plan.transforms.speech, &sentence).await else {
@@ -683,6 +689,7 @@ impl Turn {
         let request = SynthesisRequest {
             voice: voice.clone(),
             format: self.format,
+            settings: settings.clone(),
             ..SynthesisRequest::new(spoken)
         };
 

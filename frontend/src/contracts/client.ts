@@ -24,11 +24,21 @@ export interface PipelineNodeBase {
   provider: string;
 }
 
+/// Provider-specific settings, whose names and value types come from the
+/// settings schema the provider's descriptor declares rather than from this
+/// contract — which is the point: adding a setting to a provider must not mean
+/// regenerating the frontend's types.
+export type ProviderSettings = Record<string, unknown>;
+
 export type ConfirmPolicy = "never" | "always";
 
+/// `settings` is what this pipeline overrides on the Configured Provider it
+/// names, and nothing more: everything the provider was configured with still
+/// applies to settings the binding leaves out.
 export interface ModelBinding {
   provider: string;
   model?: string;
+  settings?: ProviderSettings;
 }
 
 export interface ToolBinding {
@@ -54,10 +64,10 @@ export interface ReasoningCore {
 export type PipelineNode =
   | (PipelineNodeBase & { kind: "source"; modality?: Modality })
   | (PipelineNodeBase & { kind: "wake_word" })
-  | (PipelineNodeBase & { kind: "stt" })
+  | (PipelineNodeBase & { kind: "stt"; settings?: ProviderSettings })
   | (PipelineNodeBase & { kind: "speaker_id" })
   | (PipelineNodeBase & { kind: "transform" })
-  | (PipelineNodeBase & { kind: "tts"; voice?: string })
+  | (PipelineNodeBase & { kind: "tts"; voice?: string; settings?: ProviderSettings })
   | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
   | { kind: "core"; id: IdString; core: ReasoningCore };
 
@@ -328,6 +338,7 @@ export interface ProviderDefinitionView {
   label: string;
   kind: ProviderCapability;
   variant: ProviderDefinitionVariant;
+  settings?: ProviderSettings;
 }
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";

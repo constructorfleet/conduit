@@ -29,6 +29,15 @@ pub struct ProviderDefinitionView {
     pub kind: ProviderCapability,
     /// Typed provider-specific settings, with inline secrets redacted.
     pub variant: conduit_provider::storage::ProviderDefinitionVariant,
+    /// Default request settings this configured provider carries.
+    ///
+    /// Read back rather than hidden: these are sampling controls and model
+    /// options, not credentials, and an operator editing a configured provider
+    /// has to see what it is already set to. Omitted when empty, so a
+    /// definition that carries none reads exactly as it did before they
+    /// existed.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl From<ProviderDefinition> for ProviderDefinitionView {
@@ -39,6 +48,7 @@ impl From<ProviderDefinition> for ProviderDefinitionView {
             label: definition.label,
             kind: definition.variant.capability(),
             variant: definition.variant,
+            settings: definition.settings,
         }
     }
 }

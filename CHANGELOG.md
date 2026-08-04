@@ -8,6 +8,24 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- A pipeline node can now override the request settings of the Configured
+  Provider it names, rather than either accepting the provider's defaults or
+  needing a provider of its own. An `stt` node, a `tts` node, and a core's model
+  binding each take a `settings` map holding only what that pipeline wants
+  different; everything it leaves out stays with the Configured Provider, which
+  layers the request over its own stored defaults. Overrides are checked against
+  the provider's declared settings schema when the pipeline is prepared, naming
+  both the offending setting and the node to fix it on, so a mistyped setting is
+  a graph to correct rather than a turn that fails. They are checked as
+  *overrides* — declared defaults are not filled in and `required` is not
+  enforced (`Descriptor::validate_overrides`) — because a node that names one
+  setting must not displace every stored default beside it. An empty map is
+  omitted from storage, so pipelines written before this are byte-for-byte
+  unchanged.
+- A configured provider's default request settings are now returned by the
+  management API. They were stored and applied but never read back, so an
+  operator editing a provider saw an empty form over settings that were still in
+  force. Credentials remain redacted; settings are not secret.
 - A provider definition can now carry default request settings — the reusable
   sampling controls and model options an operator sets once on the Configured
   Provider rather than on every pipeline that names it. They are stored beside

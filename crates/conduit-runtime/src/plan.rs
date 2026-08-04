@@ -16,8 +16,35 @@ use conduit_provider::tool::Tool;
 use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::TextToSpeech;
 use conduit_provider::wake::{WakePhrase, WakeWordDetector};
+use conduit_provider::{Provider, Settings};
+use serde_json::{Map, Value};
 
 use crate::Providers;
+
+/// Checks what a node overrides against the schema the provider it selected
+/// declares.
+///
+/// Overrides rather than settings, so a node that names one setting does not
+/// acquire every declared default beside it and displace what the Configured
+/// Provider was configured with — see
+/// [`Descriptor::validate_overrides`](conduit_provider::Descriptor::validate_overrides).
+///
+/// Checked here rather than at the first request because prepare time is where
+/// an operator finds out: a mistyped setting is a graph to fix, not a turn to
+/// watch fail.
+fn resolve_overrides(
+    provider: &dyn Provider,
+    node: &str,
+    overrides: &Map<String, Value>,
+) -> Result<Settings> {
+    if overrides.is_empty() {
+        return Ok(Settings::empty());
+    }
+    provider
+        .descriptor()
+        .validate_overrides(&Value::Object(overrides.clone()))
+        .map_err(|error| Error::Config(format!("node `{node}`: {error}")))
+}
 
 /// The recognizer a pipeline resolved, and the node that chose it.
 ///
@@ -28,6 +55,12 @@ pub struct Recognizer {
     pub provider: Arc<dyn SpeechToText>,
     /// Node id of the recognizer.
     pub node: String,
+    /// Request settings this node overrides on the provider it selected.
+    ///
+    /// Only what the node named: everything else the Configured Provider
+    /// carries still applies, because the provider layers a request's settings
+    /// over its own.
+    pub settings: Settings,
 }
 
 /// The wake word detector a pipeline resolved, and the node that chose it.
@@ -71,6 +104,8 @@ pub struct Synthesizer {
     pub node: String,
     /// Voice this pipeline's synthesis node asks for, when present.
     pub voice: Option<String>,
+    /// Request settings this node overrides on the provider it selected.
+    pub settings: Settings,
 }
 
 /// The reasoning core a pipeline resolved: one model, and what it may reach
@@ -89,6 +124,9 @@ pub struct CorePlan {
     pub model: String,
     /// System prompt this pipeline asks for, when present.
     pub system: Option<String>,
+    /// Request settings this pipeline's model binding overrides on the provider
+    /// it selected.
+    pub settings: Settings,
     /// Tools offered to the model, keyed by the name it calls them by.
     ///
     /// Unlike the transport stages a core may reach for any number of these,
@@ -211,12 +249,11 @@ impl Plan {
                         node: id.clone(),
                     });
                 }
-                Node::Stt { id, provider } => {
+                Node::Stt { id, provider, settings } => {
                     reject_duplicate(&stt, node)?;
-                    stt = Some(Recognizer {
-                        provider: providers.stt().require(provider)?,
-                        node: id.clone(),
-                    });
+                    let recognizer = providers.stt().require(provider)?;
+                    let settings = resolve_overrides(recognizer.as_ref(), id, settings)?;
+                    stt = Some(Recognizer { provider: recognizer, node: id.clone(), settings });
                 }
                 Node::Core { id, core } => {
                     reject_duplicate(&reasoning, node)?;
@@ -229,11 +266,13 @@ impl Plan {
                         memory.push(resolve_memory(binding, providers)?);
                     }
                     let system = combined_system(llm.system_prompt(), core.system.as_deref());
+                    let settings = resolve_overrides(llm.as_ref(), id, &core.model.settings)?;
                     reasoning = Some(Reasoning {
                         node: id.clone(),
                         llm,
                         model,
                         system,
+                        settings,
                         max_rounds: core.max_rounds,
                     });
                 }
@@ -242,12 +281,15 @@ impl Plan {
                 // rendering it changes is what the operator wrote it down to
                 // say, and that is a property of its edges.
                 Node::Transform { .. } => {}
-                Node::Tts { id, provider, voice } => {
+                Node::Tts { id, provider, voice, settings } => {
                     reject_duplicate(&tts, node)?;
+                    let synthesizer = providers.tts().require(provider)?;
+                    let settings = resolve_overrides(synthesizer.as_ref(), id, settings)?;
                     tts = Some(Synthesizer {
-                        provider: providers.tts().require(provider)?,
+                        provider: synthesizer,
                         node: id.clone(),
                         voice: voice.clone(),
+                        settings,
                     });
                 }
             }
@@ -279,13 +321,13 @@ impl Plan {
 
         let transforms = resolve_transforms(graph, tts.as_ref(), providers)?;
 
-        let Reasoning { node, llm, model, system, max_rounds } = reasoning;
+        let Reasoning { node, llm, model, system, settings, max_rounds } = reasoning;
         Ok(Self {
             pipeline: graph.name.clone(),
             wake,
             speaker,
             stt,
-            core: CorePlan { node, llm, model, system, tools, memory, max_rounds },
+            core: CorePlan { node, llm, model, system, settings, tools, memory, max_rounds },
             tts,
             transforms,
             // Validation has already established that every sink is fed by the
@@ -463,6 +505,7 @@ struct Reasoning {
     llm: Arc<dyn LanguageModel>,
     model: String,
     system: Option<String>,
+    settings: Settings,
     max_rounds: usize,
 }
 

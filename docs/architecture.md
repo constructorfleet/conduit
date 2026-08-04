@@ -107,6 +107,18 @@ that belong to the provider live in its definition. An absent `model` means
 whichever model the provider serves first, so a node that expresses no
 preference behaves as it did before nodes could express one.
 
+The same division governs provider-specific settings. A Configured Provider
+carries the reusable ones — set once, applied to every pipeline that names it —
+and a node carries only what this pipeline wants different, on `settings`: an
+`stt` node, a `tts` node, and a core's model binding each take one. An override
+is checked against the provider's declared settings schema when the pipeline is
+prepared, so a mistyped setting is a graph the operator is told to fix rather
+than a turn that fails. Crucially it is checked as an *override* — declared
+defaults are not filled in and `required` is not enforced — because a node that
+named one setting must not thereby displace every stored default beside it. What
+a node leaves out stays with the Configured Provider, which layers the request's
+settings over its own.
+
 [ADR-0012](adr/0012-transport-pipeline-and-reasoning-core.md) replaces this flat
 model with a transport pipeline plus a reasoning core;
 [docs/specs/0001](specs/0001-transport-pipeline-and-reasoning-core.md) tracks

@@ -1134,3 +1134,72 @@ async fn a_turn_nobody_authenticated_carries_no_device() {
     let envelope = subscription.recv().await.expect("event");
     assert_eq!(envelope.device, None);
 }
+
+#[tokio::test]
+async fn a_nodes_overrides_reach_the_requests_the_providers_receive() {
+    // The whole point of a per-node override: a Configured Provider is shared,
+    // and what this pipeline wants different about it has to arrive at the
+    // request. A plan that carries the setting and a turn that drops it looks
+    // exactly like a setting the operator never wrote.
+    let stt = FakeStt::new(vec![Transcript::final_text("hi")])
+        .accepting_settings(fakes::style_schema());
+    let llm = FakeLlm::new(vec!["Fine."]).accepting_settings(fakes::style_schema());
+    let tts = FakeTts::new().accepting_settings(fakes::style_schema());
+
+    let overrides = |style: &str| {
+        serde_json::json!({ "style": style }).as_object().expect("an object").clone()
+    };
+    let core = ReasoningCore {
+        model: conduit_core::graph::ModelBinding {
+            provider: "fake-llm".to_owned(),
+            model: None,
+            settings: overrides("warm"),
+        },
+        ..ReasoningCore::new("fake-llm")
+    };
+    let graph = PipelineGraph::new("overriding")
+        .with_node(Node::Stt {
+            id: "stt".to_owned(),
+            provider: "fake-stt".to_owned(),
+            settings: overrides("plain"),
+        })
+        .with_node(Node::Core { id: "core".to_owned(), core })
+        .with_node(Node::Tts {
+            id: "tts".to_owned(),
+            provider: "fake-tts".to_owned(),
+            voice: None,
+            settings: overrides("warm"),
+        })
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
+
+    let providers =
+        Providers::new().with_stt(stt.clone()).with_llm(llm.clone()).with_tts(tts.clone());
+    let runner = Runner::prepare(&graph, &providers, EventBus::default()).expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert_eq!(stt.options()[0].settings.string("style"), Some("plain"));
+    assert_eq!(llm.requests()[0].settings.string("style"), Some("warm"));
+    assert_eq!(tts.settings_requested()[0].string("style"), Some("warm"));
+}
+
+#[tokio::test]
+async fn a_pipeline_that_overrides_nothing_sends_no_settings_at_all() {
+    // What keeps the Configured Provider's own stored settings in charge: an
+    // empty request is how a provider is told to use what it was configured
+    // with, and anything filled in here would silently overrule it.
+    let stt = FakeStt::new(vec![Transcript::final_text("hi")])
+        .accepting_settings(fakes::style_schema());
+    let llm = FakeLlm::new(vec!["Fine."]).accepting_settings(fakes::style_schema());
+    let tts = FakeTts::new().accepting_settings(fakes::style_schema());
+    let providers =
+        Providers::new().with_stt(stt.clone()).with_llm(llm.clone()).with_tts(tts.clone());
+
+    let runner =
+        Runner::prepare(&linear_graph(), &providers, EventBus::default()).expect("executable");
+    let _: Vec<_> = runner.run(audio_of(&["a"])).speech().collect().await;
+
+    assert!(stt.options()[0].settings.is_empty());
+    assert!(llm.requests()[0].settings.is_empty());
+    assert!(tts.settings_requested()[0].is_empty());
+}
