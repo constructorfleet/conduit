@@ -429,6 +429,22 @@ export interface ConduitApiClientConfig {
   fetch?: typeof fetch;
 }
 
+/// Somebody the deployment has named, and possibly recorded.
+///
+/// The id is Conduit's and the identification service stores it as an opaque
+/// label, so the name only ever exists here.
+export interface EnrolledSpeaker {
+  id: IdString;
+  name: string;
+  samples: number;
+  /// Which identification provider holds the voice prints. Absent until a
+  /// sample has been accepted.
+  provider?: string;
+  created_at: DateTimeString;
+  /// When a sample was last accepted, absent for somebody only named.
+  enrolled_at?: DateTimeString;
+}
+
 export interface ConduitApiClient {
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
@@ -452,6 +468,17 @@ export interface ConduitApiClient {
     name: string,
     request?: PipelineTestRequest,
   ) => Promise<PipelineTestResult>;
+  listSpeakers: () => Promise<EnrolledSpeaker[]>;
+  createSpeaker: (name: string) => Promise<EnrolledSpeaker>;
+  renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
+  /// Sends one utterance as a WAV file. The service decides whether it is
+  /// usable, so the failure an operator sees is the service's own.
+  enrollSpeaker: (
+    id: string,
+    audio: Blob,
+    provider?: string,
+  ) => Promise<EnrolledSpeaker>;
+  deleteSpeaker: (id: string) => Promise<void>;
   listTurns: () => Promise<TurnList>;
   getTurn: (turnId: string) => Promise<TurnSnapshot>;
   getTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -470,6 +497,9 @@ export const conduitApiRoutes = {
   providerTest: "/v1/providers/{id}/test",
   providerVoices: "/v1/providers/{id}/voices",
   providerPhrases: "/v1/providers/{id}/phrases",
+  speakers: "/v1/speakers",
+  speaker: "/v1/speakers/{id}",
+  speakerEnroll: "/v1/speakers/{id}/enroll",
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{name}",
   pipelineTest: "/v1/pipelines/{name}/test-turn",
@@ -537,12 +567,53 @@ export function createConduitApiClient(
         method: "POST",
         body: JSON.stringify(testRequest),
       }),
+    listSpeakers: () =>
+      requestJson<EnrolledSpeaker[]>(request, config, conduitApiRoutes.speakers),
+    createSpeaker: (name) =>
+      requestJson<EnrolledSpeaker>(request, config, conduitApiRoutes.speakers, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    renameSpeaker: (id, name) =>
+      requestJson<EnrolledSpeaker>(request, config, speakerRoute(id), {
+        method: "PUT",
+        body: JSON.stringify({ name }),
+      }),
+    enrollSpeaker: (id, audio, provider) =>
+      requestJson<EnrolledSpeaker>(
+        request,
+        config,
+        provider
+          ? `${speakerEnrollRoute(id)}?provider=${encodeURIComponent(provider)}`
+          : speakerEnrollRoute(id),
+        {
+          method: "POST",
+          body: audio,
+          // Stated rather than left to the browser: a `Blob` with no type
+          // sends nothing, and the route has to know it is being handed a
+          // file rather than a JSON document.
+          headers: { "content-type": "audio/wav" },
+        },
+      ),
+    deleteSpeaker: async (id) => {
+      await requestJson<void>(request, config, speakerRoute(id), {
+        method: "DELETE",
+      });
+    },
     listTurns: () => requestJson<TurnList>(request, config, conduitApiRoutes.turns),
     getTurn: (turnId) =>
       requestJson<TurnSnapshot>(request, config, turnRoute(turnId)),
     getTurnEvents: (turnId) =>
       requestJson<RawTurnEvents>(request, config, turnEventsRoute(turnId)),
   };
+}
+
+function speakerRoute(id: string): string {
+  return conduitApiRoutes.speaker.replace("{id}", encodeURIComponent(id));
+}
+
+function speakerEnrollRoute(id: string): string {
+  return conduitApiRoutes.speakerEnroll.replace("{id}", encodeURIComponent(id));
 }
 
 function pipelineRoute(name: string): string {
@@ -599,7 +670,11 @@ async function requestJson<T>(
     ...init,
     headers: {
       accept: "application/json",
-      ...(init.body ? { "content-type": "application/json" } : {}),
+      // A body that is already a file says what it is; only a serialized
+      // document needs to be announced as JSON.
+      ...(init.body && typeof init.body === "string"
+        ? { "content-type": "application/json" }
+        : {}),
       ...config.headers?.(),
       ...init.headers,
     },

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App, { OverviewPanel } from "./App";
 import type {
+  EnrolledSpeaker,
   ProviderComponentCatalog,
   PipelineGraph,
   PipelineView,
@@ -67,7 +68,7 @@ describe("Operator Console shell", () => {
     expect(sessionStorage.getItem("conduit.operator.access")).toBeNull();
   });
 
-  it("enters explicit anonymous mode and exposes the five top-level sections", async () => {
+  it("enters explicit anonymous mode and exposes every top-level section", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -79,6 +80,7 @@ describe("Operator Console shell", () => {
       "Overview",
       "Pipelines",
       "Providers",
+      "Speakers",
       "Events",
       "Settings",
     ]) {
@@ -1076,11 +1078,11 @@ describe("Pipelines graph editor", () => {
       "openai.completions",
     );
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
-    await user.type(screen.getByLabelText("model required"), "gpt.5");
-    await user.click(screen.getByLabelText("streaming"));
+    await user.type(screen.getByLabelText("Model"), "gpt.5");
+    await user.click(screen.getByLabelText("Streaming"));
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
@@ -1253,11 +1255,11 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
     );
-    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Base URL")).toHaveDisplayValue(
       "https://api.openai.com/v1",
     );
-    expect(screen.getByLabelText("api_key")).toHaveDisplayValue("sk-test");
-    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt-5");
+    expect(screen.getByLabelText("API Key")).toHaveDisplayValue("sk-test");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt-5");
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -1272,11 +1274,11 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://whisper.local:10300",
     );
-    expect(screen.getByLabelText("model")).toHaveDisplayValue("tiny-int8");
-    expect(screen.getByLabelText("streaming")).toBeChecked();
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("tiny-int8");
+    expect(screen.getByLabelText("Streaming")).toBeChecked();
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -1291,10 +1293,10 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://piper.local:10200",
     );
-    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Voice")).toHaveDisplayValue(
       "en_US-lessac-medium",
     );
   });
@@ -1335,13 +1337,13 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://10.0.10.100:10200",
     );
-    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Voice")).toHaveDisplayValue(
       "en_US-ryan-high",
     );
-    expect(screen.getByLabelText("streaming")).toBeChecked();
+    expect(screen.getByLabelText("Streaming")).toBeChecked();
   });
 
   it("does not overwrite an existing provider with an invalid configuration", async () => {
@@ -1360,20 +1362,20 @@ describe("Pipelines graph editor", () => {
     await user.type(screen.getByLabelText("Provider label"), "Broken OpenAI");
 
     expect(
-      screen.getByText("Missing required fields: base_url, model"),
+      screen.getByText("Missing required fields: Base URL, Model"),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Save provider" }),
     ).toBeDisabled();
 
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
     expect(
-      screen.getByText("Missing required fields: model"),
+      screen.getByText("Missing required fields: Model"),
     ).toBeInTheDocument();
-    await user.type(screen.getByLabelText("model required"), "gpt-5");
+    await user.type(screen.getByLabelText("Model"), "gpt-5");
     expect(
       screen.queryByText(/Missing required fields/),
     ).not.toBeInTheDocument();
@@ -1924,19 +1926,16 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "openwakeword");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
-    await user.selectOptions(
-      screen.getByLabelText("where required"),
-      "wyoming",
-    );
+    await user.selectOptions(screen.getByLabelText("Where"), "wyoming");
     await user.type(
-      screen.getByLabelText("url"),
+      screen.getByLabelText("URL"),
       "tcp://openwakeword.local:10400",
     );
     await user.type(
-      screen.getByLabelText("phrases (comma separated)"),
+      screen.getByLabelText("Phrases (comma separated)"),
       "hey jarvis, okay nabu",
     );
-    await user.type(screen.getByLabelText("threshold_percent"), "70");
+    await user.type(screen.getByLabelText("Threshold Percent"), "70");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(screen.getByText("Provider openwakeword saved")).toBeInTheDocument();
@@ -1952,6 +1951,46 @@ describe("Providers workspace", () => {
         phrases: ["hey jarvis", "okay nabu"],
       },
     });
+  });
+
+  it("names config fields the way a person reads them and enforces the required ones", async () => {
+    // The wire spelling belongs on the wire. A form that showed `base_url` and
+    // the word "required" beside it was asking the operator to translate, and
+    // it left the control itself saying nothing about having to be answered.
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+
+    const baseUrl = screen.getByLabelText("Base URL");
+    expect(baseUrl).toBeRequired();
+    expect(baseUrl).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Model")).toBeRequired();
+    // Optional fields read the same way and are not enforced.
+    expect(screen.getByLabelText("API Key")).not.toBeRequired();
+    expect(screen.getByLabelText("Streaming")).not.toBeRequired();
+    expect(screen.queryByText(/base_url/)).not.toBeInTheDocument();
+
+    expect(
+      screen.getByText("Missing required fields: Base URL, Model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save provider" }),
+    ).toBeDisabled();
+
+    await user.type(baseUrl, "https://api.openai.com/v1");
+    await user.type(screen.getByLabelText("Model"), "gpt-5");
+
+    expect(baseUrl).not.toHaveAttribute("aria-invalid");
+    expect(
+      screen.queryByText(/Missing required fields/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save provider" })).toBeEnabled();
   });
 
   it("builds a speech cleanup definition from the rules it was given", async () => {
@@ -1975,7 +2014,7 @@ describe("Providers workspace", () => {
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "speech-cleanup");
     await user.type(
-      screen.getByLabelText("rules required (comma separated)"),
+      screen.getByLabelText("Rules (comma separated)"),
       "markdown_to_speech, strip_emoji",
     );
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2007,7 +2046,7 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
     await user.click(screen.getByRole("menuitem", { name: "microWakeWord" }));
 
-    const places = screen.getByLabelText("where required");
+    const places = screen.getByLabelText("Where");
     expect(
       within(places)
         .queryAllByRole("option")
@@ -2018,7 +2057,7 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "satellite");
     await user.selectOptions(places, "device");
     await user.type(
-      screen.getByLabelText("phrases (comma separated)"),
+      screen.getByLabelText("Phrases (comma separated)"),
       "okay nabu",
     );
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2053,7 +2092,7 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "openwakeword");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
-    await user.selectOptions(screen.getByLabelText("where required"), "local");
+    await user.selectOptions(screen.getByLabelText("Where"), "local");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     // Nothing to ask until a detector is registered, so the suggestions only
@@ -2065,7 +2104,7 @@ describe("Providers workspace", () => {
       }),
     );
 
-    const field = await screen.findByLabelText("phrases (comma separated)");
+    const field = await screen.findByLabelText("Phrases (comma separated)");
     const list = field.getAttribute("list");
     expect(list).toBeTruthy();
     const options = Array.from(
@@ -2089,10 +2128,10 @@ describe("Providers workspace", () => {
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "OpenAI Primary");
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
-    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.type(screen.getByLabelText("Model"), "gpt.5");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(
@@ -2119,10 +2158,10 @@ describe("Providers workspace", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
     );
-    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Base URL")).toHaveDisplayValue(
       "https://api.openai.com/v1",
     );
-    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt.5");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt.5");
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -2542,9 +2581,174 @@ async function enterPipelinesSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Pipelines" }));
 }
 
+describe("Speakers workspace", () => {
+  /// Somebody named but never recorded, which is the state every speaker
+  /// starts in.
+  function named(id: string, name: string): EnrolledSpeaker {
+    return { id, name, samples: 0, created_at: "2025-01-01T00:00:00Z" };
+  }
+
+  it("says plainly that an empty roster identifies nobody", async () => {
+    // The stage exists whether or not anyone is enrolled, and a pipeline that
+    // identifies nobody reaches every tool's permission check with no
+    // speaker. An empty page that did not say so would look like it worked.
+    const user = userEvent.setup();
+    mockOperatorApi({ speakers: [] });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+
+    expect(
+      await screen.findByText(/Nobody is enrolled yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("names somebody before anyone has recorded them", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({ speakers: [] });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.type(await screen.findByLabelText("Name"), "Ada");
+    await user.click(screen.getByRole("button", { name: "Add speaker" }));
+
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    expect(screen.getByText("no voice yet")).toBeInTheDocument();
+    expect([...api.roster.values()].map((speaker) => speaker.name)).toEqual([
+      "Ada",
+    ]);
+  });
+
+  it("sends an uploaded sample as a file and shows what came back", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    const upload = await screen.findByLabelText("Upload a sample for Ada");
+    const file = new File([new Uint8Array([1, 2, 3])], "ada.wav", {
+      type: "audio/wav",
+    });
+    await user.upload(upload.querySelector("input") as HTMLInputElement, file);
+
+    expect(
+      await screen.findByText("Sample accepted — 1 on file"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 on file")).toBeInTheDocument();
+    expect(screen.getByText("voices")).toBeInTheDocument();
+    expect(api.enrollments).toHaveLength(1);
+    expect(api.enrollments[0].body).toBe(file);
+  });
+
+  it("reports what the identification service said when it refused", async () => {
+    // The service's own words are the only thing that tells an operator
+    // whether to record again or go fix a deployment.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+      enrollmentFails: "the audio is too short to build a voice print",
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    const upload = await screen.findByLabelText("Upload a sample for Ada");
+    await user.upload(
+      upload.querySelector("input") as HTMLInputElement,
+      new File([new Uint8Array([1])], "short.wav", { type: "audio/wav" }),
+    );
+
+    expect(
+      await screen.findByText("the audio is too short to build a voice print"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("no voice yet")).toBeInTheDocument();
+  });
+
+  it("renames somebody without disturbing the voice behind the name", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [
+        {
+          ...named("00000000-0000-4000-8000-000000000001", "Ada"),
+          samples: 2,
+          provider: "voices",
+        },
+      ],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Rename Ada"));
+    const field = screen.getByLabelText("New name for Ada");
+    await user.clear(field);
+    await user.type(field, "Ada Lovelace{Enter}");
+
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("2 on file")).toBeInTheDocument();
+    expect(api.roster.get("00000000-0000-4000-8000-000000000001")?.name).toBe(
+      "Ada Lovelace",
+    );
+  });
+
+  it("removes somebody from the roster", async () => {
+    const user = userEvent.setup();
+    const api = mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Remove Ada"));
+
+    expect(
+      await screen.findByText(/Nobody is enrolled yet/),
+    ).toBeInTheDocument();
+    expect(api.roster.size).toBe(0);
+  });
+
+  it("offers to record when the browser will give the page a microphone", async () => {
+    // The button is the whole point of the page for a household that has no
+    // WAV files lying about.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+
+    expect(
+      await screen.findByLabelText("Record a sample for Ada"),
+    ).toBeEnabled();
+  });
+
+  it("says so when the browser will not give the page a microphone", async () => {
+    // jsdom has no `getUserMedia`, which is exactly the case a locked-down
+    // browser presents: the operator needs to be told to upload instead.
+    const user = userEvent.setup();
+    mockOperatorApi({
+      speakers: [named("00000000-0000-4000-8000-000000000001", "Ada")],
+    });
+    render(<App />);
+
+    await enterSpeakersSection(user);
+    await user.click(await screen.findByLabelText("Record a sample for Ada"));
+
+    expect(
+      await screen.findByText(/upload a WAV file instead/),
+    ).toBeInTheDocument();
+  });
+});
+
 async function enterProvidersSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
   await user.click(screen.getByRole("tab", { name: "Providers" }));
+}
+
+async function enterSpeakersSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
+  await user.click(screen.getByRole("tab", { name: "Speakers" }));
 }
 
 async function enterSettingsSection(user: ReturnType<typeof userEvent.setup>) {
@@ -2847,6 +3051,8 @@ function mockOperatorApi({
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
   providerDefinitions = [],
+  speakers = [],
+  enrollmentFails,
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
@@ -2854,6 +3060,10 @@ function mockOperatorApi({
   pipelineViews?: PipelineView[];
   componentCatalog?: ProviderComponentCatalog;
   providerDefinitions?: ProviderDefinitionView[];
+  speakers?: EnrolledSpeaker[];
+  /// What the identification service says when it refuses a sample, if it
+  /// does. Refusal is the case the console has to report faithfully.
+  enrollmentFails?: string;
   updateSnapshotOnPipelineSave?: boolean;
 } = {}) {
   let currentSnapshot = snapshot;
@@ -2866,6 +3076,10 @@ function mockOperatorApi({
       (definition) => [definition.id, definition] as const,
     ),
   );
+  const roster = new Map(speakers.map((speaker) => [speaker.id, speaker]));
+  /// Every enrollment body the console sent, so a test can assert it was a
+  /// WAV file rather than whatever the browser felt like producing.
+  const enrollments: { id: string; body: BodyInit | null | undefined }[] = [];
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof URL ? input : new URL(input.toString());
@@ -2875,6 +3089,66 @@ function mockOperatorApi({
       if (route === "/v1/status" && method === "GET") {
         currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
         return jsonResponse(currentSnapshot);
+      }
+
+      if (route === "/v1/speakers" && method === "GET") {
+        return jsonResponse([...roster.values()]);
+      }
+
+      if (route === "/v1/speakers" && method === "POST") {
+        const { name } = JSON.parse(String(init?.body)) as { name: string };
+        const created: EnrolledSpeaker = {
+          id: `00000000-0000-4000-8000-00000000000${roster.size + 1}`,
+          name,
+          samples: 0,
+          created_at: "2025-01-01T00:00:00Z",
+        };
+        roster.set(created.id, created);
+        return jsonResponse(created, { status: 201 });
+      }
+
+      if (route.startsWith("/v1/speakers/")) {
+        const rest = route.slice("/v1/speakers/".length);
+        const id = rest.replace(/\/enroll$/, "");
+        const speaker = roster.get(id);
+        if (!speaker) {
+          return jsonResponse(
+            { error: "not_found", detail: `no speaker ${id}` },
+            { status: 404 },
+          );
+        }
+
+        if (rest.endsWith("/enroll") && method === "POST") {
+          enrollments.push({ id, body: init?.body });
+          if (enrollmentFails) {
+            return jsonResponse(
+              { error: "unavailable", detail: enrollmentFails },
+              { status: 503 },
+            );
+          }
+          const enrolled: EnrolledSpeaker = {
+            ...speaker,
+            samples: speaker.samples + 1,
+            provider: "voices",
+            enrolled_at: "2025-01-02T00:00:00Z",
+          };
+          roster.set(id, enrolled);
+          return jsonResponse(enrolled);
+        }
+
+        if (method === "PUT") {
+          const { name } = JSON.parse(String(init?.body)) as { name: string };
+          const renamed = { ...speaker, name };
+          roster.set(id, renamed);
+          return jsonResponse(renamed);
+        }
+
+        if (method === "DELETE") {
+          roster.delete(id);
+          return new Response(null, { status: 204 });
+        }
+
+        return jsonResponse(speaker);
       }
 
       if (route === "/v1/pipelines" && method === "GET") {
@@ -2991,7 +3265,7 @@ function mockOperatorApi({
   );
 
   vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
+  return Object.assign(fetchMock, { enrollments, roster });
 }
 
 /// The outer provider definition variant is the capability itself.

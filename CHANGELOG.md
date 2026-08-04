@@ -8,6 +8,35 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added the speaker roster: a Speakers page in the operator console, and
+  `/v1/speakers` behind it. Identification has been a pipeline stage for a
+  while, but a stage that matches a voice against enrolled prints is useless
+  until something enrolls one, and nothing did. Now an operator names somebody,
+  records a sample in the page or uploads a WAV, and the voice reaches a tool's
+  per-speaker permission check under a name a person recognizes. Conduit owns
+  the speaker id and the identification service still stores it as an opaque
+  label, so the roster is the only place a name exists — which is what lets a
+  deployment change embedding models without every enrolled voice becoming a
+  stranger. The roster has its own store, in a directory
+  (`CONDUIT_SPEAKER_DIR`) or in PostgreSQL beside the pipelines.
+- Enrollment audio is uploaded as a WAV file and converted to the pipeline's
+  interchange format on the way in, so a recording made at whatever rate the
+  microphone runs at arrives correctly rather than pitched wrong — which would
+  embed as a different person. `conduit_core::wav::parse` and
+  `conduit_core::pcm::to_interchange` are the two halves of that.
+- A core's tool binding may now name an MCP definition rather than one of its
+  tools, and is offered every tool that server registered. Adding "the weather
+  server" to a pipeline is the obvious thing to do and it failed with "no
+  provider registered as `weather`"; the way around it was to list each tool by
+  hand and revisit the pipeline whenever the server grew one. A definition that
+  advertises exactly one tool is no longer separately registered under its bare
+  id, because expansion now covers that case under one rule.
+- Provider configuration fields in the console are named the way a person reads
+  them — `base_url` is `Base URL`, `api_key` is `API Key` — and a required field
+  is marked as required and carries the `required` attribute rather than having
+  the word appended to its label. A required numeric or boolean field is also no
+  longer reported as missing when it has been answered.
+
 - The operator status snapshot now reports every registered provider of every
   capability. It enumerated stt, llm, tts and tool one at a time, so a
   transform, a wake word detector, a speaker identifier or a memory store an

@@ -509,17 +509,55 @@ struct Reasoning {
     max_rounds: usize,
 }
 
-/// Adds a tool to the set the model will be offered.
+/// Adds a binding's tools to the set the model will be offered.
 ///
-/// The model picks a tool by name, so two tools answering to one name is a
-/// pipeline where it cannot say which it meant.
+/// A binding usually names one tool. It may instead name a whole *server*: a
+/// provider definition that discovered several tools registers each of them as
+/// `<definition id>.<tool name>`, and an operator who wants everything that
+/// server offers should be able to say its name once rather than list its
+/// tools and revisit the pipeline every time the server grows one. So a name
+/// that is not itself a registered tool is tried as that prefix, and every
+/// tool under it is offered.
 fn offer_tool(
     tools: &mut BTreeMap<String, BoundTool>,
     providers: &Providers,
     binding: &ToolBinding,
     node: &str,
 ) -> Result<()> {
-    let tool = providers.tools().require(&binding.provider)?;
+    let registry = providers.tools();
+    if let Some(tool) = registry.get(&binding.provider) {
+        return offer_one(tools, tool, binding, node);
+    }
+
+    let prefix = format!("{}.", binding.provider);
+    let group: Vec<_> = registry
+        .names()
+        .filter(|name| name.starts_with(&prefix))
+        .filter_map(|name| registry.get(name))
+        .collect();
+    // Nothing under the name and nothing under the prefix: the binding names
+    // something that is not there, which is the same answer as before groups
+    // existed. A server that is merely unreachable registered no tools, and
+    // that is exactly the case this reports.
+    if group.is_empty() {
+        return Err(Error::UnknownProvider(binding.provider.clone()));
+    }
+    for tool in group {
+        offer_one(tools, tool, binding, node)?;
+    }
+    Ok(())
+}
+
+/// Adds one tool to the set the model will be offered.
+///
+/// The model picks a tool by name, so two tools answering to one name is a
+/// pipeline where it cannot say which it meant.
+fn offer_one(
+    tools: &mut BTreeMap<String, BoundTool>,
+    tool: Arc<dyn Tool>,
+    binding: &ToolBinding,
+    node: &str,
+) -> Result<()> {
     let name = tool.spec().name;
     if tools.insert(name.clone(), BoundTool { tool, confirm: binding.confirm }).is_some() {
         return Err(Error::Config(format!(

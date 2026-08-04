@@ -9,7 +9,8 @@ use std::time::Duration;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{
-    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    SpeakerRosterStore,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
@@ -210,6 +211,71 @@ impl ProviderDefinitionStore for PostgresStore {
     async fn remove(&self, id: &str) -> Result<bool> {
         validate_name(id)?;
         let result = sqlx::query("DELETE FROM provider_definitions WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeakerRosterStore for PostgresStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT id FROM speakers ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(rows
+            .iter()
+            .map(|row| row.get::<String, _>("id"))
+            .filter(|id| is_listable(id))
+            .collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<EnrolledSpeaker>> {
+        validate_name(id)?;
+        let row = sqlx::query("SELECT speaker FROM speakers WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let speaker: serde_json::Value = row.try_get("speaker").map_err(Self::failure)?;
+        serde_json::from_value(speaker).map(Some).map_err(|error| {
+            Error::Config(format!("the stored speaker `{id}` is not valid: {error}"))
+        })
+    }
+
+    async fn put(&self, id: &str, speaker: EnrolledSpeaker) -> Result<bool> {
+        validate_name(id)?;
+        if speaker.id.to_string() != id {
+            return Err(Error::Config(format!(
+                "speaker id `{}` does not match route id `{id}`",
+                speaker.id
+            )));
+        }
+        let json = serde_json::to_value(&speaker)
+            .map_err(|error| Error::Config(format!("cannot encode the speaker: {error}")))?;
+
+        let row = sqlx::query(
+            "INSERT INTO speakers (id, speaker) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE SET speaker = EXCLUDED.speaker, updated_at = now()
+             RETURNING (xmax <> 0) AS replaced",
+        )
+        .bind(id)
+        .bind(json)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Self::failure)?;
+
+        row.try_get("replaced").map_err(Self::failure)
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        validate_name(id)?;
+        let result = sqlx::query("DELETE FROM speakers WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await

@@ -94,6 +94,23 @@
   font: inherit;
 }
 
+/* Drawn rather than written: a marker in the label's text would become part
+   of every control's accessible name, and "Base URL *" is not what a field is
+   called. The `required` attribute is what says so to assistive technology. */
+.field-label.required::after {
+  content: "*";
+  margin-left: 3px;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* A required field left empty is marked where the operator is looking, not
+   only in the message under the form. */
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 .field input:focus,
 .field select:focus,
 .check-row input:focus-visible,
@@ -960,6 +977,36 @@ button {
   color: var(--strong);
   font-size: 13px;
   font-weight: 750;
+}
+
+/* Naming somebody is one field and one button, so it sits on one line. */
+.speaker-add {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.speaker-add .field {
+  flex: 1 1 260px;
+  max-width: 360px;
+}
+
+/* Sits under the name it belongs to: what the identification service said
+   about this person is only meaningful beside this person. */
+.speaker-notice {
+  margin: 6px 0 0;
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* The upload control is a label wrapping a hidden file input, so it needs the
+   affordances the buttons beside it get for free. */
+label.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 
 .test-turn-reply {

@@ -15,8 +15,8 @@ use conduit_provider::storage::PipelineStore;
 use conduit_store::{FileStore, MemoryStore};
 
 use conformance::{
-    behaves_like_a_store, graph, provider_definition, provider_definitions_behave_like_a_store,
-    UNUSABLE_NAMES,
+    a_roster_behaves_like_a_store, behaves_like_a_store, graph, provider_definition,
+    provider_definitions_behave_like_a_store, speaker, UNUSABLE_NAMES,
 };
 
 /// A directory that cleans itself up.
@@ -67,6 +67,41 @@ async fn the_file_store_behaves_like_a_provider_definition_store() {
     let directory = TempDir::new("provider-contract");
     let store = FileStore::open(directory.path()).await.expect("opens");
     provider_definitions_behave_like_a_store(Arc::new(store)).await;
+}
+
+#[tokio::test]
+async fn the_memory_store_behaves_like_a_roster() {
+    a_roster_behaves_like_a_store(Arc::new(MemoryStore::new())).await;
+}
+
+#[tokio::test]
+async fn the_file_store_behaves_like_a_roster() {
+    let directory = TempDir::new("roster-contract");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    a_roster_behaves_like_a_store(Arc::new(store)).await;
+}
+
+#[tokio::test]
+async fn the_roster_survives_a_restart() {
+    // Who is who must outlive the process, or every restart turns the house
+    // back into a room full of strangers.
+    let directory = TempDir::new("roster-restart");
+    let id = conduit_core::id::SpeakerId::new();
+    let entry = speaker(id, "Ada");
+
+    let before = FileStore::open(directory.path()).await.expect("opens");
+    conduit_provider::storage::SpeakerRosterStore::put(&before, &id.to_string(), entry.clone())
+        .await
+        .expect("stores");
+    drop(before);
+
+    let after = FileStore::open(directory.path()).await.expect("reopens");
+    assert_eq!(
+        conduit_provider::storage::SpeakerRosterStore::get(&after, &id.to_string())
+            .await
+            .expect("gets"),
+        Some(entry)
+    );
 }
 
 #[tokio::test]

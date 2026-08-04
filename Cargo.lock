@@ -364,6 +364,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "chrono",
  "conduit-core",
  "conduit-provider",
  "futures-core",
@@ -414,10 +415,12 @@ dependencies = [
  "conduit-core",
  "conduit-provider",
  "conduit-store",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

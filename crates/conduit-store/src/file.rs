@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{
-    validate_name, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    SpeakerRosterStore,
 };
 
 use crate::is_listable;
@@ -58,11 +59,13 @@ impl FileStore {
             std::io::Error::new(error.kind(), format!("{}: {error}", path.display())),
         )
     }
-}
 
-#[async_trait::async_trait]
-impl PipelineStore for FileStore {
-    async fn list(&self) -> Result<Vec<String>> {
+    /// The names of every finished definition file in the directory, in order.
+    ///
+    /// One directory holds one kind of thing — pipelines, providers, and the
+    /// roster each get their own — so what a file is called is what it is
+    /// named, whichever store is asking.
+    async fn names(&self) -> Result<Vec<String>> {
         let mut entries = tokio::fs::read_dir(&self.directory)
             .await
             .map_err(|error| Self::failure(&self.directory, &error))?;
@@ -76,7 +79,7 @@ impl PipelineStore for FileStore {
             let path = entry.path();
             // A directory may hold anything — notes, subdirectories, a
             // `.json.tmp` left by a crash mid-write. Only our own finished
-            // files are pipelines.
+            // files are definitions.
             if path.extension().is_some_and(|extension| extension == EXTENSION) {
                 if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) {
                     if is_listable(name) {
@@ -90,7 +93,16 @@ impl PipelineStore for FileStore {
         Ok(names)
     }
 
-    async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
+    /// Reads and decodes one file, or `None` if it is not there.
+    ///
+    /// `what` names the kind of thing for the error message: a file that is
+    /// present but unreadable is a different problem from one that is absent,
+    /// and saying so is the difference between "create it" and "fix it".
+    async fn read<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+        what: &str,
+    ) -> Result<Option<T>> {
         let path = self.path(name)?;
         let bytes = match tokio::fs::read(&path).await {
             Ok(bytes) => bytes,
@@ -98,22 +110,22 @@ impl PipelineStore for FileStore {
             Err(error) => return Err(Self::failure(&path, &error)),
         };
 
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            // A file that is present but unreadable is a different problem
-            // from one that is absent, and saying so is the difference
-            // between "create it" and "fix it".
-            .map_err(|error| {
-                Error::Config(format!("`{}` is not a valid pipeline: {error}", path.display()))
-            })
+        serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+            Error::Config(format!("`{}` is not a valid {what}: {error}", path.display()))
+        })
     }
 
-    async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
+    /// Encodes and writes one file, returning whether it replaced one.
+    async fn write<T: serde::Serialize + Sync>(
+        &self,
+        name: &str,
+        value: &T,
+        what: &str,
+    ) -> Result<bool> {
         let path = self.path(name)?;
         let existed = tokio::fs::try_exists(&path).await.unwrap_or(false);
-
-        let json = serde_json::to_vec_pretty(&graph)
-            .map_err(|error| Error::Config(format!("cannot encode the pipeline: {error}")))?;
+        let json = serde_json::to_vec_pretty(value)
+            .map_err(|error| Error::Config(format!("cannot encode the {what}: {error}")))?;
 
         // Write beside the target and rename, so a crash mid-write leaves the
         // previous definition intact rather than a truncated file.
@@ -124,11 +136,11 @@ impl PipelineStore for FileStore {
         tokio::fs::rename(&temporary, &path)
             .await
             .map_err(|error| Self::failure(&path, &error))?;
-
         Ok(existed)
     }
 
-    async fn remove(&self, name: &str) -> Result<bool> {
+    /// Deletes one file, returning whether it existed.
+    async fn delete(&self, name: &str) -> Result<bool> {
         let path = self.path(name)?;
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(true),
@@ -139,46 +151,32 @@ impl PipelineStore for FileStore {
 }
 
 #[async_trait::async_trait]
+impl PipelineStore for FileStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        self.names().await
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<PipelineGraph>> {
+        self.read(name, "pipeline").await
+    }
+
+    async fn put(&self, name: &str, graph: PipelineGraph) -> Result<bool> {
+        self.write(name, &graph, "pipeline").await
+    }
+
+    async fn remove(&self, name: &str) -> Result<bool> {
+        self.delete(name).await
+    }
+}
+
+#[async_trait::async_trait]
 impl ProviderDefinitionStore for FileStore {
     async fn list(&self) -> Result<Vec<String>> {
-        let mut entries = tokio::fs::read_dir(&self.directory)
-            .await
-            .map_err(|error| Self::failure(&self.directory, &error))?;
-
-        let mut ids = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| Self::failure(&self.directory, &error))?
-        {
-            let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == EXTENSION) {
-                if let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) {
-                    if is_listable(id) {
-                        ids.push(id.to_owned());
-                    }
-                }
-            }
-        }
-
-        ids.sort();
-        Ok(ids)
+        self.names().await
     }
 
     async fn get(&self, id: &str) -> Result<Option<ProviderDefinition>> {
-        let path = self.path(id)?;
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Self::failure(&path, &error)),
-        };
-
-        serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-            Error::Config(format!(
-                "`{}` is not a valid provider definition: {error}",
-                path.display()
-            ))
-        })
+        self.read(id, "provider definition").await
     }
 
     async fn put(&self, id: &str, definition: ProviderDefinition) -> Result<bool> {
@@ -189,27 +187,36 @@ impl ProviderDefinitionStore for FileStore {
                 definition.id
             )));
         }
-        let path = self.path(id)?;
-        let existed = tokio::fs::try_exists(&path).await.unwrap_or(false);
-        let json = serde_json::to_vec_pretty(&definition).map_err(|error| {
-            Error::Config(format!("cannot encode the provider definition: {error}"))
-        })?;
-        let temporary = path.with_extension("json.tmp");
-        tokio::fs::write(&temporary, &json)
-            .await
-            .map_err(|error| Self::failure(&temporary, &error))?;
-        tokio::fs::rename(&temporary, &path)
-            .await
-            .map_err(|error| Self::failure(&path, &error))?;
-        Ok(existed)
+        self.write(id, &definition, "provider definition").await
     }
 
     async fn remove(&self, id: &str) -> Result<bool> {
-        let path = self.path(id)?;
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(Self::failure(&path, &error)),
+        self.delete(id).await
+    }
+}
+
+#[async_trait::async_trait]
+impl SpeakerRosterStore for FileStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        self.names().await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<EnrolledSpeaker>> {
+        self.read(id, "speaker").await
+    }
+
+    async fn put(&self, id: &str, speaker: EnrolledSpeaker) -> Result<bool> {
+        validate_name(id)?;
+        if speaker.id.to_string() != id {
+            return Err(Error::Config(format!(
+                "speaker id `{}` does not match route id `{id}`",
+                speaker.id
+            )));
         }
+        self.write(id, &speaker, "speaker").await
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        self.delete(id).await
     }
 }

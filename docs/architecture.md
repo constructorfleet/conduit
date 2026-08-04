@@ -19,7 +19,7 @@ runtime progress is published as events.
 | `conduit-store` | Memory, file, and PostgreSQL implementations of the pipeline store contract. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
 | `conduit-api` | HTTP service and ops routers, authentication, pipeline CRUD, event streaming, and the conversation WebSocket. |
-| `frontend` | React Operator Console app with token-based Operator Access, snapshot-plus-events client boundaries, and top-level Overview, Pipelines, Providers, Events, and Settings sections. |
+| `frontend` | React Operator Console app with token-based Operator Access, snapshot-plus-events client boundaries, and top-level Overview, Pipelines, Providers, Speakers, Events, and Settings sections. |
 
 ## Runtime Flow
 
