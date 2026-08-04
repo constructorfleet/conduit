@@ -167,6 +167,9 @@ fn status_fixture() -> OperatorStatusSnapshot {
         providers: vec![ProviderStatus {
             id: "piper-local".to_owned(),
             kind: ProviderKind::Tts,
+            provider: Some("piper".to_owned()),
+            label: Some("Piper".to_owned()),
+            version: Some("0.1.0".to_owned()),
             state: ProviderStatusState::Configured,
             configured: true,
             reachable: false,
@@ -1021,7 +1024,8 @@ export type ProviderKind =
   | "tts"
   | "transform"
   | "wake"
-  | "speaker_id";
+  | "speaker_id"
+  | "memory";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
 export type SnapshotResource =
   | "runtime_state"
@@ -1070,9 +1074,17 @@ export interface ComponentHealth {{
   last_turn: IdString | null;
 }}
 
+/// `id` is the selector — what a pipeline node names and what the operator
+/// configured. `provider`, `label` and `version` come from the registered
+/// implementation's descriptor and are absent when nothing was built under that
+/// selector: a definition whose service would not start, or a node naming a
+/// provider nobody configured.
 export interface ProviderStatus {{
   id: string;
   kind: ProviderKind;
+  provider?: string;
+  label?: string;
+  version?: string;
   state: ProviderStatusState;
   configured: boolean;
   reachable: boolean;

@@ -39,6 +39,9 @@
     {
       "id": "piper-local",
       "kind": "tts",
+      "provider": "piper",
+      "label": "Piper",
+      "version": "0.1.0",
       "state": "configured",
       "configured": true,
       "reachable": false,

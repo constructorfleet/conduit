@@ -61,6 +61,9 @@ fn operator_status_snapshot_serializes_the_contract_shape() {
         providers: vec![ProviderStatus {
             id: "piper-local".to_owned(),
             kind: ProviderKind::Tts,
+            provider: Some("piper".to_owned()),
+            label: Some("Piper".to_owned()),
+            version: Some("0.1.0".to_owned()),
             state: ProviderStatusState::Configured,
             configured: true,
             reachable: false,
@@ -157,6 +160,9 @@ fn operator_status_snapshot_serializes_the_contract_shape() {
             "providers": [{
                 "id": "piper-local",
                 "kind": "tts",
+                "provider": "piper",
+                "label": "Piper",
+                "version": "0.1.0",
                 "state": "configured",
                 "configured": true,
                 "reachable": false,

@@ -275,6 +275,42 @@ impl Providers {
             .map(|(capability, registry)| (*capability, registry.names()))
             .collect()
     }
+
+    /// Every registered provider, as the capability it supplies, the key it is
+    /// registered under, and what it says about itself — in capability order,
+    /// then key order.
+    ///
+    /// What an operator status page enumerates: the key is the selector a
+    /// pipeline names, and the descriptor carries the identity, label and
+    /// version to show beside it. Walking [`Capability`] uniformly is the
+    /// point — a snapshot built by naming stt, llm and tts one at a time is a
+    /// snapshot that silently omits every capability added after it was
+    /// written.
+    #[must_use]
+    pub fn descriptors(&self) -> Vec<(Capability, String, conduit_provider::Descriptor)> {
+        self.registries
+            .iter()
+            .flat_map(|(capability, registry)| {
+                registry
+                    .descriptors()
+                    .into_iter()
+                    .map(move |(key, descriptor)| (*capability, key, descriptor))
+            })
+            .collect()
+    }
+
+    /// Asks the provider registered under `key` for `capability` how it is.
+    ///
+    /// `None` when nothing is registered under that key, which is a different
+    /// answer from an unhealthy provider: one is a selector pointing at
+    /// nothing, the other is a provider that is there and cannot serve.
+    pub async fn health(
+        &self,
+        capability: Capability,
+        key: &str,
+    ) -> Option<conduit_provider::Health> {
+        self.registries.get(&capability)?.health(key).await
+    }
 }
 
 impl Default for Providers {
@@ -725,6 +761,55 @@ mod tests {
         assert!(rendered.contains("no-wake"), "{rendered}");
         assert!(rendered.contains("speaker_id"), "{rendered}");
         assert!(rendered.contains("no-speaker"), "{rendered}");
+    }
+
+    #[test]
+    fn descriptors_report_every_capabilitys_providers_beside_their_selectors() {
+        // What an operator status page enumerates. Reading it off the bundle
+        // uniformly is the point: a snapshot assembled by naming stt, llm and
+        // tts one at a time is a snapshot that omits these three, which is
+        // exactly what it used to do.
+        let providers =
+            Providers::new().with_wake(NoWake).with_speaker(NoSpeaker).with_memory(NoMemory);
+
+        let described = providers
+            .descriptors()
+            .into_iter()
+            .map(|(capability, key, descriptor)| (capability, key, descriptor.id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            described,
+            vec![
+                (Capability::Memory, "no-memory".to_owned(), "no-memory".to_owned()),
+                (Capability::Wake, "no-wake".to_owned(), "no-wake".to_owned()),
+                (Capability::SpeakerId, "no-speaker".to_owned(), "no-speaker".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_descriptor_carries_the_version_a_diagnostic_reports() {
+        let providers = Providers::new().with_wake(NoWake);
+        let (_, _, descriptor) =
+            providers.descriptors().into_iter().next().expect("one registration");
+
+        assert!(!descriptor.version.is_empty(), "a provider always states a version");
+    }
+
+    #[tokio::test]
+    async fn health_is_asked_through_the_capability_rather_than_per_registry() {
+        let providers = Providers::new().with_wake(NoWake);
+
+        assert_eq!(
+            providers.health(Capability::Wake, "no-wake").await,
+            Some(conduit_provider::Health::Healthy)
+        );
+        // Nothing registered under that selector is a different answer from an
+        // unhealthy provider: one is a name pointing at nothing, the other is a
+        // provider that is there and cannot serve.
+        assert_eq!(providers.health(Capability::Wake, "nope").await, None);
+        assert_eq!(providers.health(Capability::Stt, "no-wake").await, None);
     }
 
     #[test]

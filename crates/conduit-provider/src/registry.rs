@@ -10,13 +10,15 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use conduit_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::descriptor::Descriptor;
-use crate::Provider;
+use crate::{Health, Provider};
 
 /// A capability a provider supplies, and the dimension a bundle is indexed by.
 ///
@@ -97,6 +99,18 @@ pub trait RegistryHandle: Send + Sync {
     /// its identity, its label, what it can do, what it accepts — comes from
     /// the descriptor.
     fn descriptors(&self) -> Vec<(String, Descriptor)>;
+
+    /// Asks the provider registered under `key` how it is, or `None` when
+    /// nothing is registered under it.
+    ///
+    /// Boxed rather than `async fn` because a bundle holds these behind
+    /// `dyn RegistryHandle`, and the point of the handle is that a status layer
+    /// can health-check a detector and a recognizer through one call without
+    /// knowing which is which.
+    fn health<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<Health>> + Send + 'a>>;
 
     /// Number of registered providers.
     fn len(&self) -> usize;
@@ -258,6 +272,19 @@ impl<T: Provider + ?Sized> RegistryHandle for Registry<T> {
         Registry::descriptors(self)
             .map(|(key, descriptor)| (key.to_owned(), descriptor.clone()))
             .collect()
+    }
+
+    fn health<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<Health>> + Send + 'a>> {
+        let provider = self.get(key);
+        Box::pin(async move {
+            match provider {
+                Some(provider) => Some(provider.health().await),
+                None => None,
+            }
+        })
     }
 
     fn len(&self) -> usize {

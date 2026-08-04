@@ -173,9 +173,27 @@ pub enum ComponentHealthState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderStatus {
     /// Stable provider settings identifier.
+    ///
+    /// The selector: what a pipeline node names and what an operator
+    /// configured. Distinct from [`provider`](ProviderStatus::provider), which
+    /// is what the implementation behind it calls itself.
     pub id: String,
     /// Capability exposed by this provider.
     pub kind: ProviderKind,
+    /// Identity the registered implementation states, e.g. `"openai"`.
+    ///
+    /// Read from the provider's descriptor, so it is present only for a
+    /// provider the runtime actually built: a definition whose service would
+    /// not start, or a node naming a provider nobody configured, has an id and
+    /// no implementation to ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Display name the registered implementation offers for operator screens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Version the registered implementation reports, for diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Status distinction for configuration, reachability, and proof.
     pub state: ProviderStatusState,
     /// Whether required settings are present and valid enough to save.
@@ -217,6 +235,8 @@ pub enum ProviderKind {
     Wake,
     /// Speaker identification provider.
     SpeakerId,
+    /// Long-term memory store.
+    Memory,
 }
 
 /// Provider status state.
@@ -640,6 +660,7 @@ async fn project_provider_statuses(
 ) -> Vec<ProviderStatus> {
     let references = provider_references(graphs);
     let proven = proven_providers(graphs, projection);
+    let failed = failed_providers(graphs, projection);
     let definition_keys = definitions
         .iter()
         .map(|definition| ProviderKey {
@@ -647,53 +668,48 @@ async fn project_provider_statuses(
             id: definition.id.clone(),
         })
         .collect::<HashSet<_>>();
+    // What each registered provider says about itself, keyed by the selector it
+    // is registered under. Collected once because both loops below need it: a
+    // definition reports the identity of the provider it built, and a provider
+    // registered without a definition reports its own.
+    let registered = providers
+        .map(|providers| {
+            providers
+                .descriptors()
+                .into_iter()
+                .map(|(capability, key, descriptor)| {
+                    (ProviderKey { kind: provider_kind_for(capability), id: key }, descriptor)
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
     let mut statuses = Vec::new();
     let mut seen = HashSet::new();
 
     for definition in definitions {
+        let key = ProviderKey {
+            kind: provider_kind_for_capability(definition.capability()),
+            id: definition.id.clone(),
+        };
         push_definition_status(
             definition,
+            registered.get(&key),
             discovered_tools(providers, &definition.id),
             reachability.get(&definition.id),
             &references,
             &proven,
+            &failed,
             &mut statuses,
             &mut seen,
         );
     }
 
     if let Some(providers) = providers {
-        collect_stt_statuses(
+        collect_registered_statuses(
             providers,
             &references,
             &proven,
-            &definition_keys,
-            &mut statuses,
-            &mut seen,
-        )
-        .await;
-        collect_llm_statuses(
-            providers,
-            &references,
-            &proven,
-            &definition_keys,
-            &mut statuses,
-            &mut seen,
-        )
-        .await;
-        collect_tts_statuses(
-            providers,
-            &references,
-            &proven,
-            &definition_keys,
-            &mut statuses,
-            &mut seen,
-        )
-        .await;
-        collect_tool_statuses(
-            providers,
-            &references,
-            &proven,
+            &failed,
             &definition_keys,
             &mut statuses,
             &mut seen,
@@ -726,77 +742,25 @@ async fn project_provider_statuses(
     statuses
 }
 
-async fn collect_stt_statuses(
+/// Reports every registered provider of every capability.
+///
+/// One walk over the bundle's descriptors rather than one function per
+/// capability: enumerating stt, llm, tts and tool by hand is what left
+/// transforms, detectors, identifiers and memory stores out of the snapshot
+/// entirely, and would leave out the next capability too. What a provider is
+/// called, what it is, and what version it runs all come off its descriptor,
+/// so nothing here needs to know which capability it is looking at.
+async fn collect_registered_statuses(
     providers: &conduit_runtime::Providers,
     references: &HashMap<ProviderKey, BTreeSet<String>>,
     proven: &HashMap<ProviderKey, TurnId>,
+    failed: &HashMap<ProviderKey, TurnId>,
     definitions: &HashSet<ProviderKey>,
     statuses: &mut Vec<ProviderStatus>,
     seen: &mut HashSet<ProviderKey>,
 ) {
-    let names = providers.stt().names().map(str::to_owned).collect::<Vec<_>>();
-    for name in names {
-        let key = ProviderKey { kind: ProviderKind::Stt, id: name.clone() };
-        if definitions.contains(&key) {
-            continue;
-        }
-        let provider = providers.stt().require(&name).expect("listed provider exists");
-        let health = provider.health().await;
-        push_registered_status(key, health, references, proven, statuses, seen);
-    }
-}
-
-async fn collect_llm_statuses(
-    providers: &conduit_runtime::Providers,
-    references: &HashMap<ProviderKey, BTreeSet<String>>,
-    proven: &HashMap<ProviderKey, TurnId>,
-    definitions: &HashSet<ProviderKey>,
-    statuses: &mut Vec<ProviderStatus>,
-    seen: &mut HashSet<ProviderKey>,
-) {
-    let names = providers.llm().names().map(str::to_owned).collect::<Vec<_>>();
-    for name in names {
-        let key = ProviderKey { kind: ProviderKind::Llm, id: name.clone() };
-        if definitions.contains(&key) {
-            continue;
-        }
-        let provider = providers.llm().require(&name).expect("listed provider exists");
-        let health = provider.health().await;
-        push_registered_status(key, health, references, proven, statuses, seen);
-    }
-}
-
-async fn collect_tts_statuses(
-    providers: &conduit_runtime::Providers,
-    references: &HashMap<ProviderKey, BTreeSet<String>>,
-    proven: &HashMap<ProviderKey, TurnId>,
-    definitions: &HashSet<ProviderKey>,
-    statuses: &mut Vec<ProviderStatus>,
-    seen: &mut HashSet<ProviderKey>,
-) {
-    let names = providers.tts().names().map(str::to_owned).collect::<Vec<_>>();
-    for name in names {
-        let key = ProviderKey { kind: ProviderKind::Tts, id: name.clone() };
-        if definitions.contains(&key) {
-            continue;
-        }
-        let provider = providers.tts().require(&name).expect("listed provider exists");
-        let health = provider.health().await;
-        push_registered_status(key, health, references, proven, statuses, seen);
-    }
-}
-
-async fn collect_tool_statuses(
-    providers: &conduit_runtime::Providers,
-    references: &HashMap<ProviderKey, BTreeSet<String>>,
-    proven: &HashMap<ProviderKey, TurnId>,
-    definitions: &HashSet<ProviderKey>,
-    statuses: &mut Vec<ProviderStatus>,
-    seen: &mut HashSet<ProviderKey>,
-) {
-    let names = providers.tools().names().map(str::to_owned).collect::<Vec<_>>();
-    for name in names {
-        let key = ProviderKey { kind: ProviderKind::Tool, id: name.clone() };
+    for (capability, name, descriptor) in providers.descriptors() {
+        let key = ProviderKey { kind: provider_kind_for(capability), id: name.clone() };
         if definitions.contains(&key) {
             continue;
         }
@@ -804,12 +768,22 @@ async fn collect_tool_statuses(
         // provider beside it. Reporting each one separately listed a dozen
         // entries for one configured server — and health-checked every one of
         // them, which for MCP is a full session per tool per snapshot.
-        if owning_definition(&name, definitions).is_some() {
+        if key.kind == ProviderKind::Tool && owning_definition(&name, definitions).is_some() {
             continue;
         }
-        let provider = providers.tools().require(&name).expect("listed provider exists");
-        let health = provider.health().await;
-        push_registered_status(key, health, references, proven, statuses, seen);
+        let Some(health) = providers.health(capability, &name).await else {
+            continue;
+        };
+        push_registered_status(
+            key,
+            &descriptor,
+            health,
+            references,
+            proven,
+            failed,
+            statuses,
+            seen,
+        );
     }
 }
 
@@ -847,12 +821,15 @@ fn discovered_tools(
         .unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_definition_status(
     definition: &ProviderDefinition,
+    descriptor: Option<&conduit_provider::Descriptor>,
     offers_tools: Vec<String>,
     health: Option<&Health>,
     references: &HashMap<ProviderKey, BTreeSet<String>>,
     proven: &HashMap<ProviderKey, TurnId>,
+    failed: &HashMap<ProviderKey, TurnId>,
     statuses: &mut Vec<ProviderStatus>,
     seen: &mut HashSet<ProviderKey>,
 ) {
@@ -861,25 +838,27 @@ fn push_definition_status(
         id: definition.id.clone(),
     };
     seen.insert(key.clone());
-    let proven_by_turn = proven.get(&key).copied();
-    let (reachable, state, message) = match (proven_by_turn, health) {
-        (Some(_), _) => (true, ProviderStatusState::Proven, health_message(health)),
-        (None, Some(Health::Healthy)) => (true, ProviderStatusState::Reachable, None),
-        (None, Some(Health::Degraded { reason })) => {
+    let (reachable, state, message) = match health {
+        Some(Health::Healthy) => (true, ProviderStatusState::Reachable, None),
+        Some(Health::Degraded { reason }) => {
             (true, ProviderStatusState::Reachable, Some(reason.clone()))
         }
-        (None, Some(Health::Unhealthy { reason })) => {
+        Some(Health::Unhealthy { reason }) => {
             (false, ProviderStatusState::Configured, Some(reason.clone()))
         }
-        (None, None) => (
+        None => (
             false,
             ProviderStatusState::Configured,
             Some("no successful reachability check yet".to_owned()),
         ),
     };
+    let (state, proven_by_turn, message) = apply_proof(&key, state, message, proven, failed);
     statuses.push(ProviderStatus {
         id: key.id.clone(),
         kind: key.kind,
+        provider: descriptor.map(|descriptor| descriptor.id.clone()),
+        label: descriptor.map(|descriptor| descriptor.label.clone()),
+        version: descriptor.map(|descriptor| descriptor.version.clone()),
         state,
         configured: true,
         reachable,
@@ -893,35 +872,32 @@ fn push_definition_status(
     });
 }
 
-fn health_message(health: Option<&Health>) -> Option<String> {
-    match health {
-        Some(Health::Degraded { reason } | Health::Unhealthy { reason }) => {
-            Some(reason.clone())
-        }
-        Some(Health::Healthy) | None => None,
-    }
-}
-
+#[allow(clippy::too_many_arguments)]
 fn push_registered_status(
     key: ProviderKey,
+    descriptor: &conduit_provider::Descriptor,
     health: Health,
     references: &HashMap<ProviderKey, BTreeSet<String>>,
     proven: &HashMap<ProviderKey, TurnId>,
+    failed: &HashMap<ProviderKey, TurnId>,
     statuses: &mut Vec<ProviderStatus>,
     seen: &mut HashSet<ProviderKey>,
 ) {
     seen.insert(key.clone());
-    let proven_by_turn = proven.get(&key).copied();
     let reachable = health.is_usable();
     let (state, message) = match health {
         Health::Healthy => (ProviderStatusState::Reachable, None),
         Health::Degraded { reason } => (ProviderStatusState::Reachable, Some(reason)),
         Health::Unhealthy { reason } => (ProviderStatusState::Configured, Some(reason)),
     };
+    let (state, proven_by_turn, message) = apply_proof(&key, state, message, proven, failed);
     statuses.push(ProviderStatus {
         id: key.id.clone(),
         kind: key.kind,
-        state: if proven_by_turn.is_some() { ProviderStatusState::Proven } else { state },
+        provider: Some(descriptor.id.clone()),
+        label: Some(descriptor.label.clone()),
+        version: Some(descriptor.version.clone()),
+        state,
         configured: true,
         reachable,
         proven_by_turn,
@@ -934,6 +910,34 @@ fn push_registered_status(
     });
 }
 
+/// Settles whether real turns have proven this provider, or unproven it.
+///
+/// A success proves a provider and a later failure takes that back, which is
+/// the whole point of the distinction: `reachable` says a health check
+/// answered, and `proven` says the provider did the job inside a real
+/// pipeline. A provider that answered a health check while failing every turn
+/// must not read as proven on the strength of the health check — the failure
+/// is the more recent and more expensive evidence, and it stands until a later
+/// success proves recovery.
+fn apply_proof(
+    key: &ProviderKey,
+    state: ProviderStatusState,
+    message: Option<String>,
+    proven: &HashMap<ProviderKey, TurnId>,
+    failed: &HashMap<ProviderKey, TurnId>,
+) -> (ProviderStatusState, Option<TurnId>, Option<String>) {
+    if let Some(turn) = failed.get(key) {
+        let message = message.or_else(|| {
+            Some(format!("turn {turn} failed at this provider and no later turn has proven it"))
+        });
+        return (state, None, message);
+    }
+    match proven.get(key) {
+        Some(turn) => (ProviderStatusState::Proven, Some(*turn), message),
+        None => (state, None, message),
+    }
+}
+
 fn unavailable_provider(
     key: ProviderKey,
     message: impl Into<String>,
@@ -942,6 +946,11 @@ fn unavailable_provider(
     ProviderStatus {
         id: key.id,
         kind: key.kind,
+        // A slot nothing fills, or a selector naming a provider that was never
+        // built: there is no implementation to state an identity or a version.
+        provider: None,
+        label: None,
+        version: None,
         state: ProviderStatusState::Unavailable,
         configured: false,
         reachable: false,
@@ -970,6 +979,15 @@ fn provider_references(
     references
 }
 
+/// Providers a real turn has proven, and the turn that proved them.
+///
+/// Read per component rather than off the pipeline's `last_successful_turn`,
+/// which is what a provider's proof is *about*: a turn that failed at synthesis
+/// says nothing about the model that answered in it, and clearing the whole
+/// pipeline's success marker used to un-prove every provider in the graph on
+/// any one provider's failure. A component that last completed successfully
+/// keeps its proof; the component that failed loses it, through
+/// [`failed_providers`].
 fn proven_providers(
     graphs: &[(String, PipelineGraph)],
     projection: &Projection,
@@ -977,9 +995,6 @@ fn proven_providers(
     let mut proven = HashMap::new();
     for (pipeline, graph) in graphs {
         let Some(runtime) = projection.pipelines.get(pipeline) else {
-            continue;
-        };
-        let Some(successful_turn) = runtime.last_successful_turn else {
             continue;
         };
         for node in graph.topological_order().unwrap_or_default() {
@@ -992,17 +1007,64 @@ fn proven_providers(
             let Some(recorded) = runtime.components.get(&component) else {
                 continue;
             };
-            if recorded.state == ComponentHealthState::Healthy
-                && recorded.last_turn == Some(successful_turn)
-            {
-                proven.insert(
-                    ProviderKey { kind, id: node.provider().to_owned() },
-                    successful_turn,
-                );
+            if recorded.state != ComponentHealthState::Healthy {
+                continue;
             }
+            let Some(turn) = recorded.last_turn else {
+                continue;
+            };
+            proven.insert(ProviderKey { kind, id: node.provider().to_owned() }, turn);
         }
     }
     proven
+}
+
+/// Providers a turn failed at, and the turn that failed.
+///
+/// The other half of proof: a successful turn proves a provider, and a failure
+/// that no later success has cleared takes that back. Read from the same
+/// per-component runtime `proven_providers` reads, so the two answers cannot
+/// disagree — a component is in `unresolved_failures` exactly while its last
+/// word was a failure, and the successful turn that clears it is what removes
+/// it from that set.
+///
+/// This is why an unreachable or unproven provider can name the pipelines it
+/// affects: the failure is discovered through a pipeline's components, so the
+/// pipeline is known at the moment the provider is marked.
+fn failed_providers(
+    graphs: &[(String, PipelineGraph)],
+    projection: &Projection,
+) -> HashMap<ProviderKey, TurnId> {
+    let mut failed = HashMap::new();
+    for (pipeline, graph) in graphs {
+        let Some(runtime) = projection.pipelines.get(pipeline) else {
+            continue;
+        };
+        for node in graph.topological_order().unwrap_or_default() {
+            let Some(component) = component_for_node_kind(node.kind()) else {
+                continue;
+            };
+            if !runtime.unresolved_failures.contains(&component) {
+                continue;
+            }
+            let Some(kind) = provider_kind_for_node(node.kind()) else {
+                continue;
+            };
+            // The turn the component last failed in, falling back to the
+            // pipeline's last failed turn: either way the operator is pointed
+            // at a turn they can look up.
+            let Some(turn) = runtime
+                .components
+                .get(&component)
+                .and_then(|recorded| recorded.last_turn)
+                .or(runtime.last_failed_turn)
+            else {
+                continue;
+            };
+            failed.insert(ProviderKey { kind, id: node.provider().to_owned() }, turn);
+        }
+    }
+    failed
 }
 
 fn pipeline_provider_ids(graph: &PipelineGraph) -> Vec<String> {
@@ -1031,6 +1093,27 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
     }
 }
 
+/// The status vocabulary's name for a runtime capability.
+///
+/// [`ProviderCapability`] describes what an operator *configured* and
+/// [`Capability`](conduit_provider::Capability) describes what the runtime
+/// *registered*; both are reported through one [`ProviderKind`], so a provider
+/// reads the same whether it came from a stored definition or from the bundle.
+/// Memory has no stored definition variant today, which is why only this
+/// direction mentions it.
+const fn provider_kind_for(capability: conduit_provider::Capability) -> ProviderKind {
+    match capability {
+        conduit_provider::Capability::Stt => ProviderKind::Stt,
+        conduit_provider::Capability::Llm => ProviderKind::Llm,
+        conduit_provider::Capability::Tts => ProviderKind::Tts,
+        conduit_provider::Capability::Transform => ProviderKind::Transform,
+        conduit_provider::Capability::Tool => ProviderKind::Tool,
+        conduit_provider::Capability::Memory => ProviderKind::Memory,
+        conduit_provider::Capability::Wake => ProviderKind::Wake,
+        conduit_provider::Capability::SpeakerId => ProviderKind::SpeakerId,
+    }
+}
+
 fn provider_kind_for_capability(capability: ProviderCapability) -> ProviderKind {
     match capability {
         ProviderCapability::Stt => ProviderKind::Stt,
@@ -1056,6 +1139,7 @@ fn unavailable_slot_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Transform => "transform",
         ProviderKind::Wake => "wake",
         ProviderKind::SpeakerId => "speaker_id",
+        ProviderKind::Memory => "memory",
     }
 }
 
@@ -1068,6 +1152,7 @@ fn unavailable_message(kind: ProviderKind) -> &'static str {
         ProviderKind::Transform => "no utterance transform provider is registered",
         ProviderKind::Wake => "no wake word provider is registered",
         ProviderKind::SpeakerId => "no speaker identification provider is registered",
+        ProviderKind::Memory => "no memory provider is registered",
     }
 }
 

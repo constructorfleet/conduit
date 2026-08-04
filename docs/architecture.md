@@ -218,6 +218,36 @@ provider silently missing from the registry surfaces later as a pipeline error
 about the graph instead of about the definition. A deployment that embeds
 Conduit supplies its own vendor set with `AppState::with_factories`.
 
+### Provider Status
+
+The operator status snapshot reports every registered provider of every
+capability, with the selector a pipeline names, the identity, label and version
+its descriptor states, and the capability it supplies. It is assembled by
+walking the bundle's descriptors rather than by naming stt, llm and tts one at
+a time — that is what used to leave transforms, detectors, identifiers and
+memory stores out of the snapshot entirely, and would leave out the next
+capability too. A provider that was never built has a selector and no
+descriptor, so its identity and version are absent rather than invented.
+
+Three states stack, each earned by different evidence:
+
+- **Configured** — settings exist and validate. Says nothing about whether the
+  service is there.
+- **Reachable** — an active health check answered. Performed when definitions
+  change rather than when the console polls, because a probe can mean a request
+  to a paid API and the console polls.
+- **Proven** — the provider did the job inside a real pipeline turn, derived
+  from the event bus.
+
+Proof is per provider, not per pipeline: a turn that failed at synthesis says
+nothing about the model that answered in it, so each component keeps or loses
+its own proof. A failure marks the provider — outranking a health check that
+answered, since failing a real turn is the more recent and more expensive
+evidence — and stands until a later successful turn proves recovery. Because
+the failure is discovered through a pipeline's components, an unreachable or
+unproven provider can name the pipelines it affects, which is what lets the
+exception-first overview warn before the next turn fails.
+
 ## Events And Metrics
 
 The event bus is a bounded broadcast channel. Publishers never wait for slow

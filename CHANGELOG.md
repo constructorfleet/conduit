@@ -8,6 +8,26 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The operator status snapshot now reports every registered provider of every
+  capability. It enumerated stt, llm, tts and tool one at a time, so a
+  transform, a wake word detector, a speaker identifier or a memory store an
+  operator had configured was simply absent from the Providers page. It is now
+  one walk over the provider bundle's descriptors — `Providers::descriptors` and
+  `Providers::health`, both capability-generic — so a capability added later
+  appears without an edit here. `ProviderKind` gains `memory` to match.
+- A provider's status now carries the identity, label and version its descriptor
+  states, beside the selector a pipeline names. The two were conflated, so a
+  diagnostic could not say which implementation or which build was behind a
+  configured provider. A selector that names a provider the runtime never built
+  reports no identity rather than an invented one.
+- Proven is now derived per provider rather than per pipeline, and a failed turn
+  takes a provider's proof back until a later turn proves recovery. A turn that
+  failed at synthesis used to un-prove every provider in the graph, including
+  the model that had answered successfully in it; and a provider that answered a
+  health check while failing every real turn still read as reachable with no
+  failure recorded against it. A failure now outranks a health check that
+  answered, and names the pipelines it affects, so the exception-first overview
+  can warn before the next turn fails.
 - A pipeline node can now override the request settings of the Configured
   Provider it names, rather than either accepting the provider's defaults or
   needing a provider of its own. An `stt` node, a `tts` node, and a core's model
