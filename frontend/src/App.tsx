@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Boxes,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   KeyRound,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  Fragment,
   type FormEvent,
   type ReactNode,
   useEffect,
@@ -496,9 +498,36 @@ function OperatorWorkspace({
     }
   }
 
+  /// Saves a definition, moving it first when `previousId` names a different
+  /// one.
+  ///
+  /// An id is not private to its definition — pipeline nodes name it — so
+  /// changing it is a rename rather than a save under the new name: saving
+  /// alone would leave the old definition in place and every pipeline still
+  /// pointing at it, which reads as the edit having created a second provider.
+  /// The rename goes first so the settings that follow are written to the
+  /// definition that now exists.
   async function saveProviderDefinition(
     definition: ProviderDefinition,
+    previousId?: string,
   ): Promise<ProviderDefinition> {
+    if (previousId && previousId !== definition.id) {
+      const { renamed_pipelines } =
+        await snapshotClient.renameProviderDefinition(
+          previousId,
+          definition.id,
+        );
+      setProviderDefinitions((current) =>
+        current.filter((provider) => provider.id !== previousId),
+      );
+      // Reloaded rather than rewritten here: the server is what rewrote the
+      // graphs, and a stage's reference may be qualified by a tool name the
+      // console would have to reconstruct to patch in place.
+      if (renamed_pipelines.length > 0) {
+        const { views } = await snapshotClient.loadPipelineViews();
+        setPipelineViews(views);
+      }
+    }
     const request = toApiProviderDefinition(definition);
     onProviderDefinitionSaved?.(request);
     const saved = await snapshotClient.saveProviderDefinition(request);
@@ -870,8 +899,12 @@ function SectionPanel({
   onProviderTest: ProviderTester;
   onProviderVoices: VoiceLoader;
   onProviderPhrases: PhraseLoader;
+  /// Saves a definition. `previousId` is the id it was stored under, when it
+  /// was stored at all: a save that changes it is a rename, and the server has
+  /// to be told which definition moved.
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
+    previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
@@ -1037,8 +1070,12 @@ function ProvidersPanel({
   providers: readonly ProviderStatus[];
   onProviderTest: ProviderTester;
   onProviderPhrases: PhraseLoader;
+  /// Saves a definition. `previousId` is the id it was stored under, when it
+  /// was stored at all: a save that changes it is a rename, and the server has
+  /// to be told which definition moved.
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
+    previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
 }) {
@@ -1165,11 +1202,21 @@ function ProvidersPanel({
     setSelectedProviderKind(null);
   }
 
+  /// Opens a card's row for editing, or closes it if it is the one already open.
+  ///
+  /// The editor belongs to the row rather than to a dialog over the table: what
+  /// an operator is deciding from — the state, the pipelines that use it, the
+  /// other providers in the stage — stays readable while they change it.
   function editProviderCard(card: ProviderCardView) {
+    if (editingProviderId === card.id) {
+      cancelDraftProvider();
+      return;
+    }
+
     if (card.definition) {
       setDraftProvider(cloneProviderDefinition(card.definition));
       setEditingProviderId(card.id);
-      setAddProviderDialogOpen(true);
+      setAddProviderDialogOpen(false);
       setSelectedProviderKind(null);
       return;
     }
@@ -1190,7 +1237,7 @@ function ProvidersPanel({
       source: "local",
     });
     setEditingProviderId(card.id);
-    setAddProviderDialogOpen(true);
+    setAddProviderDialogOpen(false);
     setSelectedProviderKind(null);
   }
 
@@ -1245,11 +1292,23 @@ function ProvidersPanel({
       config: pruneEmptyConfig(draftProvider.config),
       source: "local",
     };
+    // The id the definition is stored under, when it is stored at all: only a
+    // saved definition can be moved, and a card standing for a provider the
+    // runtime holds without one has nothing on the server to rename.
+    const storedId = providerDefinitions.some(
+      (provider) =>
+        provider.id === editingProviderId && provider.source === "local",
+    )
+      ? (editingProviderId ?? undefined)
+      : undefined;
     try {
-      const saved = await onProviderDefinitionSave(next);
+      const saved = await onProviderDefinitionSave(next, storedId);
       setProviderNotices((current) => ({
         ...current,
-        [saved.id]: `Provider ${saved.id} saved`,
+        [saved.id]:
+          storedId && storedId !== saved.id
+            ? `Provider ${storedId} renamed to ${saved.id}`
+            : `Provider ${saved.id} saved`,
       }));
       setDraftProvider(null);
       setEditingProviderId(null);
@@ -1403,60 +1462,99 @@ function ProvidersPanel({
             <span>{group.cards.length}</span>
           </header>
           <table className="provider-table">
+            <colgroup>
+              {PROVIDER_COLUMNS.map((column) => (
+                <col key={column.label} style={{ width: column.width }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th scope="col">Provider</th>
-                <th scope="col">Implementation</th>
-                <th scope="col">State</th>
-                <th scope="col">Used by</th>
-                <th scope="col">
-                  <span className="visually-hidden">Actions</span>
-                </th>
+                {PROVIDER_COLUMNS.map((column) => (
+                  <th scope="col" key={column.label}>
+                    {column.label === "Actions" ? (
+                      <span className="visually-hidden">{column.label}</span>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {group.cards.map((provider) => (
-                <tr
-                  className={`provider-row ${providerCardStateClass(provider)}`}
-                  key={provider.id}
-                >
-                  <td>
-                    <div className="provider-name">
-                      <strong>{provider.label}</strong>
-                      <span>{provider.id}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-impl">
-                      <strong>
-                        {providerImplementationLabel(
-                          componentCatalog,
-                          provider,
-                        )}
-                      </strong>
-                      {provider.status?.version ? (
-                        <span>v{provider.status.version}</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-state">
-                      <span
-                        className={`state-dot ${providerStateTone(provider.status)}`}
-                        aria-hidden="true"
-                      />
-                      <span>{provider.status?.state ?? "not configured"}</span>
-                      {provider.status?.message ? (
-                        <span className="provider-state-message">
-                          {provider.status.message}
+                <Fragment key={provider.id}>
+                  <tr
+                    className={`provider-row ${providerCardStateClass(provider)}${
+                      editingProviderId === provider.id ? " expanded" : ""
+                    }`}
+                    // The whole row is the target, because the whole row is
+                    // what an operator reads before deciding to change it. The
+                    // name cell holds the control that says so, and carries the
+                    // keyboard path; this only widens where a pointer may land.
+                    onClick={(event) => {
+                      if (
+                        event.target instanceof Element &&
+                        event.target.closest("button, a, input, select")
+                      ) {
+                        return;
+                      }
+                      editProviderCard(provider);
+                    }}
+                  >
+                    <td>
+                      <button
+                        className="provider-name-toggle"
+                        type="button"
+                        aria-label={`Configure ${provider.id}`}
+                        aria-expanded={editingProviderId === provider.id}
+                        onClick={() => editProviderCard(provider)}
+                      >
+                        <ChevronRight
+                          className="provider-disclosure"
+                          size={15}
+                          aria-hidden="true"
+                        />
+                        <span className="provider-name">
+                          <strong>{provider.label}</strong>
+                          <span>{provider.id}</span>
                         </span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="provider-used-by">
-                      {providerPipelineUsesForCard(provider, providerUses).map(
-                        (use) => (
+                      </button>
+                    </td>
+                    <td>
+                      <div className="provider-impl">
+                        <strong>
+                          {providerImplementationLabel(
+                            componentCatalog,
+                            provider,
+                          )}
+                        </strong>
+                        {provider.status?.version ? (
+                          <span>v{provider.status.version}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="provider-state">
+                        <span
+                          className={`state-dot ${providerStateTone(provider.status)}`}
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {provider.status?.state ?? "not configured"}
+                        </span>
+                        {provider.status?.message ? (
+                          <span className="provider-state-message">
+                            {provider.status.message}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="provider-used-by">
+                        {providerPipelineUsesForCard(
+                          provider,
+                          providerUses,
+                        ).map((use) => (
                           <span
                             className="usage-chip"
                             key={`${use.pipeline} ${use.stage ?? ""}`}
@@ -1466,48 +1564,79 @@ function ProvidersPanel({
                               <span className="usage-stage">· {use.stage}</span>
                             ) : null}
                           </span>
-                        ),
-                      )}
-                      {providerPipelineUsesForCard(provider, providerUses)
-                        .length === 0 ? (
-                        <span className="muted">none</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="provider-actions-cell">
-                    <div className="provider-actions">
-                      {provider.status || provider.definition ? (
-                        <button
-                          className="secondary-action provider-test-action"
-                          type="button"
-                          aria-label={`Test ${provider.id}`}
-                          onClick={() => testProvider(provider)}
+                        ))}
+                        {providerPipelineUsesForCard(provider, providerUses)
+                          .length === 0 ? (
+                          <span className="muted">none</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="provider-actions-cell">
+                      <div className="provider-actions">
+                        {provider.status || provider.definition ? (
+                          <button
+                            className="secondary-action provider-test-action"
+                            type="button"
+                            aria-label={`Test ${provider.id}`}
+                            onClick={() => testProvider(provider)}
+                          >
+                            <Play size={17} aria-hidden="true" />
+                            Test
+                          </button>
+                        ) : null}
+                        {provider.definition?.source === "local" ? (
+                          <button
+                            className="icon-action danger"
+                            type="button"
+                            aria-label={`Delete ${provider.id}`}
+                            onClick={() => deleteProviderDefinition(provider)}
+                          >
+                            <Trash2 size={17} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                  {editingProviderId === provider.id && draftProvider ? (
+                    <tr className="provider-editor-row">
+                      <td colSpan={PROVIDER_COLUMNS.length}>
+                        <section
+                          className="provider-inline-editor"
+                          aria-label={`${provider.id} configuration`}
                         >
-                          <Play size={17} aria-hidden="true" />
-                          Test
-                        </button>
-                      ) : null}
-                      <button
-                        className="icon-action"
-                        type="button"
-                        aria-label={`Edit ${provider.id}`}
-                        onClick={() => editProviderCard(provider)}
-                      >
-                        <Settings size={17} aria-hidden="true" />
-                      </button>
-                      {provider.definition?.source === "local" ? (
-                        <button
-                          className="icon-action danger"
-                          type="button"
-                          aria-label={`Delete ${provider.id}`}
-                          onClick={() => deleteProviderDefinition(provider)}
-                        >
-                          <Trash2 size={17} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
+                          <div className="provider-inline-editor-actions">
+                            <button
+                              className="icon-action success"
+                              type="button"
+                              aria-label="Save provider"
+                              disabled={!draftProviderValidation.ok}
+                              onClick={saveDraftProvider}
+                            >
+                              <Save size={17} aria-hidden="true" />
+                            </button>
+                            <button
+                              className="icon-action danger"
+                              type="button"
+                              aria-label="Cancel provider edit"
+                              onClick={cancelDraftProvider}
+                            >
+                              <X size={17} aria-hidden="true" />
+                            </button>
+                          </div>
+                          <ProviderEditorFields
+                            componentCatalog={componentCatalog}
+                            draftProvider={draftProvider}
+                            selectedComponent={selectedDraftComponent}
+                            validation={draftProviderValidation}
+                            suggestions={draftProviderSuggestions}
+                            onConfigChange={updateDraftConfig}
+                            onDraftChange={updateDraftProvider}
+                          />
+                        </section>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -3457,16 +3586,86 @@ function ComponentConfigFields({
           );
         }
 
+        // Several of a closed set: a menu of what is left, and a tag for each
+        // one taken. A single text box offered the set only while it was
+        // empty, so an operator adding a second entry was retyping a name from
+        // memory and learned they had misremembered it when the save was
+        // refused. The tags keep the order they were added, which for a
+        // transform's rules is the order they are applied.
+        if (
+          property.type === "string_list" &&
+          property.options &&
+          property.options.length > 0
+        ) {
+          const chosen = listEntries(config[field]);
+          const remaining = property.options.filter(
+            (option) => !chosen.includes(option),
+          );
+          const selectId = `${component.id}-${field}`;
+          const choose = (entries: readonly string[]) =>
+            onChange(field, property, entries.join(", "));
+          return (
+            <div className="field" key={field}>
+              <label htmlFor={selectId}>{label}</label>
+              {chosen.length > 0 ? (
+                <ul className="tag-list">
+                  {chosen.map((entry) => (
+                    <li className="tag" key={entry}>
+                      {entry}
+                      <button
+                        type="button"
+                        className="tag-remove"
+                        aria-label={`Remove ${entry}`}
+                        onClick={() =>
+                          choose(chosen.filter((held) => held !== entry))
+                        }
+                      >
+                        <X size={12} aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <select
+                id={selectId}
+                // Required until something is chosen: the menu itself is left
+                // empty once there are tags, and a control that both holds no
+                // value and must have one would refuse a filled-in form.
+                required={required.has(field) && chosen.length === 0}
+                aria-invalid={isMissing(field, property) || undefined}
+                // Always empty: the menu is how an entry is added, not where
+                // the answer is kept, and leaving the last pick selected would
+                // read as though it were the whole answer.
+                value=""
+                disabled={remaining.length === 0}
+                onChange={(event) => choose([...chosen, event.target.value])}
+              >
+                <option value="">
+                  {remaining.length === 0
+                    ? "all added"
+                    : chosen.length > 0
+                      ? "add another"
+                      : "choose one or more"}
+                </option>
+                {remaining.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+
         // Held as the text an operator is typing, and split into a list when
         // the definition is built. Splitting on every keystroke would trim the
         // space they just typed and run the words together.
         if (property.type === "string_list") {
           // Suggestions rather than a menu: the field holds several values,
           // and a provider that enumerates some of them has not thereby
-          // forbidden the rest. A field that *does* close the set — a
-          // transform's rules — offers them the same way, and the entries are
-          // checked before the definition is saved.
-          const known = suggestions?.[field] ?? property.options ?? [];
+          // forbidden the rest — a wake detector reporting the phrases it has
+          // models for has not forbidden the ones it does not.
+          const known = suggestions?.[field] ?? [];
           const listId =
             known.length > 0 ? `${component.id}-${field}` : undefined;
           return (
@@ -3684,6 +3883,24 @@ const PROVIDER_STAGE_ORDER: readonly ProviderKind[] = [
   "wake",
   "speaker_id",
   "memory",
+];
+
+/// The columns every provider stage table shows, and how wide each one is.
+///
+/// Stated here rather than left to the browser because there is one table per
+/// stage: each would size its own columns from its own rows, so a group holding
+/// one long provider id put its Provider column somewhere no other group's was,
+/// and the page read as several unrelated tables instead of one list under
+/// headings. Fixed widths line them up — the cells wrap rather than widen, which
+/// is why every one of them already handles overflow.
+const PROVIDER_COLUMNS: readonly { label: string; width: string }[] = [
+  { label: "Provider", width: "24%" },
+  { label: "Implementation", width: "20%" },
+  { label: "State", width: "22%" },
+  { label: "Used by", width: "20%" },
+  // Two or three buttons of a known size, so this is the one column whose
+  // content decides its width rather than the other way round.
+  { label: "Actions", width: "14%" },
 ];
 
 /// Where each provider is bound, as "pipeline · stage", read from the stored
@@ -3948,11 +4165,7 @@ function variantFromProviderDefinition(
     typeof config[field] === "string" ? config[field].trim() : "";
   const flag = (field: string) => config[field] === true;
   /// A comma-separated field, as the form holds it while it is being typed.
-  const list = (field: string) =>
-    text(field)
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+  const list = (field: string) => listEntries(config[field]);
   /// A number field. The default is the server's own, so a definition saved
   /// without one behaves as the API documents rather than as zero — which
   /// would be a detector that accepts everything it hears.
@@ -4000,12 +4213,7 @@ function variantFromProviderDefinition(
         base_url: text("base_url") || "https://api.openai.com/v1",
         model: text("model"),
         ...(apiKey ? { api_key: apiKey } : {}),
-        voices: text("voices")
-          ? text("voices")
-              .split(",")
-              .map((voice) => voice.trim())
-              .filter(Boolean)
-          : [],
+        voices: list("voices"),
       },
     };
   }
@@ -4293,12 +4501,7 @@ function validateProviderDefinitionConfig(
       // A list field holds several of the closed set, so each entry is checked
       // rather than the text as a whole.
       const entries =
-        property.type === "string_list"
-          ? value
-              .split(",")
-              .map((entry) => entry.trim())
-              .filter(Boolean)
-          : [value];
+        property.type === "string_list" ? listEntries(value) : [value];
       const unknown = entries.find(
         (entry) => !property.options?.includes(entry),
       );
@@ -4342,6 +4545,23 @@ function updateConfigValue(
   }
   next[field] = value;
   return next;
+}
+
+/// The entries a list field holds, read from the text the form keeps it as.
+///
+/// A list is held as the comma-separated text an operator types, because
+/// splitting on every keystroke would trim the space they just typed. That one
+/// representation serves every list field, open or closed, so everything that
+/// needs the entries themselves — the tag list, validation, the definition
+/// being built — reads them through here.
+function listEntries(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function pruneEmptyConfig(

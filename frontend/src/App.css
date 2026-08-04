@@ -119,6 +119,49 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* What a closed-set list field already holds. Each entry is its own tag with
+   its own remove button, so an operator can take one back without retyping the
+   rest — and the tags read in the order they were added, which for a
+   transform's rules is the order they are applied. */
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 999px;
+  padding: 3px 4px 3px 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tag-remove {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tag-remove:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
 .check-row {
   display: flex;
   align-items: center;
@@ -1103,6 +1146,10 @@ label.icon-action {
 
 .provider-table {
   width: 100%;
+  /* Every stage is its own table, so without this each one sizes its columns
+     from its own rows and no two groups line up. The widths are the
+     `<colgroup>` the panel renders. */
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--border);
@@ -1131,7 +1178,7 @@ label.icon-action {
   border-top: 0;
 }
 
-.provider-table tbody tr:hover {
+.provider-table tbody tr.provider-row:hover {
   background: var(--selected);
 }
 
@@ -1142,6 +1189,58 @@ label.icon-action {
 
 .provider-row.healthy td:first-child {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+/* The row is what a pointer clicks; the name cell holds the control that says
+   so, which is also the keyboard path to it. */
+.provider-row {
+  cursor: pointer;
+}
+
+.provider-name-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.provider-disclosure {
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.provider-row.expanded .provider-disclosure {
+  transform: rotate(90deg);
+  color: var(--strong);
+}
+
+/* The editor is a row of the same table, so it stays under the provider it
+   belongs to while the rest of the stage keeps its place. It is recessed rather
+   than tinted: `--selected` is the accent the row hover already uses, so an
+   editor drawn in it read as one more hovered row instead of as the panel that
+   opened underneath one. A neutral gray raised off the table's own background
+   says the same thing without borrowing the accent. */
+.provider-editor-row td {
+  padding: 0;
+  background: var(--surface-raised);
+  box-shadow: inset 0 1px 0 var(--border);
+}
+
+.provider-inline-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.provider-inline-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .provider-name,
@@ -1231,9 +1330,12 @@ label.icon-action {
   border-radius: 999px;
   padding: 3px 9px;
   background: var(--surface);
+  max-width: 100%;
   color: var(--strong);
   font-size: 11px;
-  white-space: nowrap;
+  /* A fixed-width column cannot promise to be wide enough, so a pipeline name
+     longer than the column breaks instead of jutting into the Actions one. */
+  overflow-wrap: anywhere;
 }
 
 .usage-stage {

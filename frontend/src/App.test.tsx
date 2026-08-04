@@ -1245,12 +1245,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const openAiRow = screen.getByRole("row", { name: /OpenAI Primary/ });
-    await user.click(
-      within(openAiRow).getByRole("button", {
-        name: "Edit openai",
-      }),
-    );
+    await expandProviderRow(user, "openai");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
@@ -1264,12 +1259,7 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const whisperRow = screen.getByRole("row", { name: /Whisper Local/ });
-    await user.click(
-      within(whisperRow).getByRole("button", {
-        name: "Edit whisper",
-      }),
-    );
+    await expandProviderRow(user, "whisper");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming",
@@ -1283,12 +1273,7 @@ describe("Pipelines graph editor", () => {
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
 
-    const piperRow = screen.getByRole("row", { name: /Piper Local/ });
-    await user.click(
-      within(piperRow).getByRole("button", {
-        name: "Edit piper-local",
-      }),
-    );
+    await expandProviderRow(user, "piper-local");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
@@ -1325,14 +1310,7 @@ describe("Pipelines graph editor", () => {
     );
 
     await enterProvidersSection(user);
-    const piperRow = screen
-      .getByRole("button", { name: "Edit piper" })
-      .closest("tr") as HTMLElement;
-    await user.click(
-      within(piperRow).getByRole("button", {
-        name: "Edit piper",
-      }),
-    );
+    await expandProviderRow(user, "piper");
 
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
@@ -1993,11 +1971,14 @@ describe("Providers workspace", () => {
     expect(screen.getByRole("button", { name: "Save provider" })).toBeEnabled();
   });
 
-  it("builds a speech cleanup definition from the rules it was given", async () => {
-    // The rules are a closed set held several at a time, so the field is a
-    // list with the set as suggestions rather than a menu — a menu picks one,
-    // and the order the operator wrote is what decides whether an emoji inside
-    // a link is seen as text.
+  it("collects the rules a speech cleanup applies as tags", async () => {
+    // The rules are a closed set held several at a time. Typing them into one
+    // comma separated box meant the set was only offered while the box was
+    // empty: an operator adding a second rule was retyping a name from memory,
+    // and a misremembered one was refused long after they wrote it. So the
+    // field offers what is left and shows each choice as a pill, keeping the
+    // order they were added — that order decides whether an emoji inside a
+    // link is seen as text.
     const user = userEvent.setup();
     const saved: ProviderDefinition[] = [];
     render(
@@ -2013,10 +1994,42 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("menuitem", { name: "Speech cleanup" }));
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "speech-cleanup");
-    await user.type(
-      screen.getByLabelText("Rules (comma separated)"),
-      "markdown_to_speech, strip_emoji",
+
+    await user.selectOptions(
+      screen.getByLabelText("Rules"),
+      "markdown_to_speech",
     );
+    // Chosen once, it is a pill and no longer on offer.
+    expect(
+      screen.getByRole("button", { name: "Remove markdown_to_speech" }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Rules")).queryByRole("option", {
+        name: "markdown_to_speech",
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(
+      screen.getByLabelText("Rules"),
+      "collapse_whitespace",
+    );
+    await user.selectOptions(screen.getByLabelText("Rules"), "strip_emoji");
+    // Nothing left to add, so there is nothing to open.
+    expect(screen.getByLabelText("Rules")).toBeDisabled();
+
+    // A pill is removed by its own x, and what it held is offered again.
+    await user.click(
+      screen.getByRole("button", { name: "Remove collapse_whitespace" }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Remove collapse_whitespace" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Rules")).getByRole("option", {
+        name: "collapse_whitespace",
+      }),
+    ).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(saved[0]?.variant).toMatchObject({
@@ -2097,12 +2110,7 @@ describe("Providers workspace", () => {
 
     // Nothing to ask until a detector is registered, so the suggestions only
     // arrive once the definition has been saved and is being edited again.
-    const card = screen.getByRole("row", { name: /openWakeWord/ });
-    await user.click(
-      within(card).getByRole("button", {
-        name: "Edit openwakeword",
-      }),
-    );
+    await expandProviderRow(user, "openwakeword");
 
     const field = await screen.findByLabelText("Phrases (comma separated)");
     const list = field.getAttribute("list");
@@ -2141,11 +2149,7 @@ describe("Providers workspace", () => {
     expect(providerRow).toHaveTextContent("openai-primary");
     expect(providerRow).toHaveTextContent("OpenAI Responses");
 
-    await user.click(
-      within(providerRow).getByRole("button", {
-        name: "Edit openai-primary",
-      }),
-    );
+    await expandProviderRow(user, "openai-primary");
     expect(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     ).toBeInTheDocument();
@@ -2169,14 +2173,7 @@ describe("Providers workspace", () => {
       screen.getByRole("row", { name: /OpenAI Primary/ }),
     ).toBeInTheDocument();
 
-    const restoredProviderRow = screen.getByRole("row", {
-      name: /OpenAI Primary/,
-    });
-    await user.click(
-      within(restoredProviderRow).getByRole("button", {
-        name: "Edit openai-primary",
-      }),
-    );
+    await expandProviderRow(user, "openai-primary");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "OpenAI Main");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2187,12 +2184,92 @@ describe("Providers workspace", () => {
     expect(screen.queryByText("OpenAI Primary")).not.toBeInTheDocument();
   });
 
+  it("edits a provider in the row it belongs to and leaves the modal to new ones", async () => {
+    // A dialog over the table hid what the operator was working from — the
+    // state, the pipelines that use it, the other providers in the stage — and
+    // asked them to remember it while filling the form in. Editing happens in
+    // the row now; only a provider that has no row yet needs a dialog.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "openai",
+            label: "OpenAI Primary",
+            component: "openai.responses",
+            config: {
+              base_url: "https://api.openai.com/v1",
+              model: "gpt-5",
+            },
+          }),
+          providerDefinitionFixture({
+            id: "whisper",
+            label: "Whisper Local",
+            kind: "stt",
+            component: "wyoming",
+            config: { url: "tcp://whisper.local:10300", model: "tiny-int8" },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    // The gear is gone: the row itself is what opens the editor.
+    expect(
+      screen.queryByRole("button", { name: "Edit openai" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    const openAiToggle = await expandProviderRow(user, "openai");
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue("openai");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt-5");
+    // The editor is part of the table it was opened from, not a layer over it.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const editor = screen.getByRole("region", {
+      name: "openai configuration",
+    });
+    expect(openAiToggle.closest("table")).toContainElement(editor);
+    expect(openAiToggle).toHaveAttribute("aria-expanded", "true");
+
+    // What the row was already showing is still readable beside the form.
+    expect(
+      screen.getByRole("row", { name: /Whisper Local/ }),
+    ).toHaveTextContent("whisper");
+
+    // Opening another row is a move, not a second form.
+    await expandProviderRow(user, "whisper");
+    expect(screen.getByLabelText("Provider id")).toHaveDisplayValue("whisper");
+    expect(
+      screen.queryByRole("region", { name: "openai configuration" }),
+    ).not.toBeInTheDocument();
+
+    // And the row that is open closes on the next click.
+    await collapseProviderRow(user, "whisper");
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    // An action in the row acts, rather than opening the editor under it.
+    await user.click(screen.getByRole("button", { name: "Test whisper" }));
+    expect(screen.queryByLabelText("Provider id")).not.toBeInTheDocument();
+
+    // A provider with no row yet is still configured in the dialog.
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Add provider" }),
+    ).toContainElement(screen.getByLabelText("Provider id"));
+  });
+
   it("starts a new provider card from a kind menu and closes the active editor", async () => {
     const user = userEvent.setup();
     render(<App initialComponentCatalog={componentCatalog()} />);
 
     await enterProvidersSection(user);
-    await user.click(screen.getByRole("button", { name: "Edit openai" }));
+    await expandProviderRow(user, "openai");
     expect(screen.getAllByDisplayValue("openai").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Add provider" }));
@@ -2222,6 +2299,61 @@ describe("Providers workspace", () => {
     expect(
       screen.queryByRole("heading", { name: "OpenAI Responses" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renames a provider rather than creating a second one, and moves the pipelines with it", async () => {
+    // Changing the id used to save under the new one and leave the old
+    // definition where it was, so an operator correcting a name got two
+    // providers and a pipeline still pointing at the one they meant to
+    // replace. An id is not private to its definition: pipelines name it, so
+    // it moves with them.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialPipelineViews={[pipelineView()]}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "openai");
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openai-main");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      await screen.findByText("Provider openai renamed to openai-main"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: /openai-main/ }),
+    ).toBeInTheDocument();
+    // No definition is left under the old id — the card that remains is the
+    // one the runtime snapshot reports, which has nothing local to delete.
+    expect(
+      screen.queryByRole("button", { name: "Delete openai" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete openai-main" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    expect(screen.getByLabelText("Pipeline stages")).toHaveTextContent(
+      "llmcore / openai-main",
+    );
   });
 
   it("deletes configured provider cards", async () => {
@@ -2282,6 +2414,50 @@ describe("Providers workspace", () => {
     expect(
       within(ttsSection).getByRole("row", { name: /piper-local/ }),
     ).toBeInTheDocument();
+  });
+
+  it("gives every provider stage table the same column widths", async () => {
+    // One table per stage, so each one sized its own columns from its own
+    // rows: the Provider column landed somewhere different in every group and
+    // the page read as five tables rather than one list under headings.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: { base_url: "https://api.openai.com/v1", model: "gpt-5" },
+      }),
+      // Deliberately far wider than the row above, which is what used to pull
+      // this group's columns out of line with every other group's.
+      providerDefinitionFixture({
+        id: "a-rather-long-recognizer-provider-id",
+        label: "Whisper Local, running on the box under the desk",
+        component: "wyoming",
+        config: { url: "tcp://whisper.local:10300", model: "tiny-int8" },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+
+    const tables = screen.getAllByRole("table");
+    expect(tables.length).toBeGreaterThan(1);
+    const widthsPerTable = tables.map((table) =>
+      [...table.querySelectorAll("col")].map((column) => column.style.width),
+    );
+    for (const widths of widthsPerTable) {
+      expect(widths).toEqual(widthsPerTable[0]);
+      // One per column, so a column added to the header without one here would
+      // be the one that sizes itself.
+      expect(widths).toHaveLength(5);
+    }
   });
 
   it("filters providers by search and narrows to issues only", async () => {
@@ -2746,6 +2922,23 @@ async function enterProvidersSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Providers" }));
 }
 
+/// Opens a provider's row for editing and answers with the row itself.
+async function expandProviderRow(
+  user: ReturnType<typeof userEvent.setup>,
+  id: string,
+) {
+  const row = screen.getByRole("button", { name: `Configure ${id}` });
+  await user.click(row);
+  return row;
+}
+
+async function collapseProviderRow(
+  user: ReturnType<typeof userEvent.setup>,
+  id: string,
+) {
+  await user.click(screen.getByRole("button", { name: `Configure ${id}` }));
+}
+
 async function enterSpeakersSection(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Use anonymous mode" }));
   await user.click(screen.getByRole("tab", { name: "Speakers" }));
@@ -3165,6 +3358,35 @@ function mockOperatorApi({
 
       if (route.startsWith("/v1/providers/")) {
         const id = route.slice("/v1/providers/".length);
+        if (id.endsWith("/rename") && method === "POST") {
+          const providerId = id.replace(/\/rename$/, "");
+          const definition = savedProviderDefinitions.get(providerId);
+          if (!definition) {
+            return jsonResponse({ error: "not_found" }, { status: 404 });
+          }
+          const { id: newId } = JSON.parse(String(init?.body)) as {
+            id: string;
+          };
+          savedProviderDefinitions.delete(providerId);
+          savedProviderDefinitions.set(newId, { ...definition, id: newId });
+          // The server rewrites the graphs, so the mock has to as well: the
+          // console reloads them rather than patching them, and a mock that
+          // left them alone would let a broken reference pass as a pass.
+          const renamedPipelines: string[] = [];
+          for (const [name, view] of pipelines) {
+            const nodes = view.graph.nodes.map((node) =>
+              renameNodeProvider(node, providerId, newId),
+            );
+            if (nodes.some((node, index) => node !== view.graph.nodes[index])) {
+              pipelines.set(name, { ...view, graph: { ...view.graph, nodes } });
+              renamedPipelines.push(name);
+            }
+          }
+          return jsonResponse({
+            provider: { ...definition, id: newId },
+            renamed_pipelines: renamedPipelines,
+          });
+        }
         if (id.endsWith("/test") && method === "POST") {
           const providerId = id.replace(/\/test$/, "");
           currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
@@ -3266,6 +3488,28 @@ function mockOperatorApi({
 
   vi.stubGlobal("fetch", fetchMock);
   return Object.assign(fetchMock, { enrollments, roster });
+}
+
+/// Points a node's provider reference at `to` when it named `from`, returning
+/// the node itself when it did not.
+///
+/// Identity is what the caller uses to tell whether anything moved, so an
+/// untouched node has to be the same object rather than a copy of it.
+function renameNodeProvider(
+  node: PipelineGraph["nodes"][number],
+  from: string,
+  to: string,
+): PipelineGraph["nodes"][number] {
+  if (node.kind === "core") {
+    if (node.core.model.provider !== from) {
+      return node;
+    }
+    return {
+      ...node,
+      core: { ...node.core, model: { ...node.core.model, provider: to } },
+    };
+  }
+  return node.provider === from ? { ...node, provider: to } : node;
 }
 
 /// The outer provider definition variant is the capability itself.

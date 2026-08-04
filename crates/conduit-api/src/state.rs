@@ -320,6 +320,74 @@ impl AppState {
         Ok(replaced)
     }
 
+    /// Moves the definition stored under `from` to `to`, pointing every
+    /// pipeline that named it at the new id. Answers with the pipelines that
+    /// changed, in the order they were listed.
+    ///
+    /// A rename rather than a save-and-delete because a provider id is not
+    /// private to its definition: pipelines name it. Saving under a new id and
+    /// deleting the old one leaves every graph in between referencing a
+    /// provider nothing answers to — and the delete would be refused for
+    /// exactly that reason. So the definition and the references move together,
+    /// and the runtime snapshot is rebuilt once at the end rather than once per
+    /// write.
+    ///
+    /// Returns an empty list without writing anything if `from` is not stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either id is unusable or any write fails. The order
+    /// is chosen so that a failure part-way leaves references pointing at a
+    /// definition that exists: the new definition is written first and the old
+    /// one removed last.
+    pub async fn rename_provider_definition(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<String>> {
+        // Renaming to the id it already has is a no-op rather than a write
+        // followed by a delete of what was just written.
+        if from == to {
+            return Ok(Vec::new());
+        }
+        let Some(definition) = self.provider_definition(from).await? else {
+            return Ok(Vec::new());
+        };
+        self.provider_definitions
+            .put(to, ProviderDefinition { id: to.to_owned(), ..definition })
+            .await?;
+
+        let mut renamed = Vec::new();
+        for name in self.pipeline_names().await? {
+            // A pipeline that will not parse is stepped over rather than
+            // failing the rename, for the same reason the reference scan steps
+            // over it: it cannot be read, so it cannot be rewritten, and
+            // refusing the rename would leave an operator unable to fix either.
+            let graph = match self.pipeline(&name).await {
+                Ok(Some(graph)) => graph,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        pipeline = %name,
+                        %error,
+                        "skipping unreadable pipeline while renaming a provider"
+                    );
+                    continue;
+                }
+            };
+            let mut graph = graph;
+            if graph.rename_provider(from, to) {
+                self.pipelines.put(&name, graph).await?;
+                renamed.push(name);
+            }
+        }
+
+        self.provider_definitions.remove(from).await?;
+        self.clear_provider_reachability(from);
+        self.rebuild_provider_snapshot().await?;
+        Ok(renamed)
+    }
+
     /// Removes a provider definition.
     ///
     /// # Errors
