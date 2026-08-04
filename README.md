@@ -116,6 +116,25 @@ action as *not* performed. See [Known gaps](#known-gaps).
 cargo run -p conduit-api
 ```
 
+For local development, one script runs the API and the Operator Console
+together, and stops both on Ctrl-C:
+
+```sh
+scripts/dev.sh
+```
+
+That serves the API anonymously on `127.0.0.1:8080` and the console on
+`127.0.0.1:5173`, with the console's `/v1` proxy pointed at whichever API port
+is in use. Real providers come from saved Provider Definitions, as they do in
+any other deployment. The flags cover the two axes that change:
+
+```sh
+scripts/dev.sh --tokens secrets/tokens.json   # authenticate instead of serving openly
+scripts/dev.sh --echo                         # echo providers; no speech engine needed
+scripts/dev.sh --api-port 8081 --ui-port 5174 # move either listener
+scripts/dev.sh --help
+```
+
 Or with Docker Compose, which is the shortest path to a working deployment:
 
 ```sh

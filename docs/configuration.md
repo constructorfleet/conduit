@@ -213,6 +213,33 @@ populated.
 When neither is set, Conduit still writes structured JSON logs and does not try
 to connect to an OTLP collector.
 
+## Local Development
+
+`scripts/dev.sh` runs the API and the Operator Console as one pair and sets the
+variables below from its flags, so a development loop does not need a `.env` or
+an exported environment. It reads neither: a shell that already exported
+`CONDUIT_TOKENS` while the script was asked for anonymous mode would hand the
+server both variables at once, which it refuses to start on. Every other
+`CONDUIT_*` variable passes through untouched.
+
+| Flag | Default | Sets |
+| --- | --- | --- |
+| `--anonymous` | on | `CONDUIT_ALLOW_ANONYMOUS=1`, and clears `CONDUIT_TOKENS`. |
+| `--tokens FILE` | — | `CONDUIT_TOKENS=FILE`, and clears `CONDUIT_ALLOW_ANONYMOUS`. Refused if the file does not exist. |
+| `--echo` | off | Builds with `--features dev-providers`. Also spelled `--dev-providers`. |
+| `--api-port PORT` | `8080` | `CONDUIT_BIND` and `VITE_CONDUIT_API_TARGET`. |
+| `--ops-port PORT` | `9090` | `CONDUIT_OPS_BIND`. |
+| `--ui-port PORT` | `5173` | The Vite dev server port. |
+| `--dry-run` | off | Prints the resolved configuration and starts nothing. |
+
+Both listeners bind `127.0.0.1` rather than the server's own `0.0.0.0` default,
+so starting a development script does not publish an anonymous API to the
+network. Ctrl-C stops both processes and everything they spawned.
+
+Providers are the same as in any other deployment: real ones come from saved
+Provider Definitions, and `--echo` is the opt-in for the in-memory providers
+that treat audio as UTF-8 text, which cannot hear speech.
+
 ## Test-Only Variables
 
 | Variable | Used by | Description |
