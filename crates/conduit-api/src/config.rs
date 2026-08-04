@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use conduit_core::{Error, Result};
 use conduit_openai::OpenAiConfig;
-use conduit_provider::storage::{PipelineStore, ProviderDefinitionStore};
+use conduit_provider::storage::{PipelineStore, ProviderDefinitionStore, SpeakerRosterStore};
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
@@ -51,6 +51,8 @@ const DATA_DIR: &str = "CONDUIT_DATA_DIR";
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
 /// Directory to keep provider definitions in. Unset means the default data directory.
 const PROVIDER_DIR: &str = "CONDUIT_PROVIDER_DIR";
+/// Directory to keep the speaker roster in. Unset means the default data directory.
+const SPEAKER_DIR: &str = "CONDUIT_SPEAKER_DIR";
 /// Named only in the error a missing data directory raises: a wake definition
 /// carries its own `models_dir`, so there is no variable to set instead.
 const WAKE_MODELS_DIR: &str = "the definition's `models_dir`";
@@ -126,6 +128,58 @@ pub async fn store_from_env() -> Result<Arc<dyn PipelineStore>> {
 /// Returns [`Error::Config`] if the configured directory cannot be used.
 pub async fn provider_definition_store_from_env() -> Result<Arc<dyn ProviderDefinitionStore>> {
     provider_definition_store_from_vars(&std::env::vars().collect()).await
+}
+
+/// Opens the speaker roster store the environment asks for.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn speaker_roster_store_from_env() -> Result<Arc<dyn SpeakerRosterStore>> {
+    speaker_roster_store_from_vars(&std::env::vars().collect()).await
+}
+
+/// Opens the speaker roster store described by `vars`.
+///
+/// A shared database wins over a directory for the same reason it does for
+/// pipelines, and more so: the roster is what turns an id into a person, so a
+/// replica reading a different copy would answer to the wrong name.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the configured directory cannot be used.
+pub async fn speaker_roster_store_from_vars(
+    vars: &HashMap<String, String>,
+) -> Result<Arc<dyn SpeakerRosterStore>> {
+    #[cfg(feature = "postgres")]
+    if let Some(url) = vars.get(DATABASE_URL) {
+        if !url.trim().is_empty() {
+            tracing::info!("storing the speaker roster in PostgreSQL");
+            return Ok(Arc::new(conduit_store::PostgresStore::connect(url).await?));
+        }
+    }
+
+    match vars.get(SPEAKER_DIR).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        Some(MEMORY_PIPELINE_DIR) => {
+            tracing::warn!(
+                "{SPEAKER_DIR} is {MEMORY_PIPELINE_DIR}: the speaker roster is kept in memory \
+                 and will be lost on restart"
+            );
+            Ok(Arc::new(MemoryStore::new()))
+        }
+        Some(directory) => {
+            tracing::info!(%directory, "storing the speaker roster on disk");
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+        None => {
+            let directory = default_speaker_dir(vars)?;
+            tracing::info!(
+                directory = %directory.display(),
+                "storing the speaker roster in the default local data directory"
+            );
+            Ok(Arc::new(FileStore::open(directory).await?))
+        }
+    }
 }
 
 /// Opens the pipeline store described by `vars`.
@@ -210,6 +264,10 @@ pub async fn provider_definition_store_from_vars(
 
 fn default_pipeline_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
     default_data_subdir(vars, PIPELINE_DIR, "pipelines")
+}
+
+fn default_speaker_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+    default_data_subdir(vars, SPEAKER_DIR, "speakers")
 }
 
 fn default_provider_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {

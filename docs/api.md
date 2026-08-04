@@ -451,6 +451,113 @@ Success body:
 }
 ```
 
+## Speaker Routes
+
+The roster: who a deployment has enrolled. Conduit owns a speaker's id and the
+identification service stores it as an opaque label, so a person's name lives
+in Conduit and nowhere else — which is what lets a deployment change embedding
+models without every enrolled voice becoming a stranger.
+
+Naming somebody and recording them are separate requests: an operator names a
+household once and records each person when that person is actually there.
+
+A roster entry reads:
+
+```json
+{
+  "id": "6f1c2d9e-3b7a-4f52-9c0f-2f4b8a1d5e77",
+  "name": "Ada Lovelace",
+  "samples": 2,
+  "provider": "voices",
+  "created_at": "2025-01-01T09:00:00Z",
+  "enrolled_at": "2025-01-02T18:31:04Z"
+}
+```
+
+`samples` counts the utterances the service accepted; zero means named but
+never heard, and such an entry identifies nobody. `provider` names the
+definition the voice prints were enrolled against, because a print does not
+travel between services. Both `provider` and `enrolled_at` are absent until a
+sample has been accepted.
+
+### `GET /v1/speakers`
+
+Lists the whole roster, in id order. An entry that cannot be decoded is left
+out rather than failing the request, so one broken record does not make the
+page unopenable.
+
+### `POST /v1/speakers`
+
+Creates somebody from `{"name": "Ada"}`. Answers `201` with the new entry,
+including the id Conduit generated.
+
+A name is free text — apostrophes, accents, and spaces are all fine, because
+it is never a storage key. It is bounded at 200 characters.
+
+Errors:
+
+- `422` if the name is blank or too long
+
+### `PUT /v1/speakers/{id}`
+
+Renames somebody from `{"name": "Ada Lovelace"}`. Only the name changes: the
+samples, the provider, and the id are records of what happened rather than
+fields a caller sets.
+
+Errors:
+
+- `400` if `id` is not a speaker id
+- `404` if nobody is on the roster under `id`
+- `422` if the name is blank or too long
+
+### `POST /v1/speakers/{id}/enroll`
+
+Teaches the identification service one voice. The body is a **WAV file** —
+`Content-Type: audio/wav` — and the request may carry up to 8 MiB, rather than
+the 1 MiB every other route is held to.
+
+WAV rather than raw samples because the file says its own sample rate: audio
+recorded at whatever a microphone runs at arrives correctly rather than at the
+wrong speed. Any PCM WAV is accepted; Conduit mixes it down to mono and
+resamples it to 16 kHz before sending it on.
+
+`?provider=<id>` names which identification service to enroll against; the
+deployment's default is used when it is omitted. Worth naming when a deployment
+runs more than one, because enrolling against the wrong one produces an entry
+that looks enrolled and identifies nobody.
+
+Answers the updated entry, with `samples` incremented. Enrollment is
+cumulative: a second sample improves the voice print rather than replacing it.
+
+Errors:
+
+- `400` if `id` is not a speaker id
+- `404` if nobody is on the roster under `id`
+- `415` if the body does not claim to be audio
+- `422` if the body is not a readable PCM WAV file
+- `503` if no identification provider is configured, or the service refused the
+  sample — the refusal carries what the service itself said
+
+A refused sample leaves the roster unchanged. An entry that claimed to be
+enrolled when nothing was is the worst outcome here: an operator would stop
+recording, and the voice would never be recognized.
+
+### `DELETE /v1/speakers/{id}`
+
+Forgets somebody: the voice print first, the name second. If the service
+refuses, the entry stays — a print left behind with no name would identify as
+an id nobody can look up.
+
+An entry nobody ever enrolled is removed without asking the service anything,
+so a deployment with no identification provider configured can still tidy its
+roster.
+
+Errors:
+
+- `400` if `id` is not a speaker id
+- `404` if nobody is on the roster under `id`
+- `503` if the service will not release the voice print
+
 ## Pipeline Routes
 
 ### `GET /v1/pipelines`

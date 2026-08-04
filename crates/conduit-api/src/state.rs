@@ -10,8 +10,8 @@ use conduit_core::Result;
 use conduit_mcp::McpClient;
 use conduit_metrics::Metrics;
 use conduit_provider::storage::{
-    McpTransport, PipelineStore, ProviderCapability, ProviderDefinition,
-    ProviderDefinitionStore, ProviderDefinitionVariant, ToolVariant,
+    EnrolledSpeaker, McpTransport, PipelineStore, ProviderCapability, ProviderDefinition,
+    ProviderDefinitionStore, ProviderDefinitionVariant, SpeakerRosterStore, ToolVariant,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
@@ -29,6 +29,8 @@ pub struct AppState {
     pub bus: EventBus,
     pipelines: Arc<dyn PipelineStore>,
     provider_definitions: Arc<dyn ProviderDefinitionStore>,
+    /// Who the deployment has named and enrolled.
+    speakers: Arc<dyn SpeakerRosterStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
@@ -74,6 +76,7 @@ impl AppState {
             bus,
             pipelines,
             provider_definitions,
+            speakers: Arc::new(MemoryStore::new()),
             providers: Arc::new(RwLock::new(None)),
             provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
@@ -83,6 +86,54 @@ impl AppState {
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
             factories: Arc::new(Factories::builtin()),
         }
+    }
+
+    /// Keeps the speaker roster in `speakers` rather than in memory.
+    ///
+    /// Separate from the other stores because it is the one that holds
+    /// people's names: a deployment may reasonably want it somewhere other
+    /// than wherever its pipelines live.
+    #[must_use]
+    pub fn with_speaker_roster(mut self, speakers: Arc<dyn SpeakerRosterStore>) -> Self {
+        self.speakers = speakers;
+        self
+    }
+
+    /// Speaker ids in the roster, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn speaker_ids(&self) -> Result<Vec<String>> {
+        self.speakers.list().await
+    }
+
+    /// Fetches one roster entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable or the entry cannot be
+    /// read.
+    pub async fn speaker(&self, id: &str) -> Result<Option<EnrolledSpeaker>> {
+        self.speakers.get(id).await
+    }
+
+    /// Stores a roster entry, returning `true` if it replaced one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id is unusable or the write fails.
+    pub async fn put_speaker(&self, speaker: EnrolledSpeaker) -> Result<bool> {
+        self.speakers.put(&speaker.id.to_string(), speaker).await
+    }
+
+    /// Removes a roster entry, returning `true` if it existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn remove_speaker(&self, id: &str) -> Result<bool> {
+        self.speakers.remove(id).await
     }
 
     /// Builds provider definitions with `factories` rather than with the

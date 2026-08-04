@@ -20,6 +20,7 @@ pub mod events;
 pub mod factory;
 pub mod pipelines;
 pub mod providers;
+pub mod speakers;
 pub mod state;
 pub mod status;
 pub mod turns;
@@ -74,6 +75,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers/{id}/voices", get(providers::voices))
         .route("/v1/providers/{id}/phrases", get(providers::phrases))
         .route("/v1/providers/{id}/test", post(providers::test))
+        .route("/v1/speakers", get(speakers::list).post(speakers::create))
+        .route(
+            "/v1/speakers/{id}",
+            get(speakers::get).put(speakers::rename).delete(speakers::delete),
+        )
+        .route(
+            "/v1/speakers/{id}/enroll",
+            post(speakers::enroll)
+                // Its own budget: enrollment is the one route that carries
+                // audio, and the service-wide limit below would cut a
+                // recording short.
+                .layer(DefaultBodyLimit::max(speakers::ENROLLMENT_BODY_LIMIT_BYTES)),
+        )
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route("/v1/pipelines/{name}/test-turn", post(pipelines::test_turn))

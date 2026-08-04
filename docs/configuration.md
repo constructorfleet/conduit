@@ -62,6 +62,7 @@ empty list to allow none.
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data. |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage. |
 | `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers` | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage. |
+| `CONDUIT_SPEAKER_DIR` | `$CONDUIT_DATA_DIR/speakers` | Directory for the speaker roster. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage. |
 
 If neither database nor pipeline directory is set, pipelines are stored as JSON
 files in the default local data directory and survive API restarts. The server
@@ -73,6 +74,12 @@ definitions are stored as JSON files under the default local data directory and
 survive API restarts. A server rebuilds the Runtime Provider Registry Snapshot
 from those definitions during startup and after successful provider writes or
 deletes.
+
+The speaker roster — who has been enrolled, and what each of them is called —
+has its own store too. A database URL wins over `CONDUIT_SPEAKER_DIR` for the
+same reason it does for pipelines, and more so: the roster is what turns an id
+into a person, so replicas reading different copies would answer to the wrong
+name.
 
 The `conduit-api` crate enables PostgreSQL support by default. A
 `--no-default-features` build refuses to start if `CONDUIT_DATABASE_URL` is set.
