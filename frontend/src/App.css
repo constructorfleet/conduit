@@ -94,6 +94,23 @@
   font: inherit;
 }
 
+/* Drawn rather than written: a marker in the label's text would become part
+   of every control's accessible name, and "Base URL *" is not what a field is
+   called. The `required` attribute is what says so to assistive technology. */
+.field-label.required::after {
+  content: "*";
+  margin-left: 3px;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* A required field left empty is marked where the operator is looking, not
+   only in the message under the form. */
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 .field input:focus,
 .field select:focus,
 .check-row input:focus-visible,

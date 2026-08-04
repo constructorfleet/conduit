@@ -98,6 +98,7 @@ type PhraseLoader = (providerId: string) => Promise<string[]>;
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
+import { fieldLabel, fieldLabels } from "./fieldLabel";
 import {
   type OperatorAccess,
   clearOperatorAccess,
@@ -2965,6 +2966,37 @@ function ComponentConfigFields({
 }) {
   const required = new Set(component.schema.required);
 
+  /// The field's name, marked when it must be answered.
+  ///
+  /// The mark is drawn by CSS rather than written into the label, so the
+  /// control's accessible name stays the field's name; that it is required is
+  /// carried by the `required` attribute, which is also what enforces it.
+  function labelFor(field: string, suffix = "") {
+    return (
+      <span
+        className={required.has(field) ? "field-label required" : "field-label"}
+      >
+        {`${fieldLabel(field)}${suffix}`}
+      </span>
+    );
+  }
+
+  /// Whether a required field is still empty, which is what marks the control
+  /// rather than only the message under the form.
+  function isMissing(field: string, property: ComponentConfigProperty) {
+    if (!required.has(field)) {
+      return false;
+    }
+    const value = config[field];
+    if (property.type === "boolean") {
+      return value !== true;
+    }
+    if (property.type === "integer") {
+      return typeof value !== "number";
+    }
+    return typeof value !== "string" || value.trim().length === 0;
+  }
+
   return (
     <fieldset
       className="component-config-fields"
@@ -2972,19 +3004,20 @@ function ComponentConfigFields({
       aria-label={`${component.label} configuration`}
     >
       {Object.entries(component.schema.properties).map(([field, property]) => {
-        const requiredLabel = required.has(field) ? " required" : "";
-        const label = `${field}${requiredLabel}`;
+        const label = labelFor(field);
         if (property.type === "boolean") {
           return (
             <label className="check-row" key={field}>
               <input
                 type="checkbox"
+                required={required.has(field)}
+                aria-invalid={isMissing(field, property) || undefined}
                 checked={config[field] === true}
                 onChange={(event) =>
                   onChange(field, property, event.target.checked)
                 }
               />
-              <span>{field}</span>
+              {label}
             </label>
           );
         }
@@ -3001,9 +3034,10 @@ function ComponentConfigFields({
         ) {
           return (
             <label className="field" key={field}>
-              <span>{label}</span>
+              {label}
               <select
                 required={required.has(field)}
+                aria-invalid={isMissing(field, property) || undefined}
                 value={typeof config[field] === "string" ? config[field] : ""}
                 onChange={(event) =>
                   onChange(field, property, event.target.value)
@@ -3034,10 +3068,11 @@ function ComponentConfigFields({
             known.length > 0 ? `${component.id}-${field}` : undefined;
           return (
             <label className="field" key={field}>
-              <span>{`${label} (comma separated)`}</span>
+              {labelFor(field, " (comma separated)")}
               <input
                 type="text"
                 required={required.has(field)}
+                aria-invalid={isMissing(field, property) || undefined}
                 list={listId}
                 value={typeof config[field] === "string" ? config[field] : ""}
                 onChange={(event) =>
@@ -3057,7 +3092,7 @@ function ComponentConfigFields({
 
         return (
           <label className="field" key={field}>
-            <span>{label}</span>
+            {label}
             <input
               type={
                 property.type === "integer"
@@ -3070,6 +3105,7 @@ function ComponentConfigFields({
                 property.type === "integer" ? undefined : property.pattern
               }
               required={required.has(field)}
+              aria-invalid={isMissing(field, property) || undefined}
               value={
                 property.type === "integer"
                   ? typeof config[field] === "number"
@@ -3810,12 +3846,22 @@ function validateProviderDefinitionConfig(
   const config = pruneEmptyConfig(provider.config);
   const missing = component.schema.required.filter((field) => {
     const value = config[field];
+    // Checked against the type the field declares: a required number left
+    // blank is missing, but a required number the operator set to zero is
+    // answered, and a string test would call both of them empty.
+    const property = component.schema.properties[field];
+    if (property?.type === "boolean") {
+      return value !== true;
+    }
+    if (property?.type === "integer") {
+      return typeof value !== "number";
+    }
     return typeof value !== "string" || value.trim().length === 0;
   });
   if (missing.length > 0) {
     return {
       ok: false,
-      message: `Missing required fields: ${missing.join(", ")}`,
+      message: `Missing required fields: ${fieldLabels(missing)}`,
     };
   }
 
@@ -3825,16 +3871,16 @@ function validateProviderDefinitionConfig(
     }
     const value = config[field];
     if (property.type === "string" && typeof value !== "string") {
-      return { ok: false, message: `${field} must be a string` };
+      return { ok: false, message: `${fieldLabel(field)} must be a string` };
     }
     if (property.type === "boolean" && typeof value !== "boolean") {
-      return { ok: false, message: `${field} must be a boolean` };
+      return { ok: false, message: `${fieldLabel(field)} must be a boolean` };
     }
     if (property.type === "integer" && typeof value !== "number") {
-      return { ok: false, message: `${field} must be a number` };
+      return { ok: false, message: `${fieldLabel(field)} must be a number` };
     }
     if (property.type === "string_list" && typeof value !== "string") {
-      return { ok: false, message: `${field} must be a list` };
+      return { ok: false, message: `${fieldLabel(field)} must be a list` };
     }
     if (
       property.options &&
@@ -3856,7 +3902,7 @@ function validateProviderDefinitionConfig(
       if (unknown !== undefined) {
         return {
           ok: false,
-          message: `${field} must be one of ${property.options.join(", ")}`,
+          message: `${fieldLabel(field)} must be one of ${property.options.join(", ")}`,
         };
       }
     }

@@ -1076,11 +1076,11 @@ describe("Pipelines graph editor", () => {
       "openai.completions",
     );
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
-    await user.type(screen.getByLabelText("model required"), "gpt.5");
-    await user.click(screen.getByLabelText("streaming"));
+    await user.type(screen.getByLabelText("Model"), "gpt.5");
+    await user.click(screen.getByLabelText("Streaming"));
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(screen.getByText("Provider openai-fast saved")).toBeInTheDocument();
@@ -1253,11 +1253,11 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
     );
-    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Base URL")).toHaveDisplayValue(
       "https://api.openai.com/v1",
     );
-    expect(screen.getByLabelText("api_key")).toHaveDisplayValue("sk-test");
-    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt-5");
+    expect(screen.getByLabelText("API Key")).toHaveDisplayValue("sk-test");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt-5");
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -1272,11 +1272,11 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://whisper.local:10300",
     );
-    expect(screen.getByLabelText("model")).toHaveDisplayValue("tiny-int8");
-    expect(screen.getByLabelText("streaming")).toBeChecked();
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("tiny-int8");
+    expect(screen.getByLabelText("Streaming")).toBeChecked();
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
@@ -1291,10 +1291,10 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://piper.local:10200",
     );
-    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Voice")).toHaveDisplayValue(
       "en_US-lessac-medium",
     );
   });
@@ -1335,13 +1335,13 @@ describe("Pipelines graph editor", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "Wyoming TTS",
     );
-    expect(screen.getByLabelText("url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
       "tcp://10.0.10.100:10200",
     );
-    expect(screen.getByLabelText("voice")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Voice")).toHaveDisplayValue(
       "en_US-ryan-high",
     );
-    expect(screen.getByLabelText("streaming")).toBeChecked();
+    expect(screen.getByLabelText("Streaming")).toBeChecked();
   });
 
   it("does not overwrite an existing provider with an invalid configuration", async () => {
@@ -1360,20 +1360,20 @@ describe("Pipelines graph editor", () => {
     await user.type(screen.getByLabelText("Provider label"), "Broken OpenAI");
 
     expect(
-      screen.getByText("Missing required fields: base_url, model"),
+      screen.getByText("Missing required fields: Base URL, Model"),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Save provider" }),
     ).toBeDisabled();
 
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
     expect(
-      screen.getByText("Missing required fields: model"),
+      screen.getByText("Missing required fields: Model"),
     ).toBeInTheDocument();
-    await user.type(screen.getByLabelText("model required"), "gpt-5");
+    await user.type(screen.getByLabelText("Model"), "gpt-5");
     expect(
       screen.queryByText(/Missing required fields/),
     ).not.toBeInTheDocument();
@@ -1924,19 +1924,16 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "openwakeword");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
-    await user.selectOptions(
-      screen.getByLabelText("where required"),
-      "wyoming",
-    );
+    await user.selectOptions(screen.getByLabelText("Where"), "wyoming");
     await user.type(
-      screen.getByLabelText("url"),
+      screen.getByLabelText("URL"),
       "tcp://openwakeword.local:10400",
     );
     await user.type(
-      screen.getByLabelText("phrases (comma separated)"),
+      screen.getByLabelText("Phrases (comma separated)"),
       "hey jarvis, okay nabu",
     );
-    await user.type(screen.getByLabelText("threshold_percent"), "70");
+    await user.type(screen.getByLabelText("Threshold Percent"), "70");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(screen.getByText("Provider openwakeword saved")).toBeInTheDocument();
@@ -1952,6 +1949,46 @@ describe("Providers workspace", () => {
         phrases: ["hey jarvis", "okay nabu"],
       },
     });
+  });
+
+  it("names config fields the way a person reads them and enforces the required ones", async () => {
+    // The wire spelling belongs on the wire. A form that showed `base_url` and
+    // the word "required" beside it was asking the operator to translate, and
+    // it left the control itself saying nothing about having to be answered.
+    const user = userEvent.setup();
+    render(<App initialComponentCatalog={componentCatalog()} />);
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Language model" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "OpenAI Responses" }),
+    );
+
+    const baseUrl = screen.getByLabelText("Base URL");
+    expect(baseUrl).toBeRequired();
+    expect(baseUrl).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Model")).toBeRequired();
+    // Optional fields read the same way and are not enforced.
+    expect(screen.getByLabelText("API Key")).not.toBeRequired();
+    expect(screen.getByLabelText("Streaming")).not.toBeRequired();
+    expect(screen.queryByText(/base_url/)).not.toBeInTheDocument();
+
+    expect(
+      screen.getByText("Missing required fields: Base URL, Model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save provider" }),
+    ).toBeDisabled();
+
+    await user.type(baseUrl, "https://api.openai.com/v1");
+    await user.type(screen.getByLabelText("Model"), "gpt-5");
+
+    expect(baseUrl).not.toHaveAttribute("aria-invalid");
+    expect(
+      screen.queryByText(/Missing required fields/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save provider" })).toBeEnabled();
   });
 
   it("builds a speech cleanup definition from the rules it was given", async () => {
@@ -1975,7 +2012,7 @@ describe("Providers workspace", () => {
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "speech-cleanup");
     await user.type(
-      screen.getByLabelText("rules required (comma separated)"),
+      screen.getByLabelText("Rules (comma separated)"),
       "markdown_to_speech, strip_emoji",
     );
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2007,7 +2044,7 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
     await user.click(screen.getByRole("menuitem", { name: "microWakeWord" }));
 
-    const places = screen.getByLabelText("where required");
+    const places = screen.getByLabelText("Where");
     expect(
       within(places)
         .queryAllByRole("option")
@@ -2018,7 +2055,7 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "satellite");
     await user.selectOptions(places, "device");
     await user.type(
-      screen.getByLabelText("phrases (comma separated)"),
+      screen.getByLabelText("Phrases (comma separated)"),
       "okay nabu",
     );
     await user.click(screen.getByRole("button", { name: "Save provider" }));
@@ -2053,7 +2090,7 @@ describe("Providers workspace", () => {
     await user.type(screen.getByLabelText("Provider id"), "openwakeword");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
-    await user.selectOptions(screen.getByLabelText("where required"), "local");
+    await user.selectOptions(screen.getByLabelText("Where"), "local");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     // Nothing to ask until a detector is registered, so the suggestions only
@@ -2065,7 +2102,7 @@ describe("Providers workspace", () => {
       }),
     );
 
-    const field = await screen.findByLabelText("phrases (comma separated)");
+    const field = await screen.findByLabelText("Phrases (comma separated)");
     const list = field.getAttribute("list");
     expect(list).toBeTruthy();
     const options = Array.from(
@@ -2089,10 +2126,10 @@ describe("Providers workspace", () => {
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "OpenAI Primary");
     await user.type(
-      screen.getByLabelText("base_url required"),
+      screen.getByLabelText("Base URL"),
       "https://api.openai.com/v1",
     );
-    await user.type(screen.getByLabelText("model required"), "gpt.5");
+    await user.type(screen.getByLabelText("Model"), "gpt.5");
     await user.click(screen.getByRole("button", { name: "Save provider" }));
 
     expect(
@@ -2119,10 +2156,10 @@ describe("Providers workspace", () => {
     expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
       "OpenAI Responses",
     );
-    expect(screen.getByLabelText("base_url required")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Base URL")).toHaveDisplayValue(
       "https://api.openai.com/v1",
     );
-    expect(screen.getByLabelText("model required")).toHaveDisplayValue("gpt.5");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("gpt.5");
     await user.click(
       screen.getByRole("button", { name: "Cancel provider edit" }),
     );
