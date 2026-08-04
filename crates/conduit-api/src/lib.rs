@@ -17,6 +17,7 @@ pub mod config;
 pub mod converse;
 pub mod error;
 pub mod events;
+pub mod factory;
 pub mod pipelines;
 pub mod providers;
 pub mod state;
