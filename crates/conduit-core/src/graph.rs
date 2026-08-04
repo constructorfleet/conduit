@@ -47,6 +47,8 @@ pub enum NodeKind {
     SpeakerId,
     /// A language model with its tool and memory bindings.
     Core,
+    /// Rewriting an utterance before it is rendered.
+    Transform,
     /// Text-to-speech.
     Tts,
     /// Egress to a device.
@@ -66,6 +68,7 @@ impl NodeKind {
             Self::Stt => "stt",
             Self::SpeakerId => "speaker_id",
             Self::Core => "core",
+            Self::Transform => "transform",
             Self::Tts => "tts",
             Self::Sink => "sink",
         }
@@ -308,6 +311,19 @@ pub enum Node {
         /// The model, and what it may reach for.
         core: ReasoningCore,
     },
+    /// Rewriting an utterance before it is rendered.
+    ///
+    /// Sits on the edge between a core and whatever renders what it said, so
+    /// which renderings it changes is a property of the graph: a transform
+    /// wired only to a `tts` node cleans up what is spoken and leaves a text
+    /// sink showing what the model actually wrote, which is usually what a
+    /// transcript is for.
+    Transform {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"speech-cleanup"`.
+        provider: String,
+    },
     /// Text-to-speech.
     Tts {
         /// Author-chosen identifier, unique within the graph.
@@ -393,6 +409,12 @@ impl Node {
         Self::Core { id: id.into(), core: ReasoningCore::new(provider) }
     }
 
+    /// Creates a `transform` node.
+    #[must_use]
+    pub fn transform(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Transform { id: id.into(), provider: provider.into() }
+    }
+
     /// Creates a `tts` node using the provider's default voice.
     #[must_use]
     pub fn tts(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
@@ -418,6 +440,7 @@ impl Node {
             | Self::Stt { id, .. }
             | Self::SpeakerId { id, .. }
             | Self::Core { id, .. }
+            | Self::Transform { id, .. }
             | Self::Tts { id, .. }
             | Self::Sink { id, .. } => id,
         }
@@ -436,6 +459,7 @@ impl Node {
             | Self::WakeWord { provider, .. }
             | Self::Stt { provider, .. }
             | Self::SpeakerId { provider, .. }
+            | Self::Transform { provider, .. }
             | Self::Tts { provider, .. }
             | Self::Sink { provider, .. } => provider,
         }
@@ -467,6 +491,7 @@ impl Node {
             Self::Stt { .. } => NodeKind::Stt,
             Self::SpeakerId { .. } => NodeKind::SpeakerId,
             Self::Core { .. } => NodeKind::Core,
+            Self::Transform { .. } => NodeKind::Transform,
             Self::Tts { .. } => NodeKind::Tts,
             Self::Sink { .. } => NodeKind::Sink,
         }
@@ -490,7 +515,10 @@ impl Node {
                 Some(Modality::Audio)
             }
             Self::Stt { .. } => Some(Modality::Text),
-            Self::Core { .. } => Some(Modality::Utterance),
+            // A transform changes the words, not what they are. What comes out
+            // of one is still something nothing has decided how to render, so
+            // transforms chain and either rendering can read the result.
+            Self::Core { .. } | Self::Transform { .. } => Some(Modality::Utterance),
             Self::Sink { .. } => None,
         }
     }
@@ -514,6 +542,11 @@ impl Node {
                 &[Modality::Audio]
             }
             Self::Core { .. } => &[Modality::Text],
+            // Only an utterance. A transform rewrites what a model said on the
+            // way to being rendered, which is a stage that exists between a
+            // core and a renderer and nowhere else; putting one in front of a
+            // core would be editing what a person said to it.
+            Self::Transform { .. } => &[Modality::Utterance],
             // Speech is one rendering of an utterance, and plain text is an
             // utterance nothing had to decide about, so synthesis speaks both.
             Self::Tts { .. } => &[Modality::Utterance, Modality::Text],
@@ -1385,6 +1418,87 @@ mod tests {
     }
 
     #[test]
+    fn a_transform_sits_between_the_core_and_what_speaks_it() {
+        let transform = Node::transform("clean", "speech-cleanup");
+
+        assert_eq!(transform.output_modality(), Some(Modality::Utterance));
+        assert_eq!(transform.accepted_modalities(), &[Modality::Utterance][..]);
+
+        PipelineGraph::new("cleaned")
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(transform)
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "clean"))
+            .with_edge(Edge::new("clean", "tts"))
+            .validate()
+            .expect("a transform delivers an utterance to synthesis");
+    }
+
+    #[test]
+    fn transforms_chain_because_each_one_still_produces_an_utterance() {
+        PipelineGraph::new("twice cleaned")
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::transform("markdown", "flatten"))
+            .with_node(Node::transform("emoji", "de-emoji"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "markdown"))
+            .with_edge(Edge::new("markdown", "emoji"))
+            .with_edge(Edge::new("emoji", "tts"))
+            .validate()
+            .expect("one transform feeds the next");
+    }
+
+    #[test]
+    fn a_transform_may_clean_up_speech_and_leave_the_transcript_alone() {
+        // The reason this is a node and not a setting on the synthesizer: the
+        // markdown a model wrote is right for a transcript and wrong for a
+        // voice, and the graph is where that difference is stated.
+        PipelineGraph::new("spoken and written")
+            .with_node(Node::source("chat", "websocket", Modality::Text))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::transform("clean", "speech-cleanup"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_node(Node::sink("transcript", "websocket", Modality::Text))
+            .with_edge(Edge::new("chat", "core"))
+            .with_edge(Edge::new("core", "clean"))
+            .with_edge(Edge::new("clean", "tts"))
+            .with_edge(Edge::new("core", "transcript"))
+            .validate()
+            .expect("only the spoken rendering passes through the transform");
+    }
+
+    #[test]
+    fn a_transform_in_front_of_the_core_is_refused() {
+        // A transform rewrites what the assistant says, not what was said to
+        // it, and transcribed speech is the latter.
+        let backwards = PipelineGraph::new("backwards")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::transform("clean", "speech-cleanup"))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "clean"))
+            .with_edge(Edge::new("clean", "core"))
+            .with_edge(Edge::new("core", "tts"));
+
+        assert_eq!(
+            backwards.validate(),
+            Err(GraphError::ModalityMismatch {
+                edge: 1,
+                from: "stt".to_owned(),
+                to: "clean".to_owned(),
+                produced: Modality::Text,
+                expected: vec![Modality::Utterance],
+            })
+        );
+    }
+
+    #[test]
     fn a_source_that_never_reaches_the_core_is_refused() {
         // Every edge here is modality-compatible — synthesis renders written
         // words as readily as an utterance — so no per-edge rule can see that
@@ -1587,6 +1701,7 @@ mod tests {
             Node::stt("c", "p"),
             Node::speaker_id("d", "p"),
             Node::core("e", "p"),
+            Node::transform("h", "p"),
             Node::tts("i", "p"),
             Node::sink("j", "p", Modality::Audio),
         ] {
