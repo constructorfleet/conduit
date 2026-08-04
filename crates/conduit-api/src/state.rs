@@ -331,6 +331,10 @@ impl AppState {
                     provider.health().await
                 } else if let Some(provider) = providers.tools().get(&id) {
                     provider.health().await
+                } else if let Some(provider) = providers.wake().get(&id) {
+                    provider.health().await
+                } else if let Some(provider) = providers.speaker().get(&id) {
+                    provider.health().await
                 } else {
                     // The registry holds no provider under the definition id.
                     // An MCP definition registers its tools as

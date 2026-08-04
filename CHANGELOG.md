@@ -8,11 +8,26 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
-- Added wake word detection as a runnable pipeline stage. `wyoming_wake`
-  provider definitions talk to openWakeWord, microWakeWord, or nanoWakeWord over
-  the Wyoming protocol; `device_wake` definitions describe a satellite that
-  wakes itself. A wake stage holds captured audio back until a phrase is
-  accepted, and publishes both activations and near misses.
+- Added wake word detection as a runnable pipeline stage. A wake stage holds
+  captured audio back until a phrase is accepted, and publishes both
+  activations and near misses.
+- A wake provider definition names its engine as its type — `openwakeword`,
+  `nanowakeword`, or `microwakeword` — and where that detector runs as a
+  `runtime` inside it. Each engine offers only the places it can actually run,
+  so a detector on hardware too small for it is no longer expressible rather
+  than merely rejected. Definitions written in the older shape, which named an
+  engine and a place as independent fields, are still read and are rewritten
+  the next time they are saved.
+- Added `conduit-wake`, which scores openWakeWord models in the Conduit process
+  with no service to run: a definition with a `local` runtime reads models from
+  disk and detects directly. About 3 ms of work per 80 ms of audio. Its models
+  are fetched by `scripts/fetch-wake-models.sh` rather than carried in the
+  repository. microWakeWord cannot be scored this way — its models need the
+  tflite-micro micro-frontend operator — and nanoWakeWord's phrase models are
+  recurrent, which is a second scorer rather than a setting on this one; both
+  run on a Wyoming server, and microWakeWord on the satellite built for it.
+- Added `GET /v1/providers/{id}/phrases`, and the provider form now offers the
+  phrases a saved detector reports having models for.
 - Added speaker identification as a runnable pipeline stage. `http_speaker_id`
   provider definitions talk to a SpeechBrain, Resemblyzer, or pyannote service
   over the contract documented on the new `conduit-speaker` crate. The identity
@@ -24,7 +39,10 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   tags. Its encoder is pluggable, so a further engine is a class rather than a
   new contract.
 - Added `docker-compose.yml`, which runs Conduit alone by default and adds the
-  identification service under `--profile speaker-id`.
+  identification service under `--profile speaker-id` and a wake word server
+  under `--profile openwakeword`, `--profile microwakeword`, or
+  `--profile nanowakeword`. Waking on an openWakeWord phrase needs no profile:
+  the models go in the `wake-models` volume and Conduit scores them itself.
 - Added a `diarization_server_speaker_id` provider definition for deployments
   already running a [Diarization_Server](https://github.com/CptCamembert/Diarization_Server).
 - Added `GET /v1/providers/{id}/voices`, and the pipeline editor now offers a

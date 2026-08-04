@@ -107,6 +107,34 @@ capability and an inner `variant.type` names the vendor.
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
 
+### Wake Word Detection Without A Service
+
+A `wake` definition with an `openwakeword` type and a `local` runtime is scored
+in the Conduit process: openWakeWord is three small ONNX models, and there is no
+server to run. Put `melspectrogram.onnx`, `embedding_model.onnx`, and one
+`<phrase>.onnx` per phrase in a directory; `scripts/fetch-wake-models.sh`
+downloads a working set. A definition that names no `models_dir` reads
+`wake-models` under the data directory, which is the volume the compose file
+mounts.
+
+Which phrases the detector has are whichever model files it found, named after
+them: `hey_jarvis_v0.1.onnx` is the phrase `hey jarvis`. `GET
+/v1/providers/{id}/phrases` reports them, and the console offers them while
+editing the definition. A `phrases` list narrows what is loaded; an empty one
+loads everything in the directory.
+
+The models are loaded when the definition is saved, so a directory that is
+missing or holds nothing the definition asked for is refused there rather than
+at the first turn. Detection costs about 3 ms per 80 ms of audio, on a thread
+of its own.
+
+The other two engines need a service or a satellite. microWakeWord's models are
+tflite-micro graphs Conduit cannot load, so it runs on the device it was built
+for or on a Wyoming server. nanoWakeWord's phrase models are recurrent, carrying
+LSTM state between chunks, which is a different scorer from the one Conduit has
+— for now it runs on a Wyoming server, and a `local` runtime is refused with
+that reason.
+
 An MCP definition describes a *server*, which may advertise several tools, and
 a graph tool node runs one tool. Each advertised tool is therefore registered as
 `<definition id>.<tool name>`; a server advertising exactly one tool is also
