@@ -2,7 +2,8 @@
 //!
 //! Every replaceable component of the voice pipeline — wake word, speech
 //! recognition, speaker identification, reasoning, tools, memory, synthesis —
-//! is expressed here as a trait. Supporting a new vendor means implementing
+//! is expressed here as a trait, as is every stage that rewrites what passes
+//! between them. Supporting a new vendor means implementing
 //! one of these traits and registering it; it must never mean editing the
 //! pipeline.
 //!
@@ -19,6 +20,7 @@ pub mod stt;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod tool;
+pub mod transform;
 pub mod tts;
 pub mod wake;
 
