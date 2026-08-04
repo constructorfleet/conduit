@@ -33,6 +33,11 @@ In live mode, Vite proxies `/v1/*` requests to
 `npm run dev` can talk to a local `conduit-api` service without hardcoding an
 API origin into the browser bundle.
 
+To start that service and this console together, run `scripts/dev.sh` from the
+repository root. It sets `VITE_CONDUIT_API_TARGET` to match the API port it
+chose, so moving one listener does not mean setting the proxy by hand. See
+`scripts/dev.sh --help`.
+
 The Overview section is the Operations Workspace landing surface when a usable
 pipeline exists. It renders current exceptions before baseline status, keeps
 connected satellites separate from recently active satellites, preserves the

@@ -230,6 +230,17 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
+  # The development script is how a contributor runs the stack, so a change that
+  # breaks its flag handling breaks the first thing anyone does with the
+  # repository. The tests need no toolchain: every case is `--dry-run`, which
+  # resolves the configuration and starts nothing.
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test scripts/dev.sh
+        run: scripts/tests/dev_test.sh
+
   # The reference speaker identification service ships in this repository and is
   # published as an image, so its tests and its build are gates like any other.
   speaker-id:

@@ -20,6 +20,12 @@ Documentation is part of the implementation. If behavior, configuration,
 public API, routes, metrics, or examples change, update the matching docs in
 the same commit.
 
+To see a change in the real stack, `scripts/dev.sh` runs the API and the
+Operator Console together and stops both on Ctrl-C. It defaults to an anonymous
+API on loopback with real providers; `--tokens FILE` authenticates instead,
+`--echo` builds the providers that need no speech engine, and `--help` lists the
+rest.
+
 ## Quality Gates
 
 CI runs these Rust gates:
@@ -44,6 +50,7 @@ Additional CI jobs run:
 
 ```sh
 firmware/test.sh
+scripts/tests/dev_test.sh
 cargo audit
 cargo llvm-cov --workspace --all-features --cobertura --output-path cobertura.xml
 docker buildx build --load -t conduit-check .
