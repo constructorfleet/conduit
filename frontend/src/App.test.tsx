@@ -1964,6 +1964,41 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("builds a speech cleanup definition from the rules it was given", async () => {
+    // The rules are a closed set held several at a time, so the field is a
+    // list with the set as suggestions rather than a menu — a menu picks one,
+    // and the order the operator wrote is what decides whether an emoji inside
+    // a link is seen as text.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Transform" }));
+    await user.click(screen.getByRole("menuitem", { name: "Speech cleanup" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "speech-cleanup");
+    await user.type(
+      screen.getByLabelText("rules required (comma separated)"),
+      "markdown_to_speech, strip_emoji",
+    );
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(saved[0]?.variant).toMatchObject({
+      type: "transform",
+      variant: {
+        type: "builtin",
+        rules: ["markdown_to_speech", "strip_emoji"],
+      },
+    });
+  });
+
   it("keeps a satellite off the engines it is too small to run", async () => {
     // The engine used to be a field beside the place, so a definition could say
     // openWakeWord on a satellite and only find out at the server. Now each
@@ -2141,7 +2176,7 @@ describe("Providers workspace", () => {
     await user.click(screen.getByRole("menuitem", { name: "LLM" }));
     expect(screen.queryByRole("menuitem", { name: "All kinds" })).toBeNull();
     expect(
-      screen.getByRole("menuitem", { name: "Provider types" }),
+      screen.getByRole("menuitem", { name: "← Provider types" }),
     ).toBeInTheDocument();
     await user.click(
       screen.getByRole("menuitem", { name: "OpenAI Responses" }),
@@ -2684,6 +2719,25 @@ function componentCatalog(): ProviderComponentCatalog {
             streaming: { type: "boolean" },
           },
           required: ["url"],
+        },
+      },
+      {
+        id: "transform.builtin",
+        label: "Speech cleanup",
+        kind: "transform",
+        definition_variant: "builtin",
+        schema: {
+          properties: {
+            rules: {
+              type: "string_list",
+              options: [
+                "markdown_to_speech",
+                "strip_emoji",
+                "collapse_whitespace",
+              ],
+            },
+          },
+          required: ["rules"],
         },
       },
       {

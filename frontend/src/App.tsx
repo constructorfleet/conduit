@@ -49,6 +49,7 @@ import type {
   ProviderSecret,
   SpeakerEngine,
   TurnSnapshot,
+  TransformRule,
   WakeRuntime,
 } from "./contracts/client";
 import {
@@ -930,6 +931,9 @@ function providerKindLabel(kind: ProviderFilter): string {
   if (kind === "wake") {
     return "Wake word";
   }
+  if (kind === "transform") {
+    return "Transform";
+  }
   return kind.toUpperCase();
 }
 
@@ -1029,6 +1033,7 @@ function ProvidersPanel({
     "llm",
     "tool",
     "tts",
+    "transform",
     "wake",
     "speaker_id",
   ];
@@ -1500,7 +1505,7 @@ function ProviderAddDialog({
                   role="menuitem"
                   onClick={() => onKindChange(null)}
                 >
-                  Provider types
+                  &larr; Provider types
                 </button>
                 {selectedKindComponents.map((component) => (
                   <button
@@ -2900,8 +2905,14 @@ function ComponentConfigFields({
 
         // A closed set — a wake word engine, an embedding model — is a menu.
         // A text box for it lets an operator save a definition the server then
-        // refuses, and the refusal arrives long after they typed it.
-        if (property.options && property.options.length > 0) {
+        // refuses, and the refusal arrives long after they typed it. A field
+        // holding *several* of a closed set is not a menu, though: a menu
+        // picks one, and the list below keeps the order the operator wrote.
+        if (
+          property.type !== "string_list" &&
+          property.options &&
+          property.options.length > 0
+        ) {
           return (
             <label className="field" key={field}>
               <span>{label}</span>
@@ -2929,8 +2940,10 @@ function ComponentConfigFields({
         if (property.type === "string_list") {
           // Suggestions rather than a menu: the field holds several values,
           // and a provider that enumerates some of them has not thereby
-          // forbidden the rest.
-          const known = suggestions?.[field] ?? [];
+          // forbidden the rest. A field that *does* close the set — a
+          // transform's rules — offers them the same way, and the entries are
+          // checked before the definition is saved.
+          const known = suggestions?.[field] ?? property.options ?? [];
           const listId =
             known.length > 0 ? `${component.id}-${field}` : undefined;
           return (
@@ -3258,6 +3271,11 @@ function configFromProviderVariant(
       threshold_percent: runtime.threshold_percent,
     };
   }
+  if (variant.type === "transform") {
+    // Held as the text an operator is typing, and split when the definition is
+    // built, like every other list field in this form.
+    return { rules: variant.variant.rules.join(", ") };
+  }
   if (variant.type === "speaker_id") {
     if (variant.variant.type === "diarization_server") {
       return {
@@ -3416,6 +3434,17 @@ function variantFromProviderDefinition(
         type: definition.component,
         runtime,
         phrases: list("phrases"),
+      },
+    };
+  }
+  if (definition.component === "transform.builtin") {
+    return {
+      type: "transform",
+      variant: {
+        type: "builtin",
+        // Order is what the operator wrote: flattening markdown before
+        // stripping emoji means an emoji inside a link's text is seen as text.
+        rules: list("rules") as TransformRule[],
       },
     };
   }
@@ -3609,13 +3638,26 @@ function validateProviderDefinitionConfig(
     if (
       property.options &&
       property.options.length > 0 &&
-      typeof value === "string" &&
-      !property.options.includes(value)
+      typeof value === "string"
     ) {
-      return {
-        ok: false,
-        message: `${field} must be one of ${property.options.join(", ")}`,
-      };
+      // A list field holds several of the closed set, so each entry is checked
+      // rather than the text as a whole.
+      const entries =
+        property.type === "string_list"
+          ? value
+              .split(",")
+              .map((entry) => entry.trim())
+              .filter(Boolean)
+          : [value];
+      const unknown = entries.find(
+        (entry) => !property.options?.includes(entry),
+      );
+      if (unknown !== undefined) {
+        return {
+          ok: false,
+          message: `${field} must be one of ${property.options.join(", ")}`,
+        };
+      }
     }
   }
 
@@ -3685,6 +3727,9 @@ function capabilityForNodeKind(kind: NodeKind): ProviderCapability | null {
   }
   if (kind === "speaker_id") {
     return "speaker_id";
+  }
+  if (kind === "transform") {
+    return "transform";
   }
   return null;
 }
