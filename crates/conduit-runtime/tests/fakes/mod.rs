@@ -16,7 +16,7 @@ use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel, ToolSp
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::tool::{Permission, Tool, ToolContext, ToolOutput};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
-use conduit_provider::{ChunkStream, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Metadata, Provider};
 use futures_util::StreamExt;
 use tokio::sync::Notify;
 
@@ -72,18 +72,22 @@ fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
 #[derive(Clone)]
 pub struct FakeStt {
     transcripts: Vec<Transcript>,
-    encodings: Vec<Encoding>,
+    descriptor: Descriptor,
     /// Whether being handed no audio at all is a test failure.
     demands_audio: bool,
 }
 
 impl FakeStt {
     pub fn new(transcripts: Vec<Transcript>) -> Self {
-        Self { transcripts, encodings: Vec::new(), demands_audio: true }
+        Self {
+            transcripts,
+            descriptor: Descriptor::new("fake-stt", Capability::Stt),
+            demands_audio: true,
+        }
     }
 
     pub fn accepting_encodings(mut self, encodings: &[Encoding]) -> Self {
-        self.encodings = encodings.to_vec();
+        self.descriptor.metadata.encodings = encodings.to_vec();
         self
     }
 
@@ -99,8 +103,8 @@ impl FakeStt {
 }
 
 impl Provider for FakeStt {
-    fn name(&self) -> &str {
-        "fake-stt"
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -116,10 +120,6 @@ impl SpeechToText for FakeStt {
         assert!(received > 0 || !self.demands_audio, "the recognizer was given no audio");
         Ok(stream_of(self.transcripts.clone()))
     }
-
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        self.encodings.is_empty() || self.encodings.contains(&encoding)
-    }
 }
 
 /// A recognizer that always fails.
@@ -127,9 +127,7 @@ impl SpeechToText for FakeStt {
 pub struct FailingStt;
 
 impl Provider for FailingStt {
-    fn name(&self) -> &str {
-        "fake-stt"
-    }
+    conduit_provider::stub_descriptor!("fake-stt", Capability::Stt);
 }
 
 #[async_trait::async_trait]
@@ -152,9 +150,7 @@ impl SpeechToText for FailingStt {
 pub struct SilentStt;
 
 impl Provider for SilentStt {
-    fn name(&self) -> &str {
-        "fake-stt"
-    }
+    conduit_provider::stub_descriptor!("fake-stt", Capability::Stt);
 }
 
 #[async_trait::async_trait]
@@ -179,24 +175,20 @@ impl SpeechToText for SilentStt {
 pub struct SilentLlm;
 
 impl Provider for SilentLlm {
-    fn name(&self) -> &str {
-        "fake-llm"
+    fn descriptor(&self) -> &Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<Descriptor> = std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            Descriptor::new("fake-llm", Capability::Llm).with_metadata(
+                Metadata::default().with_models(vec!["fake-model".to_owned()]).with_tools(),
+            )
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl LanguageModel for SilentLlm {
-    fn models(&self) -> &[String] {
-        static MODELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-        MODELS.get_or_init(|| vec!["fake-model".to_owned()])
-    }
-
     async fn complete(&self, _request: CompletionRequest) -> Result<ChunkStream<Completion>> {
         std::future::pending().await
-    }
-
-    fn supports_tools(&self) -> bool {
-        true
     }
 }
 
@@ -235,7 +227,7 @@ pub struct FakeLlm {
     /// Whether the final round replays forever once the script runs out, so a
     /// test can drive a model that never stops asking for tools.
     repeat_last: bool,
-    models: Vec<String>,
+    descriptor: Descriptor,
     system_prompt: Option<String>,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
@@ -257,7 +249,9 @@ impl FakeLlm {
             // A real provider advertises what it serves, and resolution now
             // refuses a pipeline where nothing names a model. Fakes advertise
             // one so a test about something else does not have to.
-            models: vec!["fake-model".to_owned()],
+            descriptor: Descriptor::new("fake-llm", Capability::Llm).with_metadata(
+                Metadata::default().with_models(vec!["fake-model".to_owned()]).with_tools(),
+            ),
             system_prompt: None,
             requests: Arc::new(Mutex::new(Vec::new())),
         }
@@ -271,7 +265,8 @@ impl FakeLlm {
 
     /// Advertises a finite model catalogue.
     pub fn serving(mut self, models: &[&str]) -> Self {
-        self.models = models.iter().map(|model| (*model).to_owned()).collect();
+        self.descriptor.metadata.models =
+            models.iter().map(|model| (*model).to_owned()).collect();
         self
     }
 
@@ -288,8 +283,8 @@ impl FakeLlm {
 }
 
 impl Provider for FakeLlm {
-    fn name(&self) -> &str {
-        "fake-llm"
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -310,14 +305,6 @@ impl LanguageModel for FakeLlm {
         Ok(stream_of(round))
     }
 
-    fn supports_tools(&self) -> bool {
-        true
-    }
-
-    fn models(&self) -> &[String] {
-        &self.models
-    }
-
     fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
     }
@@ -329,7 +316,7 @@ pub struct FakeTts {
     spoken: Arc<Mutex<Vec<String>>>,
     voices: Arc<Mutex<Vec<Option<String>>>>,
     spoke: Arc<Notify>,
-    encodings: Vec<Encoding>,
+    descriptor: Descriptor,
     /// Rate this synthesizer speaks at, when it is not the requested one.
     native_rate: Option<u32>,
 }
@@ -340,7 +327,13 @@ impl FakeTts {
             spoken: Arc::new(Mutex::new(Vec::new())),
             voices: Arc::new(Mutex::new(Vec::new())),
             spoke: Arc::new(Notify::new()),
-            encodings: Vec::new(),
+            descriptor: Descriptor::new("fake-tts", Capability::Tts).with_metadata(
+                Metadata::default().with_voices(vec![Voice {
+                    id: "fake".to_owned(),
+                    name: "Fake".to_owned(),
+                    language: "en-US".to_owned(),
+                }]),
+            ),
             native_rate: None,
         }
     }
@@ -353,7 +346,7 @@ impl FakeTts {
     }
 
     pub fn producing_encodings(mut self, encodings: &[Encoding]) -> Self {
-        self.encodings = encodings.to_vec();
+        self.descriptor.metadata.encodings = encodings.to_vec();
         self
     }
 
@@ -377,8 +370,8 @@ impl FakeTts {
 }
 
 impl Provider for FakeTts {
-    fn name(&self) -> &str {
-        "fake-tts"
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -400,18 +393,6 @@ impl TextToSpeech for FakeTts {
             format: request.format,
             data: Bytes::from(request.text.into_bytes()),
         }]))
-    }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(vec![Voice {
-            id: "fake".to_owned(),
-            name: "Fake".to_owned(),
-            language: "en-US".to_owned(),
-        }])
-    }
-
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        self.encodings.is_empty() || self.encodings.contains(&encoding)
     }
 }
 
@@ -440,9 +421,7 @@ impl HangingTts {
 }
 
 impl Provider for HangingTts {
-    fn name(&self) -> &str {
-        "fake-tts"
-    }
+    conduit_provider::stub_descriptor!("fake-tts", Capability::Tts);
 }
 
 #[async_trait::async_trait]
@@ -450,10 +429,6 @@ impl TextToSpeech for HangingTts {
     async fn synthesize(&self, _request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>> {
         self.speaking.notify_one();
         std::future::pending().await
-    }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(Vec::new())
     }
 }
 
@@ -467,9 +442,7 @@ impl TextToSpeech for HangingTts {
 pub struct SlowTts;
 
 impl Provider for SlowTts {
-    fn name(&self) -> &str {
-        "fake-tts"
-    }
+    conduit_provider::stub_descriptor!("fake-tts", Capability::Tts);
 }
 
 #[async_trait::async_trait]
@@ -490,10 +463,6 @@ impl TextToSpeech for SlowTts {
             },
         )))
     }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(Vec::new())
-    }
 }
 
 /// How a fake tool behaves when invoked.
@@ -513,6 +482,7 @@ pub enum Behaviour {
 /// A tool that records its invocations.
 #[derive(Clone)]
 pub struct FakeTool {
+    descriptor: Descriptor,
     name: &'static str,
     behaviour: Behaviour,
     permission: Permission,
@@ -528,6 +498,7 @@ impl FakeTool {
     /// A tool that succeeds with `value`.
     pub fn new(name: &'static str, value: serde_json::Value) -> Self {
         Self {
+            descriptor: Descriptor::new(name, Capability::Tool),
             name,
             behaviour: Behaviour::Succeed(value),
             permission: Permission::Allow,
@@ -560,8 +531,8 @@ impl FakeTool {
 }
 
 impl Provider for FakeTool {
-    fn name(&self) -> &str {
-        self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 
@@ -642,9 +613,7 @@ impl FakeMemory {
 }
 
 impl Provider for FakeMemory {
-    fn name(&self) -> &str {
-        "fake-memory"
-    }
+    conduit_provider::stub_descriptor!("fake-memory", Capability::Memory);
 }
 
 #[async_trait::async_trait]
@@ -717,8 +686,14 @@ impl FakeWake {
 
 #[async_trait::async_trait]
 impl Provider for FakeWake {
-    fn name(&self) -> &str {
-        "fake-wake"
+    fn descriptor(&self) -> &Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<Descriptor> = std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            Descriptor::new("fake-wake", Capability::Wake).with_metadata(
+                Metadata::default()
+                    .with_phrases(vec![conduit_provider::wake::WakePhrase::new("hey jarvis")]),
+            )
+        })
     }
 }
 
@@ -740,10 +715,6 @@ impl conduit_provider::wake::WakeWordDetector for FakeWake {
                 accepted: accept && index + 1 >= after,
             })
         })))
-    }
-
-    fn configured_phrases(&self) -> Vec<conduit_provider::wake::WakePhrase> {
-        vec![conduit_provider::wake::WakePhrase::new("hey jarvis")]
     }
 }
 
@@ -773,9 +744,7 @@ impl FakeSpeaker {
 
 #[async_trait::async_trait]
 impl Provider for FakeSpeaker {
-    fn name(&self) -> &str {
-        "fake-speaker"
-    }
+    conduit_provider::stub_descriptor!("fake-speaker", Capability::SpeakerId);
 }
 
 #[async_trait::async_trait]
@@ -813,7 +782,7 @@ impl conduit_provider::speaker::SpeakerIdentifier for FakeSpeaker {
 /// was given.
 #[derive(Clone)]
 pub struct FakeTransform {
-    name: String,
+    descriptor: Descriptor,
     /// What every segment becomes, or `None` to pass it through unchanged.
     replacement: Option<String>,
     /// Text to strip out of every segment, when it appears.
@@ -825,7 +794,7 @@ pub struct FakeTransform {
 impl FakeTransform {
     pub fn new(name: &str) -> Self {
         Self {
-            name: name.to_owned(),
+            descriptor: Descriptor::new(name, Capability::Transform),
             replacement: None,
             remove: None,
             seen: Arc::new(Mutex::new(Vec::new())),
@@ -858,8 +827,8 @@ impl FakeTransform {
 }
 
 impl Provider for FakeTransform {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 

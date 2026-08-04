@@ -136,11 +136,14 @@ pub struct ProviderVoices {
 /// The pipeline editor asks so an operator picks a voice their provider
 /// actually has, rather than typing one and finding out at the first reply.
 ///
+/// The catalogue is read off the provider's descriptor rather than fetched, so
+/// this cannot fail on a provider that is registered: what a synthesizer can
+/// say is settled when it is built.
+///
 /// # Errors
 ///
-/// Returns 404 if there is no such definition, 422 if the definition is not a
-/// synthesizer, and 503 if the provider is registered but its catalogue cannot
-/// be retrieved.
+/// Returns 404 if there is no such definition, and 422 if the definition is not
+/// a synthesizer.
 pub async fn voices(
     _caller: ManagementCaller,
     State(state): State<AppState>,
@@ -166,9 +169,7 @@ pub async fn voices(
         return Ok(Json(ProviderVoices { provider: id, voices: Vec::new() }));
     };
 
-    let voices = provider.voices().await.map_err(|error| {
-        ApiError::unavailable(format!("provider `{id}` could not list its voices: {error}"))
-    })?;
+    let voices = provider.descriptor().metadata.voices.clone();
     Ok(Json(ProviderVoices { provider: id, voices }))
 }
 
@@ -220,7 +221,13 @@ pub async fn phrases(
         return Ok(Json(ProviderPhrases { provider: id, phrases: Vec::new() }));
     };
 
-    let phrases = provider.available_phrases().to_vec();
+    let phrases = provider
+        .descriptor()
+        .metadata
+        .phrases
+        .iter()
+        .map(|phrase| phrase.phrase.clone())
+        .collect();
     Ok(Json(ProviderPhrases { provider: id, phrases }))
 }
 

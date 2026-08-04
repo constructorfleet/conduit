@@ -93,6 +93,18 @@ pub enum Permission {
 #[async_trait::async_trait]
 pub trait Tool: Provider {
     /// The schema advertised to the model.
+    ///
+    /// Deliberately not read off the
+    /// [`Descriptor`](crate::Descriptor): the audiences differ. The descriptor
+    /// says what Conduit calls this tool — the selector a graph names, the
+    /// label a screen shows — while this says what the *model* must write to
+    /// call it, under the tool's real name on its server, which a definition
+    /// may have aliased.
+    ///
+    /// The argument schema is the one part they share, and an implementation
+    /// should declare it once as its descriptor's settings and return it here,
+    /// so an operator rendering a tool's arguments and a model filling them in
+    /// read the same document.
     fn spec(&self) -> ToolSpec;
 
     /// Decides whether this invocation may run.

@@ -7,7 +7,9 @@
 use conduit_core::audio::Encoding;
 use conduit_core::{Error, Result};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{
+    Capability, ChunkStream, Descriptor, Health, Metadata, Provider, SettingsSchema,
+};
 use futures_util::StreamExt;
 use serde::Serialize;
 
@@ -31,6 +33,10 @@ struct Request {
     response_format: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f32>,
+    /// Provider-specific settings, already checked against this provider's
+    /// declared schema.
+    #[serde(flatten)]
+    settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A synthesizer served over the audio speech API.
@@ -38,7 +44,24 @@ struct Request {
 pub struct OpenAiTts {
     http: Http,
     model: String,
-    voices: Vec<Voice>,
+    descriptor: Descriptor,
+}
+
+/// The encodings the speech endpoint produces.
+const ENCODINGS: [Encoding; 3] = [Encoding::PcmS16Le, Encoding::Flac, Encoding::Opus];
+
+/// What the speech endpoint accepts beyond a voice, a format, and a rate.
+fn settings_schema() -> SettingsSchema {
+    SettingsSchema::new(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "instructions": {
+                "type": "string",
+                "description": "How to say it — accent, emotion, pacing — where the model supports it.",
+            },
+        },
+    }))
+    .expect("a literal object schema")
 }
 
 impl OpenAiTts {
@@ -48,18 +71,25 @@ impl OpenAiTts {
     ///
     /// Returns [`Error::Config`] if the HTTP client cannot be built.
     pub fn new(config: &OpenAiConfig, model: impl Into<String>) -> Result<Self> {
-        Ok(Self {
-            http: Http::new(config)?,
-            model: model.into(),
-            voices: HOSTED_VOICES
-                .iter()
-                .map(|id| Voice {
-                    id: (*id).to_owned(),
-                    name: (*id).to_owned(),
-                    language: "en-US".to_owned(),
-                })
-                .collect(),
-        })
+        let model = model.into();
+        let voices = HOSTED_VOICES
+            .iter()
+            .map(|id| Voice {
+                id: (*id).to_owned(),
+                name: (*id).to_owned(),
+                language: "en-US".to_owned(),
+            })
+            .collect();
+        let descriptor = config
+            .descriptor(Capability::Tts)
+            .with_metadata(
+                Metadata::default()
+                    .with_models(vec![model.clone()])
+                    .with_voices(voices)
+                    .with_encodings(ENCODINGS.to_vec()),
+            )
+            .with_settings(settings_schema());
+        Ok(Self { http: Http::new(config)?, model, descriptor })
     }
 
     /// Replaces the advertised voice catalogue.
@@ -68,8 +98,13 @@ impl OpenAiTts {
     /// a client discover them.
     #[must_use]
     pub fn with_voices(mut self, voices: Vec<Voice>) -> Self {
-        self.voices = voices;
+        self.descriptor.metadata.voices = voices;
         self
+    }
+
+    /// The voices this synthesizer advertises.
+    fn voices(&self) -> &[Voice] {
+        &self.descriptor.metadata.voices
     }
 
     /// The voice to speak with, most specific choice first.
@@ -80,7 +115,7 @@ impl OpenAiTts {
     /// which on a local `openedai-speech` server is not even a voice it has.
     fn voice_for(&self, requested: Option<String>) -> String {
         requested
-            .or_else(|| self.voices.first().map(|voice| voice.id.clone()))
+            .or_else(|| self.voices().first().map(|voice| voice.id.clone()))
             .unwrap_or_else(|| DEFAULT_VOICE.to_owned())
     }
 }
@@ -106,8 +141,8 @@ fn response_format(encoding: Encoding) -> Result<&'static str> {
 
 #[async_trait::async_trait]
 impl Provider for OpenAiTts {
-    fn name(&self) -> &str {
-        self.http.name()
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -127,6 +162,7 @@ impl TextToSpeech for OpenAiTts {
             voice: self.voice_for(request.voice),
             response_format: response_format(request.format.encoding)?,
             speed: request.rate,
+            settings: request.settings.as_map().clone(),
         };
         tracing::debug!(model = %body.model, voice = %body.voice, "synthesizing");
 
@@ -151,14 +187,6 @@ impl TextToSpeech for OpenAiTts {
         });
 
         Ok(Box::pin(chunks))
-    }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(self.voices.clone())
-    }
-
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        matches!(encoding, Encoding::PcmS16Le | Encoding::Flac | Encoding::Opus)
     }
 }
 
@@ -210,5 +238,15 @@ mod tests {
     #[test]
     fn the_hosted_default_remains_the_last_resort() {
         assert_eq!(synthesizer().with_voices(Vec::new()).voice_for(None), DEFAULT_VOICE);
+    }
+
+    #[test]
+    fn the_descriptor_carries_the_catalogue_and_the_encodings() {
+        let provider = synthesizer().with_voices(vec![voice("shimmer")]);
+        let metadata = &provider.descriptor().metadata;
+
+        assert_eq!(metadata.voices, [voice("shimmer")], "the catalogue is read, not awaited");
+        assert!(metadata.supports_encoding(Encoding::Opus));
+        assert!(!metadata.supports_encoding(Encoding::PcmF32Le));
     }
 }

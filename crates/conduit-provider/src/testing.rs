@@ -14,7 +14,9 @@ use conduit_core::event::FinishReason;
 use conduit_core::Result;
 use futures_util::StreamExt;
 
+use crate::descriptor::{Descriptor, Metadata};
 use crate::llm::{Completion, CompletionRequest, LanguageModel, Role, Usage};
+use crate::registry::Capability;
 use crate::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use crate::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
 use crate::{ChunkStream, Provider};
@@ -31,8 +33,11 @@ fn stream_of<T: Send + 'static>(items: Vec<T>) -> ChunkStream<T> {
 pub struct EchoStt;
 
 impl Provider for EchoStt {
-    fn name(&self) -> &str {
-        "echo-stt"
+    fn descriptor(&self) -> &Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<Descriptor> = std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            Descriptor::new("echo-stt", Capability::Stt).with_label("Echo recognizer")
+        })
     }
 }
 
@@ -60,22 +65,22 @@ impl SpeechToText for EchoStt {
 pub struct EchoLlm;
 
 impl Provider for EchoLlm {
-    fn name(&self) -> &str {
-        "echo-llm"
+    /// Advertises one model, as a real provider does.
+    ///
+    /// Resolution refuses a pipeline where neither the node nor the provider
+    /// names a model, since there would be nothing to ask for.
+    fn descriptor(&self) -> &Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<Descriptor> = std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            Descriptor::new("echo-llm", Capability::Llm)
+                .with_label("Echo model")
+                .with_metadata(Metadata::default().with_models(vec!["echo-model".to_owned()]))
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl LanguageModel for EchoLlm {
-    /// Advertises one model, as a real provider does.
-    ///
-    /// Resolution refuses a pipeline where neither the node nor the provider
-    /// names a model, since there would be nothing to ask for.
-    fn models(&self) -> &[String] {
-        static MODELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-        MODELS.get_or_init(|| vec!["echo-model".to_owned()])
-    }
-
     async fn complete(&self, request: CompletionRequest) -> Result<ChunkStream<Completion>> {
         let heard = request
             .messages
@@ -99,8 +104,17 @@ impl LanguageModel for EchoLlm {
 pub struct EchoTts;
 
 impl Provider for EchoTts {
-    fn name(&self) -> &str {
-        "echo-tts"
+    fn descriptor(&self) -> &Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<Descriptor> = std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            Descriptor::new("echo-tts", Capability::Tts)
+                .with_label("Echo synthesizer")
+                .with_metadata(Metadata::default().with_voices(vec![Voice {
+                    id: "echo".to_owned(),
+                    name: "Echo".to_owned(),
+                    language: "en-US".to_owned(),
+                }]))
+        })
     }
 }
 
@@ -112,14 +126,6 @@ impl TextToSpeech for EchoTts {
             format: request.format,
             data: Bytes::from(request.text.into_bytes()),
         }]))
-    }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(vec![Voice {
-            id: "echo".to_owned(),
-            name: "Echo".to_owned(),
-            language: "en-US".to_owned(),
-        }])
     }
 }
 

@@ -389,6 +389,10 @@ async fn register_definition(
         base_url: base_url.to_owned(),
         api_key: secret_value(api_key),
         name: definition.id.clone(),
+        // The label an operator typed, kept distinct from the identity: the
+        // provider is registered under the definition id and calls itself by
+        // it, and this is only what a screen shows.
+        label: Some(definition.label.clone()),
         ..OpenAiConfig::default()
     };
 
@@ -430,33 +434,32 @@ async fn register_definition(
         }
         ProviderDefinitionVariant::Stt {
             variant: SttVariant::Wyoming { url, model, streaming },
-        } => Ok(providers.with_stt(WyomingStt::new(
-            &definition.id,
-            url,
-            model.clone(),
-            *streaming,
-        )?)),
+        } => Ok(providers.with_stt(
+            WyomingStt::new(&definition.id, url, model.clone(), *streaming)?
+                .with_label(&definition.label),
+        )),
         ProviderDefinitionVariant::Tts {
             variant: TtsVariant::Wyoming { url, voice, streaming },
-        } => Ok(providers.with_tts(WyomingTts::new(
-            &definition.id,
-            url,
-            voice.clone(),
-            *streaming,
-        )?)),
+        } => Ok(providers.with_tts(
+            WyomingTts::new(&definition.id, url, voice.clone(), *streaming)?
+                .with_label(&definition.label),
+        )),
         ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
         ProviderDefinitionVariant::Wake { variant } => {
-            register_wake(providers, &definition.id, variant)
+            register_wake(providers, &definition.id, &definition.label, variant)
         }
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::DiarizationServer { base_url, threshold_percent },
-        } => Ok(providers.with_speaker(DiarizationServerSpeakerId::new(
-            &definition.id,
-            base_url,
-            f32::from(*threshold_percent) / 100.0,
-        )?)),
+        } => Ok(providers.with_speaker(
+            DiarizationServerSpeakerId::new(
+                &definition.id,
+                base_url,
+                f32::from(*threshold_percent) / 100.0,
+            )?
+            .with_label(&definition.label),
+        )),
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::Http { base_url, api_key, threshold_percent, .. },
         } => Ok(providers.with_speaker(HttpSpeakerId::new(
@@ -467,7 +470,9 @@ async fn register_definition(
         )?)),
         ProviderDefinitionVariant::Transform {
             variant: TransformVariant::Builtin { rules },
-        } => Ok(providers.with_transform(Builtin::new(&definition.id, rules.clone()))),
+        } => Ok(providers.with_transform(
+            Builtin::new(&definition.id, rules.clone()).with_label(&definition.label),
+        )),
     }
 }
 
@@ -479,13 +484,19 @@ async fn register_definition(
 /// wakes itself still gets a detector — one that scores nothing, because the
 /// device already decided — so that a pipeline naming the stage resolves and
 /// the activation reaches the event stream.
-fn register_wake(providers: Providers, id: &str, variant: &WakeVariant) -> Result<Providers> {
+fn register_wake(
+    providers: Providers,
+    id: &str,
+    label: &str,
+    variant: &WakeVariant,
+) -> Result<Providers> {
     let phrases = variant.phrases().to_vec();
     let threshold =
         f32::from(variant.threshold_percent().unwrap_or(DEFAULT_THRESHOLD_PERCENT)) / 100.0;
 
     if let Some(url) = variant.wyoming_url() {
-        return Ok(providers.with_wake(WyomingWake::new(id, url, phrases, threshold)?));
+        return Ok(providers
+            .with_wake(WyomingWake::new(id, url, phrases, threshold)?.with_label(label)));
     }
     if let Some(models_dir) = variant.local_models_dir() {
         if variant.engine() != WakeEngine::OpenWakeWord {
@@ -499,9 +510,11 @@ fn register_wake(providers: Providers, id: &str, variant: &WakeVariant) -> Resul
             Some(named) => PathBuf::from(named),
             None => crate::config::wake_models_dir_from_env()?,
         };
-        return Ok(providers.with_wake(OpenWakeWord::load(id, directory, phrases, threshold)?));
+        return Ok(providers.with_wake(
+            OpenWakeWord::load(id, directory, phrases, threshold)?.with_label(label),
+        ));
     }
-    Ok(providers.with_wake(DeviceWake::new(id, phrases)))
+    Ok(providers.with_wake(DeviceWake::new(id, phrases).with_label(label)))
 }
 
 /// Registers whatever tools an MCP server currently advertises.

@@ -12,7 +12,7 @@ use conduit_core::bus::EventBus;
 use conduit_core::graph::{Edge, Node, PipelineGraph};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
-use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
+use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech};
 use conduit_provider::{ChunkStream, Provider};
 use conduit_runtime::Providers;
 use futures_util::{SinkExt, StreamExt};
@@ -28,9 +28,7 @@ use tokio_tungstenite::tungstenite::Message;
 struct SlowTts;
 
 impl Provider for SlowTts {
-    fn name(&self) -> &str {
-        "echo-tts"
-    }
+    conduit_provider::stub_descriptor!("echo-tts", conduit_provider::Capability::Tts);
 }
 
 /// A synthesizer that accepts the request and never answers.
@@ -42,9 +40,7 @@ impl Provider for SlowTts {
 struct SilentTts;
 
 impl Provider for SilentTts {
-    fn name(&self) -> &str {
-        "echo-tts"
-    }
+    conduit_provider::stub_descriptor!("echo-tts", conduit_provider::Capability::Tts);
 }
 
 #[async_trait::async_trait]
@@ -54,10 +50,6 @@ impl TextToSpeech for SilentTts {
         _request: SynthesisRequest,
     ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
         std::future::pending().await
-    }
-
-    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
-        Ok(Vec::new())
     }
 }
 
@@ -74,9 +66,7 @@ impl RecordingStt {
 }
 
 impl Provider for RecordingStt {
-    fn name(&self) -> &str {
-        "recording-stt"
-    }
+    conduit_provider::stub_descriptor!("recording-stt", conduit_provider::Capability::Stt);
 }
 
 #[async_trait::async_trait]
@@ -114,9 +104,7 @@ impl RecordingTts {
 }
 
 impl Provider for RecordingTts {
-    fn name(&self) -> &str {
-        "recording-tts"
-    }
+    conduit_provider::stub_descriptor!("recording-tts", conduit_provider::Capability::Tts);
 }
 
 #[async_trait::async_trait]
@@ -131,10 +119,6 @@ impl TextToSpeech for RecordingTts {
             format: request.format,
             data: bytes::Bytes::from(request.text.into_bytes()),
         })])))
-    }
-
-    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
-        Ok(Vec::new())
     }
 }
 
@@ -159,14 +143,6 @@ impl TextToSpeech for SlowTts {
                 Some((Ok(chunk), bytes))
             },
         )))
-    }
-
-    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
-        Ok(vec![Voice {
-            id: "slow".to_owned(),
-            name: "Slow".to_owned(),
-            language: "en-US".to_owned(),
-        }])
     }
 }
 

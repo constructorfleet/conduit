@@ -201,7 +201,7 @@ impl Plan {
                     // from the node: which words wake a house is a property of
                     // the detector that was configured, and two pipelines
                     // pointing at one detector cannot listen for different ones.
-                    let phrases = detector.configured_phrases();
+                    let phrases = detector.descriptor().metadata.phrases.clone();
                     wake = Some(Detector { provider: detector, node: id.clone(), phrases });
                 }
                 Node::SpeakerId { id, provider } => {
@@ -267,7 +267,7 @@ impl Plan {
             ));
         }
 
-        if !tools.is_empty() && !reasoning.llm.supports_tools() {
+        if !tools.is_empty() && !reasoning.llm.descriptor().metadata.tools {
             return Err(Error::Config(format!(
                 "node `{}` uses provider `{}`, which cannot call tools, but the \
                  pipeline defines {} of them",
@@ -531,7 +531,7 @@ fn resolve_model(
         // to ask for — and the id is not an answer: asking OpenAI for a model
         // called `openai` fails at the first token, which is a long way from
         // the form where the model was never filled in.
-        return provider.models().first().cloned().ok_or_else(|| {
+        return provider.descriptor().metadata.models.first().cloned().ok_or_else(|| {
             Error::Config(format!(
                 "node `{}` names no model and provider `{}` advertises none, so there \
                  is nothing to ask for; set a model on the node or on the provider \
@@ -546,8 +546,8 @@ fn resolve_model(
     // nothing to check it against. A non-empty one is what the provider says
     // it can serve, and asking for anything else fails at the first token —
     // long after the operator stopped looking at the graph they just saved.
-    let served = provider.models();
-    if served.is_empty() || served.iter().any(|model| model == requested) {
+    let served = &provider.descriptor().metadata.models;
+    if provider.descriptor().metadata.serves_model(requested) {
         return Ok(requested.to_owned());
     }
 

@@ -7,6 +7,8 @@ use conduit_core::Result;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
+use crate::descriptor::{Descriptor, Metadata};
+use crate::registry::Capability;
 use crate::stt::AudioChunk;
 use crate::{ChunkStream, Health, Provider};
 
@@ -66,23 +68,6 @@ pub trait WakeWordDetector: Provider {
         audio: ChunkStream<AudioChunk>,
         phrases: Vec<WakePhrase>,
     ) -> Result<ChunkStream<Detection>>;
-
-    /// Phrases this detector has models for. Empty means the detector trains
-    /// or loads phrases on demand.
-    fn available_phrases(&self) -> &[String] {
-        &[]
-    }
-
-    /// The phrases to listen for, with the thresholds this detector was
-    /// configured with.
-    ///
-    /// What [`WakeWordDetector::detect`] is called with when a pipeline names
-    /// no phrases of its own, which is every pipeline today: a graph node
-    /// selects a provider definition, and which phrases that definition
-    /// listens for is a property of the definition.
-    fn configured_phrases(&self) -> Vec<WakePhrase> {
-        self.available_phrases().iter().map(WakePhrase::new).collect()
-    }
 }
 
 /// The detector for a satellite that wakes itself.
@@ -99,24 +84,40 @@ pub trait WakeWordDetector: Provider {
 /// editor, the event stream — stay the same.
 #[derive(Debug, Clone)]
 pub struct DeviceWake {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
-    /// Phrases the satellite is flashed with, for operator screens.
-    phrases: Vec<String>,
+    /// Identity, version, and the phrases the satellite is flashed with.
+    descriptor: Descriptor,
 }
 
 impl DeviceWake {
     /// A detector standing for the satellite's own, listening for `phrases`.
     #[must_use]
     pub fn new(name: impl Into<String>, phrases: Vec<String>) -> Self {
-        Self { name: name.into(), phrases }
+        let metadata =
+            Metadata::default().with_phrases(phrases.iter().map(WakePhrase::new).collect());
+        Self { descriptor: Descriptor::new(name, Capability::Wake).with_metadata(metadata) }
+    }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
+    }
+
+    /// The phrases the satellite is flashed with.
+    fn phrases(&self) -> &[WakePhrase] {
+        &self.descriptor.metadata.phrases
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for DeviceWake {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     /// Always healthy: there is no service to reach. A satellite that stopped
@@ -138,17 +139,13 @@ impl WakeWordDetector for DeviceWake {
         // pipeline that named none has only the definition's list to go on.
         let phrase = phrases
             .first()
+            .or_else(|| self.phrases().first())
             .map(|phrase| phrase.phrase.clone())
-            .or_else(|| self.phrases.first().cloned())
-            .unwrap_or_else(|| self.name.clone());
+            .unwrap_or_else(|| self.descriptor.id.clone());
         Ok(Box::pin(AlreadyAwake {
             detection: Some(Detection { phrase, confidence: 1.0, accepted: true }),
             audio,
         }))
-    }
-
-    fn available_phrases(&self) -> &[String] {
-        &self.phrases
     }
 }
 

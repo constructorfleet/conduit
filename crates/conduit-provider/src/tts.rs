@@ -1,10 +1,11 @@
 //! Text-to-speech provider interface.
 
 use bytes::Bytes;
-use conduit_core::audio::{AudioFormat, Encoding};
+use conduit_core::audio::AudioFormat;
 use conduit_core::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::descriptor::Settings;
 use crate::{ChunkStream, Provider};
 
 /// A voice a provider can speak with.
@@ -32,9 +33,11 @@ pub struct SynthesisRequest {
     /// Speaking rate multiplier, where `1.0` is the voice's natural rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f32>,
-    /// Provider-specific settings, e.g. emotion or style controls.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub extra: serde_json::Value,
+    /// Provider-specific settings, e.g. emotion or style controls, checked
+    /// against the schema the provider's [`Descriptor`](crate::Descriptor)
+    /// declares.
+    #[serde(default, skip_serializing_if = "Settings::is_empty")]
+    pub settings: Settings,
 }
 
 impl SynthesisRequest {
@@ -47,7 +50,7 @@ impl SynthesisRequest {
             voice: None,
             format: AudioFormat::DEFAULT,
             rate: None,
-            extra: serde_json::Value::Null,
+            settings: Settings::empty(),
         }
     }
 }
@@ -77,18 +80,4 @@ pub trait TextToSpeech: Provider {
     /// Returns an error if the request is rejected outright. Mid-stream
     /// failures surface as error items on the returned stream.
     async fn synthesize(&self, request: SynthesisRequest) -> Result<ChunkStream<SpeechChunk>>;
-
-    /// Voices this provider offers.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the catalogue cannot be retrieved.
-    async fn voices(&self) -> Result<Vec<Voice>>;
-
-    /// Whether this provider can produce audio in `encoding`.
-    ///
-    /// The default is permissive for adapters whose backend decides at runtime.
-    fn supports_encoding(&self, _encoding: Encoding) -> bool {
-        true
-    }
 }

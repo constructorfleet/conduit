@@ -37,7 +37,7 @@ use conduit_core::id::SpeakerId;
 use conduit_core::{Error, Result};
 use conduit_provider::speaker::{Identification, SpeakerIdentifier};
 use conduit_provider::stt::AudioChunk;
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Provider};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -112,8 +112,8 @@ pub(crate) async fn checked(
 /// A speaker identification provider backed by an HTTP service.
 #[derive(Debug, Clone)]
 pub struct HttpSpeakerId {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
+    /// Identity and version, surfaced in health and diagnostics.
+    descriptor: Descriptor,
     /// Base URL, without a trailing slash.
     base_url: String,
     /// Optional bearer token.
@@ -149,11 +149,22 @@ impl HttpSpeakerId {
         Ok(Self {
             client: http_client(&name, REQUEST_TIMEOUT)?,
             base_url: normalized_base_url(&name, base_url)?,
-            name,
+            descriptor: Descriptor::new(name, Capability::SpeakerId),
             api_key,
             threshold,
             format: AudioFormat::DEFAULT,
         })
+    }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
     }
 
     /// Sets the format the audio handed to this provider is captured in.
@@ -197,8 +208,8 @@ struct IdentifyResponse {
 
 #[async_trait::async_trait]
 impl Provider for HttpSpeakerId {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -221,18 +232,22 @@ impl SpeakerIdentifier for HttpSpeakerId {
             .authorized(self.client.post(format!("{}/identify", self.base_url)))
             .header("content-type", mime)
             .body(body);
-        let response =
-            request.send().await.map_err(|error| Error::provider(self.name.clone(), error))?;
-        let response = checked(&self.name, response).await?;
-        let identified: IdentifyResponse =
-            response.json().await.map_err(|error| Error::provider(self.name.clone(), error))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
+        let response = checked(self.name(), response).await?;
+        let identified: IdentifyResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
 
         // A match the deployment is not sure enough about is an unknown voice,
         // not a wrong one. Reporting the name anyway would let a per-speaker
         // tool policy be satisfied by whoever sounds closest.
         if identified.confidence < self.threshold {
             tracing::debug!(
-                provider = self.name,
+                provider = self.name(),
                 confidence = identified.confidence,
                 threshold = self.threshold,
                 "closest voice print fell below the configured threshold"
@@ -250,22 +265,26 @@ impl SpeakerIdentifier for HttpSpeakerId {
             )
             .header("content-type", mime)
             .body(body);
-        let response =
-            request.send().await.map_err(|error| Error::provider(self.name.clone(), error))?;
-        checked(&self.name, response).await.map(|_| ())
+        let response = request
+            .send()
+            .await
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
+        checked(self.name(), response).await.map(|_| ())
     }
 
     async fn forget(&self, speaker: SpeakerId) -> Result<()> {
         let request = self
             .authorized(self.client.delete(format!("{}/speakers/{speaker}", self.base_url)));
-        let response =
-            request.send().await.map_err(|error| Error::provider(self.name.clone(), error))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
         // Removing a speaker who is not there succeeds: the caller asked for
         // that voice print to be gone, and it is.
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(());
         }
-        checked(&self.name, response).await.map(|_| ())
+        checked(self.name(), response).await.map(|_| ())
     }
 }
 

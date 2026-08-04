@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use bytes::Bytes;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::wake::{Detection, WakePhrase, WakeWordDetector};
-use conduit_provider::ChunkStream;
+use conduit_provider::{ChunkStream, Provider};
 use conduit_wake::OpenWakeWord;
 use futures_util::StreamExt;
 
@@ -130,8 +130,7 @@ async fn the_detector_lists_the_phrases_it_has_models_for() {
     let detector = OpenWakeWord::load("openwakeword", &directory, Vec::new(), 0.5)
         .expect("the models load");
 
-    assert_eq!(detector.available_phrases(), ["hey jarvis"]);
-    let configured = detector.configured_phrases();
+    let configured = &detector.descriptor().metadata.phrases;
     assert_eq!(configured.len(), 1);
     assert_eq!(configured[0], WakePhrase::new("hey jarvis").with_threshold(0.5));
 }

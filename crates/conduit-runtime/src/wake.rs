@@ -267,9 +267,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for AcceptsAfter {
-        fn name(&self) -> &str {
-            "test-wake"
-        }
+        conduit_provider::stub_descriptor!("test-wake", conduit_provider::Capability::Wake);
     }
 
     #[async_trait::async_trait]
@@ -297,9 +295,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for NeverAccepts {
-        fn name(&self) -> &str {
-            "test-wake"
-        }
+        conduit_provider::stub_descriptor!("test-wake", conduit_provider::Capability::Wake);
     }
 
     #[async_trait::async_trait]

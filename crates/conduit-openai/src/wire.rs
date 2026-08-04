@@ -25,6 +25,13 @@ pub struct Request {
     /// Cap on generated tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Provider-specific settings, sent alongside the documented fields.
+    ///
+    /// These reached the vendor untouched as an untyped blob before; they are
+    /// now whatever the provider's declared settings schema admitted, which is
+    /// why they can be flattened in without a second look.
+    #[serde(flatten)]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Request {
@@ -37,6 +44,7 @@ impl Request {
             tools: request.tools.into_iter().map(WireTool::from_spec).collect(),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
+            settings: request.settings.as_map().clone(),
         }
     }
 }

@@ -111,9 +111,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for Knows {
-        fn name(&self) -> &str {
-            "test-speaker"
-        }
+        conduit_provider::stub_descriptor!(
+            "test-speaker",
+            conduit_provider::Capability::SpeakerId
+        );
     }
 
     #[async_trait::async_trait]
@@ -140,9 +141,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for Unreachable {
-        fn name(&self) -> &str {
-            "test-speaker"
-        }
+        conduit_provider::stub_descriptor!(
+            "test-speaker",
+            conduit_provider::Capability::SpeakerId
+        );
     }
 
     #[async_trait::async_trait]

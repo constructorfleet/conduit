@@ -37,7 +37,7 @@ use std::sync::Arc;
 use conduit_core::Result;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::wake::{Detection, WakePhrase, WakeWordDetector};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Metadata, Provider};
 
 pub mod phrase;
 
@@ -50,8 +50,8 @@ pub const DEFAULT_MODELS_DIR: &str = "wake-models";
 
 /// A wake word detector scoring openWakeWord models in this process.
 pub struct OpenWakeWord {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
+    /// Identity, version, and the phrases the loaded models listen for.
+    descriptor: Descriptor,
     /// Where the models were loaded from, for diagnostics.
     models_dir: PathBuf,
     /// Phrases the loaded models listen for.
@@ -66,7 +66,7 @@ impl std::fmt::Debug for OpenWakeWord {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OpenWakeWord")
-            .field("name", &self.name)
+            .field("name", &self.name())
             .field("models_dir", &self.models_dir)
             .field("phrases", &self.phrases)
             .field("threshold", &self.threshold)
@@ -117,15 +117,34 @@ impl OpenWakeWord {
                 phrases = ?loaded,
                 "loaded openWakeWord models"
             );
-            Ok(Self { name, models_dir, phrases: loaded, threshold, models })
+            let descriptor = Descriptor::new(name, Capability::Wake).with_metadata(
+                Metadata::default().with_phrases(
+                    loaded
+                        .iter()
+                        .map(|phrase| WakePhrase::new(phrase).with_threshold(threshold))
+                        .collect(),
+                ),
+            );
+            Ok(Self { descriptor, models_dir, phrases: loaded, threshold, models })
         }
+    }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for OpenWakeWord {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     /// Always healthy: the models are loaded, so there is nothing to reach.
@@ -149,7 +168,7 @@ impl WakeWordDetector for OpenWakeWord {
         {
             Err(conduit_core::Error::Config(format!(
                 "provider `{}` was compiled without the `onnx` feature",
-                self.name
+                self.name()
             )))
         }
 
@@ -157,17 +176,6 @@ impl WakeWordDetector for OpenWakeWord {
         {
             Ok(self.detect_with_models(audio, phrases))
         }
-    }
-
-    fn available_phrases(&self) -> &[String] {
-        &self.phrases
-    }
-
-    fn configured_phrases(&self) -> Vec<WakePhrase> {
-        self.phrases
-            .iter()
-            .map(|phrase| WakePhrase::new(phrase).with_threshold(self.threshold))
-            .collect()
     }
 }
 
@@ -190,7 +198,7 @@ impl OpenWakeWord {
 
         let thresholds = onnx::thresholds_for(&self.models, &phrases, self.threshold);
         let mut scorer = onnx::Scorer::new(Arc::clone(&self.models), thresholds);
-        let provider = self.name.clone();
+        let provider = self.name().to_owned();
 
         let (samples_out, mut samples_in) = tokio::sync::mpsc::channel::<Vec<f32>>(1);
         let (detections_out, detections_in) =

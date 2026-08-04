@@ -8,7 +8,7 @@ use bytes::Bytes;
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::{Error, Result};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Metadata, Provider};
 use futures_util::stream;
 use serde_json::{json, Value};
 use tokio::io::BufReader;
@@ -16,11 +16,14 @@ use tokio::net::TcpStream;
 
 use crate::protocol::{read_wyoming_event, tcp_address, write_wyoming_event, CONNECT_TIMEOUT};
 
+/// The one encoding Wyoming audio events carry.
+const ENCODINGS: [Encoding; 1] = [Encoding::PcmS16Le];
+
 /// A text-to-speech provider backed by a Wyoming TCP server.
 #[derive(Debug, Clone)]
 pub struct WyomingTts {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
+    /// Identity, version, and what this server says it can do.
+    descriptor: Descriptor,
     /// Resolved `host:port` from the `tcp://` URL.
     address: String,
     /// Default voice for synthesis, when the server has one configured.
@@ -49,23 +52,44 @@ impl WyomingTts {
         let address = tcp_address(url).ok_or_else(|| {
             Error::Config(format!("provider `{name}` Wyoming url must use tcp://host:port"))
         })?;
-        Ok(Self { name, address, voice, streaming })
+        // A Wyoming server enumerates its own voices over the protocol, and
+        // Conduit does not ask: the definition names the one voice it was
+        // configured with, which is the only one an operator chose.
+        let voices = voice
+            .iter()
+            .map(|id| Voice { id: id.clone(), name: id.clone(), language: String::new() })
+            .collect();
+        let descriptor = Descriptor::new(name, Capability::Tts).with_metadata(
+            Metadata::default().with_voices(voices).with_encodings(ENCODINGS.to_vec()),
+        );
+        Ok(Self { descriptor, address, voice, streaming })
+    }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
     }
 
     async fn connect(&self) -> Result<TcpStream> {
         tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&self.address))
             .await
             .map_err(|_| {
-                Error::Config(format!("provider `{}` timed out connecting", self.name))
+                Error::Config(format!("provider `{}` timed out connecting", self.name()))
             })?
-            .map_err(|error| Error::provider(self.name.clone(), error))
+            .map_err(|error| Error::provider(self.name().to_owned(), error))
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for WyomingTts {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -90,7 +114,7 @@ impl TextToSpeech for WyomingTts {
         }
         write_wyoming_event(&mut stream, "synthesize", data).await?;
 
-        let provider = self.name.clone();
+        let provider = self.name().to_owned();
         let reader = BufReader::new(stream);
         Ok(Box::pin(stream::unfold(
             (reader, 0_u64, provider),
@@ -133,14 +157,6 @@ impl TextToSpeech for WyomingTts {
                 }
             },
         )))
-    }
-
-    async fn voices(&self) -> Result<Vec<Voice>> {
-        Ok(Vec::new())
-    }
-
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        encoding == Encoding::PcmS16Le
     }
 }
 
@@ -187,7 +203,20 @@ mod tests {
     #[test]
     fn supports_only_pcm_s16_le() {
         let provider = WyomingTts::new("piper", "tcp://localhost:10300", None, false).unwrap();
-        assert!(provider.supports_encoding(Encoding::PcmS16Le));
-        assert!(!provider.supports_encoding(Encoding::Opus));
+        let metadata = &provider.descriptor().metadata;
+        assert!(metadata.supports_encoding(Encoding::PcmS16Le));
+        assert!(!metadata.supports_encoding(Encoding::Opus));
+    }
+
+    #[test]
+    fn the_configured_voice_is_the_catalogue_the_server_never_offers() {
+        // Wyoming has no voice-listing request, so the one voice a definition
+        // names is the whole of what an operator screen can show.
+        let provider =
+            WyomingTts::new("piper", "tcp://localhost:10300", Some("alan".to_owned()), false)
+                .unwrap();
+        let voices = &provider.descriptor().metadata.voices;
+        assert_eq!(voices.len(), 1);
+        assert_eq!(voices[0].id, "alan");
     }
 }

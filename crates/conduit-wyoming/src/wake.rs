@@ -13,7 +13,7 @@
 use conduit_core::{Error, Result};
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::wake::{Detection, WakePhrase, WakeWordDetector};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Metadata, Provider};
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::io::BufReader;
@@ -33,15 +33,10 @@ const NOT_DETECTED: &str = "not-detected";
 /// A wake word detector backed by a Wyoming TCP server.
 #[derive(Debug, Clone)]
 pub struct WyomingWake {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
+    /// Identity, version, and the phrases this definition listens for.
+    descriptor: Descriptor,
     /// Resolved `host:port` from the `tcp://` URL.
     address: String,
-    /// Phrases this definition was configured with, offered to callers that
-    /// do not name their own.
-    phrases: Vec<String>,
-    /// Minimum confidence to accept, in `0.0..=1.0`, from the definition.
-    threshold: f32,
 }
 
 impl WyomingWake {
@@ -61,16 +56,35 @@ impl WyomingWake {
         let address = tcp_address(url).ok_or_else(|| {
             Error::Config(format!("provider `{name}` Wyoming url must use tcp://host:port"))
         })?;
-        Ok(Self { name, address, phrases, threshold })
+        let descriptor = Descriptor::new(name, Capability::Wake).with_metadata(
+            Metadata::default().with_phrases(
+                phrases
+                    .iter()
+                    .map(|phrase| WakePhrase::new(phrase).with_threshold(threshold))
+                    .collect(),
+            ),
+        );
+        Ok(Self { descriptor, address })
+    }
+
+    /// Sets the human-readable name operator screens show.
+    ///
+    /// Separate from the identity this provider was built with: the identity
+    /// is what a pipeline selects and what appears in metric labels, and this
+    /// is only what a person reads.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.descriptor = self.descriptor.with_label(label);
+        self
     }
 
     async fn connect(&self) -> Result<TcpStream> {
         tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&self.address))
             .await
             .map_err(|_| {
-                Error::Config(format!("provider `{}` timed out connecting", self.name))
+                Error::Config(format!("provider `{}` timed out connecting", self.name()))
             })?
-            .map_err(|error| Error::provider(self.name.clone(), error))
+            .map_err(|error| Error::provider(self.name().to_owned(), error))
     }
 }
 
@@ -100,8 +114,8 @@ fn detection_from_event(event: &WyomingEvent, phrases: &[WakePhrase]) -> Detecti
 
 #[async_trait::async_trait]
 impl Provider for WyomingWake {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -140,7 +154,7 @@ impl WakeWordDetector for WyomingWake {
         // losing detections it had already produced.
         let writer = std::sync::Arc::new(tokio::sync::Mutex::new(write_half));
         let pump_writer = std::sync::Arc::clone(&writer);
-        let provider = self.name.clone();
+        let provider = self.name().to_owned();
         let pump_provider = provider.clone();
         tokio::spawn(async move {
             let mut guard = pump_writer.lock().await;
@@ -230,17 +244,6 @@ impl WakeWordDetector for WyomingWake {
                 }
             },
         )))
-    }
-
-    fn available_phrases(&self) -> &[String] {
-        &self.phrases
-    }
-
-    fn configured_phrases(&self) -> Vec<WakePhrase> {
-        self.phrases
-            .iter()
-            .map(|phrase| WakePhrase::new(phrase).with_threshold(self.threshold))
-            .collect()
     }
 }
 
@@ -422,11 +425,12 @@ mod tests {
             0.8,
         )
         .expect("built");
-        assert_eq!(provider.available_phrases(), ["hey jarvis"]);
-        // And with the threshold the definition set, so a detector an operator
-        // tightened is asked for that tightness rather than the default.
-        let configured = provider.configured_phrases();
+        // The phrases carry the threshold the definition set, so a detector an
+        // operator tightened is asked for that tightness rather than the
+        // default.
+        let configured = &provider.descriptor().metadata.phrases;
         assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].phrase, "hey jarvis");
         assert!((configured[0].threshold - 0.8).abs() < f32::EPSILON);
     }
 }
