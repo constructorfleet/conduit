@@ -24,6 +24,7 @@ echoes described under [Running](#running).
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
+| [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
 | [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
@@ -612,8 +613,8 @@ by the wrong identity is worse than one satisfied by none.
 
 **Speaker identification is remote only.** The embedding models that recognize
 a voice are Python and want more memory than an ESP32 has, so there is no
-on-device counterpart to `device_wake`. A satellite can wake itself; it cannot
-tell who woke it.
+on-device counterpart to a wake definition's `device` runtime. A satellite can
+wake itself; it cannot tell who woke it.
 
 **The identification threshold is not calibrated for you.** The 50% default is
 a starting point. Cosine similarities from an embedding model depend on the

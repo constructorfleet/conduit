@@ -49,7 +49,7 @@ import type {
   ProviderSecret,
   SpeakerEngine,
   TurnSnapshot,
-  WakeEngine,
+  WakeRuntime,
 } from "./contracts/client";
 import {
   eventEnvelopeFixtures,
@@ -91,6 +91,8 @@ import type {
 /// Asks a provider what voices it offers, answering `null` when it could not
 /// be asked at all.
 type VoiceLoader = (providerId: string) => Promise<VoiceCatalog>;
+/// The phrases a wake detector has models for, empty when it cannot enumerate.
+type PhraseLoader = (providerId: string) => Promise<string[]>;
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -129,6 +131,8 @@ interface AppProps {
   /// The definition as it goes to the API, for tests that care what shape the
   /// console actually sends.
   onProviderDefinitionSaved?: (definition: ApiProviderDefinition) => void;
+  /// The phrases a detector reports, for tests that care what the form offers.
+  onProviderPhrases?: PhraseLoader;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
 }
@@ -145,6 +149,7 @@ function App({
   onPipelineSaved,
   onPipelineDeleted,
   onProviderDefinitionSaved,
+  onProviderPhrases,
   onPipelineValidate,
   onPipelineTest,
 }: AppProps = {}) {
@@ -172,6 +177,7 @@ function App({
       onPipelineSaved={onPipelineSaved}
       onPipelineDeleted={onPipelineDeleted}
       onProviderDefinitionSaved={onProviderDefinitionSaved}
+      onProviderPhrases={onProviderPhrases}
       onPipelineValidate={onPipelineValidate}
       onPipelineTest={onPipelineTest}
       onSectionChange={setActiveSection}
@@ -271,6 +277,7 @@ function OperatorWorkspace({
   onPipelineSaved,
   onPipelineDeleted,
   onProviderDefinitionSaved,
+  onProviderPhrases,
   onPipelineValidate,
   onPipelineTest,
   onSectionChange,
@@ -291,6 +298,8 @@ function OperatorWorkspace({
   /// The definition as it goes to the API, for tests that care what shape the
   /// console actually sends.
   onProviderDefinitionSaved?: (definition: ApiProviderDefinition) => void;
+  /// The phrases a detector reports, for tests that care what the form offers.
+  onProviderPhrases?: PhraseLoader;
   onPipelineValidate?: PipelineValidator;
   onPipelineTest?: PipelineTester;
   onSectionChange: (section: SectionId) => void;
@@ -445,6 +454,22 @@ function OperatorWorkspace({
       }));
     } catch {
       return null;
+    }
+  }
+
+  /// The phrases a wake detector has models for, or none when it cannot say.
+  ///
+  /// A detector scoring models in this process knows exactly which phrases it
+  /// loaded, so an operator narrowing the list should see them rather than
+  /// having to remember how the files were named. A Wyoming server enumerates
+  /// nothing and a satellite knows only what it was flashed with; both answer
+  /// with an empty list and the field stays a plain text box.
+  async function loadProviderPhrases(providerId: string): Promise<string[]> {
+    try {
+      const { phrases } = await snapshotClient.loadProviderPhrases(providerId);
+      return phrases;
+    } catch {
+      return [];
     }
   }
 
@@ -750,6 +775,7 @@ function OperatorWorkspace({
           onPipelineTest={onPipelineTest ?? runPipelineTest}
           onProviderTest={runProviderTest}
           onProviderVoices={loadProviderVoices}
+          onProviderPhrases={onProviderPhrases ?? loadProviderPhrases}
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
@@ -781,6 +807,7 @@ function SectionPanel({
   onPipelineTest,
   onProviderTest,
   onProviderVoices,
+  onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
 }: {
@@ -801,6 +828,7 @@ function SectionPanel({
   onPipelineTest: PipelineTester;
   onProviderTest: ProviderTester;
   onProviderVoices: VoiceLoader;
+  onProviderPhrases: PhraseLoader;
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinition>;
@@ -858,6 +886,7 @@ function SectionPanel({
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
         onProviderTest={onProviderTest}
+        onProviderPhrases={onProviderPhrases}
         onProviderDefinitionSave={onProviderDefinitionSave}
         onProviderDefinitionDelete={onProviderDefinitionDelete}
       />
@@ -935,6 +964,7 @@ function ProvidersPanel({
   providerDefinitions,
   providers,
   onProviderTest,
+  onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
 }: {
@@ -943,6 +973,7 @@ function ProvidersPanel({
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
   onProviderTest: ProviderTester;
+  onProviderPhrases: PhraseLoader;
   onProviderDefinitionSave: (
     definition: ProviderDefinition,
   ) => Promise<ProviderDefinition>;
@@ -961,6 +992,33 @@ function ProvidersPanel({
   const [providerNotices, setProviderNotices] = useState<
     Record<string, string>
   >({});
+  /// Phrases the detector being edited reports having models for.
+  ///
+  /// Only a saved definition has a registered detector to ask, so a brand new
+  /// one has nothing to offer and the field stays a plain text box — which is
+  /// what it was before this existed.
+  const [draftPhrases, setDraftPhrases] = useState<readonly string[]>([]);
+  const draftWakeId =
+    draftProvider && draftProvider.kind === "wake" && editingProviderId
+      ? draftProvider.id
+      : null;
+  useEffect(() => {
+    if (!draftWakeId) {
+      setDraftPhrases([]);
+      return;
+    }
+    let current = true;
+    void onProviderPhrases(draftWakeId).then((phrases) => {
+      if (current) {
+        setDraftPhrases(phrases);
+      }
+    });
+    return () => {
+      current = false;
+    };
+  }, [draftWakeId, onProviderPhrases]);
+  const draftProviderSuggestions =
+    draftPhrases.length > 0 ? { phrases: draftPhrases } : undefined;
   const providerCards = providerCardViews(providerDefinitions, providers);
   const visibleProviderCards = providerCards.filter(
     (provider) => filter === "all" || provider.kind === filter,
@@ -1336,6 +1394,7 @@ function ProvidersPanel({
           validation={draftProviderValidation}
           selectedKind={selectedProviderKind}
           selectedKindComponents={selectedKindComponents}
+          suggestions={draftProviderSuggestions}
           onCancel={cancelDraftProvider}
           onConfigChange={updateDraftConfig}
           onDraftChange={updateDraftProvider}
@@ -1356,6 +1415,7 @@ function ProviderAddDialog({
   validation,
   selectedKind,
   selectedKindComponents,
+  suggestions,
   onCancel,
   onConfigChange,
   onDraftChange,
@@ -1370,6 +1430,7 @@ function ProviderAddDialog({
   validation: PipelineValidationResult;
   selectedKind: ProviderKind | null;
   selectedKindComponents: readonly ProviderComponentDescriptor[];
+  suggestions?: Record<string, readonly string[]>;
   onCancel: () => void;
   onConfigChange: (
     field: string,
@@ -1425,6 +1486,7 @@ function ProviderAddDialog({
             draftProvider={draftProvider}
             selectedComponent={selectedComponent}
             validation={validation}
+            suggestions={suggestions}
             onConfigChange={onConfigChange}
             onDraftChange={onDraftChange}
           />
@@ -1482,6 +1544,7 @@ function ProviderEditorFields({
   draftProvider,
   selectedComponent,
   validation,
+  suggestions,
   onConfigChange,
   onDraftChange,
 }: {
@@ -1489,6 +1552,7 @@ function ProviderEditorFields({
   draftProvider: ProviderDefinition;
   selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
+  suggestions?: Record<string, readonly string[]>;
   onConfigChange: (
     field: string,
     property: ComponentConfigProperty,
@@ -1558,6 +1622,7 @@ function ProviderEditorFields({
           component={selectedComponent}
           config={draftProvider.config}
           readOnly={false}
+          suggestions={suggestions}
           onChange={onConfigChange}
         />
       ) : null}
@@ -2789,11 +2854,17 @@ function ComponentConfigFields({
   component,
   config,
   readOnly,
+  suggestions,
   onChange,
 }: {
   component: ProviderComponentDescriptor;
   config: Record<string, unknown>;
   readOnly: boolean;
+  /// Values a field is known to accept, offered as suggestions rather than as
+  /// a closed menu. A wake detector reports the phrases it has models for, and
+  /// an operator narrowing a list should see them without having to remember
+  /// how the files were named.
+  suggestions?: Record<string, readonly string[]>;
   onChange: (
     field: string,
     property: ComponentConfigProperty,
@@ -2855,17 +2926,31 @@ function ComponentConfigFields({
         // the definition is built. Splitting on every keystroke would trim the
         // space they just typed and run the words together.
         if (property.type === "string_list") {
+          // Suggestions rather than a menu: the field holds several values,
+          // and a provider that enumerates some of them has not thereby
+          // forbidden the rest.
+          const known = suggestions?.[field] ?? [];
+          const listId =
+            known.length > 0 ? `${component.id}-${field}` : undefined;
           return (
             <label className="field" key={field}>
               <span>{`${label} (comma separated)`}</span>
               <input
                 type="text"
                 required={required.has(field)}
+                list={listId}
                 value={typeof config[field] === "string" ? config[field] : ""}
                 onChange={(event) =>
                   onChange(field, property, event.target.value)
                 }
               />
+              {listId ? (
+                <datalist id={listId}>
+                  {known.map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
+              ) : null}
             </label>
           );
         }
@@ -3150,17 +3235,26 @@ function configFromProviderVariant(
     };
   }
   if (variant.type === "wake") {
-    if (variant.variant.type === "wyoming") {
+    // The engine is the variant and the place is inside it, so the form flattens
+    // the runtime back out: `where` picks which of the remaining fields matter.
+    const runtime = variant.variant.runtime;
+    const phrases = variant.variant.phrases.join(", ");
+    if (runtime.where === "device") {
+      return { where: runtime.where, phrases };
+    }
+    if (runtime.where === "local") {
       return {
-        url: variant.variant.url,
-        engine: variant.variant.engine,
-        phrases: variant.variant.phrases.join(", "),
-        threshold_percent: variant.variant.threshold_percent,
+        where: runtime.where,
+        models_dir: runtime.models_dir ?? "",
+        phrases,
+        threshold_percent: runtime.threshold_percent,
       };
     }
     return {
-      engine: variant.variant.engine,
-      phrases: variant.variant.phrases.join(", "),
+      where: runtime.where,
+      url: runtime.url,
+      phrases,
+      threshold_percent: runtime.threshold_percent,
     };
   }
   if (variant.type === "speaker_id") {
@@ -3276,26 +3370,50 @@ function variantFromProviderDefinition(
       },
     };
   }
-  if (definition.component === "wyoming.wake") {
+  if (definition.component === "microwakeword") {
+    // The satellite is the reason microWakeWord exists on this list, so a
+    // definition arriving without a place named means the device.
+    const url = text("url");
     return {
       type: "wake",
       variant: {
-        type: "wyoming",
-        url: text("url"),
-        engine: (text("engine") || "openwakeword") as WakeEngine,
+        type: "microwakeword",
+        runtime:
+          text("where") === "wyoming"
+            ? {
+                where: "wyoming",
+                url,
+                threshold_percent: whole("threshold_percent"),
+              }
+            : { where: "device" },
         phrases: list("phrases"),
-        threshold_percent: whole("threshold_percent"),
       },
     };
   }
-  if (definition.component === "device.wake") {
+  if (
+    definition.component === "openwakeword" ||
+    definition.component === "nanowakeword"
+  ) {
+    // Both are ONNX end-to-end, so both can be scored here or handed to a
+    // server; the component says which engine, `where` says which of those.
+    const modelsDir = text("models_dir");
+    const runtime: WakeRuntime =
+      text("where") === "wyoming"
+        ? {
+            where: "wyoming",
+            url: text("url"),
+            threshold_percent: whole("threshold_percent"),
+          }
+        : {
+            where: "local",
+            ...(modelsDir ? { models_dir: modelsDir } : {}),
+            threshold_percent: whole("threshold_percent"),
+          };
     return {
       type: "wake",
       variant: {
-        // A satellite runs microWakeWord or nothing, and the catalog offers no
-        // other choice, so a definition arriving without one means the same.
-        type: "device",
-        engine: (text("engine") || "microwakeword") as WakeEngine,
+        type: definition.component,
+        runtime,
         phrases: list("phrases"),
       },
     };

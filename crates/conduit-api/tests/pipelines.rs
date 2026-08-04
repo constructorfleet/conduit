@@ -748,6 +748,271 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
 }
 
 #[tokio::test]
+async fn each_wake_engine_offers_only_the_places_it_runs() {
+    // The console builds its form from this catalog, so the catalog is what
+    // keeps an operator from describing a detector that cannot exist: an engine
+    // on hardware too small for it, or one Conduit cannot score in a process.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+    for scored in ["openwakeword", "nanowakeword"] {
+        assert_component(
+            components,
+            scored,
+            "wake",
+            &["where", "url", "models_dir", "phrases", "threshold_percent"],
+            &["where"],
+        );
+        assert_eq!(
+            places(components, scored),
+            serde_json::json!(["local", "wyoming"]),
+            "{scored} is ONNX end-to-end, so it runs here or on a server"
+        );
+    }
+    assert_component(
+        components,
+        "microwakeword",
+        "wake",
+        &["where", "url", "phrases", "threshold_percent"],
+        &["where"],
+    );
+    assert_eq!(
+        places(components, "microwakeword"),
+        serde_json::json!(["device", "wyoming"]),
+        "microWakeWord is the only engine a satellite runs, and the only one \
+         Conduit cannot score itself"
+    );
+    let properties = |id: &str| {
+        components.iter().find(|component| component["id"] == id).expect("component")["schema"]
+            ["properties"]
+            .clone()
+    };
+    assert!(
+        properties("microwakeword").get("models_dir").is_none(),
+        "there is no directory to read models from when Conduit never loads them"
+    );
+    for gone in ["wyoming.wake", "device.wake"] {
+        assert!(
+            !components.iter().any(|component| component["id"] == gone),
+            "`{gone}` named an engine beside a place; the engine is the component now"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_detector_that_scores_in_process_registers_from_its_models() {
+    let Some(models) = wake_models_dir() else { return };
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": {
+                            "where": "local",
+                            "models_dir": models.to_string_lossy(),
+                            "threshold_percent": 50,
+                        },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let providers = state.providers().expect("a snapshot was built");
+    let detector = providers.wake().get("openwakeword").expect("the detector registered");
+    assert_eq!(
+        detector.available_phrases(),
+        ["hey jarvis"],
+        "the phrases are whatever models are on disk, with no service to ask"
+    );
+}
+
+#[tokio::test]
+async fn a_model_directory_that_holds_nothing_is_refused_when_it_is_saved() {
+    // Not at the first turn, with someone standing there speaking to it.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": { "where": "local", "models_dir": "/nonexistent/models" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().unwrap_or_default().contains("/nonexistent/models"),
+        "the refusal names the directory: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_detector_lists_the_phrases_it_has_so_the_console_can_offer_them() {
+    let Some(models) = wake_models_dir() else { return };
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/openwakeword",
+            serde_json::json!({
+                "id": "openwakeword",
+                "label": "openWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "openwakeword",
+                        "runtime": { "where": "local", "models_dir": models.to_string_lossy() },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/openwakeword/phrases")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["provider"], "openwakeword");
+    assert_eq!(body["phrases"], serde_json::json!(["hey jarvis"]));
+}
+
+#[tokio::test]
+async fn a_provider_that_hears_nothing_has_no_phrases_to_offer() {
+    let state = AppState::new(EventBus::default());
+    call(
+        &state,
+        put_json(
+            "/v1/providers/speech",
+            serde_json::json!({
+                "id": "speech",
+                "label": "Whisper",
+                "variant": {
+                    "type": "stt",
+                    "variant": { "type": "wyoming", "url": "tcp://whisper:10300" },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    let (status, body) = call(&state, get("/v1/providers/speech/phrases")).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().unwrap_or_default().contains("not a wake word provider"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn phrases_for_a_definition_that_does_not_exist_are_a_404() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(&state, get("/v1/providers/ghost/phrases")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn nanowakeword_in_process_is_refused_with_the_reason() {
+    // It is ONNX like openWakeWord, so the refusal has to say what is actually
+    // different — recurrent models — or it reads as an arbitrary restriction.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(
+        &state,
+        put_json(
+            "/v1/providers/nanowakeword",
+            serde_json::json!({
+                "id": "nanowakeword",
+                "label": "nanoWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "nanowakeword",
+                        "runtime": { "where": "local" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = body["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("recurrent"), "the refusal says why: {detail}");
+    assert!(detail.contains("Wyoming"), "and what to do instead: {detail}");
+}
+
+#[tokio::test]
+async fn nanowakeword_on_a_wyoming_server_is_accepted() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/nanowakeword",
+            serde_json::json!({
+                "id": "nanowakeword",
+                "label": "nanoWakeWord",
+                "variant": {
+                    "type": "wake",
+                    "variant": {
+                        "type": "nanowakeword",
+                        "runtime": { "where": "wyoming", "url": "tcp://nanowakeword:10400" },
+                    },
+                },
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+/// The models `scripts/fetch-wake-models.sh` downloads, when they are present.
+fn wake_models_dir() -> Option<std::path::PathBuf> {
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../conduit-wake/tests/models");
+    directory.join("melspectrogram.onnx").exists().then_some(directory)
+}
+
+/// The places one wake component offers.
+fn places(components: &[serde_json::Value], id: &str) -> serde_json::Value {
+    components
+        .iter()
+        .find(|component| component["id"] == id)
+        .unwrap_or_else(|| panic!("missing component {id}"))["schema"]["properties"]["where"]
+        ["options"]
+        .clone()
+}
+
+#[tokio::test]
 async fn old_pipeline_component_catalog_route_is_gone() {
     let state = AppState::new(EventBus::default());
 

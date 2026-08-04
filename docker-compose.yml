@@ -2,6 +2,13 @@
 #
 #   docker compose up                          # just Conduit
 #   docker compose --profile speaker-id up     # and speaker identification
+#   docker compose --profile openwakeword up   # and a wake word server
+#
+# Waking on a phrase needs no profile at all if you use openWakeWord: Conduit
+# scores its models itself. Put them in the `wake-models` volume and point a
+# provider definition at `local`. The profiles below are for the cases that do
+# need a service — microWakeWord, nanoWakeWord, or an openWakeWord you would
+# rather run separately.
 #
 # Everything optional sits behind a profile, so the default is the smallest
 # thing that runs. Optional services are deliberately not published to the
@@ -27,6 +34,11 @@ services:
       CONDUIT_DATA_DIR: /var/lib/conduit
     volumes:
       - conduit-data:/var/lib/conduit
+      # openWakeWord models, for a definition whose runtime is `local`. Put
+      # `melspectrogram.onnx`, `embedding_model.onnx` and one `<phrase>.onnx`
+      # per wake phrase in here; `scripts/fetch-wake-models.sh` downloads a set.
+      # A definition that names no `models_dir` reads exactly this directory.
+      - wake-models:/var/lib/conduit/wake-models
       # Where a token file goes when you use one. Create ./secrets/tokens.json
       # and set CONDUIT_TOKENS=/run/secrets/tokens.json; the file must not be
       # group- or world-readable, which Conduit checks at startup.
@@ -59,7 +71,45 @@ services:
       - speaker-id-models:/models
     restart: unless-stopped
 
+  # Wake word servers, reached at tcp://<service>:10400 from Conduit.
+  #
+  # One profile per engine, because which one you run decides which phrases you
+  # can ask for — a microWakeWord manifest, an openWakeWord model, a
+  # nanoWakeWord model — and a provider definition names the engine as its type.
+  # Create a definition whose runtime is `wyoming` and whose `url` is that
+  # address, then add a Wake word stage to a pipeline.
+  #
+  # The images are yours to choose, for the same reason the speaker-id one is,
+  # so they come from .env. Activating a profile without setting its variable
+  # fails with "neither an image nor a build context" — that is the variable
+  # that is missing.
+  openwakeword:
+    profiles: ["openwakeword"]
+    image: ${CONDUIT_OPENWAKEWORD_IMAGE:-}
+    volumes:
+      # The models, so a restart does not re-download them.
+      - openwakeword-models:/models
+    restart: unless-stopped
+
+  microwakeword:
+    profiles: ["microwakeword"]
+    image: ${CONDUIT_MICROWAKEWORD_IMAGE:-}
+    volumes:
+      - microwakeword-models:/models
+    restart: unless-stopped
+
+  nanowakeword:
+    profiles: ["nanowakeword"]
+    image: ${CONDUIT_NANOWAKEWORD_IMAGE:-}
+    volumes:
+      - nanowakeword-models:/models
+    restart: unless-stopped
+
 volumes:
   conduit-data:
+  wake-models:
   speaker-id-data:
   speaker-id-models:
+  openwakeword-models:
+  microwakeword-models:
+  nanowakeword-models:

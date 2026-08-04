@@ -51,6 +51,9 @@ const DATA_DIR: &str = "CONDUIT_DATA_DIR";
 const PIPELINE_DIR: &str = "CONDUIT_PIPELINE_DIR";
 /// Directory to keep provider definitions in. Unset means the default data directory.
 const PROVIDER_DIR: &str = "CONDUIT_PROVIDER_DIR";
+/// Named only in the error a missing data directory raises: a wake definition
+/// carries its own `models_dir`, so there is no variable to set instead.
+const WAKE_MODELS_DIR: &str = "the definition's `models_dir`";
 /// Explicit value for a disposable in-memory pipeline store.
 const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
@@ -211,6 +214,23 @@ fn default_pipeline_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
 
 fn default_provider_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
     default_data_subdir(vars, PROVIDER_DIR, "providers")
+}
+
+/// Where a wake definition reads models from when it names no directory.
+///
+/// The same data directory pipelines and provider definitions live under, which
+/// is the volume the compose file mounts — so an operator who dropped models
+/// where the documentation said gets a definition that needs no path at all.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if there is no data directory to derive it from.
+pub fn wake_models_dir_from_env() -> Result<PathBuf> {
+    default_data_subdir(
+        &std::env::vars().collect(),
+        WAKE_MODELS_DIR,
+        conduit_wake::DEFAULT_MODELS_DIR,
+    )
 }
 
 fn default_data_subdir(

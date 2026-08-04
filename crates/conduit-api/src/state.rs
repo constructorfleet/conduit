@@ -1,6 +1,7 @@
 //! Shared application state.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use conduit_openai::{OpenAi, OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::storage::{
     LlmVariant, McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
     ProviderDefinitionVariant, ProviderSecret, SpeakerIdVariant, SttVariant, ToolVariant,
-    TtsVariant, WakeVariant,
+    TtsVariant, WakeEngine, WakeVariant, DEFAULT_THRESHOLD_PERCENT,
 };
 use conduit_provider::wake::DeviceWake;
 use conduit_provider::Health;
@@ -21,6 +22,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_speaker::diarization_server::DiarizationServerSpeakerId;
 use conduit_speaker::HttpSpeakerId;
 use conduit_store::MemoryStore;
+use conduit_wake::OpenWakeWord;
 use conduit_wyoming::stt::WyomingStt;
 use conduit_wyoming::tts::WyomingTts;
 use conduit_wyoming::wake::WyomingWake;
@@ -329,6 +331,10 @@ impl AppState {
                     provider.health().await
                 } else if let Some(provider) = providers.tools().get(&id) {
                     provider.health().await
+                } else if let Some(provider) = providers.wake().get(&id) {
+                    provider.health().await
+                } else if let Some(provider) = providers.speaker().get(&id) {
+                    provider.health().await
                 } else {
                     // The registry holds no provider under the definition id.
                     // An MCP definition registers its tools as
@@ -440,19 +446,8 @@ async fn register_definition(
         ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             Ok(register_mcp_tools(providers, &definition.id, transport).await)
         }
-        ProviderDefinitionVariant::Wake {
-            variant: WakeVariant::Wyoming { url, phrases, threshold_percent, .. },
-        } => Ok(providers.with_wake(WyomingWake::new(
-            &definition.id,
-            url,
-            phrases.clone(),
-            f32::from(*threshold_percent) / 100.0,
-        )?)),
-        // A satellite that wakes itself still registers a detector, so that a
-        // pipeline naming the stage resolves and the activation reaches the
-        // event stream. It scores nothing: the device already decided.
-        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { phrases, .. } } => {
-            Ok(providers.with_wake(DeviceWake::new(&definition.id, phrases.clone())))
+        ProviderDefinitionVariant::Wake { variant } => {
+            register_wake(providers, &definition.id, variant)
         }
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::DiarizationServer { base_url, threshold_percent },
@@ -470,6 +465,39 @@ async fn register_definition(
             f32::from(*threshold_percent) / 100.0,
         )?)),
     }
+}
+
+/// Registers the detector a wake definition describes.
+///
+/// The engine says which detector is listening and the runtime says where, so
+/// what gets registered follows from the runtime alone: a Wyoming server gets a
+/// client, models on disk get one that scores them here, and a satellite that
+/// wakes itself still gets a detector — one that scores nothing, because the
+/// device already decided — so that a pipeline naming the stage resolves and
+/// the activation reaches the event stream.
+fn register_wake(providers: Providers, id: &str, variant: &WakeVariant) -> Result<Providers> {
+    let phrases = variant.phrases().to_vec();
+    let threshold =
+        f32::from(variant.threshold_percent().unwrap_or(DEFAULT_THRESHOLD_PERCENT)) / 100.0;
+
+    if let Some(url) = variant.wyoming_url() {
+        return Ok(providers.with_wake(WyomingWake::new(id, url, phrases, threshold)?));
+    }
+    if let Some(models_dir) = variant.local_models_dir() {
+        if variant.engine() != WakeEngine::OpenWakeWord {
+            return Err(conduit_core::Error::Config(crate::providers::local_wake_unavailable(
+                variant.engine().name(),
+            )));
+        }
+        // A definition that named no directory means the conventional one under
+        // the data directory, which is the volume the compose file mounts.
+        let directory = match models_dir {
+            Some(named) => PathBuf::from(named),
+            None => crate::config::wake_models_dir_from_env()?,
+        };
+        return Ok(providers.with_wake(OpenWakeWord::load(id, directory, phrases, threshold)?));
+    }
+    Ok(providers.with_wake(DeviceWake::new(id, phrases)))
 }
 
 /// Registers whatever tools an MCP server currently advertises.

@@ -1929,20 +1929,18 @@ describe("Providers workspace", () => {
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Add provider" }));
     await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: "Wyoming wake word" }),
-    );
+    await user.click(screen.getByRole("menuitem", { name: "openWakeWord" }));
     await user.clear(screen.getByLabelText("Provider id"));
     await user.type(screen.getByLabelText("Provider id"), "openwakeword");
     await user.clear(screen.getByLabelText("Provider label"));
     await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
-    await user.type(
-      screen.getByLabelText("url required"),
-      "tcp://openwakeword.local:10400",
-    );
     await user.selectOptions(
-      screen.getByLabelText("engine required"),
-      "openwakeword",
+      screen.getByLabelText("where required"),
+      "wyoming",
+    );
+    await user.type(
+      screen.getByLabelText("url"),
+      "tcp://openwakeword.local:10400",
     );
     await user.type(
       screen.getByLabelText("phrases (comma separated)"),
@@ -1955,13 +1953,102 @@ describe("Providers workspace", () => {
     expect(saved[0]?.variant).toMatchObject({
       type: "wake",
       variant: {
-        type: "wyoming",
-        url: "tcp://openwakeword.local:10400",
-        engine: "openwakeword",
+        type: "openwakeword",
+        runtime: {
+          where: "wyoming",
+          url: "tcp://openwakeword.local:10400",
+          threshold_percent: 70,
+        },
         phrases: ["hey jarvis", "okay nabu"],
-        threshold_percent: 70,
       },
     });
+  });
+
+  it("keeps a satellite off the engines it is too small to run", async () => {
+    // The engine used to be a field beside the place, so a definition could say
+    // openWakeWord on a satellite and only find out at the server. Now each
+    // engine is its own component, offering only the places it runs.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
+    await user.click(screen.getByRole("menuitem", { name: "microWakeWord" }));
+
+    const places = screen.getByLabelText("where required");
+    expect(
+      within(places)
+        .queryAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["choose one", "device", "wyoming"]);
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "satellite");
+    await user.selectOptions(places, "device");
+    await user.type(
+      screen.getByLabelText("phrases (comma separated)"),
+      "okay nabu",
+    );
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(saved[0]?.variant).toMatchObject({
+      type: "wake",
+      variant: {
+        type: "microwakeword",
+        runtime: { where: "device" },
+        phrases: ["okay nabu"],
+      },
+    });
+  });
+
+  it("offers the phrases a saved detector reports having models for", async () => {
+    // A detector scoring models in this process knows exactly which phrases it
+    // loaded. Suggestions rather than a menu: the field holds several values,
+    // and a detector that enumerates some has not forbidden the rest.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderPhrases={async () => ["hey jarvis", "alexa"]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Wake word" }));
+    await user.click(screen.getByRole("menuitem", { name: "openWakeWord" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "openwakeword");
+    await user.clear(screen.getByLabelText("Provider label"));
+    await user.type(screen.getByLabelText("Provider label"), "openWakeWord");
+    await user.selectOptions(screen.getByLabelText("where required"), "local");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    // Nothing to ask until a detector is registered, so the suggestions only
+    // arrive once the definition has been saved and is being edited again.
+    const card = screen
+      .getByRole("heading", { name: "openWakeWord" })
+      .closest("article");
+    await user.click(
+      within(card as HTMLElement).getByRole("button", {
+        name: "Edit openwakeword",
+      }),
+    );
+
+    const field = await screen.findByLabelText("phrases (comma separated)");
+    const list = field.getAttribute("list");
+    expect(list).toBeTruthy();
+    const options = Array.from(
+      document.getElementById(list as string)?.querySelectorAll("option") ?? [],
+    ).map((option) => option.getAttribute("value"));
+    expect(options).toEqual(["hey jarvis", "alexa"]);
   });
 
   it("creates and edits schema-backed provider instances from provider cards", async () => {
@@ -2512,21 +2599,34 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
-        id: "wyoming.wake",
-        label: "Wyoming wake word",
+        id: "openwakeword",
+        label: "openWakeWord",
         kind: "wake",
-        definition_variant: "wyoming",
+        definition_variant: "openwakeword",
         schema: {
           properties: {
+            where: { type: "string", options: ["local", "wyoming"] },
             url: { type: "string", format: "url" },
-            engine: {
-              type: "string",
-              options: ["openwakeword", "microwakeword", "nanowakeword"],
-            },
+            models_dir: { type: "string" },
             phrases: { type: "string_list" },
             threshold_percent: { type: "integer" },
           },
-          required: ["url", "engine"],
+          required: ["where"],
+        },
+      },
+      {
+        id: "microwakeword",
+        label: "microWakeWord",
+        kind: "wake",
+        definition_variant: "microwakeword",
+        schema: {
+          properties: {
+            where: { type: "string", options: ["device", "wyoming"] },
+            url: { type: "string", format: "url" },
+            phrases: { type: "string_list" },
+            threshold_percent: { type: "integer" },
+          },
+          required: ["where"],
         },
       },
       {

@@ -7,7 +7,7 @@ use axum::Json;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
     ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TtsVariant,
-    WakeVariant,
+    WakeEngine,
 };
 use conduit_provider::Health;
 use serde::Serialize;
@@ -172,6 +172,58 @@ pub async fn voices(
     Ok(Json(ProviderVoices { provider: id, voices }))
 }
 
+/// The phrases a wake word detector offers.
+#[derive(Debug, Serialize)]
+pub struct ProviderPhrases {
+    /// Provider definition the phrases belong to.
+    pub provider: String,
+    /// Phrases the detector reported, in the order it reported them.
+    ///
+    /// Empty is a real answer, for the same reason it is for voices: a Wyoming
+    /// server scores whatever it loaded and enumerates nothing, and a satellite
+    /// knows only what it was flashed with. The console falls back to typing,
+    /// which is what an operator had before this endpoint existed.
+    pub phrases: Vec<String>,
+}
+
+/// `GET /v1/providers/{id}/phrases` — the phrases one detector offers.
+///
+/// A detector that scores models in process knows exactly which phrases it has,
+/// because they are the files it loaded. Asking is what lets the console offer
+/// them rather than making an operator type a phrase and find out whether the
+/// model exists when someone speaks to it.
+///
+/// # Errors
+///
+/// Returns 404 if there is no such definition, and 422 if the definition is not
+/// a wake word detector.
+pub async fn phrases(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderPhrases>, ApiError> {
+    let definition = state
+        .provider_definition(&id)
+        .await
+        .map_err(store_failure)?
+        .ok_or_else(|| ApiError::not_found(format!("no provider definition `{id}`")))?;
+    if definition.capability() != ProviderCapability::Wake {
+        return Err(ApiError::unprocessable(format!(
+            "provider definition `{id}` is not a wake word provider, so it has no phrases"
+        )));
+    }
+
+    // A definition saved but not registered — its models would not load, or its
+    // service was down when the snapshot was built — has nothing to enumerate.
+    let Some(provider) = state.providers().and_then(|providers| providers.wake().get(&id))
+    else {
+        return Ok(Json(ProviderPhrases { provider: id, phrases: Vec::new() }));
+    };
+
+    let phrases = provider.available_phrases().to_vec();
+    Ok(Json(ProviderPhrases { provider: id, phrases }))
+}
+
 /// `POST /v1/providers/{id}/test` — active reachability check for one provider.
 pub async fn test(
     _caller: ManagementCaller,
@@ -259,6 +311,26 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
     }
 }
 
+/// Why a definition that detects in process cannot be used.
+///
+/// Shared by validation and by registration so that an operator saving one and
+/// a server loading one already stored are told the same thing.
+///
+/// Only nanoWakeWord reaches this: microWakeWord has no `local` runtime to
+/// name, and openWakeWord is implemented. nanoWakeWord runs in process
+/// perfectly well — the reason it does not run in *this* process is that its
+/// phrase models are recurrent, threading an LSTM hidden and cell state from
+/// one chunk to the next, where openWakeWord's score a fixed window of
+/// embeddings and keep nothing. That is a second detector, not a setting on
+/// this one, and a definition should hear the difference now rather than
+/// discover it as a detector that never fires.
+pub(crate) fn local_wake_unavailable(engine: &str) -> String {
+    format!(
+        "`{engine}` cannot yet detect in process: its models are recurrent and Conduit only \
+         scores openWakeWord's in-process. Point the definition at a Wyoming server instead."
+    )
+}
+
 fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), ApiError> {
     match &definition.variant {
         ProviderDefinitionVariant::Llm { variant: LlmVariant::OpenAi { base_url, .. } }
@@ -267,8 +339,7 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
             validate_http_url("base_url", base_url)?;
         }
         ProviderDefinitionVariant::Stt { variant: SttVariant::Wyoming { url, .. } }
-        | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } }
-        | ProviderDefinitionVariant::Wake { variant: WakeVariant::Wyoming { url, .. } } => {
+        | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } } => {
             validate_tcp_url("url", url)?;
         }
         ProviderDefinitionVariant::SpeakerId {
@@ -279,15 +350,24 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         } => {
             validate_http_url("base_url", base_url)?;
         }
-        // A satellite that wakes itself has no endpoint to check: the
-        // detector is flashed onto the device, and the only thing that could
-        // be wrong here is an engine too large for it to run.
-        ProviderDefinitionVariant::Wake { variant: WakeVariant::Device { engine, .. } } => {
-            if !engine.runs_on_device() {
-                return Err(ApiError::unprocessable(format!(
-                    "`{}` cannot run on a satellite; use a wyoming_wake definition for it, \
-                     or microwakeword on the device",
-                    engine.name()
+        // Where a wake definition detects is the shape of the definition
+        // rather than two fields that can disagree, so an engine on hardware
+        // too small for it is no longer something to reject — it is no longer
+        // something to write. What is left to check is the endpoint, when
+        // there is one; a satellite has none, because the detector is flashed
+        // onto the device.
+        ProviderDefinitionVariant::Wake { variant } => {
+            if let Some(url) = variant.wyoming_url() {
+                validate_tcp_url("url", url)?;
+            }
+            // Detecting in process is openWakeWord's alone for now. The models
+            // are checked when the detector is built, not here: whether a
+            // directory holds them is not something a definition can say.
+            if variant.local_models_dir().is_some()
+                && variant.engine() != WakeEngine::OpenWakeWord
+            {
+                return Err(ApiError::unprocessable(local_wake_unavailable(
+                    variant.engine().name(),
                 )));
             }
         }
