@@ -480,7 +480,7 @@ impl Runner {
         // A pipeline fed by text has no recognizer to ask, and the format
         // still describes the audio it produces.
         if let Some(stt) = &self.plan.stt {
-            if !stt.provider.supports_encoding(format.encoding) {
+            if !stt.provider.descriptor().metadata.supports_encoding(format.encoding) {
                 return Err(conduit_core::Error::Config(format!(
                     "node `{}` uses provider `{}`, which cannot accept {:?} audio",
                     stt.node,
@@ -491,7 +491,7 @@ impl Runner {
         }
         // A pipeline that writes its reply down has no synthesizer to ask.
         if let Some(tts) = &self.plan.tts {
-            if !tts.provider.supports_encoding(format.encoding) {
+            if !tts.provider.descriptor().metadata.supports_encoding(format.encoding) {
                 return Err(conduit_core::Error::Config(format!(
                     "node `{}` uses provider `{}`, which cannot produce {:?} audio",
                     tts.node,
@@ -615,9 +615,7 @@ mod tests {
     struct NoMemory;
 
     impl Provider for NoMemory {
-        fn name(&self) -> &str {
-            "no-memory"
-        }
+        conduit_provider::stub_descriptor!("no-memory", conduit_provider::Capability::Memory);
     }
 
     #[async_trait::async_trait]
@@ -641,9 +639,7 @@ mod tests {
     struct NoWake;
 
     impl Provider for NoWake {
-        fn name(&self) -> &str {
-            "no-wake"
-        }
+        conduit_provider::stub_descriptor!("no-wake", conduit_provider::Capability::Wake);
     }
 
     #[async_trait::async_trait]
@@ -664,9 +660,10 @@ mod tests {
     struct NoSpeaker;
 
     impl Provider for NoSpeaker {
-        fn name(&self) -> &str {
-            "no-speaker"
-        }
+        conduit_provider::stub_descriptor!(
+            "no-speaker",
+            conduit_provider::Capability::SpeakerId
+        );
     }
 
     #[async_trait::async_trait]

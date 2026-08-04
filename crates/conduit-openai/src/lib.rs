@@ -79,9 +79,18 @@ pub struct OpenAiConfig {
     pub base_url: String,
     /// Bearer token. Local servers usually need none.
     pub api_key: Option<String>,
-    /// Registration name, so two differently configured servers can coexist
-    /// in one registry — `"openai"` and `"ollama"`, say.
+    /// Stable identity, so two differently configured servers can coexist in
+    /// one registry — `"openai"` and `"ollama"`, say.
+    ///
+    /// This is what the provider calls itself, and what appears in metric
+    /// labels and error messages. The key it is registered under is the
+    /// deployment's to choose and need not match.
     pub name: String,
+    /// Human-readable name for operator screens, e.g. `"Ollama (kitchen)"`.
+    ///
+    /// `None` shows the identity, which reads perfectly well for a deployment
+    /// that never named its servers.
+    pub label: Option<String>,
     /// How long to wait for the TCP and TLS handshake. This bounds *reaching*
     /// the server and nothing after it.
     pub connect_timeout: Duration,
@@ -107,12 +116,30 @@ pub struct OpenAiConfig {
     pub system_prompt: Option<String>,
 }
 
+impl OpenAiConfig {
+    /// The identity half of a descriptor for one capability this server
+    /// serves.
+    ///
+    /// A configuration describes a *server*, so the three capabilities it can
+    /// supply share an identity, a label, and a version, and differ only in
+    /// what they say they can do.
+    fn descriptor(
+        &self,
+        capability: conduit_provider::Capability,
+    ) -> conduit_provider::Descriptor {
+        conduit_provider::Descriptor::new(self.name.clone(), capability)
+            .with_label(self.label.clone().unwrap_or_else(|| self.name.clone()))
+            .with_version(env!("CARGO_PKG_VERSION"))
+    }
+}
+
 impl Default for OpenAiConfig {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_owned(),
             api_key: None,
             name: "openai".to_owned(),
+            label: None,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             read_timeout: Some(DEFAULT_READ_TIMEOUT),
             models: Vec::new(),

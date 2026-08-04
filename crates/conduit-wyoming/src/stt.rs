@@ -9,7 +9,7 @@
 use conduit_core::audio::Encoding;
 use conduit_core::{Error, Result};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Metadata, Provider};
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use tokio::io::BufReader;
@@ -20,11 +20,14 @@ use crate::protocol::{
     WyomingEvent, CONNECT_TIMEOUT,
 };
 
+/// The one encoding Wyoming audio events carry.
+const ENCODINGS: [Encoding; 1] = [Encoding::PcmS16Le];
+
 /// A speech-to-text provider backed by a Wyoming TCP server.
 #[derive(Debug, Clone)]
 pub struct WyomingStt {
-    /// Stable registration name, surfaced in health and diagnostics.
-    name: String,
+    /// Identity, version, and what this server says it can do.
+    descriptor: Descriptor,
     /// Resolved `host:port` from the `tcp://` URL.
     address: String,
     /// Optional server-side model to request in `audio-start`.
@@ -53,16 +56,21 @@ impl WyomingStt {
         let address = tcp_address(url).ok_or_else(|| {
             Error::Config(format!("provider `{name}` Wyoming url must use tcp://host:port"))
         })?;
-        Ok(Self { name, address, model, streaming })
+        let descriptor = Descriptor::new(name, Capability::Stt).with_metadata(
+            Metadata::default()
+                .with_models(model.iter().cloned().collect())
+                .with_encodings(ENCODINGS.to_vec()),
+        );
+        Ok(Self { descriptor, address, model, streaming })
     }
 
     async fn connect(&self) -> Result<TcpStream> {
         tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&self.address))
             .await
             .map_err(|_| {
-                Error::Config(format!("provider `{}` timed out connecting", self.name))
+                Error::Config(format!("provider `{}` timed out connecting", self.name()))
             })?
-            .map_err(|error| Error::provider(self.name.clone(), error))
+            .map_err(|error| Error::provider(self.name().to_owned(), error))
     }
 }
 
@@ -95,8 +103,8 @@ fn transcript_from_event(event: &WyomingEvent) -> (String, Option<f32>, bool) {
 
 #[async_trait::async_trait]
 impl Provider for WyomingStt {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -145,7 +153,7 @@ impl SpeechToText for WyomingStt {
         // clean audio and recognized nothing.
         let writer = std::sync::Arc::new(tokio::sync::Mutex::new(write_half));
         let pump_writer = std::sync::Arc::clone(&writer);
-        let provider = self.name.clone();
+        let provider = self.name().to_owned();
         let pump_provider = provider.clone();
         // How much audio reached the recognizer, and how the send side ended,
         // is the difference between "the device stopped talking" and "we
@@ -315,10 +323,6 @@ impl SpeechToText for WyomingStt {
                 }
             },
         )))
-    }
-
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        encoding == Encoding::PcmS16Le
     }
 }
 
@@ -560,8 +564,9 @@ mod tests {
     fn supports_only_pcm_s16_le() {
         let provider =
             WyomingStt::new("whisper", "tcp://localhost:10300", None, false).unwrap();
-        assert!(provider.supports_encoding(Encoding::PcmS16Le));
-        assert!(!provider.supports_encoding(Encoding::Flac));
+        let metadata = &provider.descriptor().metadata;
+        assert!(metadata.supports_encoding(Encoding::PcmS16Le));
+        assert!(!metadata.supports_encoding(Encoding::Flac));
     }
 
     #[test]

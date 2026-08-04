@@ -6,7 +6,9 @@
 use conduit_core::audio::Encoding;
 use conduit_core::Result;
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{
+    Capability, ChunkStream, Descriptor, Health, Metadata, Provider, SettingsSchema,
+};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -33,6 +35,31 @@ struct Response {
 pub struct OpenAiStt {
     http: Http,
     model: String,
+    descriptor: Descriptor,
+}
+
+/// The encodings the transcriptions endpoint accepts, via the WAV container
+/// Conduit packages an utterance into.
+const ENCODINGS: [Encoding; 3] = [Encoding::PcmS16Le, Encoding::PcmF32Le, Encoding::Flac];
+
+/// What the transcriptions endpoint accepts beyond a language hint.
+fn settings_schema() -> SettingsSchema {
+    SettingsSchema::new(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "Vocabulary hint biasing the recognizer, e.g. proper nouns.",
+            },
+            "temperature": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Sampling temperature; 0 asks for the most likely transcript.",
+            },
+        },
+    }))
+    .expect("a literal object schema")
 }
 
 impl OpenAiStt {
@@ -43,14 +70,23 @@ impl OpenAiStt {
     /// Returns [`conduit_core::Error::Config`] if the HTTP client cannot be
     /// built.
     pub fn new(config: &OpenAiConfig, model: impl Into<String>) -> Result<Self> {
-        Ok(Self { http: Http::new(config)?, model: model.into() })
+        let model = model.into();
+        let descriptor = config
+            .descriptor(Capability::Stt)
+            .with_metadata(
+                Metadata::default()
+                    .with_models(vec![model.clone()])
+                    .with_encodings(ENCODINGS.to_vec()),
+            )
+            .with_settings(settings_schema());
+        Ok(Self { http: Http::new(config)?, model, descriptor })
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for OpenAiStt {
-    fn name(&self) -> &str {
-        self.http.name()
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -90,6 +126,15 @@ impl SpeechToText for OpenAiStt {
         if let Some(language) = options.language {
             form = form.text("language", language);
         }
+        // Already checked against this provider's declared schema, so each one
+        // is a field the endpoint has rather than a blob forwarded on trust.
+        for (name, value) in options.settings.as_map() {
+            let rendered = match value {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            form = form.text(name.clone(), rendered);
+        }
 
         let response =
             self.http.send(self.http.post("audio/transcriptions").multipart(form)).await?;
@@ -105,8 +150,19 @@ impl SpeechToText for OpenAiStt {
             Transcript { language: body.language, ..Transcript::final_text(body.text.trim()) };
         Ok(Box::pin(futures_util::stream::once(async move { Ok(transcript) })))
     }
+}
 
-    fn supports_encoding(&self, encoding: Encoding) -> bool {
-        matches!(encoding, Encoding::PcmS16Le | Encoding::PcmF32Le | Encoding::Flac)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_descriptor_names_the_encodings_the_endpoint_takes() {
+        let provider = OpenAiStt::new(&OpenAiConfig::default(), "whisper-1").expect("client");
+        let metadata = &provider.descriptor().metadata;
+
+        assert!(metadata.supports_encoding(Encoding::PcmS16Le));
+        assert!(!metadata.supports_encoding(Encoding::Opus));
+        assert_eq!(metadata.models, ["whisper-1"]);
     }
 }

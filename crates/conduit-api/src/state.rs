@@ -389,6 +389,10 @@ async fn register_definition(
         base_url: base_url.to_owned(),
         api_key: secret_value(api_key),
         name: definition.id.clone(),
+        // The label an operator typed, kept distinct from the identity: the
+        // provider is registered under the definition id and calls itself by
+        // it, and this is only what a screen shows.
+        label: Some(definition.label.clone()),
         ..OpenAiConfig::default()
     };
 

@@ -24,7 +24,7 @@ use conduit_core::id::SpeakerId;
 use conduit_core::{Error, Result};
 use conduit_provider::speaker::{Identification, SpeakerIdentifier};
 use conduit_provider::stt::AudioChunk;
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Provider};
 use serde::Deserialize;
 
 use crate::{collect_samples, http_client, REQUEST_TIMEOUT};
@@ -39,7 +39,7 @@ const REQUIRED_FORMAT: AudioFormat =
 /// A speaker identifier backed by a Diarization_Server instance.
 #[derive(Debug, Clone)]
 pub struct DiarizationServerSpeakerId {
-    name: String,
+    descriptor: Descriptor,
     base_url: String,
     threshold: f32,
     format: AudioFormat,
@@ -58,7 +58,7 @@ impl DiarizationServerSpeakerId {
         Ok(Self {
             client: http_client(&name, REQUEST_TIMEOUT)?,
             base_url: crate::normalized_base_url(&name, base_url)?,
-            name,
+            descriptor: Descriptor::new(name, Capability::SpeakerId),
             threshold,
             format: AudioFormat::DEFAULT,
         })
@@ -84,7 +84,10 @@ impl DiarizationServerSpeakerId {
             "provider `{}` speaks to a Diarization_Server, which reads raw 16 kHz mono \
              16-bit PCM and cannot be told otherwise; this pipeline captures {:?} at \
              {} Hz in {} channel(s)",
-            self.name, self.format.encoding, self.format.sample_rate, self.format.channels
+            self.name(),
+            self.format.encoding,
+            self.format.sample_rate,
+            self.format.channels
         )))
     }
 }
@@ -107,8 +110,8 @@ struct DiarizeResponse {
 
 #[async_trait::async_trait]
 impl Provider for DiarizationServerSpeakerId {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -133,10 +136,12 @@ impl SpeakerIdentifier for DiarizationServerSpeakerId {
             .body(samples)
             .send()
             .await
-            .map_err(|error| Error::provider(self.name.clone(), error))?;
-        let response = crate::checked(&self.name, response).await?;
-        let ranked: DiarizeResponse =
-            response.json().await.map_err(|error| Error::provider(self.name.clone(), error))?;
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
+        let response = crate::checked(self.name(), response).await?;
+        let ranked: DiarizeResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
 
         let Some(best) = ranked.speakers.into_iter().next() else {
             // Nothing enrolled, or nothing close enough for the server to
@@ -148,7 +153,7 @@ impl SpeakerIdentifier for DiarizationServerSpeakerId {
 
         if confidence < self.threshold {
             tracing::debug!(
-                provider = self.name,
+                provider = self.name(),
                 confidence,
                 threshold = self.threshold,
                 "closest voice print fell below the configured threshold"
@@ -166,7 +171,7 @@ impl SpeakerIdentifier for DiarizationServerSpeakerId {
             }
             Err(_) => {
                 tracing::debug!(
-                    provider = self.name,
+                    provider = self.name(),
                     matched = %best.speaker,
                     "voice matched a speaker that Conduit did not enroll"
                 );
@@ -184,8 +189,8 @@ impl SpeakerIdentifier for DiarizationServerSpeakerId {
             .body(body)
             .send()
             .await
-            .map_err(|error| Error::provider(self.name.clone(), error))?;
-        crate::checked(&self.name, response).await.map(|_| ())
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
+        crate::checked(self.name(), response).await.map(|_| ())
     }
 
     async fn forget(&self, speaker: SpeakerId) -> Result<()> {
@@ -194,11 +199,11 @@ impl SpeakerIdentifier for DiarizationServerSpeakerId {
             .post(format!("{}/diarize_teach_delete?name={speaker}", self.base_url))
             .send()
             .await
-            .map_err(|error| Error::provider(self.name.clone(), error))?;
+            .map_err(|error| Error::provider(self.name().to_owned(), error))?;
         // The server answers 200 whether or not the speaker was there, which
         // matches what the trait asks for: removing an unknown speaker
         // succeeds.
-        crate::checked(&self.name, response).await.map(|_| ())
+        crate::checked(self.name(), response).await.map(|_| ())
     }
 }
 

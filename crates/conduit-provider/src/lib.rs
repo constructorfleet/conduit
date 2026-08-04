@@ -11,6 +11,7 @@
 //! [`ChunkStream`], so providers can be stored behind `Arc<dyn Trait>` in a
 //! [`Registry`] and swapped at runtime.
 
+pub mod descriptor;
 pub mod llm;
 pub mod memory;
 pub mod registry;
@@ -30,6 +31,7 @@ use conduit_core::Result;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
+pub use descriptor::{Descriptor, Metadata, Settings, SettingsSchema};
 pub use registry::{Capability, Registry, RegistryHandle};
 
 /// A boxed stream of fallible items, the shape every streaming provider
@@ -42,13 +44,29 @@ pub type ChunkStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
 /// implements both `Provider` and [`stt::SpeechToText`].
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync + 'static {
-    /// Stable registration name, e.g. `"whisper"`. Used in pipeline graphs
-    /// and in metric labels, so it must not change between versions.
-    fn name(&self) -> &str;
+    /// What this provider is, what it can do, and what it needs configured.
+    ///
+    /// One descriptor per provider, built when the provider is constructed.
+    /// Everything a caller used to ask a provider one method at a time — its
+    /// name, its version, the models it serves, the voices it speaks with, the
+    /// encodings it handles, whether it can call tools — is read from here, so
+    /// a status screen can describe a provider of any capability without
+    /// knowing which capability it is.
+    fn descriptor(&self) -> &Descriptor;
+
+    /// Stable identity, e.g. `"whisper"` — the descriptor's
+    /// [`id`](Descriptor::id).
+    ///
+    /// Used in metric labels and error messages, so it must not change between
+    /// versions. It is *not* the registry key: a deployment chooses that, and
+    /// may register the same implementation under two of them.
+    fn name(&self) -> &str {
+        &self.descriptor().id
+    }
 
     /// Provider version, surfaced in diagnostics.
     fn version(&self) -> &str {
-        env!("CARGO_PKG_VERSION")
+        &self.descriptor().version
     }
 
     /// Reports whether the provider can currently serve requests.

@@ -1,10 +1,11 @@
 //! Speech-to-text provider interface.
 
 use bytes::Bytes;
-use conduit_core::audio::{AudioFormat, Encoding};
+use conduit_core::audio::AudioFormat;
 use conduit_core::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::descriptor::Settings;
 use crate::{ChunkStream, Provider};
 
 /// A chunk of captured audio handed to a recognizer.
@@ -66,9 +67,10 @@ pub struct TranscribeOptions {
     /// Whether to emit partial transcripts. Providers that cannot stream
     /// ignore this and emit a single final.
     pub partials: bool,
-    /// Provider-specific settings.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub extra: serde_json::Value,
+    /// Provider-specific settings, checked against the schema the provider's
+    /// [`Descriptor`](crate::Descriptor) declares.
+    #[serde(default, skip_serializing_if = "Settings::is_empty")]
+    pub settings: Settings,
 }
 
 impl Default for TranscribeOptions {
@@ -77,7 +79,7 @@ impl Default for TranscribeOptions {
             format: AudioFormat::DEFAULT,
             language: None,
             partials: true,
-            extra: serde_json::Value::Null,
+            settings: Settings::empty(),
         }
     }
 }
@@ -100,16 +102,4 @@ pub trait SpeechToText: Provider {
         audio: ChunkStream<AudioChunk>,
         options: TranscribeOptions,
     ) -> Result<ChunkStream<Transcript>>;
-
-    /// BCP-47 tags this provider can recognize. Empty means unrestricted.
-    fn languages(&self) -> &[String] {
-        &[]
-    }
-
-    /// Whether this provider can accept audio in `encoding`.
-    ///
-    /// The default is permissive for adapters whose backend decides at runtime.
-    fn supports_encoding(&self, _encoding: Encoding) -> bool {
-        true
-    }
 }

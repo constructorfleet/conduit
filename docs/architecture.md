@@ -162,9 +162,30 @@ a text pipeline writes a piece at a time.
 
 ## Providers
 
-Providers implement traits from `conduit-provider` and are registered by stable
-provider name. A graph node selects a provider by that name; provider-specific
-configuration lives in provider registration, not in the pipeline graph.
+Providers implement traits from `conduit-provider` and are registered under a
+selector — a registry key the deployment chooses, which is what a graph node
+names. Provider-specific configuration lives in provider registration, not in
+the pipeline graph.
+
+Every provider describes itself through one `Descriptor`, built when the
+provider is constructed:
+
+- **id** — the stable identity the provider calls itself, used in metric labels
+  and error messages. Distinct from the registry key, so the same
+  implementation can be registered twice.
+- **label** — the display name for operator screens. Nothing keys off it.
+- **version** — surfaced in diagnostics.
+- **capability** — which registry it belongs in.
+- **metadata** — models, languages, voices, phrases, encodings, and whether it
+  can call tools, in one shape shared by every capability. An empty list means
+  *unrestricted*, not *none*.
+- **settings** — a JSON Schema for the provider-specific settings a request may
+  carry. A request's settings are checked against it, so a mistyped setting is
+  reported rather than forwarded and silently ignored.
+
+Because the descriptor is uniform, the status layer and the operator UI can
+render and validate a provider of any capability without knowing which one it
+is.
 
 The runtime stores providers behind trait objects in registries. Dropping a
 returned stream is the cancellation mechanism for provider work that is no

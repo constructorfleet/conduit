@@ -18,7 +18,7 @@ pub mod whitespace;
 use conduit_core::Result;
 use conduit_provider::storage::Rule;
 use conduit_provider::transform::UtteranceTransform;
-use conduit_provider::Provider;
+use conduit_provider::{Capability, Descriptor, Provider};
 
 /// An utterance transform built from the rules that ship with Conduit.
 ///
@@ -26,7 +26,7 @@ use conduit_provider::Provider;
 /// share across every turn that names it.
 #[derive(Debug, Clone)]
 pub struct Builtin {
-    name: String,
+    descriptor: Descriptor,
     rules: Vec<Rule>,
 }
 
@@ -38,7 +38,7 @@ impl Builtin {
     /// make a half-filled form unsaveable.
     #[must_use]
     pub fn new(name: impl Into<String>, rules: Vec<Rule>) -> Self {
-        Self { name: name.into(), rules }
+        Self { descriptor: Descriptor::new(name, Capability::Transform), rules }
     }
 
     /// The rules this transform applies, in order.
@@ -50,8 +50,8 @@ impl Builtin {
 
 #[async_trait::async_trait]
 impl Provider for Builtin {
-    fn name(&self) -> &str {
-        &self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 }
 

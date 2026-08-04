@@ -8,6 +8,31 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Every provider now describes itself through one `Descriptor`: a stable
+  identity distinct from its display label and from the registry key, a
+  version, capability metadata, and a declared settings schema. The per-trait
+  methods that used to answer those questions one at a time — `models`,
+  `languages`, `voices`, `available_phrases`, `configured_phrases`,
+  `supports_tools`, `supports_encoding` — are gone, and what they returned is
+  read off `descriptor().metadata` instead. The status layer and the operator
+  UI can now render and validate a provider of any capability generically.
+- Provider-specific request settings are validated instead of passing through
+  untyped. The `extra: serde_json::Value` escape hatch on completion,
+  transcription, and synthesis requests is replaced by a `Settings` value built
+  by checking against the provider's declared schema, so a mistyped setting is
+  reported rather than forwarded and silently ignored. The OpenAI providers
+  declare what their endpoints actually accept (`top_p`, `frequency_penalty`,
+  `presence_penalty`, `seed`; `prompt` and `temperature` for transcription;
+  `instructions` for speech) and now send them.
+- An MCP tool declares its argument schema as its descriptor's settings — the
+  same document the model is shown — so an operator screen can render a tool's
+  arguments the same way it renders any other provider's settings.
+- A registry no longer conflates its key with the provider's identity: the key
+  is the deployment's selector, `Descriptor::id` is what the provider calls
+  itself, and `Descriptor::label` is what an operator screen shows.
+  `Registry::register` keys a provider by its own identity, and
+  `RegistryHandle::descriptors` lists every registration as a selector paired
+  with a descriptor.
 - The runtime provider bundle (`Providers`) is now capability-indexed rather
   than one hand-written registry field per capability. Registering and
   enumerating a wake, speaker, or memory provider goes through the exact same

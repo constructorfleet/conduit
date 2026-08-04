@@ -14,8 +14,8 @@ use conduit_core::graph::{Edge, Modality, Node, PipelineGraph};
 use conduit_core::id::{ConversationId, DeviceId, TraceId, TurnId};
 use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
-use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech, Voice};
-use conduit_provider::{ChunkStream, Health, Provider};
+use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech};
+use conduit_provider::{Capability, ChunkStream, Descriptor, Health, Provider};
 use conduit_runtime::Providers;
 use futures_util::{stream, SinkExt, StreamExt};
 use http_body_util::BodyExt;
@@ -97,20 +97,20 @@ fn with_status_providers(state: AppState, health: Health) -> AppState {
 
 #[derive(Debug, Clone)]
 struct StatusStt {
-    name: &'static str,
+    descriptor: Descriptor,
     health: Health,
 }
 
 impl StatusStt {
     fn new(name: &'static str, health: Health) -> Self {
-        Self { name, health }
+        Self { descriptor: Descriptor::new(name, Capability::Stt), health }
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for StatusStt {
-    fn name(&self) -> &str {
-        self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -131,20 +131,20 @@ impl SpeechToText for StatusStt {
 
 #[derive(Debug, Clone)]
 struct StatusLlm {
-    name: &'static str,
+    descriptor: Descriptor,
     health: Health,
 }
 
 impl StatusLlm {
     fn new(name: &'static str, health: Health) -> Self {
-        Self { name, health }
+        Self { descriptor: Descriptor::new(name, Capability::Llm), health }
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for StatusLlm {
-    fn name(&self) -> &str {
-        self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -164,20 +164,20 @@ impl LanguageModel for StatusLlm {
 
 #[derive(Debug, Clone)]
 struct StatusTts {
-    name: &'static str,
+    descriptor: Descriptor,
     health: Health,
 }
 
 impl StatusTts {
     fn new(name: &'static str, health: Health) -> Self {
-        Self { name, health }
+        Self { descriptor: Descriptor::new(name, Capability::Tts), health }
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for StatusTts {
-    fn name(&self) -> &str {
-        self.name
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
     }
 
     async fn health(&self) -> Health {
@@ -192,10 +192,6 @@ impl TextToSpeech for StatusTts {
         _request: SynthesisRequest,
     ) -> conduit_core::Result<ChunkStream<SpeechChunk>> {
         Ok(Box::pin(stream::empty()))
-    }
-
-    async fn voices(&self) -> conduit_core::Result<Vec<Voice>> {
-        Ok(Vec::new())
     }
 }
 

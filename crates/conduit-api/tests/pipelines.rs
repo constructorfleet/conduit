@@ -891,8 +891,15 @@ async fn a_detector_that_scores_in_process_registers_from_its_models() {
     assert_eq!(status, StatusCode::CREATED);
     let providers = state.providers().expect("a snapshot was built");
     let detector = providers.wake().get("openwakeword").expect("the detector registered");
+    let phrases: Vec<&str> = detector
+        .descriptor()
+        .metadata
+        .phrases
+        .iter()
+        .map(|phrase| phrase.phrase.as_str())
+        .collect();
     assert_eq!(
-        detector.available_phrases(),
+        phrases,
         ["hey jarvis"],
         "the phrases are whatever models are on disk, with no service to ask"
     );

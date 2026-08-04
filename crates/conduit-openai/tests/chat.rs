@@ -275,7 +275,7 @@ async fn a_malformed_chunk_fails_the_stream_rather_than_being_skipped() {
 async fn the_provider_names_itself_for_the_registry() {
     let server = MockServer::start(String::new()).await;
     assert_eq!(provider(&server).name(), "openai");
-    assert!(provider(&server).supports_tools());
+    assert!(provider(&server).descriptor().metadata.tools);
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@ use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_openai::{OpenAiConfig, OpenAiStt, OpenAiTts};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions};
 use conduit_provider::tts::{SynthesisRequest, TextToSpeech};
-use conduit_provider::ChunkStream;
+use conduit_provider::{ChunkStream, Provider};
 use futures_util::StreamExt;
 use server::MockServer;
 
@@ -203,7 +203,7 @@ async fn the_voice_catalogue_can_be_replaced_for_a_local_server() {
         },
     ]);
 
-    let voices = tts.voices().await.expect("lists voices");
+    let voices = &tts.descriptor().metadata.voices;
     assert_eq!(voices.len(), 1);
     assert_eq!(voices[0].id, "en_GB-alan-medium");
 }

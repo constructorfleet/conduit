@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use conduit_core::{Error, Result};
+use serde::{Deserialize, Serialize};
 
+use crate::descriptor::Descriptor;
 use crate::Provider;
 
 /// A capability a provider supplies, and the dimension a bundle is indexed by.
@@ -22,7 +24,8 @@ use crate::Provider;
 /// whichever bundle constructs one [`Registry`] per capability). Nothing that
 /// *enumerates* capabilities — a registry, a bundle, its debug output — changes
 /// structure to accommodate it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// Speech recognition.
     Stt,
@@ -82,8 +85,18 @@ impl Capability {
 /// caring which is which, and hand the caller the typed registry back through
 /// `Any`.
 pub trait RegistryHandle: Send + Sync {
-    /// Registered names, in order.
+    /// Registration keys, in order.
     fn names(&self) -> Vec<String>;
+
+    /// Every registered provider's [`Descriptor`], paired with the key it is
+    /// registered under, in key order.
+    ///
+    /// What lets a status layer or an operator screen render any provider of
+    /// any capability without knowing which capability it is: the key is the
+    /// selector a pipeline names, and everything shown about the provider —
+    /// its identity, its label, what it can do, what it accepts — comes from
+    /// the descriptor.
+    fn descriptors(&self) -> Vec<(String, Descriptor)>;
 
     /// Number of registered providers.
     fn len(&self) -> usize;
@@ -217,9 +230,34 @@ impl<T: ?Sized> Clone for Registry<T> {
     }
 }
 
+impl<T: Provider + ?Sized> Registry<T> {
+    /// Registers `provider` under its own [`Descriptor::id`].
+    ///
+    /// The shape to reach for when the deployment has no separate selector to
+    /// give a provider: the key is then the identity the provider states,
+    /// rather than a string the caller repeats and can get wrong. A deployment
+    /// that registers one implementation twice keys them with
+    /// [`Registry::insert`] instead.
+    pub fn register(&mut self, provider: Arc<T>) -> Option<Arc<T>> {
+        let id = provider.descriptor().id.clone();
+        self.insert(id, provider)
+    }
+
+    /// Every registered provider's [`Descriptor`], keyed by its selector.
+    pub fn descriptors(&self) -> impl Iterator<Item = (&str, &Descriptor)> {
+        self.providers.iter().map(|(key, provider)| (key.as_str(), provider.descriptor()))
+    }
+}
+
 impl<T: Provider + ?Sized> RegistryHandle for Registry<T> {
     fn names(&self) -> Vec<String> {
         Registry::names(self).map(str::to_owned).collect()
+    }
+
+    fn descriptors(&self) -> Vec<(String, Descriptor)> {
+        Registry::descriptors(self)
+            .map(|(key, descriptor)| (key.to_owned(), descriptor.clone()))
+            .collect()
     }
 
     fn len(&self) -> usize {
@@ -306,17 +344,23 @@ mod tests {
         fn greet(&self) -> String;
     }
 
-    struct FixedSpeaker(&'static str);
+    struct FixedSpeaker(Descriptor);
+
+    impl FixedSpeaker {
+        fn new(id: &str) -> Self {
+            Self(Descriptor::new(id, Capability::Wake).with_label("Fixed"))
+        }
+    }
 
     impl Provider for FixedSpeaker {
-        fn name(&self) -> &str {
-            self.0
+        fn descriptor(&self) -> &Descriptor {
+            &self.0
         }
     }
 
     impl Speaks for FixedSpeaker {
         fn greet(&self) -> String {
-            self.0.to_owned()
+            self.0.id.clone()
         }
     }
 
@@ -340,7 +384,8 @@ mod tests {
     #[test]
     fn a_registry_is_usable_as_a_type_erased_handle() {
         let mut registry = Registry::<dyn Speaks>::new();
-        registry.insert("okay-nabu", Arc::new(FixedSpeaker("okay-nabu")) as Arc<dyn Speaks>);
+        registry
+            .insert("okay-nabu", Arc::new(FixedSpeaker::new("okay-nabu")) as Arc<dyn Speaks>);
         let handle: Box<dyn RegistryHandle> = Box::new(registry);
 
         assert_eq!(handle.names(), ["okay-nabu"]);
@@ -359,8 +404,36 @@ mod tests {
             .as_any_mut()
             .downcast_mut::<Registry<dyn Speaks>>()
             .expect("same concrete type")
-            .insert("okay-nabu", Arc::new(FixedSpeaker("okay-nabu")) as Arc<dyn Speaks>);
+            .insert("okay-nabu", Arc::new(FixedSpeaker::new("okay-nabu")) as Arc<dyn Speaks>);
 
         assert_eq!(handle.names(), ["okay-nabu"]);
+    }
+
+    #[test]
+    fn a_provider_registers_under_the_identity_it_states() {
+        // The key used to be a string the caller repeated; a provider that
+        // states its own identity is registered under it.
+        let mut registry = Registry::<dyn Speaks>::new();
+        registry.register(Arc::new(FixedSpeaker::new("okay-nabu")) as Arc<dyn Speaks>);
+
+        assert_eq!(registry.names().collect::<Vec<_>>(), ["okay-nabu"]);
+    }
+
+    #[test]
+    fn a_registry_reports_each_providers_descriptor_beside_its_selector() {
+        // A deployment may register one implementation under a selector of its
+        // own choosing; the key and the identity are then different strings,
+        // and a listing has to show both.
+        let mut registry = Registry::<dyn Speaks>::new();
+        registry
+            .insert("front-door", Arc::new(FixedSpeaker::new("okay-nabu")) as Arc<dyn Speaks>);
+        let handle: Box<dyn RegistryHandle> = Box::new(registry);
+
+        let descriptors = handle.descriptors();
+        let (key, descriptor) = descriptors.first().expect("one registration");
+        assert_eq!(key, "front-door", "the selector a pipeline names");
+        assert_eq!(descriptor.id, "okay-nabu", "what the provider calls itself");
+        assert_eq!(descriptor.label, "Fixed", "what an operator screen shows");
+        assert_eq!(descriptor.capability, Capability::Wake);
     }
 }

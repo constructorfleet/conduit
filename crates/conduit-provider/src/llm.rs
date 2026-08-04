@@ -5,6 +5,7 @@ use conduit_core::id::ToolCallId;
 use conduit_core::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::descriptor::Settings;
 use crate::{ChunkStream, Provider};
 
 /// Who produced a message.
@@ -86,9 +87,10 @@ pub struct CompletionRequest {
     /// Cap on generated tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    /// Provider-specific settings.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub extra: serde_json::Value,
+    /// Provider-specific settings, checked against the schema the provider's
+    /// [`Descriptor`](crate::Descriptor) declares.
+    #[serde(default, skip_serializing_if = "Settings::is_empty")]
+    pub settings: Settings,
 }
 
 impl CompletionRequest {
@@ -101,7 +103,7 @@ impl CompletionRequest {
             tools: Vec::new(),
             temperature: None,
             max_tokens: None,
-            extra: serde_json::Value::Null,
+            settings: Settings::empty(),
         }
     }
 }
@@ -163,12 +165,6 @@ pub trait LanguageModel: Provider {
     /// failures surface as error items on the returned stream.
     async fn complete(&self, request: CompletionRequest) -> Result<ChunkStream<Completion>>;
 
-    /// Models this provider can serve. Empty means any model name is passed
-    /// through untouched, as with OpenAI-compatible local endpoints.
-    fn models(&self) -> &[String] {
-        &[]
-    }
-
     /// A system prompt this provider's configuration attaches to every turn.
     ///
     /// Set where the provider is defined rather than per pipeline: it says how
@@ -178,10 +174,5 @@ pub trait LanguageModel: Provider {
     /// appended to this one rather than replacing it.
     fn system_prompt(&self) -> Option<&str> {
         None
-    }
-
-    /// Whether this provider can execute tool calls.
-    fn supports_tools(&self) -> bool {
-        false
     }
 }
