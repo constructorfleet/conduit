@@ -411,7 +411,9 @@ impl ProviderDefinitionVariant {
         match self {
             Self::Llm {
                 variant:
-                    LlmVariant::OpenAi { api_key, .. } | LlmVariant::Anthropic { api_key, .. },
+                    LlmVariant::OpenAi { api_key, .. }
+                    | LlmVariant::Anthropic { api_key, .. }
+                    | LlmVariant::Bedrock { api_key, .. },
             }
             | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
             | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
@@ -427,7 +429,9 @@ impl ProviderDefinitionVariant {
         match self {
             Self::Llm {
                 variant:
-                    LlmVariant::OpenAi { api_key, .. } | LlmVariant::Anthropic { api_key, .. },
+                    LlmVariant::OpenAi { api_key, .. }
+                    | LlmVariant::Anthropic { api_key, .. }
+                    | LlmVariant::Bedrock { api_key, .. },
             }
             | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
             | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
@@ -892,6 +896,16 @@ mod tests {
             ProviderDefinitionVariant::Llm {
                 variant: LlmVariant::Anthropic {
                     base_url: "https://api.anthropic.com/v1".to_owned(),
+                    api_key: None,
+                    models: Vec::new(),
+                    streaming: false,
+                    system_prompt: None,
+                },
+            },
+            ProviderDefinitionVariant::Llm {
+                variant: LlmVariant::Bedrock {
+                    region: "us-west-2".to_owned(),
+                    profile: None,
                     api_key: None,
                     models: Vec::new(),
                     streaming: false,

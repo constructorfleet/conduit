@@ -423,6 +423,12 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         | ProviderDefinitionVariant::Tts { variant: TtsVariant::OpenAi { base_url, .. } } => {
             validate_http_url("base_url", base_url)?;
         }
+        // A region rather than an endpoint: the SDK builds the URL, so what an
+        // operator can get wrong here is the region name itself, and a wrong
+        // one resolves to a host that does not exist.
+        ProviderDefinitionVariant::Llm { variant: LlmVariant::Bedrock { region, .. } } => {
+            validate_aws_region(region)?;
+        }
         ProviderDefinitionVariant::Stt { variant: SttVariant::Wyoming { url, .. } }
         | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } } => {
             validate_tcp_url("url", url)?;
@@ -488,6 +494,27 @@ fn validate_tcp_url(field: &str, value: &str) -> Result<(), ApiError> {
     }
     if uri.port().is_none() {
         return Err(ApiError::unprocessable(format!("{field} must include a port")));
+    }
+    Ok(())
+}
+
+/// Checks that `region` is shaped like an AWS region name.
+///
+/// A shape check rather than a list: the regions are AWS's to add, and a build
+/// that rejected one opened last month would be wrong in the direction an
+/// operator cannot work around. What is caught here is the mistake that is
+/// actually common — pasting an endpoint URL, or an ARN, into the field.
+fn validate_aws_region(region: &str) -> Result<(), ApiError> {
+    let shaped = !region.is_empty()
+        && region.len() <= 32
+        && region.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+        && region.contains('-');
+    if !shaped {
+        return Err(ApiError::unprocessable(format!(
+            "region must be an AWS region name such as `us-west-2`, got `{region}`"
+        )));
     }
     Ok(())
 }
