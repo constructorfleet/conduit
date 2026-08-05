@@ -8,6 +8,22 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Bedrock credential resolution is covered by tests rather than assumed. A named
+  `profile` reaches the loader, an `api_key` prefers bearer auth over signing,
+  and naming neither leaves the AWS default chain and SigV4 in place. The middle
+  one is the load-bearing case: without an explicit auth scheme preference the
+  SDK accepts a token and then signs with whatever the chain resolved, so a key
+  an operator typed is ignored in favour of an ambient instance role and the
+  failure points at the wrong thing. The tests supply a credentials file through
+  aws-config's own `Env`/`Fs` overrides, so nothing on the machine running them
+  is read and no network is reached.
+- `crates/conduit-bedrock/README.md` documents every mechanism the chain covers
+  — environment, shared config, a named profile, a role assumed through
+  `role_arn` and `source_profile`, web identity and IRSA, ECS task roles, EC2
+  instance profiles, SSO, `credential_process`, and the Bedrock API key — and
+  states that assuming a role by an ARN passed inline is not among them, because
+  the chain only assumes a role that external configuration already named.
+
 - Added `transform` definitions that run a script the operator wrote. The three
   builtin rules are Rust functions somebody had to write and release; a `script`
   definition holds a source, names its engine, and takes effect on the next

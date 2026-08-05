@@ -54,6 +54,37 @@ key pair. Naming one also sets bearer auth as preferred: left implicit the SDK
 would accept the key and then sign with an unrelated instance role instead.
 Most deployments should leave it unset.
 
+## Credentials
+
+A definition names at most one credential field, and usually none. What resolves
+in that case is the AWS default chain, which is worth spelling out here so an
+operator does not have to read `aws-config`'s feature list to learn whether their
+mechanism is covered.
+
+| Mechanism | How to use it | Enabled by |
+| --- | --- | --- |
+| Environment | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, plus `AWS_SESSION_TOKEN` for a temporary credential | the chain, always |
+| Shared config file | a `[default]` profile in `~/.aws/credentials` or `~/.aws/config` | the chain, always |
+| Named profile | `profile` on the definition, naming a profile in those files | `profile_name` on the loader |
+| Assumed role in a profile | `role_arn` + `source_profile` in the named profile — the chain performs the `sts:AssumeRole` | the chain, always |
+| Web identity / IRSA | `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE`, as an EKS service account sets them | the chain, always |
+| ECS / task role | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, as Fargate sets it | the chain, always |
+| EC2 instance profile | nothing to configure; IMDS is queried | the chain, always |
+| SSO | `aws sso login` once, then a `sso_*` profile; the cached session resolves | the `sso` feature |
+| `credential_process` | `credential_process = …` in a profile, for an external helper | the `credentials-process` feature |
+| Bedrock API key | `api_key` on the definition | `token_provider` + an explicit bearer auth preference |
+
+`sso` and `credentials-process` are enabled in `Cargo.toml`; without them a
+profile using either would resolve to nothing at request time with no obvious
+reason, which is why they are named there rather than left to defaults.
+
+**Not covered: assuming a role by ARN from the definition.** There is no
+`role_arn` field, and the chain only assumes a role when a profile or the
+environment already says to. A deployment that must assume a role names it in a
+profile with a `source_profile` and points `profile` at that; passing an ARN
+inline would be a different credential shape — an `sts:AssumeRole` call this
+crate would make itself — not a chain lookup.
+
 Building the client is infallible on purpose. Every failure available here — no
 credentials, an unknown profile, an unreachable metadata endpoint — is one the
 SDK reports when a request is *sent*. Turning those into a build failure would

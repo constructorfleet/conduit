@@ -163,6 +163,7 @@ dependencies = [
  "http-body 1.1.0",
  "percent-encoding",
  "pin-project-lite",
+ "regex-lite",
  "tracing",
  "uuid",
 ]
@@ -798,6 +799,7 @@ dependencies = [
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
+ "aws-types",
  "conduit-core",
  "conduit-http",
  "conduit-provider",
