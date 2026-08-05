@@ -550,7 +550,7 @@ many of them:
 | --- | --- | --- |
 | `OpenAi` | `/chat/completions` | Ollama, vLLM, LM Studio, OpenRouter, Moonshot (Kimi), Z.Ai |
 | `OpenAiStt` | `/audio/transcriptions` | Speaches, `whisper.cpp`, `faster-whisper` |
-| `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper |
+| `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper; Kokoro-FastAPI |
 
 Pipeline graphs do not carry provider configuration. A graph node stores the
 stable provider id it selects; provider-specific settings belong to provider
@@ -580,7 +580,22 @@ endpoint already filled in, and still editable. Knowing that a local Ollama is
 OpenAI-compatible does not tell anyone it listens on `11434` and wants a `/v1`
 suffix, and a preset is the catalogue saying so. No provider code is involved.
 
-Each endpoint appears under exactly one name. Moonshot and Kimi Code read like
+Synthesis has a preset too: **Kokoro** points the `openai` TTS variant at
+Kokoro-FastAPI on `8880` with the model name filled in as well, because there is
+one model behind that server and it is called `kokoro` — a required field left
+blank only invites a guess at a name that does not exist. It needs no key, and the
+field remains for a reverse proxy that does.
+
+**A speech preset is a claim about `/v1/audio/speech` specifically.** Chat
+compatibility does not imply audio compatibility, and a great many servers
+advertising "OpenAI compatible" serve `/v1/chat/completions` and nothing else. So
+these are added one verified server at a time rather than assumed from a
+compatibility badge, and the dedup check is per capability: one server may
+legitimately offer chat and speech under the same base URL, and those are two
+presets an operator picks between by what the stage needs.
+
+Each endpoint appears under exactly one name per capability. Moonshot and Kimi
+Code read like
 two vendors, but `platform.moonshot.ai` redirects to `platform.kimi.ai` and the
 one endpoint serves both `kimi-*` and `moonshot-v1-*` models, so they are a
 single preset — two entries for one backend is a menu an operator cannot choose

@@ -505,6 +505,11 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         // is `https://api.z.ai/api`, and the chat route beneath it is
         // `/paas/v4/chat/completions`.
         preset("zai", "Z.Ai", "https://api.z.ai/api/paas/v4/"),
+        // Kokoro-FastAPI, which is the one local synthesizer verified to serve
+        // the OpenAI *speech* endpoint rather than only chat. One model behind
+        // it, named `kokoro`, so the model is part of the preset. It wants no
+        // key; the field stays because a reverse proxy in front of it may.
+        speech_preset("kokoro", "Kokoro", "http://localhost:8880/v1", "kokoro"),
         ProviderComponentDescriptor {
             id: "anthropic.messages",
             label: "Anthropic Messages",
@@ -927,6 +932,40 @@ fn preset(
     }
 }
 
+/// A named server that speaks the OpenAI *speech* API.
+///
+/// The sibling of [`preset`] rather than a parameter on it, because the two fill
+/// in different fields: a chat preset supplies only an endpoint and leaves the
+/// model to the operator, since one server hosts many. A speech server of this
+/// kind hosts one voice model, so its name is part of the preset — a required
+/// field left blank invites a guess at a name that does not exist.
+///
+/// Kept separate from the chat presets for a second reason: "OpenAI compatible"
+/// is claimed by servers that serve `/v1/chat/completions` and nothing else, so
+/// a speech preset is an assertion that `/v1/audio/speech` specifically answers,
+/// and it should be made one server at a time.
+fn speech_preset(
+    id: &'static str,
+    label: &'static str,
+    base_url: &'static str,
+    model: &'static str,
+) -> ProviderComponentDescriptor {
+    ProviderComponentDescriptor {
+        id,
+        label,
+        kind: ProviderCapability::Tts,
+        definition_variant: "openai",
+        schema: ComponentConfigSchema {
+            properties: properties([
+                ("base_url", defaulted_url(base_url)),
+                ("model", defaulted_string(model)),
+                ("api_key", string_property(None, None)),
+            ]),
+            required: vec!["base_url", "model"],
+        },
+    }
+}
+
 fn openai_llm_schema() -> ComponentConfigSchema {
     ComponentConfigSchema {
         properties: properties([
@@ -953,6 +992,11 @@ fn string_property(
         options: Vec::new(),
         default: None,
     }
+}
+
+/// A plain string field arriving with `default` already in the box.
+fn defaulted_string(default: &'static str) -> ComponentConfigProperty {
+    ComponentConfigProperty { default: Some(default), ..string_property(None, None) }
 }
 
 /// The same field, arriving with `default` already in the box.

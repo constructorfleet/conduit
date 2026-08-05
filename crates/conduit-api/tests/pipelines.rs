@@ -864,7 +864,11 @@ async fn no_two_presets_name_the_same_endpoint() {
     let (status, body) = call(&state, get("/v1/catalog/providers")).await;
     assert_eq!(status, StatusCode::OK);
 
-    let mut by_url: std::collections::HashMap<String, Vec<String>> =
+    // Keyed on capability as well as URL. One server can legitimately serve
+    // chat on `/v1/chat/completions` and speech on `/v1/audio/speech` under the
+    // same base, and those are two presets an operator picks between by what the
+    // stage needs — not a duplicate. Only two of the same kind at one address is.
+    let mut by_url: std::collections::HashMap<(String, String), Vec<String>> =
         std::collections::HashMap::new();
     for component in body["components"].as_array().expect("component list") {
         // Presets are the components carrying a filled-in default; a bare
@@ -872,8 +876,9 @@ async fn no_two_presets_name_the_same_endpoint() {
         if let Some(base_url) =
             component["schema"]["properties"]["base_url"]["default"].as_str()
         {
+            let kind = component["kind"].as_str().unwrap_or_default().to_owned();
             by_url
-                .entry(base_url.to_owned())
+                .entry((base_url.to_owned(), kind))
                 .or_default()
                 .push(component["id"].as_str().unwrap_or_default().to_owned());
         }
@@ -883,8 +888,43 @@ async fn no_two_presets_name_the_same_endpoint() {
     shared.sort();
     assert!(
         shared.is_empty(),
-        "each endpoint must be offered under exactly one name, found: {shared:?}"
+        "each endpoint must be offered under exactly one name per capability, \
+         found: {shared:?}"
     );
+}
+
+#[tokio::test]
+async fn the_catalog_offers_kokoro_as_a_speech_preset() {
+    // Kokoro-FastAPI serves the OpenAI *speech* endpoint, which is the part
+    // worth stating: a great many local servers claim OpenAI compatibility and
+    // serve only chat, so a TTS preset is a claim about `/v1/audio/speech`
+    // specifically. Verified against the project's own README — port 8880,
+    // `model: "kokoro"`, no key needed, Apache-2.0.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+
+    let kokoro = components
+        .iter()
+        .find(|component| component["id"] == "kokoro")
+        .expect("missing kokoro preset");
+
+    assert_eq!(kokoro["kind"], "tts", "Kokoro synthesizes; it does not converse");
+    assert_eq!(
+        kokoro["definition_variant"], "openai",
+        "a preset is a filled-in form, not a new wire format"
+    );
+    assert_eq!(
+        kokoro["schema"]["properties"]["base_url"]["default"],
+        "http://localhost:8880/v1"
+    );
+    // The model name is filled in too, unlike the LLM presets. There is one
+    // model behind this server and it is called `kokoro`, so leaving a required
+    // field blank would only invite an operator to guess a name that does not
+    // exist.
+    assert_eq!(kokoro["schema"]["properties"]["model"]["default"], "kokoro");
 }
 
 #[tokio::test]
