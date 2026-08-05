@@ -8,6 +8,27 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The `streaming` flag on a Wyoming recognizer does what it says. It was stored,
+  shown in the console, and never read: partials were gated solely on a request
+  option that defaulted to on, so they were effectively always on and no operator
+  could turn them off. Now the flag decides. Off emits no partials whatever the
+  server offers — the case that was previously impossible. On sends a `describe`
+  and reads the server's `info`: a server advertising
+  `supports_transcript_streaming` is asked for partials, and one that says it
+  cannot stream still returns a correct single final, logged once, because a
+  non-streaming recognizer is a fully working recognizer. A server that answers
+  without mentioning the capability, or that will not answer at all, is asked for
+  partials anyway — the key postdates transcript streaming itself, so its absence
+  means "did not say" rather than "cannot", and negotiation never fails a turn.
+  The handshake is a short second connection per session rather than a cache,
+  because a Wyoming server can be replaced under a stable address, and it is only
+  paid when `streaming` is on.
+- `SttVariant::OpenAi`'s `stream` flag is documented as reserved rather than left
+  looking equivalent. Conduit posts a complete recording to
+  `audio/transcriptions` and reads one response, so there are no partials to
+  gate; the vendor's streaming transcription is a different request shape and an
+  event stream, which is a change rather than a setting.
+
 - A Wyoming server's `error` event reaches the operator. All three Wyoming
   clients — speech-to-text, text-to-speech, and wake word — read the event and
   report the message the server sent, instead of letting it fall through the
