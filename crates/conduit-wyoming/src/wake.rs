@@ -21,8 +21,8 @@ use tokio::net::TcpStream;
 
 use crate::protocol::CONNECT_TIMEOUT;
 use crate::protocol::{
-    read_wyoming_event, tcp_address, write_wyoming_event, write_wyoming_event_with_payload,
-    WyomingEvent,
+    error_message, read_wyoming_event, tcp_address, write_wyoming_event,
+    write_wyoming_event_with_payload, WyomingEvent, WyomingServerError, ERROR,
 };
 
 /// The event a server sends when a phrase fired.
@@ -222,6 +222,26 @@ impl WakeWordDetector for WyomingWake {
                             // further to read.
                             tracing::debug!(provider, "audio ended with no wake word");
                             return None;
+                        }
+                        // A detector that refuses is worth reporting even though
+                        // a detector that simply hears nothing is not. Without
+                        // this a wake server rejecting the audio format looked
+                        // identical to a room that stayed quiet, and a wake word
+                        // that never fires is the hardest symptom to attribute.
+                        Ok(Some(event)) if event.event_type == ERROR => {
+                            let message = error_message(&event);
+                            tracing::warn!(
+                                provider,
+                                message = %message,
+                                "Wyoming wake detector refused the audio"
+                            );
+                            return Some((
+                                Err(Error::provider(
+                                    provider.clone(),
+                                    WyomingServerError::new(message),
+                                )),
+                                (reader, provider, phrases, writer),
+                            ));
                         }
                         Ok(Some(event)) => {
                             tracing::debug!(
@@ -432,5 +452,37 @@ mod tests {
         assert_eq!(configured.len(), 1);
         assert_eq!(configured[0].phrase, "hey jarvis");
         assert!((configured[0].threshold - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn a_detector_that_refuses_the_audio_says_so_instead_of_hearing_nothing() {
+        // A refused format and a quiet room both produced an empty detection
+        // stream, and a wake word that never fires is the hardest symptom to
+        // attribute — there is no error anywhere to start from.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(serve(
+            listener,
+            vec![(ERROR, json!({ "text": "channels 2 is not supported, expected 1" }))],
+        ));
+
+        let provider =
+            WyomingWake::new("openwakeword", &format!("tcp://{address}"), Vec::new(), 0.5)
+                .expect("built");
+        let mut detections = provider
+            .detect(audio(), vec![WakePhrase::new("hey jarvis")])
+            .await
+            .expect("session");
+
+        let error = detections
+            .next()
+            .await
+            .expect("the refusal must be reported, not read as silence")
+            .expect_err("a refused detector is not a detection");
+        assert!(
+            error.to_string().contains("channels 2 is not supported, expected 1"),
+            "the server's own message must reach the operator, got: {error}"
+        );
+        server.abort();
     }
 }

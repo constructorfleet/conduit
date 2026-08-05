@@ -14,7 +14,10 @@ use serde_json::{json, Value};
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
-use crate::protocol::{read_wyoming_event, tcp_address, write_wyoming_event, CONNECT_TIMEOUT};
+use crate::protocol::{
+    error_message, read_wyoming_event, tcp_address, write_wyoming_event, WyomingServerError,
+    CONNECT_TIMEOUT, ERROR,
+};
 
 /// The one encoding Wyoming audio events carry.
 const ENCODINGS: [Encoding; 1] = [Encoding::PcmS16Le];
@@ -145,6 +148,34 @@ impl TextToSpeech for WyomingTts {
                             };
                             return Some((Ok(chunk), (reader, sequence + 1, provider)));
                         }
+                        // Same refusal path as the recognizer: a server that
+                        // will not synthesize says why, and without this the
+                        // caller got a silent, empty audio stream — which
+                        // sounds exactly like a turn that had nothing to say.
+                        //
+                        // Reported even when chunks have already been sent. A
+                        // refusal mid-stream means the utterance is truncated,
+                        // and truncated speech presented as complete speech is
+                        // the worse outcome; the recognizer's post-final guard
+                        // does not apply, because there is no single event there
+                        // that means "this synthesis is complete" other than
+                        // `audio-stop`, which ends the stream above.
+                        Ok(Some(event)) if event.event_type == ERROR => {
+                            let message = error_message(&event);
+                            tracing::warn!(
+                                provider,
+                                message = %message,
+                                sequence,
+                                "Wyoming server refused the synthesis"
+                            );
+                            return Some((
+                                Err(Error::provider(
+                                    provider.clone(),
+                                    WyomingServerError::new(message),
+                                )),
+                                (reader, sequence + 1, provider),
+                            ));
+                        }
                         Ok(Some(_)) => {}
                         Ok(None) => return None,
                         Err(error) => {
@@ -164,6 +195,46 @@ impl TextToSpeech for WyomingTts {
 mod tests {
     use super::*;
     use conduit_core::Error;
+    use futures_util::StreamExt;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn a_server_refusal_reaches_the_operator_instead_of_silence() {
+        // Without an arm for `error` a refused synthesis was an empty audio
+        // stream, which sounds exactly like a turn that had nothing to say.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            let _ = read_wyoming_event(&mut reader).await;
+            write_wyoming_event(
+                &mut write_half,
+                "error",
+                json!({ "text": "no such voice `alan`" }),
+            )
+            .await
+            .expect("error written");
+            drop(write_half);
+        });
+
+        let provider =
+            WyomingTts::new("piper", &format!("tcp://{address}"), None, false).expect("built");
+        let mut speech =
+            provider.synthesize(SynthesisRequest::new("hello")).await.expect("session");
+
+        let error = speech
+            .next()
+            .await
+            .expect("the refusal must be reported, not swallowed")
+            .expect_err("a refused synthesis is not audio");
+        assert!(
+            error.to_string().contains("no such voice `alan`"),
+            "the server's own message must reach the operator, got: {error}"
+        );
+        server.abort();
+    }
 
     #[test]
     fn new_accepts_a_tcp_url() {
