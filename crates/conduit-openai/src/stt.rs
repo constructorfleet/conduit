@@ -146,6 +146,10 @@ impl SpeechToText for OpenAiStt {
             form = form.text(name, rendered);
         }
 
+        // One request carrying the whole recording, one response carrying the
+        // whole transcript. The stored `stream` flag has nothing to gate here:
+        // the vendor's streaming transcription is a different request shape and
+        // an SSE response, not a parameter on this one. See `SttVariant::OpenAi`.
         let response =
             self.http.send(self.http.post("audio/transcriptions").multipart(form)).await?;
         // A body that is not the documented shape will not become one on a

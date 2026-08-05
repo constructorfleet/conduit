@@ -18,7 +18,14 @@ pub enum SttVariant {
         /// Optional API key.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         api_key: Option<ProviderSecret>,
-        /// Whether the recognizer streams partials.
+        /// Reserved; setting it changes nothing today.
+        ///
+        /// Conduit posts a complete recording to `audio/transcriptions` and
+        /// reads one response, so there are no partials for this to gate. The
+        /// vendor does offer a streaming transcription mode, which is a
+        /// different request shape and a server-sent event stream rather than a
+        /// flag — wiring it is its own change. Kept rather than removed so a
+        /// stored definition that carries it still loads.
         #[serde(default)]
         stream: bool,
     },
@@ -29,7 +36,11 @@ pub enum SttVariant {
         /// Optional model hint.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
-        /// Whether streaming is enabled.
+        /// Whether to emit partial transcripts as the server recognizes.
+        ///
+        /// Off emits none. On asks the server whether it can stream and uses
+        /// partials when it says yes; a server that says no still returns a
+        /// correct single final rather than failing the turn.
         #[serde(default)]
         streaming: bool,
     },

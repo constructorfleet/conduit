@@ -160,6 +160,12 @@ fn merge_data(base: &mut Value, extra: Value) {
     }
 }
 
+/// The event asking a server to describe itself.
+pub(crate) const DESCRIBE: &str = "describe";
+
+/// The event a server answers [`DESCRIBE`] with, carrying its capabilities.
+pub(crate) const INFO: &str = "info";
+
 /// The event type a Wyoming server sends to refuse a request.
 ///
 /// A server that will not serve a session says why and then closes. Reading it
@@ -199,6 +205,27 @@ pub(crate) fn error_message(event: &WyomingEvent) -> String {
         (None, Some(code)) => format!("server reported error code {code}"),
         (None, None) => "server reported an error with no message".to_owned(),
     }
+}
+
+/// Reads whether an `info` event advertises transcript streaming.
+///
+/// Wyoming nests capabilities under a per-capability array — an ASR server
+/// answers with `{"asr": [{"name": ..., "supports_transcript_streaming": ...}]}`
+/// — so the flag is read from the first program under `section`.
+///
+/// `None` means the server did not say, which is not the same as saying no: the
+/// key was added to Wyoming after transcript streaming itself, so an older
+/// server that does stream omits it entirely. Callers decide what to do with
+/// silence; treating it as a refusal would turn partials off against servers
+/// that support them.
+pub(crate) fn advertises_streaming(event: &WyomingEvent, section: &str) -> Option<bool> {
+    event
+        .data
+        .get(section)?
+        .as_array()?
+        .first()?
+        .get("supports_transcript_streaming")
+        .and_then(Value::as_bool)
 }
 
 /// Parses `tcp://host:port` into `host:port`, or `None` for any other scheme.

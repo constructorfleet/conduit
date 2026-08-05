@@ -16,8 +16,9 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
 use crate::protocol::{
-    error_message, read_wyoming_event, tcp_address, write_wyoming_event,
-    write_wyoming_event_with_payload, WyomingEvent, WyomingServerError, CONNECT_TIMEOUT, ERROR,
+    advertises_streaming, error_message, read_wyoming_event, tcp_address, write_wyoming_event,
+    write_wyoming_event_with_payload, WyomingEvent, WyomingServerError, CONNECT_TIMEOUT,
+    DESCRIBE, ERROR, INFO,
 };
 
 /// The one encoding Wyoming audio events carry.
@@ -32,10 +33,12 @@ pub struct WyomingStt {
     address: String,
     /// Optional server-side model to request in `audio-start`.
     model: Option<String>,
-    /// Whether the server is expected to emit partial transcripts. Partials
-    /// are still gated on the per-request `partials` option; this flag only
-    /// describes the stored definition.
-    #[allow(dead_code)]
+    /// Whether this definition asks for partial transcripts.
+    ///
+    /// `false` means none are emitted, whatever the server offers. `true` means
+    /// the server is asked first — see [`Self::server_streams`] — and a server
+    /// that cannot stream still produces a correct single final, because a
+    /// non-streaming recognizer is a fully working recognizer.
     streaming: bool,
 }
 
@@ -82,6 +85,41 @@ impl WyomingStt {
                 Error::Config(format!("provider `{}` timed out connecting", self.name()))
             })?
             .map_err(|error| Error::provider(self.name().to_owned(), error))
+    }
+
+    /// Asks the server whether it can stream partial transcripts.
+    ///
+    /// `describe` is sent on its own short-lived connection rather than on the
+    /// session socket. Wyoming allows the handshake in band, but a server is
+    /// free to answer `info` at any point, and reading it off the session would
+    /// mean the transcript loop had to tell a late `info` apart from the one it
+    /// asked for. A second connection costs a TCP setup against a recognizer
+    /// that is about to do far more expensive work.
+    ///
+    /// Never fails a turn. Every failure — a refused connection, a timeout, a
+    /// server that answers something else — returns `None`, meaning "no answer",
+    /// and the caller proceeds. A recognizer that transcribes correctly must not
+    /// be taken out of service because it would not introduce itself.
+    async fn server_streams(&self) -> Option<bool> {
+        let stream = self.connect().await.ok()?;
+        let (read_half, mut write_half) = stream.into_split();
+        write_wyoming_event(&mut write_half, DESCRIBE, json!({})).await.ok()?;
+        let mut reader = BufReader::new(read_half);
+        // Bounded: a server that accepts the connection and then says nothing
+        // would otherwise hold the turn open before any audio was sent.
+        let deadline = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            loop {
+                match read_wyoming_event(&mut reader).await {
+                    Ok(Some(event)) if event.event_type == INFO => {
+                        return advertises_streaming(&event, "asr")
+                    }
+                    // Anything else on the way to `info` is not ours to act on.
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => return None,
+                }
+            }
+        });
+        deadline.await.ok().flatten()
     }
 }
 
@@ -133,6 +171,41 @@ impl SpeechToText for WyomingStt {
         audio: ChunkStream<AudioChunk>,
         options: TranscribeOptions,
     ) -> Result<ChunkStream<Transcript>> {
+        // What the definition asks for, and what the server will actually do.
+        //
+        // The stored flag decides whether partials are wanted at all: a
+        // definition with `streaming` off emits none even from a server that
+        // offers them, which is the case that was impossible while the request
+        // option was the only gate. `options.partials` still has a veto, so a
+        // caller that cannot use partials does not receive them.
+        //
+        // Only when partials are wanted is the server asked, because a server
+        // that will not be sending any is not worth a round trip.
+        let emit_partials = if self.streaming && options.partials {
+            match self.server_streams().await {
+                Some(false) => {
+                    // Once per session, at info, naming the server and the
+                    // reason. This is the fallback, and it is not a failure: a
+                    // non-streaming recognizer is a fully working recognizer.
+                    tracing::info!(
+                        provider = self.name(),
+                        address = %self.address,
+                        "server does not support transcript streaming; \
+                         falling back to a single final transcript"
+                    );
+                    false
+                }
+                // A server that says yes, and a server that did not answer.
+                // Silence is not a refusal — the capability key postdates
+                // transcript streaming, and `describe` may have failed for
+                // reasons that have nothing to do with recognition — so
+                // partials stay on and an absent one costs nothing.
+                Some(true) | None => true,
+            }
+        } else {
+            false
+        };
+
         let stream = self.connect().await?;
         let (read_half, mut write_half) = stream.into_split();
 
@@ -236,7 +309,6 @@ impl SpeechToText for WyomingStt {
         });
 
         let reader = BufReader::new(read_half);
-        let emit_partials = options.partials;
         Ok(Box::pin(stream::unfold(
             (reader, provider, emit_partials, false, writer),
             |(mut reader, provider, emit_partials, mut saw_final, writer)| async move {
@@ -667,6 +739,295 @@ mod tests {
         let (text, _, is_final) = transcript_from_event(&event);
         assert_eq!(text, "what time");
         assert!(!is_final);
+    }
+
+    /// How a fake server answers `describe`.
+    #[derive(Clone, Copy)]
+    enum Describes {
+        /// Answers `info` advertising transcript streaming.
+        Streaming,
+        /// Answers `info` advertising that it cannot stream, as a live
+        /// faster-whisper server does.
+        NotStreaming,
+        /// Answers `info` with no capability key at all, as a server predating
+        /// the flag does.
+        Silent,
+    }
+
+    impl Describes {
+        fn info(self) -> Option<Value> {
+            match self {
+                Self::Streaming => Some(
+                    json!({ "asr": [{ "name": "fake", "supports_transcript_streaming": true }] }),
+                ),
+                Self::NotStreaming => Some(
+                    json!({ "asr": [{ "name": "fake", "supports_transcript_streaming": false }] }),
+                ),
+                Self::Silent => Some(json!({ "asr": [{ "name": "fake" }] })),
+            }
+        }
+    }
+
+    /// Runs a fake recognizer that answers `describe`, then sends `chunks` as
+    /// partials followed by `final_text`, and returns everything the caller saw.
+    ///
+    /// Handles connections in a loop because negotiation and the session are
+    /// separate connections, and answers whichever the client asks for — so a
+    /// client that skips `describe` entirely is served correctly too, which is
+    /// what makes "no round trip when partials are off" testable.
+    async fn transcripts_from(
+        describes: Describes,
+        provider_streaming: bool,
+        request_partials: bool,
+        chunks: &[&str],
+        final_text: &str,
+    ) -> Vec<Transcript> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let owned: Vec<String> = chunks.iter().map(|chunk| (*chunk).to_owned()).collect();
+        let final_text = final_text.to_owned();
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.expect("provider connects");
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut described = false;
+                while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                    if event.event_type == DESCRIBE {
+                        if let Some(info) = describes.info() {
+                            write_wyoming_event(&mut write_half, INFO, info)
+                                .await
+                                .expect("info written");
+                        }
+                        described = true;
+                        break;
+                    }
+                    if event.event_type == "audio-stop" {
+                        for chunk in &owned {
+                            write_wyoming_event(
+                                &mut write_half,
+                                TRANSCRIPT_CHUNK,
+                                json!({ "text": chunk }),
+                            )
+                            .await
+                            .expect("partial written");
+                        }
+                        write_wyoming_event(
+                            &mut write_half,
+                            "transcript",
+                            json!({ "text": final_text }),
+                        )
+                        .await
+                        .expect("final written");
+                        return;
+                    }
+                }
+                if !described {
+                    return;
+                }
+            }
+        });
+
+        let provider =
+            WyomingStt::new("whisper", &format!("tcp://{address}"), None, provider_streaming)
+                .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options = TranscribeOptions {
+            format: AudioFormat::DEFAULT,
+            partials: request_partials,
+            ..TranscribeOptions::default()
+        };
+        let transcripts = provider.transcribe(Box::pin(audio), options).await.expect("session");
+        let collected: Vec<Transcript> =
+            transcripts.map(|item| item.expect("no error")).collect().await;
+        server.abort();
+        collected
+    }
+
+    #[tokio::test]
+    async fn a_streaming_server_yields_partials_before_the_final() {
+        // The whole point of the flag: a server that says it can stream is asked
+        // to, and the caller sees the text arrive as it is recognized.
+        let transcripts = transcripts_from(
+            Describes::Streaming,
+            true,
+            true,
+            &["the quick", "the quick brown"],
+            "the quick brown fox",
+        )
+        .await;
+
+        let partials: Vec<&str> =
+            transcripts.iter().filter(|t| !t.is_final).map(|t| t.text.as_str()).collect();
+        assert_eq!(partials, ["the quick", "the quick brown"]);
+        let last = transcripts.last().expect("a final");
+        assert!(last.is_final);
+        assert_eq!(last.text, "the quick brown fox");
+    }
+
+    #[tokio::test]
+    async fn streaming_against_a_server_that_cannot_stream_still_transcribes() {
+        // The fallback, and the criterion that matters most. A live
+        // faster-whisper server answers `describe` with
+        // `supports_transcript_streaming: False`; asking it for partials must
+        // not fail the turn, because a non-streaming recognizer is a fully
+        // working recognizer. It sends a `transcript-chunk` anyway here — a
+        // server contradicting its own handshake must not produce partials the
+        // negotiation said would not come.
+        let transcripts = transcripts_from(
+            Describes::NotStreaming,
+            true,
+            true,
+            &["ignored"],
+            "the whole of it",
+        )
+        .await;
+
+        assert_eq!(transcripts.len(), 1, "only the final, got: {transcripts:?}");
+        assert!(transcripts[0].is_final);
+        assert_eq!(transcripts[0].text, "the whole of it");
+    }
+
+    #[tokio::test]
+    async fn streaming_off_yields_no_partials_even_when_the_server_sends_them() {
+        // Impossible before this change: `TranscribeOptions` defaulted
+        // `partials: true` and the stored flag was never read, so nobody could
+        // turn partials off. The server sends two, and neither is emitted.
+        let transcripts = transcripts_from(
+            Describes::Streaming,
+            false,
+            true,
+            &["half a", "half a sentence"],
+            "a whole sentence",
+        )
+        .await;
+
+        assert_eq!(transcripts.len(), 1, "only the final, got: {transcripts:?}");
+        assert!(transcripts[0].is_final);
+        assert_eq!(transcripts[0].text, "a whole sentence");
+    }
+
+    #[tokio::test]
+    async fn a_caller_that_cannot_use_partials_keeps_its_veto() {
+        // The request option still wins. A definition asking for streaming does
+        // not force partials on a caller that has nowhere to put them.
+        let transcripts =
+            transcripts_from(Describes::Streaming, true, false, &["partial"], "final").await;
+
+        assert_eq!(transcripts.len(), 1, "only the final, got: {transcripts:?}");
+        assert!(transcripts[0].is_final);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_does_not_say_gets_the_benefit_of_the_doubt() {
+        // `supports_transcript_streaming` postdates transcript streaming
+        // itself, so an older server that does stream omits the key. Reading
+        // silence as a refusal would turn partials off against servers that
+        // support them.
+        let transcripts =
+            transcripts_from(Describes::Silent, true, true, &["a partial"], "a final").await;
+
+        let partials: Vec<&str> =
+            transcripts.iter().filter(|t| !t.is_final).map(|t| t.text.as_str()).collect();
+        assert_eq!(partials, ["a partial"], "silence is not a refusal");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_will_not_describe_itself_still_transcribes() {
+        // Negotiation must never fail a turn. This server accepts the
+        // `describe` connection and says nothing at all, so the handshake times
+        // out — and the session still has to produce its transcript.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.expect("provider connects");
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut is_session = false;
+                while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                    if event.event_type == "audio-stop" {
+                        is_session = true;
+                        break;
+                    }
+                }
+                if is_session {
+                    write_wyoming_event(
+                        &mut write_half,
+                        "transcript",
+                        json!({ "text": "heard" }),
+                    )
+                    .await
+                    .expect("final written");
+                    return;
+                }
+                // The describe connection answered nothing and the client has
+                // now given up on it. Loop straight round to accept the session
+                // rather than holding the socket: sleeping here would make the
+                // test wait for the sleep, not for the handshake timeout this
+                // is about.
+            }
+        });
+
+        let provider =
+            WyomingStt::new("whisper", &format!("tcp://{address}"), None, true).expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let transcript = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert_eq!(transcript.text, "heard");
+        assert!(transcript.is_final);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn negotiation_is_skipped_when_no_partials_are_wanted() {
+        // A server that will not be sending partials is not worth a round trip.
+        // The fake refuses to answer `describe` at all — if the client waited
+        // for an answer it would stall for the handshake timeout, so this also
+        // proves the skip rather than just tolerating it.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let seen_describe = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_flag = std::sync::Arc::clone(&seen_describe);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                if event.event_type == DESCRIBE {
+                    server_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                if event.event_type == "audio-stop" {
+                    break;
+                }
+            }
+            write_wyoming_event(&mut write_half, "transcript", json!({ "text": "batch only" }))
+                .await
+                .expect("final written");
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let transcript = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert_eq!(transcript.text, "batch only");
+        assert!(
+            !seen_describe.load(std::sync::atomic::Ordering::SeqCst),
+            "a definition with streaming off must not ask the server anything"
+        );
+        server.abort();
     }
 
     /// Drives a real session against a server that refuses, and returns the

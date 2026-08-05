@@ -184,16 +184,36 @@ encoding Wyoming events carry, and `model` is passed through on `audio-start` as
 a hint the server may honour or ignore — it is a name the server recognizes, not
 a name Conduit validates.
 
-Two things about `streaming` are worth saying plainly, because the field name
-promises more than it does. Conduit's Wyoming recognizer already reads
-`transcript-chunk` events as partials whenever the transcription request asks
-for partials, which is the default; the stored `streaming` flag does not gate
-that, and setting it does not make a batch server emit partials. Whether
-partials arrive is a property of the server, not of the definition. A server
-that only transcribes once it has seen `audio-stop` — which is how
-faster-whisper behaves, and how a NeMo model loaded per utterance will behave —
-returns a single final transcript, and that is a correct session, not a
-misconfiguration.
+`streaming` decides whether partial transcripts arrive as the server recognizes,
+and it asks the server before assuming:
+
+- **Off** — no partials, whatever the server offers. One final transcript per
+  utterance.
+- **On** — Conduit sends a `describe` and reads the server's `info`. A server
+  advertising `supports_transcript_streaming` gets asked for partials, and its
+  `transcript-chunk` events arrive as they are recognized, followed by the final.
+- **On, against a server that cannot stream** — the server says so, Conduit logs
+  it once naming the server, and the session proceeds to a single final
+  transcript. This is the designed fallback, not a misconfiguration: a
+  non-streaming recognizer is a fully working recognizer. faster-whisper answers
+  `describe` with `supports_transcript_streaming: False`, and a NeMo model loaded
+  per utterance behaves the same way, so this is the common case for local
+  weights today.
+
+A server that answers `describe` without mentioning the capability is asked for
+partials anyway. The key was added to Wyoming after transcript streaming itself,
+so its absence means "did not say" rather than "cannot" — and reading silence as
+a refusal would turn partials off against servers that support them. A server
+that will not answer `describe` at all is treated the same way, and negotiation
+never fails a turn: a recognizer that transcribes correctly is not taken out of
+service for declining to introduce itself.
+
+The handshake is a short second connection per session, not a cached lookup.
+That is deliberate — a Wyoming server can be replaced under a stable address, and
+a cache would keep serving the old answer until something invalidated it. The
+cost is one TCP round trip against a recognizer about to do far more expensive
+work, and it is only paid when `streaming` is on, since a definition that wants
+no partials has nothing to negotiate.
 
 The alternative is an OpenAI-compatible shim, which the existing `openai` STT
 variant reaches with a `base_url`. **Chat-completions compatibility does not
@@ -203,7 +223,12 @@ compatible" and serve only `/v1/chat/completions`; Conduit posts to
 that path fails at the first turn with a configuration that looked correct when
 it was saved. Confirm the audio endpoint specifically before choosing this
 route. Note also that this variant sends a complete recording and returns one
-final transcript, so its `stream` flag changes nothing about what arrives.
+final transcript. Its `stream` flag is **reserved and changes nothing**: there
+are no partials for it to gate, because Conduit posts to `audio/transcriptions`
+and reads one response. The vendor does offer a streaming transcription mode, but
+it is a different request shape and a server-sent event stream rather than a
+parameter, so it is a change rather than a setting. Unlike the `wyoming`
+variant's `streaming`, turning this on asks for nothing and reports nothing.
 
 Writing the server that fronts the weights is tracked by
 [issue #106](https://github.com/constructorfleet/conduit/issues/106) — a service
