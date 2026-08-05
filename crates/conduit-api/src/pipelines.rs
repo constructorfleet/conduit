@@ -580,6 +580,80 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "elevenlabs.transcription",
+            label: "ElevenLabs Transcription",
+            kind: ProviderCapability::Stt,
+            definition_variant: "elevenlabs",
+            schema: ComponentConfigSchema {
+                // No base URL: there is one ElevenLabs, and nothing else speaks
+                // its API. Nothing required either — a key can arrive later, and
+                // the crate has a documented default model.
+                properties: properties([
+                    ("api_key", string_property(None, None)),
+                    ("model", string_property(None, Some("[A-Za-z0-9._-]+"))),
+                ]),
+                required: Vec::new(),
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "elevenlabs.speech",
+            label: "ElevenLabs Speech",
+            kind: ProviderCapability::Tts,
+            definition_variant: "elevenlabs",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("api_key", string_property(None, None)),
+                    ("model", string_property(None, Some("[A-Za-z0-9._-]+"))),
+                    // The pattern is the same allowlist the provider enforces
+                    // before putting a voice in a URL path, declared here so the
+                    // console refuses a traversal attempt in the form rather
+                    // than on save.
+                    ("voice", string_property(None, Some("[A-Za-z0-9_-]+"))),
+                ]),
+                required: Vec::new(),
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "google.transcription",
+            label: "Google Speech-to-Text",
+            kind: ProviderCapability::Stt,
+            definition_variant: "google",
+            schema: google_stt_schema(),
+        },
+        ProviderComponentDescriptor {
+            id: "google.speech",
+            label: "Google Text-to-Speech",
+            kind: ProviderCapability::Tts,
+            definition_variant: "google",
+            schema: ComponentConfigSchema {
+                // No credential field at all: Google's are discovered, not
+                // typed, so a box to paste one into would be a box that does
+                // nothing. See `conduit-google`.
+                properties: properties([
+                    ("language", string_property(None, Some(HYPHENATED_ALPHANUMERIC))),
+                    ("voice", string_property(None, Some(HYPHENATED_ALPHANUMERIC))),
+                ]),
+                required: Vec::new(),
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "marytts",
+            label: "MaryTTS",
+            kind: ProviderCapability::Tts,
+            definition_variant: "marytts",
+            schema: ComponentConfigSchema {
+                // A URL and nothing else is required: MaryTTS has no
+                // authentication, and it ships no voices, so any voice this
+                // form suggested would be wrong on some installs.
+                properties: properties([
+                    ("url", string_property(Some(ComponentConfigFormat::Url), None)),
+                    ("voice", string_property(None, Some("[A-Za-z0-9._-]+"))),
+                    ("locale", string_property(None, Some("[A-Za-z]{2,3}([-_][A-Za-z0-9]+)*"))),
+                ]),
+                required: vec!["url"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "mcp.sse",
             label: "MCP SSE",
             kind: ProviderCapability::Tool,
@@ -697,6 +771,29 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
     ]
+}
+
+/// A BCP-47 language tag (`en-GB`) or a Google voice name (`en-US-Neural2-F`).
+///
+/// One pattern for both because they are the same alphabet — Google's voice
+/// names begin with the language tag — and they differ only in how long they may
+/// be, which a schema pattern cannot say and the provider crate checks anyway.
+///
+/// Declared here so the console refuses a typo in the form rather than on save;
+/// the provider enforces the same rule, because a pattern in a schema is advice
+/// and a check before a request is not.
+const HYPHENATED_ALPHANUMERIC: &str = "[A-Za-z0-9]+(-[A-Za-z0-9]+)*";
+
+/// What a Google recognizer takes: a language to listen for and a model.
+fn google_stt_schema() -> ComponentConfigSchema {
+    ComponentConfigSchema {
+        // No credential field: Google's are discovered rather than typed.
+        properties: properties([
+            ("language", string_property(None, Some(HYPHENATED_ALPHANUMERIC))),
+            ("model", string_property(None, Some("[A-Za-z0-9._-]+"))),
+        ]),
+        required: Vec::new(),
+    }
 }
 
 /// The shape shared by the two engines Conduit can score itself.

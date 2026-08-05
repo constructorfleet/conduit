@@ -433,6 +433,45 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         | ProviderDefinitionVariant::Tts { variant: TtsVariant::Wyoming { url, .. } } => {
             validate_tcp_url("url", url)?;
         }
+        // Nothing to check on the recognizer: the model is a name the vendor
+        // either knows or 4xxs about, and there is no endpoint to get wrong.
+        ProviderDefinitionVariant::Stt { variant: SttVariant::ElevenLabs { .. } } => {}
+        // The voice becomes a URL path segment with the account's credential
+        // attached, so it is checked with the provider's own validator rather
+        // than a second rule that could drift from it.
+        ProviderDefinitionVariant::Tts { variant: TtsVariant::ElevenLabs { voice, .. } } => {
+            if let Some(voice) = voice {
+                refuse_config(conduit_elevenlabs::voice_id::validate(voice))?;
+            }
+        }
+        // No endpoint and no credential — Google's are discovered. What an
+        // operator can get wrong is a language tag or a voice name, and both
+        // reach a request, so both are checked with the provider's own
+        // validators.
+        ProviderDefinitionVariant::Stt { variant: SttVariant::Google { language, .. } } => {
+            if let Some(language) = language {
+                refuse_config(conduit_google::validate_language(language))?;
+            }
+        }
+        ProviderDefinitionVariant::Tts { variant: TtsVariant::Google { language, voice } } => {
+            if let Some(language) = language {
+                refuse_config(conduit_google::validate_language(language))?;
+            }
+            if let Some(voice) = voice {
+                refuse_config(conduit_google::validate_voice(voice))?;
+            }
+        }
+        ProviderDefinitionVariant::Tts {
+            variant: TtsVariant::MaryTts { url, voice, locale },
+        } => {
+            validate_http_url("url", url)?;
+            if let Some(voice) = voice {
+                refuse_config(conduit_marytts::validate::voice(&definition.id, voice))?;
+            }
+            if let Some(locale) = locale {
+                refuse_config(conduit_marytts::validate::locale(&definition.id, locale))?;
+            }
+        }
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::Http { base_url, .. },
         }
@@ -517,6 +556,16 @@ fn validate_aws_region(region: &str) -> Result<(), ApiError> {
         )));
     }
     Ok(())
+}
+
+/// Reports a provider crate's own validation failure as a rejected definition.
+///
+/// The alternative was a second copy of each rule here, which is how the API and
+/// the provider come to disagree about what is valid: a definition the form
+/// accepted would then fail to build on the next server start, long after the
+/// operator stopped looking.
+fn refuse_config<T>(checked: conduit_core::Result<T>) -> Result<(), ApiError> {
+    checked.map(|_| ()).map_err(|error| ApiError::unprocessable(error.to_string()))
 }
 
 fn validate_http_url(field: &str, value: &str) -> Result<(), ApiError> {

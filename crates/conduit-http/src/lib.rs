@@ -29,5 +29,5 @@ pub mod client;
 pub mod failure;
 pub mod sse;
 
-pub use client::{Credential, Http, HttpConfig};
+pub use client::{BearerSource, Credential, Http, HttpConfig};
 pub use failure::{Failure, FailureKind};

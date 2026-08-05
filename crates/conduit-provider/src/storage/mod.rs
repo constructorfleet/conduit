@@ -415,8 +415,14 @@ impl ProviderDefinitionVariant {
                     | LlmVariant::Anthropic { api_key, .. }
                     | LlmVariant::Bedrock { api_key, .. },
             }
-            | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
-            | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
+            | Self::Stt {
+                variant:
+                    SttVariant::OpenAi { api_key, .. } | SttVariant::ElevenLabs { api_key, .. },
+            }
+            | Self::Tts {
+                variant:
+                    TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
+            }
             | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
                 api_key.as_ref()
             }
@@ -433,8 +439,14 @@ impl ProviderDefinitionVariant {
                     | LlmVariant::Anthropic { api_key, .. }
                     | LlmVariant::Bedrock { api_key, .. },
             }
-            | Self::Stt { variant: SttVariant::OpenAi { api_key, .. } }
-            | Self::Tts { variant: TtsVariant::OpenAi { api_key, .. } }
+            | Self::Stt {
+                variant:
+                    SttVariant::OpenAi { api_key, .. } | SttVariant::ElevenLabs { api_key, .. },
+            }
+            | Self::Tts {
+                variant:
+                    TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
+            }
             | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
                 Some(api_key)
             }
@@ -912,6 +924,36 @@ mod tests {
                     system_prompt: None,
                 },
             },
+            ProviderDefinitionVariant::Stt {
+                variant: SttVariant::OpenAi {
+                    base_url: "https://api.openai.example/v1".to_owned(),
+                    model: "whisper-1".to_owned(),
+                    api_key: None,
+                    stream: false,
+                },
+            },
+            ProviderDefinitionVariant::Stt {
+                variant: SttVariant::ElevenLabs { api_key: None, model: None },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::OpenAi {
+                    base_url: "https://api.openai.example/v1".to_owned(),
+                    model: "tts-1".to_owned(),
+                    api_key: None,
+                    voices: Vec::new(),
+                },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::ElevenLabs { api_key: None, model: None, voice: None },
+            },
+            ProviderDefinitionVariant::SpeakerId {
+                variant: SpeakerIdVariant::Http {
+                    base_url: "https://speakers.example".to_owned(),
+                    api_key: None,
+                    engine: SpeakerEngine::SpeechBrain,
+                    threshold_percent: default_threshold_percent(),
+                },
+            },
         ];
 
         for variant in keyed {
@@ -923,8 +965,10 @@ mod tests {
             assert_eq!(
                 merged.api_key(),
                 Some(&ProviderSecret::Inline { value: "k".to_owned() }),
-                "a redacted update keeps the stored key for {:?}",
-                variant.capability()
+                // Named by the whole variant, not by its capability: two keyed
+                // variants can share a capability, and `Tts` alone would not say
+                // which of them lost its key.
+                "a redacted update keeps the stored key for {variant:?}"
             );
         }
     }

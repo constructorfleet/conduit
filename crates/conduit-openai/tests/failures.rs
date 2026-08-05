@@ -209,3 +209,21 @@ async fn a_response_the_provider_cannot_read_is_not_retryable() {
     };
     assert!(!failure(&error).is_retryable(), "{error}");
 }
+
+#[tokio::test]
+async fn synthesis_that_goes_quiet_mid_body_reports_its_failure_once_and_then_ends() {
+    // A failed `reqwest` body re-reports the same error on every poll, so
+    // mapping it straight onto chunks yields an unbounded stream of identical
+    // errors. A consumer that drains until the stream ends never finishes, and
+    // a lost turn becomes a hung one — with the memory to match.
+    let server = MockServer::start_stalled_after(vec!["half the audio".to_owned()]).await;
+    let tts = OpenAiTts::new(&impatient(&server), "tts-1").expect("builds");
+
+    let audio = tts.synthesize(SynthesisRequest::new("hello")).await.expect("the head arrives");
+    let items: Vec<_> = audio.take(64).collect().await;
+
+    assert!(items.first().is_some_and(Result::is_ok), "the first packet arrived: {items:?}");
+    let errors = items.iter().filter(|item| item.is_err()).count();
+    assert_eq!(errors, 1, "a stalled body must fail once, not forever");
+    assert!(items.len() < 64, "the stream must end after the failure, not repeat it");
+}

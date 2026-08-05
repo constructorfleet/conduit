@@ -364,7 +364,12 @@ a Runtime Provider under the definition id:
 | Capability (`type`) | Vendor (`variant.type`) | Registers | Notes |
 | --- | --- | --- | --- |
 | `llm`, `stt`, `tts` | `openai` | One provider under the definition id | |
+| `llm` | `anthropic` | One provider under the definition id | `base_url` defaults to the public API |
+| `llm` | `bedrock` | One provider under the definition id | `region` rather than a URL; the AWS chain resolves the credential |
 | `stt`, `tts` | `wyoming` | One provider under the definition id | `url` must be `tcp://host:port` |
+| `stt`, `tts` | `elevenlabs` | One provider under the definition id | No URL: there is one ElevenLabs. A `voice` must be an id, not a path |
+| `stt`, `tts` | `google` | One provider under the definition id | No credential field: Application Default Credentials, resolved when the definition is saved |
+| `tts` | `marytts` | One provider under the definition id | `url` must be `http` or `https`; no authentication |
 | `wake` | `openwakeword`, `nanowakeword` | One wake word detector under the definition id | `runtime.where` is `local` or `wyoming` |
 | `wake` | `microwakeword` | One wake word detector under the definition id | `runtime.where` is `device` or `wyoming` |
 | `speaker_id` | `http` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
@@ -445,6 +450,11 @@ not a text-to-speech one. An empty `voices` list is a successful answer, not a
 failure: a Wyoming synthesizer enumerates nothing and accepts any voice its
 server was given, and a definition saved while its service was down is not
 registered at all. The console falls back to a typed voice in both cases.
+
+ElevenLabs and MaryTTS answer empty for the same reason: their catalogues are
+per-account and per-install, so reading one means a request to the vendor, and
+saving a definition does not make requests. Google answers with the voice the
+definition names, because naming one is what a Google definition does instead.
 
 Success body:
 

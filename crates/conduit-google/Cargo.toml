@@ -1,0 +1,47 @@
+[package]
+name = "conduit-google"
+description = "Google Cloud speech providers for Conduit: Cloud Text-to-Speech synthesis and Cloud Speech-to-Text recognition over REST with Application Default Credentials."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["google"]
+# Discovering Application Default Credentials. Off, both providers still exist
+# and still register, and each refuses to construct with a message naming this
+# feature — so a lean build says which feature is missing when a definition is
+# saved rather than when someone speaks.
+#
+# Only credential discovery is gated. The REST plumbing is not, so a deployment
+# that mints its own access tokens works in either build.
+google = ["dep:gcp_auth"]
+
+[dependencies]
+conduit-core.workspace = true
+conduit-http.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+# `gcp_auth` reaches TLS through `hyper-rustls`, which offers `ring` and
+# `aws-lc-rs`. Its own default is `ring`, but naming it explicitly with
+# `default-features = false` is what keeps a future default flip from linking a
+# second crypto provider beside the one this workspace already has.
+gcp_auth = { version = "0.12", default-features = false, features = ["ring"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[lints]
+workspace = true
