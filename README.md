@@ -548,7 +548,7 @@ many of them:
 
 | Capability | Endpoint | Also served by |
 | --- | --- | --- |
-| `OpenAi` | `/chat/completions` | Ollama, vLLM, LM Studio, OpenRouter |
+| `OpenAi` | `/chat/completions` | Ollama, vLLM, LM Studio, OpenRouter, Moonshot (Kimi), Z.Ai |
 | `OpenAiStt` | `/audio/transcriptions` | Speaches, `whisper.cpp`, `faster-whisper` |
 | `OpenAiTts` | `/audio/speech` | `openedai-speech`, which fronts Piper |
 
@@ -574,11 +574,32 @@ side — a local model and a hosted one — though today only one of them can be
 reached from a given pipeline, because the runtime executes a single `llm` node
 per turn.
 
-The Providers page names the common ones — Ollama, vLLM, LM Studio, and
-OpenRouter — as presets: the same `openai` variant with the endpoint already
-filled in, and still editable. Knowing that a local Ollama is OpenAI-compatible
-does not tell anyone it listens on `11434` and wants a `/v1` suffix, and a
-preset is the catalogue saying so. No provider code is involved.
+The Providers page names the common ones — Ollama, vLLM, LM Studio, OpenRouter,
+Moonshot (Kimi), and Z.Ai — as presets: the same `openai` variant with the
+endpoint already filled in, and still editable. Knowing that a local Ollama is
+OpenAI-compatible does not tell anyone it listens on `11434` and wants a `/v1`
+suffix, and a preset is the catalogue saying so. No provider code is involved.
+
+Each endpoint appears under exactly one name. Moonshot and Kimi Code read like
+two vendors, but `platform.moonshot.ai` redirects to `platform.kimi.ai` and the
+one endpoint serves both `kimi-*` and `moonshot-v1-*` models, so they are a
+single preset — two entries for one backend is a menu an operator cannot choose
+from correctly, because whichever they pick, the other looks like a capability
+they are missing.
+
+**Ollama's native `/api/chat` is deliberately not implemented.** The
+OpenAI-compatible path already reaches it, and the argument for a second one was
+that native errors name a missing model better. Measured against Ollama 0.32.3,
+the opposite is true: `/v1` returns
+`{"error":{"message":"model 'x' not found"}}`, which is the shape
+`conduit-http`'s `vendor_message` unwraps, so an operator already reads
+`model 'x' not found`. Native returns `{"error":"model 'x' not found"}` with no
+`message` key, which would surface as raw JSON until something parsed it
+specially. What native still offers and `/v1` cannot express is `think` levels,
+`keep_alive`, `options`, and per-response timing stats; if those are wanted, that
+is the case to make, and it needs an NDJSON stream reader and a tool-call parser
+that does not double-decode arguments Ollama sends as an object rather than a
+string.
 
 `conduit-anthropic` is a second implementation rather than another base URL,
 because Anthropic's Messages API differs in the three places that matter: it

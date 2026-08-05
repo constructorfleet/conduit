@@ -306,9 +306,13 @@ already holds a credential — a task role, an instance profile, a named profile
 `AWS_ACCESS_KEY_ID` — and naming one here would override it.
 
 Two components can also share a `definition_variant` and differ only in what
-their schema suggests. `ollama`, `vllm`, `lmstudio`, and `openrouter` are
-`openai` components whose `base_url` carries a `default`, so the console opens
-their forms with the endpoint already typed. A `default` is a suggestion, not a
+their schema suggests. `ollama`, `vllm`, `lmstudio`, `openrouter`, `moonshot`,
+and `zai` are `openai` components whose `base_url` carries a `default`, so the
+console opens their forms with the endpoint already typed. Each endpoint is
+offered under exactly one name, which
+`no_two_presets_name_the_same_endpoint` asserts: Moonshot and Kimi Code read
+like two vendors and are one service, and two entries for one backend is a menu
+an operator cannot choose from correctly. A `default` is a suggestion, not a
 constraint: the console seeds a fresh form with it, an operator may replace it,
 and a stored definition that omits the field is never filled in on the server.
 

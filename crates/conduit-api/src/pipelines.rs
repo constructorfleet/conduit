@@ -495,6 +495,16 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
         preset("vllm", "vLLM", "http://localhost:8000/v1"),
         preset("lmstudio", "LM Studio", "http://localhost:1234/v1"),
         preset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+        // One preset, not two. `platform.moonshot.ai` redirects to
+        // `platform.kimi.ai`, the API brands itself "Moonshot AI API", and the
+        // one endpoint serves both `kimi-*` and `moonshot-v1-*` model ids.
+        // Naming them separately would give an operator two entries for one
+        // backend and no way to tell which to pick.
+        preset("moonshot", "Moonshot (Kimi)", "https://api.moonshot.ai/v1"),
+        // The path really does carry `/api/paas/v4/`: the vendor's own base URL
+        // is `https://api.z.ai/api`, and the chat route beneath it is
+        // `/paas/v4/chat/completions`.
+        preset("zai", "Z.Ai", "https://api.z.ai/api/paas/v4/"),
         ProviderComponentDescriptor {
             id: "anthropic.messages",
             label: "Anthropic Messages",

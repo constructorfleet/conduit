@@ -8,6 +8,21 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Two more OpenAI-compatible chat endpoints arrive as catalogue presets:
+  Moonshot (Kimi) and Z.Ai. Both are the existing `openai` variant with the
+  `base_url` filled in, so there is no new crate, no factory arm, and nothing to
+  configure beyond a key. Moonshot and Kimi are one preset, not two:
+  `platform.moonshot.ai` redirects to `platform.kimi.ai` and the one endpoint
+  serves both `kimi-*` and `moonshot-v1-*` models, so listing them separately
+  would offer an operator a choice where only one answer exists. A new test
+  asserts that no two presets name the same endpoint, so the next one cannot
+  reintroduce the duplicate.
+- Ollama's native `/api/chat` is recorded as deliberately unimplemented rather
+  than left open. The case for it was that native errors name a missing model
+  better; measured, `/v1` returns the nested `error.message` shape Conduit
+  already unwraps and native does not, so the compatible path reads better today.
+  What native still offers — `think` levels, `keep_alive`, `options`, timing
+  stats — is written down as the case a future change would have to make.
 - The `streaming` flag on a Wyoming recognizer does what it says. It was stored,
   shown in the console, and never read: partials were gated solely on a request
   option that defaulted to on, so they were effectively always on and no operator
