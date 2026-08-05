@@ -8,7 +8,6 @@ substitutions:
   wake_debug_assistant_id: ${conduit_pipeline}
   wake_debug_udp_host: ""
   wake_debug_udp_port: "6056"
-  wake_debug_event_url: ""
   # Official board firmware source: https://github.com/esphome/home-assistant-voice-pe
   voicepe_ref: 0579e7b9d8504264719c593474c85447253c9dc1
 
@@ -203,6 +202,8 @@ conduit_voice:
   debug_assistant_id: ${wake_debug_assistant_id}
   debug_udp_host: ${wake_debug_udp_host}
   debug_udp_port: ${wake_debug_udp_port}
-  debug_wake_event_url: ${wake_debug_event_url}
+  # From secrets.yaml, not a substitution: the URL carries a webhook token,
+  # and substitutions are committed.
+  debug_wake_event_url: !secret wake_debug_event_url
   microphone: i2s_mics
   speaker: announcement_resampling_speaker
