@@ -33,6 +33,20 @@ pub enum TtsVariant {
         #[serde(default)]
         streaming: bool,
     },
+    /// Deepgram Aura speech synthesizer.
+    ///
+    /// No `base_url`, following `ElevenLabs`: there is one Deepgram and nothing
+    /// else speaks its API, so the field would be a box with one correct value.
+    Deepgram {
+        /// Optional API key. Sent as `Authorization: Token <key>` rather than
+        /// `Bearer`, which is this vendor's one real trap.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        api_key: Option<ProviderSecret>,
+        /// The Aura model, which is also the voice — `aura-2-thalia-en`. Absent
+        /// uses Deepgram's own default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
     /// ElevenLabs speech synthesizer.
     #[serde(rename = "elevenlabs")]
     ElevenLabs {
@@ -85,6 +99,9 @@ impl TtsVariant {
             Self::Wyoming { url, voice, streaming } => {
                 Self::Wyoming { url: url.clone(), voice: voice.clone(), streaming: *streaming }
             }
+            Self::Deepgram { api_key, model } => {
+                Self::Deepgram { api_key: redact_secret(api_key), model: model.clone() }
+            }
             Self::ElevenLabs { api_key, model, voice } => Self::ElevenLabs {
                 api_key: redact_secret(api_key),
                 model: model.clone(),
@@ -109,6 +126,7 @@ mod tests {
         // The inner `type` is what a stored definition carries, so a rename here
         // silently orphans every definition an operator has already saved.
         let spellings = [
+            (TtsVariant::Deepgram { api_key: None, model: None }, "deepgram"),
             (TtsVariant::ElevenLabs { api_key: None, model: None, voice: None }, "elevenlabs"),
             (TtsVariant::Google { language: None, voice: None }, "google"),
             (

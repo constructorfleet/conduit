@@ -526,6 +526,7 @@ export type ProviderDefinitionVariantType =
   | "bedrock"
   | "wyoming"
   | "elevenlabs"
+  | "deepgram"
   | "google"
   | "marytts"
   | "mcp"
@@ -610,7 +611,8 @@ export type SttVariant =
 /// A speech synthesizer.
 ///
 /// MaryTTS names a URL and no credential: it is self-hosted and has no
-/// authentication to configure. Google, again, discovers its own.
+/// authentication to configure. Google, again, discovers its own. Deepgram takes
+/// a key and a model and nothing else, because the model is the voice.
 export type TtsVariant =
   | {{
       type: "openai";
@@ -624,6 +626,11 @@ export type TtsVariant =
       url: string;
       voice?: string;
       streaming: boolean;
+    }}
+  | {{
+      type: "deepgram";
+      api_key?: ProviderSecret;
+      model?: string;
     }}
   | {{
       type: "elevenlabs";

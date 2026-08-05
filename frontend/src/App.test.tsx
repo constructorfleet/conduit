@@ -2099,6 +2099,70 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("asks a Deepgram voice for one model field and no separate voice", async () => {
+    // Deepgram encodes the voice into the model id — `aura-2-thalia-en` is
+    // family, voice, and language in one string. A separate Voice box would be
+    // a field with nowhere to go on the wire.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text-to-speech" }));
+    await user.click(screen.getByRole("menuitem", { name: "Deepgram Aura" }));
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Voice")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "aura");
+    await user.type(screen.getByLabelText("API Key"), "dg-test-key");
+    await user.type(screen.getByLabelText("Model"), "aura-2-thalia-en");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider aura saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toEqual({
+      type: "tts",
+      variant: {
+        type: "deepgram",
+        api_key: { type: "inline", value: "dg-test-key" },
+        model: "aura-2-thalia-en",
+      },
+    });
+  });
+
+  it("reopens a stored Deepgram voice with the model it was saved with", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "aura",
+            label: "Deepgram Aura",
+            kind: "tts",
+            component: "deepgram.speech",
+            config: { api_key: "dg-stored", model: "aura-2-apollo-en" },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "aura");
+
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue(
+      "aura-2-apollo-en",
+    );
+    expect(screen.getByLabelText("API Key")).toHaveDisplayValue("dg-stored");
+  });
+
   it("offers a Google voice no box to paste a credential into", async () => {
     // Google's credentials are discovered from the host rather than typed, so a
     // key field here would be a field that does nothing — and an operator who
@@ -3613,6 +3677,21 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "deepgram.speech",
+        label: "Deepgram Aura",
+        kind: "tts",
+        definition_variant: "deepgram",
+        schema: {
+          // The voice is the model, so one field covers both, and no URL
+          // because there is one Deepgram.
+          properties: {
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._-]+" },
+          },
+          required: [],
+        },
+      },
+      {
         id: "google.transcription",
         label: "Google Speech-to-Text",
         kind: "stt",
@@ -4244,6 +4323,21 @@ function providerDefinitionFixture({
           ...(apiKey ? { api_key: apiKey } : {}),
           ...(text("model") ? { model: text("model") } : {}),
           ...(text("voice") ? { voice: text("voice") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "deepgram.speech") {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "tts",
+        variant: {
+          type: "deepgram",
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(text("model") ? { model: text("model") } : {}),
         },
       },
     };

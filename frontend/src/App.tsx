@@ -4150,6 +4150,12 @@ function configFromProviderVariant(
         voice: variant.variant.voice ?? "",
       };
     }
+    if (variant.variant.type === "deepgram") {
+      return {
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.model ?? "",
+      };
+    }
     if (variant.variant.type === "google") {
       return {
         language: variant.variant.language ?? "",
@@ -4376,6 +4382,18 @@ function variantFromProviderDefinition(
         ...(apiKey ? { api_key: apiKey } : {}),
         ...(text("model") ? { model: text("model") } : {}),
         ...(text("voice") ? { voice: text("voice") } : {}),
+      },
+    };
+  }
+  if (definition.component === "deepgram.speech") {
+    return {
+      type: "tts",
+      variant: {
+        type: "deepgram",
+        // No base URL: there is one Deepgram, and the voice is the model, so a
+        // single `model` field is the whole of what an operator chooses.
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(text("model") ? { model: text("model") } : {}),
       },
     };
   }

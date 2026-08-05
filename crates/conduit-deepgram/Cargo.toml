@@ -1,0 +1,27 @@
+[package]
+name = "conduit-deepgram"
+description = "Deepgram Aura speech synthesis provider for Conduit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-http.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[lints]
+workspace = true

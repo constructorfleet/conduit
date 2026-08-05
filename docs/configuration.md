@@ -109,6 +109,7 @@ capability and an inner `variant.type` names the vendor.
 | `llm` | `bedrock` | `conduit-bedrock` | `region`: the AWS region is the endpoint |
 | `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
 | `stt` / `tts` | `elevenlabs` | `conduit-elevenlabs` | none: there is one ElevenLabs |
+| `tts` | `deepgram` | `conduit-deepgram` | none: there is one Deepgram |
 | `stt` / `tts` | `google` | `conduit-google` | none: the Cloud Speech APIs |
 | `tts` | `marytts` | `conduit-marytts` | `url`, `http` or `https` |
 | `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
