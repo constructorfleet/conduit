@@ -369,6 +369,8 @@ a Runtime Provider under the definition id:
 | `wake` | `microwakeword` | One wake word detector under the definition id | `runtime.where` is `device` or `wyoming` |
 | `speaker_id` | `http` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
 | `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
+| `transform` | `builtin` | One transform under the definition id | `rules` names the rewrites to apply, in order |
+| `transform` | `script` | One transform under the definition id | `engine` is `rhai`; the script is compiled and its deadline checked when the definition is saved |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
 
 A `wake` definition names its detector as the variant — `openwakeword`,

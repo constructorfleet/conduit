@@ -8,6 +8,32 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added `transform` definitions that run a script the operator wrote. The three
+  builtin rules are Rust functions somebody had to write and release; a `script`
+  definition holds a source, names its engine, and takes effect on the next
+  utterance. `conduit-script` is a separate crate because an interpreter is a
+  large dependency, and a deployment wanting only `strip_emoji` should not
+  compile one.
+- Running operator code inside the turn loop is bounded rather than trusted. A
+  script carries a deadline — 50ms by default, capped at 5s — and one that does
+  not finish fails its segment rather than ending every turn on the pipeline.
+  The script is compiled and its deadline checked when the definition is
+  *saved*, by asking `conduit-script`'s own validator rather than keeping a
+  second copy of the rules, so a typo is refused while it is still on screen
+  instead of becoming a jammed pipeline discovered by whoever spoke to it next.
+  Compilation catches syntax errors and undefined variables; an unknown
+  function, an unknown method, or a non-string return still surface as a failed
+  turn on the first sentence.
+- The engine is stored in the definition rather than assumed, so a second
+  interpreter could arrive without every saved script silently changing
+  language. One exists today, and the field is still not optional.
+- The Providers page gives a script a box it can be read in: a `multiline`
+  format hint on a config field, rendered as a resizable monospaced textarea
+  with the operator's own indentation, and read back verbatim — the source is
+  the definition rather than a secret in it, so reopening the form shows the
+  program there is to edit. `timeout_ms` also reads as `Timeout Ms` rather than
+  `Timeout MS`: a unit symbol is not an initialism.
+
 - Added three ways to reach a language model that were not reachable by changing
   a base URL. `conduit-anthropic` speaks the Messages API, which authenticates
   with `x-api-key`, pins a version header, takes system framing as a top-level

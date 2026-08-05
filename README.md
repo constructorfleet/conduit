@@ -30,6 +30,8 @@ echoes described under [Running](#running).
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
 | [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
+| [`conduit-transform`](crates/conduit-transform) | The rewrites that ship with Conduit: flatten markdown, strip emoji, collapse whitespace |
+| [`conduit-script`](crates/conduit-script) | The same job written by the operator: utterance transforms on a sandboxed Rhai interpreter |
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
@@ -620,6 +622,30 @@ The AWS SDK is ~40 transitive crates, so it sits behind the `bedrock` feature.
 The feature is on by default; a build without it still registers the provider
 and refuses by name, so an operator learns which feature is missing when they
 save the definition rather than when someone speaks to it.
+
+`conduit-script` is the one provider whose configuration is a *program*. The
+three rewrites in `conduit-transform` are Rust functions somebody had to write
+and release; a `script` transform definition holds a source an operator wrote,
+and it applies to the next utterance.
+
+Running operator code inside the turn loop is only acceptable because the
+interpreter is boxed in. An error ends one sentence, and a hang would end every
+turn on that pipeline, so a script carries a deadline — 50 ms by default, capped
+at 5 s — and a script that does not finish fails its segment rather than the
+conversation. The script is compiled and its deadline checked when the
+*definition is saved*, so a typo is refused while it is still on screen. The
+management API asks `conduit-script` rather than keeping its own copy of those
+rules, because two copies are how a form comes to accept a definition that fails
+to build on the next server start.
+
+The engine is named in the definition rather than assumed. One exists — Rhai —
+and storing which one it is means a second could arrive without every saved
+script silently changing language. `conduit-script` is a separate crate for the
+same reason `bedrock` is a feature: an interpreter is a large dependency, and a
+deployment that wants only `strip_emoji` should not compile one.
+[`crates/conduit-script/README.md`](crates/conduit-script/README.md) is the
+language reference, including the sandbox limits and the mutating-method trap
+that makes the obvious `segment.replace("cat", "dog")` one-liner fail.
 
 Two honest limits. Transcription takes a complete recording rather than a
 stream, so `OpenAiStt` buffers the utterance and reports no partial
