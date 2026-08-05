@@ -56,6 +56,7 @@ import type {
   ProviderDefinitionVariant,
   ProviderDefinitionView,
   ProviderSecret,
+  ScriptEngine,
   SpeakerEngine,
   TurnSnapshot,
   TransformRule,
@@ -3692,6 +3693,27 @@ function ComponentConfigFields({
           );
         }
 
+        // A program rather than a value: a script is written over several lines
+        // and read back to be edited, so a one-line box would show a few words
+        // of it and scroll the rest out of sight.
+        if (property.format === "multiline") {
+          return (
+            <label className="field" key={field}>
+              {label}
+              <textarea
+                rows={8}
+                spellCheck={false}
+                required={required.has(field)}
+                aria-invalid={isMissing(field, property) || undefined}
+                value={typeof config[field] === "string" ? config[field] : ""}
+                onChange={(event) =>
+                  onChange(field, property, event.target.value)
+                }
+              />
+            </label>
+          );
+        }
+
         return (
           <label className="field" key={field}>
             {label}
@@ -4182,6 +4204,17 @@ function configFromProviderVariant(
     };
   }
   if (variant.type === "transform") {
+    if (variant.variant.type === "script") {
+      // The source verbatim: it is the definition rather than a secret in it, so
+      // reopening the form has to show the script there is to edit.
+      return {
+        engine: variant.variant.engine,
+        source: variant.variant.source,
+        ...(variant.variant.timeout_ms === undefined
+          ? {}
+          : { timeout_ms: variant.variant.timeout_ms }),
+      };
+    }
     // Held as the text an operator is typing, and split when the definition is
     // built, like every other list field in this form.
     return { rules: variant.variant.rules.join(", ") };
@@ -4438,6 +4471,27 @@ function variantFromProviderDefinition(
         // Order is what the operator wrote: flattening markdown before
         // stripping emoji means an emoji inside a link's text is seen as text.
         rules: list("rules") as TransformRule[],
+      },
+    };
+  }
+  if (definition.component === "transform.script") {
+    return {
+      type: "transform",
+      variant: {
+        type: "script",
+        // Named rather than assumed, so the definition says what its source is
+        // written in even though the menu offers one engine.
+        engine: (text("engine") || "rhai") as ScriptEngine,
+        // Untrimmed, unlike every other text field here: this is a program, and
+        // an operator gets back what they wrote rather than a tidied version of
+        // it.
+        source: typeof config.source === "string" ? config.source : "",
+        // Omitted rather than guessed when the box is empty: the server stores
+        // its own deadline, and a zero here would be a script that can never
+        // finish.
+        ...(typeof config.timeout_ms === "number"
+          ? { timeout_ms: config.timeout_ms }
+          : {}),
       },
     };
   }

@@ -112,6 +112,7 @@ capability and an inner `variant.type` names the vendor.
 | `stt` / `tts` | `google` | `conduit-google` | none: the Cloud Speech APIs |
 | `tts` | `marytts` | `conduit-marytts` | `url`, `http` or `https` |
 | `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
+| `transform` | `script` | `conduit-script` | none: the interpreter runs in process |
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 | `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
 | `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
@@ -159,6 +160,57 @@ A transform runs per sentence, because synthesis begins before the model has
 finished writing. A construct spanning several sentences — most obviously a
 fenced code block — is therefore judged one line at a time rather than
 recognised as one thing.
+
+#### A Rewrite The Operator Writes
+
+A builtin rule is a Rust function somebody had to write and release. A `script`
+definition is the other half of that trade: the operator writes the rewrite
+themselves and it applies to the next utterance.
+
+```json
+{
+  "id": "shouting",
+  "label": "Shouting",
+  "variant": {
+    "type": "transform",
+    "variant": {
+      "type": "script",
+      "engine": "rhai",
+      "source": "segment.to_upper()",
+      "timeout_ms": 50
+    }
+  }
+}
+```
+
+The incoming sentence is bound to `segment` and whatever the script evaluates to
+is what gets rendered; returning `""` drops the sentence, which is a normal
+outcome rather than a failure. [`crates/conduit-script/README.md`](../crates/conduit-script/README.md)
+is the language reference, including the mutating-method trap that makes the
+obvious `segment.replace("cat", "dog")` one-liner fail.
+
+`engine` is stored rather than assumed. One interpreter exists, and naming it in
+the definition is what lets a second arrive without every saved script silently
+changing language.
+
+`timeout_ms` is a deadline rather than a suggestion, and is the reason a script
+can be run inside the turn loop at all: a transform sits between a model
+finishing a sentence and a synthesizer starting to speak it, so a script that
+never returns would end every turn on that pipeline rather than one sentence. It
+defaults to 50 ms and `conduit-script` refuses anything outside 1 ms..=5 s. The
+management API refuses an out-of-range deadline, and a script that does not
+compile, when the definition is *saved* — by asking `conduit-script` rather than
+keeping a second copy of the rules — so a typo is caught while the script is
+still on screen instead of becoming a jammed pipeline discovered by whoever
+speaks to it next.
+
+Compilation catches syntax errors and undefined variables. It does not catch an
+unknown function, an unknown method, or a script that returns something that is
+not a string; those surface as a failed turn on the first sentence that reaches
+them.
+
+The script's source is the definition rather than a secret in it, so it is read
+back verbatim and the console reopens the program the operator wrote.
 
 ### Wake Word Detection Without A Service
 

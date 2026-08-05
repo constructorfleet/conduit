@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
+members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +24,7 @@ conduit-provider = { path = "crates/conduit-provider", version = "0.1.0" }
 conduit-metrics = { path = "crates/conduit-metrics", version = "0.1.0" }
 conduit-http = { path = "crates/conduit-http", version = "0.1.0" }
 conduit-openai = { path = "crates/conduit-openai", version = "0.1.0" }
+conduit-script = { path = "crates/conduit-script", version = "0.1.0" }
 conduit-google = { path = "crates/conduit-google", version = "0.1.0" }
 conduit-marytts = { path = "crates/conduit-marytts", version = "0.1.0" }
 conduit-speaker = { path = "crates/conduit-speaker", version = "0.1.0" }
@@ -43,6 +44,10 @@ futures-util = "0.3"
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
 opentelemetry_sdk = { version = "0.32", features = ["trace"] }
+# `sync` makes `Engine`/`AST` `Send + Sync` so one engine can be shared across
+# turns; `no_closure` removes shared closure captures, whose locking is a hang
+# risk the deadline cannot break. Neither is optional for the sandbox.
+rhai = { version = "1.25", default-features = false, features = ["std", "sync", "no_closure"] }
 rubato = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

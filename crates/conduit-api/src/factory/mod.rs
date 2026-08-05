@@ -31,6 +31,7 @@ mod google;
 mod marytts;
 mod mcp;
 mod openai;
+mod script;
 mod speaker;
 mod transform;
 mod wake;
@@ -48,6 +49,9 @@ pub use google::Google;
 pub use marytts::MaryTtsServer;
 pub use mcp::Mcp;
 pub use openai::OpenAi;
+// Named for the factory's role on the same terms as `BedrockRuntime`:
+// `conduit_script::Script` is the provider it builds.
+pub use script::ScriptedTransform;
 pub use speaker::{DiarizationServer, HttpSpeaker};
 pub use transform::BuiltinTransform;
 pub use wake::{DeviceWake, OpenWakeWord};
@@ -124,6 +128,7 @@ impl Factories {
             .with(DiarizationServer)
             .with(HttpSpeaker)
             .with(BuiltinTransform)
+            .with(ScriptedTransform)
     }
 
     /// Adds `factory` after the ones already registered.
@@ -213,8 +218,8 @@ mod tests {
     use super::*;
     use conduit_provider::storage::{
         LlmVariant, McpTransport, MicroWakeWordRuntime, ProviderDefinitionVariant,
-        SpeakerEngine, SpeakerIdVariant, SttVariant, ToolVariant, TransformVariant, TtsVariant,
-        WakeRuntime, WakeVariant,
+        ScriptEngine, SpeakerEngine, SpeakerIdVariant, SttVariant, ToolVariant,
+        TransformVariant, TtsVariant, WakeRuntime, WakeVariant,
     };
     use conduit_provider::testing::EchoStt;
 
@@ -373,6 +378,13 @@ mod tests {
             },
             ProviderDefinitionVariant::Transform {
                 variant: TransformVariant::Builtin { rules: Vec::new() },
+            },
+            ProviderDefinitionVariant::Transform {
+                variant: TransformVariant::Script {
+                    engine: ScriptEngine::Rhai,
+                    source: "segment".to_owned(),
+                    timeout_ms: 50,
+                },
             },
         ]
     }
