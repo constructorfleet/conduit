@@ -8,6 +8,15 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Coqui is deliberately not supported, recorded alongside the PicoTTS refusal it
+  resembles. The live fork, `idiap/coqui-ai-TTS`, ships an HTTP server, but a bespoke
+  one rather than an OpenAI-compatible one — so it is not reachable by changing a base
+  URL, and support would mean a hand-written variant tracking one project's own API or
+  a wrapper service Conduit would then own. What that buys over the vendors already
+  here is voice cloning, which is the part least suited to offering: XTTS clones from a
+  recording of a real person's voice, usually not the operator's, so consent and
+  retention become a question about biometric data. Better answered before building a
+  feature than after.
 - Amazon Polly synthesis, as `conduit-polly` and a `polly` TTS variant. A region
   rather than a base URL, like `conduit-bedrock`: the SDK resolves the endpoint and
   the credential is SigV4 over the AWS chain, so neither is reachable by pointing
