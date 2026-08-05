@@ -799,6 +799,7 @@ dependencies = [
  "conduit-speaker",
  "conduit-store",
  "conduit-transform",
+ "conduit-vad",
  "conduit-wake",
  "conduit-wyoming",
  "futures-util",
@@ -1104,6 +1105,21 @@ dependencies = [
  "conduit-provider",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "conduit-vad"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "conduit-core",
+ "conduit-provider",
+ "futures-util",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tract-onnx",
 ]
 
 [[package]]

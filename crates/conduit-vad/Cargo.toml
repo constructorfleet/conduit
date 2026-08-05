@@ -1,0 +1,36 @@
+[package]
+name = "conduit-vad"
+description = "In-process voice activity detection for Conduit, scoring the Silero ONNX model with no service to run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["onnx"]
+# Scoring the model in process. Off, the detector still exists and refuses to
+# load with a message naming this feature, so a build without an inference
+# runtime says so rather than registering a detector that hears nothing. The
+# same arrangement `conduit-wake` uses, and for the same reason.
+onnx = ["dep:tract-onnx"]
+
+[dependencies]
+conduit-core.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tokio-stream.workspace = true
+tracing.workspace = true
+tract-onnx = { version = "0.23", optional = true }
+
+[dev-dependencies]
+bytes.workspace = true
+conduit-provider.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true
