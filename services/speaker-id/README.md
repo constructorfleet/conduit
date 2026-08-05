@@ -2,8 +2,12 @@
 
 Conduit does not recognize voices itself. It packages an utterance and asks a
 service over the contract documented on the [`conduit-speaker`](../../crates/conduit-speaker)
-crate, and this is that contract implemented over SpeechBrain's ECAPA-TDNN
-embeddings.
+crate, and this is that contract implemented over a swappable embedding model:
+SpeechBrain's ECAPA-TDNN, pyannote's x-vectors, or NVIDIA NeMo's TitaNet.
+
+It identifies and it does not diarize. "Who is speaking, out of the people I
+know" and "how many people are in this recording and when did each talk" are
+different questions, and only the first one has a stage in a Conduit pipeline.
 
 ```
 docker compose --profile speaker-id up
@@ -29,12 +33,68 @@ Enrolling the same speaker again adds a sample rather than replacing one;
 identification compares against the mean of everything they enrolled. Three or
 four utterances from different sittings makes a better print than one long one.
 
+## Engines
+
+Each image serves one engine, because an image carrying all three would pull
+every framework to run one. `SPEAKER_ID_ENGINE` selects it and defaults to
+whichever the image was built for.
+
+| Engine | Default model | Licence | Access | Width |
+| --- | --- | --- | --- | --- |
+| `speechbrain` | `speechbrain/spkrec-ecapa-voxceleb` | Apache-2.0 | ungated | 192 |
+| `pyannote` | `pyannote/embedding` | MIT weights, **gated repository** | accept the model's conditions, then supply `HF_TOKEN` | 512 |
+| `nemo` | `nvidia/speakerverification_en_titanet_large` | CC-BY-4.0 | ungated, attribution required | 192 |
+
+**No image ships weights.** Every engine downloads its model on first use into
+the `/models` volume. That is not only a size decision for pyannote: an image
+containing gated weights could be pulled by somebody who never accepted the
+agreement those weights are behind, so the image cannot legally carry them and
+the tag would be a licence violation rather than a convenience.
+
+### pyannote: what an operator must accept
+
+`pyannote/embedding` is a gated Hugging Face repository. Before it will
+download:
+
+1. Sign in to Hugging Face and visit
+   [`pyannote/embedding`](https://huggingface.co/pyannote/embedding). Accept the
+   conditions the page states — pyannote asks for your company and use case, and
+   grants access to that account.
+2. Create a **read** token and pass it as `HF_TOKEN` (or
+   `HUGGING_FACE_HUB_TOKEN`; both are honoured, because the hub honours both).
+
+With no token, the container refuses at load with a message naming the model
+page and the variable, not a 401. With a token whose account has not been
+granted the model, the failure says that instead — the two are different
+operator actions and a bare 401 distinguishes neither. The token is never
+logged.
+
+### NeMo: what attribution means
+
+TitaNet-Large is CC-BY-4.0 and needs no token. CC-BY does require attribution,
+so a product that identifies speakers with it should credit NVIDIA's model in
+whatever notices it already ships.
+
+### Widths, and why they are in this table
+
+A voice print records the dimensions it was built with, and comparing a
+512-dimension print to a 192-dimension voice is not a low score — it is
+nonsense. Pointing a `pyannote` store at a `speechbrain` or `nemo` image is
+refused with a `409` naming the mismatch.
+
+**SpeechBrain and NeMo are both 192 dimensions, so that guard cannot catch a
+swap between them.** The store will compare them, and the comparison will be
+wrong: two models that agree on a vector length do not agree on what its
+directions mean. Swapping between those two means re-enrolling everybody, and
+nothing in this service will tell you that you did not.
+
 ## Configuration
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SPEAKER_ID_ENGINE` | `speechbrain` | Which embedding backend to load. |
-| `SPEAKER_ID_MODEL` | `speechbrain/spkrec-ecapa-voxceleb` | Model the engine loads. |
+| `SPEAKER_ID_ENGINE` | the engine the image was built for | Which embedding backend to load: `speechbrain`, `pyannote`, or `nemo`. |
+| `HF_TOKEN` | unset | Hugging Face read token. Required by `pyannote`, unused by the others. Never logged. |
+| `SPEAKER_ID_MODEL` | the engine's default, above | Model the engine loads. A model whose embeddings are not the width its engine declares is refused at load, because the alternative is confident wrong matches. |
 | `SPEAKER_ID_DEVICE` | `cpu` | `cuda` on the GPU image. Startup fails loudly if CUDA was asked for and is not there, because a GPU image silently running on the CPU is a deployment that looks fine and is far slower. |
 | `SPEAKER_ID_DATA_DIR` | `/data` | Voice prints, one `.npy` per speaker. |
 | `SPEAKER_ID_MODEL_DIR` | `/models` | Model cache, so a restart does not re-download it. |
@@ -45,14 +105,17 @@ container becomes healthy immediately and a first identification is slow.
 
 ## Images
 
-One Dockerfile builds both tags, because two would drift and only one of them
-would be tested.
+One Dockerfile builds every tag, because one per engine would drift and only
+one of them would be tested. Two dimensions vary: `ENGINE`, and the
+CPU/GPU triple that was already there.
 
 ```
 # CPU
 docker build -t conduit-speaker-id:speechbrain services/speaker-id
+docker build -t conduit-speaker-id:pyannote --build-arg ENGINE=pyannote services/speaker-id
+docker build -t conduit-speaker-id:nemo     --build-arg ENGINE=nemo     services/speaker-id
 
-# GPU
+# GPU — the same three, plus the CUDA triple
 docker build -t conduit-speaker-id:speechbrain-gpu \
   --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
@@ -60,8 +123,17 @@ docker build -t conduit-speaker-id:speechbrain-gpu \
   services/speaker-id
 ```
 
-The CPU image is about 1.8 GB, most of which is torch. The GPU image is
-substantially larger and needs a container runtime with GPU access.
+The CPU images pull CPU torch wheels from torch's own index, which is what keeps
+them from silently becoming multi-gigabyte CUDA images. The SpeechBrain CPU
+image is about 1.8 GB, most of which is torch; the pyannote and NeMo images are
+larger, NeMo substantially so. The GPU images are larger again and need a
+container runtime with GPU access.
+
+## Speaker identification is remote only
+
+All three engines are Python and want more memory than an ESP32 has, so there is
+no on-device counterpart to a wake definition's `device` runtime. More engines
+does not change this: a satellite can wake itself; it cannot tell who woke it.
 
 ## Choosing a threshold
 
@@ -70,24 +142,39 @@ who is speaking. Conduit applies `threshold_percent` from the Provider
 Definition, so two deployments sharing one service can disagree about how sure
 they want to be before a voice unlocks a door.
 
-**The 50% default is a starting point, not a calibrated value.** ECAPA cosine
+**The 50% default is a starting point, not a calibrated value.** Cosine
 similarities depend on your microphones, your room, and how much audio each
-turn captures. Tune it against your own voices: Conduit publishes every
+turn captures.
+
+**They also depend on the engine.** Each of the three has its own similarity
+distribution — a threshold tuned against ECAPA is not a threshold tuned against
+TitaNet or pyannote, and carrying one over after an engine swap is how a
+deployment starts making confident wrong matches. Re-tune after changing
+engines, the same way you re-enrol.
+
+Tune it against your own voices: Conduit publishes every
 `SpeakerIdentified` event with its confidence, including the ones that matched
 nobody, so a few turns from each household member will show you where the two
 populations separate.
 
 ## Adding an engine
 
-`build_encoder` in [`app.py`](app.py) is the whole seam. A pyannote or NeMo
-backend is a class with an `embed` method and an entry in that function; the
-routes, the contract, and everything Conduit knows about are unchanged.
-Conduit's `engine` field is an open string, so a new backend needs no change
-there either.
+`ENGINE_CLASSES` and `build_encoder` in [`app.py`](app.py) are the whole seam. A
+backend is a class with an `embed` method and a declared `width`, an entry in
+that table, a default model in `DEFAULT_MODELS`, a width in `EMBEDDING_WIDTHS`,
+and a `requirements-<engine>.txt` the Dockerfile's `ENGINE` argument selects.
+The routes and the contract are unchanged.
+
+Conduit's side is *not* an open string: `SpeakerEngine` in
+`conduit-provider` is a closed enum, currently `speechbrain`, `resemblyzer`, and
+`pyannote`. So `pyannote` is already selectable from a provider definition and
+`nemo` is not — reaching it needs a variant added to that enum, and until then
+`nemo` is reachable only by setting `SPEAKER_ID_ENGINE` on the service directly.
 
 Voice prints record the dimensions they were built with. Pointing a store built
-by one encoder at another refuses the enrollment with a `409` naming the
-mismatch rather than scoring a comparison that means nothing.
+by one encoder at another of a different width refuses the enrollment with a
+`409` naming the mismatch rather than scoring a comparison that means nothing —
+see the caveat above about the two engines that share a width.
 
 ## Tests
 
