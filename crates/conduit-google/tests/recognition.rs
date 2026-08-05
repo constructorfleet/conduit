@@ -140,6 +140,30 @@ async fn the_declared_sample_rate_is_what_google_is_told() {
 }
 
 #[tokio::test]
+async fn per_channel_recognition_is_left_off_so_one_utterance_gets_one_transcript() {
+    // Setting `enableSeparateRecognitionPerChannel` would return one transcript
+    // per channel and bill for each. Leaving it off means Google recognizes the
+    // first channel, which is what a single-speaker utterance wants.
+    let server = MockGoogle::json(recognized("hello", 0.9)).await;
+    let provider = recognizer(&server, GoogleConfig::default()).await;
+
+    let format = AudioFormat { channels: 2, ..AudioFormat::DEFAULT };
+    listen(
+        &provider,
+        captured(vec![0; 64], 1),
+        TranscribeOptions { format, ..TranscribeOptions::default() },
+    )
+    .await;
+
+    let body = server.last_body().await.expect("a body");
+    assert_eq!(
+        body["config"]["audioChannelCount"], 2,
+        "Google is told the truth about the audio"
+    );
+    assert!(body["config"].get("enableSeparateRecognitionPerChannel").is_none());
+}
+
+#[tokio::test]
 async fn a_nonsense_format_is_refused_before_anything_is_sent() {
     // Zero Hz cannot be recognized, and Google's rejection of it would read as an
     // opaque INVALID_ARGUMENT.

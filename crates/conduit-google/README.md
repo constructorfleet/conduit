@@ -138,6 +138,12 @@ format and are never assumed. This is the most consequential thing this crate
 does: audio described at the wrong rate does not fail, it transcribes the wrong
 words with high confidence.
 
+`audioChannelCount` comes from the same place. Google recognizes only the first
+channel of multi-channel audio unless `enableSeparateRecognitionPerChannel` is
+set, which this provider does not set: separate recognition is billed per channel
+and returns one transcript per channel, which is not what a single-speaker
+utterance wants. Stereo capture therefore transcribes its left channel.
+
 Consecutive result segments are joined in order, and the confidence reported is
 the **minimum** across them — a transcript is only as trustworthy as its shakiest
 segment. Silence comes back as an empty final rather than an error, so the

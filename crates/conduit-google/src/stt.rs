@@ -22,6 +22,13 @@
 //! does not fail — it produces a confidently wrong transcript of audio played at
 //! the wrong speed. So it is taken from the format the caller declares its audio
 //! to be in, never assumed.
+//!
+//! `audioChannelCount` is taken from the same place, and carries a documented
+//! consequence worth knowing: Google recognizes only the *first* channel of
+//! multi-channel audio unless `enableSeparateRecognitionPerChannel` is set. This
+//! provider does not set it, because separate recognition is billed per channel
+//! and produces one transcript per channel, which is not what a single-speaker
+//! utterance wants. Stereo capture therefore transcribes its left channel.
 
 use base64::Engine as _;
 use conduit_core::audio::{AudioFormat, Encoding};
