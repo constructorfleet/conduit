@@ -134,10 +134,9 @@ pub struct CorePlan {
     pub tools: BTreeMap<String, BoundTool>,
     /// Memory this core retrieves from and stores to.
     ///
-    /// Empty today: resolution refuses every mode rather than accepting a
-    /// binding it would not run, so nothing reaches this field until track F
-    /// executes memory. It is here because the alternative — dropping the
-    /// binding at resolution — is what the refusal exists to avoid.
+    /// Collected rather than one slot, like `tools` and for the same reason: a
+    /// core may read a keyword store and a vector store in the same turn, and
+    /// the two retrieve different records for the same question.
     pub memory: Vec<ResolvedMemory>,
     /// Cap on model calls in one turn.
     pub max_rounds: usize,

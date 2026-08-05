@@ -25,6 +25,7 @@ runtime progress is published as events.
 | `conduit-script` | The same job, written by the operator: an utterance transform running an operator-supplied script on a sandboxed Rhai interpreter. Separate from `conduit-transform` so a deployment wanting only the fixed rules never compiles an interpreter. |
 | `conduit-mcp` | Model Context Protocol client and tool providers over stdio, streamable HTTP, and SSE. |
 | `conduit-store` | Memory, file, and PostgreSQL implementations of the pipeline store contract. |
+| `conduit-memory` | What the assistant remembers: an in-process BM25 store that needs nothing, and PostgreSQL with `pgvector` behind the `postgres` feature. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
 | `conduit-api` | HTTP service and ops routers, authentication, pipeline CRUD, event streaming, and the conversation WebSocket. |
 | `frontend` | React Operator Console app with token-based Operator Access, snapshot-plus-events client boundaries, and top-level Overview, Pipelines, Providers, Speakers, Events, and Settings sections. |
@@ -147,8 +148,10 @@ being two models rather than about how the graph spells them.
 
 Today the runtime executes at most one wake stage, one identification stage,
 one recognizer, one language model, at most one synthesizer, and any number of
-tool branches downstream of the model. `router` and `memory` nodes exist in the
-graph vocabulary but are not runnable runtime stages yet.
+tool branches downstream of the model. A core's memory bindings run with it: the
+turn retrieves from every store bound for reading before it reasons and writes to
+every store bound for writing after it answers. `router` nodes exist in the graph
+vocabulary but are not runnable runtime stages yet.
 
 A wake stage gates capture: every chunk reaches the detector and nothing
 reaches the recognizer until a phrase is accepted. The gate forwards half a
@@ -294,5 +297,5 @@ pipeline definition.
 
 ## Current Limits
 
-The runtime does not yet route between branches or read and write memory. These
-are documented as known gaps in [README.md](../README.md).
+The runtime does not yet route between branches. That, and the rest, are
+documented as known gaps in [README.md](../README.md).

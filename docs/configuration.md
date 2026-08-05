@@ -117,6 +117,8 @@ capability and an inner `variant.type` names the vendor.
 | `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
 | `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
 | `speaker_id` | `http` / `diarization_server` | `conduit-speaker` | `base_url`, `http` or `https` |
+| `memory` | `builtin` | `conduit-memory` | none: the records are in this process |
+| `memory` | `pgvector` | `conduit-memory` | `url`, `postgres://…`, plus an embedding `embedding_base_url` |
 
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
@@ -259,6 +261,51 @@ startup — for every capability, including MCP: a tool provider is checked
 through its transport the way the explicit test checks it, so a healthy server
 reads `reachable` without an operator pressing Test, however the registry is
 populated.
+
+### Remembering What Was Said
+
+A `memory` definition names where the assistant keeps what it should remember,
+and a core binds it the way it binds a tool. The two variants are two
+*retrievals* rather than two places to put the same records: `builtin` ranks by
+keyword, so a question phrased in words the stored record never used misses,
+and `pgvector` ranks by embedding distance, so it does not.
+
+```json
+{
+  "id": "household-recall",
+  "label": "Household memory",
+  "variant": {
+    "type": "memory",
+    "variant": { "type": "builtin", "capacity": 1000 }
+  }
+}
+```
+
+`builtin` needs nothing installed and nothing reached. A definition that names
+no `path` writes nowhere and is gone at the next restart: a memory store that
+silently began recording every conversation to disk is not a default anyone
+should get by leaving a field blank. `capacity` bounds it — a thousand records
+by default, oldest dropped first — because nothing else forgets one. The runtime
+never calls `forget_conversation`, so an unbounded in-process store grows for as
+long as the process runs.
+
+`pgvector` keeps the records in PostgreSQL and needs the `postgres` feature; a
+deployment with a database for pipeline definitions already has one for this. It
+wants the `pgvector` extension, but does not require it — without the extension
+the store still works and ranks by keyword, which is why the extension is not
+part of the definition. `embedding_base_url` is an OpenAI-compatible
+`/embeddings` endpoint, which Ollama serves as well as OpenAI does, and
+`dimensions` is how many numbers that model's vectors have. That last one is
+supplied rather than discovered because it is what the `vector(n)` column is
+declared with, and nothing can learn it before the first embedding exists.
+
+The connection URL may not carry a password, and one is refused rather than
+redacted. Every other credential in a definition lives in its own secret field,
+which is what lets a read hide it and a later save keep it; a password buried in
+a URL's userinfo has neither, so it would be stored in the clear and handed back
+in the clear to every operator who can read the provider list. `PGPASSWORD`, a
+`.pgpass` file, or a password-less local role are all ways to say it somewhere
+the definition does not.
 
 ## OpenTelemetry
 

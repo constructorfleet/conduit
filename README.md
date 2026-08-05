@@ -38,6 +38,7 @@ echoes described under [Running](#running).
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
 | [`conduit-metrics`](crates/conduit-metrics) | Prometheus metrics, derived from the event bus |
 | [`conduit-store`](crates/conduit-store) | Storage backends for pipeline definitions |
+| [`conduit-memory`](crates/conduit-memory) | What the assistant remembers: BM25 in process, or PostgreSQL with `pgvector` |
 | [`conduit-api`](crates/conduit-api) | HTTP API: pipeline CRUD, a live event stream, and the conversation socket |
 | [`frontend`](frontend) | React Operator Console shell and browser-side access foundation |
 
@@ -692,10 +693,35 @@ It is an unmaintained C library with no network interface and no streaming, so
 reaching it would mean FFI and a vendored blob in exchange for worse output than
 a MaryTTS container gives.
 
+`conduit-memory` is where what the assistant remembers lives, and the two
+backends are two *retrievals* rather than two places to put the same records.
+`Builtin` ranks with BM25 over unigrams and needs nothing at all: no service, no
+database, and — with no `path` — no file, which is what a store configured by
+configuring nothing should be. `PgVector` ranks by cosine distance over an
+embedding, so a question phrased in words the stored record never used still
+finds it; it wants PostgreSQL with the `pgvector` extension, and degrades to
+keyword ranking where the extension is missing rather than refusing to answer.
+Both sit behind the same trait, so which one runs is configuration.
+
+```rust
+// No path, so nothing is written anywhere.
+let memory = Builtin::builder("recall").capacity(1_000).build().await?;
+```
+
+The `builtin` store is bounded because nothing else forgets a record — the
+runtime never calls `forget_conversation` — so an unbounded in-process store
+grows for as long as the process runs. A `pgvector` definition supplies the
+embedding width rather than discovering it: that number is what the `vector(n)`
+column is declared with, and nothing can learn it before the first embedding
+exists. Its connection URL may not carry a password, because a password in a
+URL's userinfo has no secret field to be hidden by on a read or kept by on a
+save, and would round-trip in the clear to every operator who can read the
+provider list.
+
 ## Next
 
 - gRPC and MQTT device transports alongside the WebSocket one
-- Memory and routing in the runtime
+- Routing in the runtime
 
 ## Known gaps
 
@@ -779,7 +805,7 @@ microphones, the room, and how much audio a turn captured, so tune
 carries its confidence, including the ones that matched nobody, which is what
 shows you where the two populations separate.
 
-**Memory and routing are graph-only.** The graph model describes `memory`
-bindings and `router` nodes, but the runtime does not run them. For memory the
-provider trait exists and what is missing is the runtime wiring; for `router`
-there is no trait yet either.
+**Routing is graph-only.** The graph model describes `router` nodes, but the
+runtime does not run them and there is no provider trait for one yet. Memory is
+no longer in this list: a `memory` definition names a store, a core binds it, and
+the turn retrieves before it reasons and writes after it answers.
