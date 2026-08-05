@@ -146,6 +146,75 @@ like every other inline credential. See
 [`crates/conduit-bedrock/README.md`](../crates/conduit-bedrock/README.md) for the
 mechanism-by-mechanism table.
 
+### Reaching A Locally Hosted Recognizer
+
+Several of the recognizers an operator hears about — NVIDIA Canary, Qwen's audio
+models, IBM Granite Speech — are not services. They are published weights, run
+by loading them into a Python process (Canary through NeMo's
+`ASRModel.from_pretrained()`), and no vendor offers a hosted endpoint for them.
+An `stt` definition names an endpoint, so there is nothing for one to point at
+until a server is in front of the weights.
+
+None of them needs a Conduit change to be reachable, though, because the
+protocol that wraps a local ASR model already has a variant. `wyoming` takes a
+`url` and nothing else: the console form is **Wyoming** (descriptor id
+`wyoming`), where `url` is the one required field and `model` and `streaming` are
+optional. A Canary server that speaks Wyoming is reachable today by filling in
+that URL.
+
+```json
+{
+  "id": "canary-local",
+  "label": "Canary (local)",
+  "variant": {
+    "type": "stt",
+    "variant": {
+      "type": "wyoming",
+      "url": "tcp://canary-wyoming:10300",
+      "model": "nvidia/canary-1b-flash"
+    }
+  }
+}
+```
+
+The `url` must be `tcp://host:port`. Wyoming is a TCP event protocol, not HTTP,
+and a `ws://` or `http://` URL is refused when the definition is saved rather
+than at the first turn. The audio is sent as `pcm_s16le`, which is the one
+encoding Wyoming events carry, and `model` is passed through on `audio-start` as
+a hint the server may honour or ignore — it is a name the server recognizes, not
+a name Conduit validates.
+
+Two things about `streaming` are worth saying plainly, because the field name
+promises more than it does. Conduit's Wyoming recognizer already reads
+`transcript-chunk` events as partials whenever the transcription request asks
+for partials, which is the default; the stored `streaming` flag does not gate
+that, and setting it does not make a batch server emit partials. Whether
+partials arrive is a property of the server, not of the definition. A server
+that only transcribes once it has seen `audio-stop` — which is how
+faster-whisper behaves, and how a NeMo model loaded per utterance will behave —
+returns a single final transcript, and that is a correct session, not a
+misconfiguration.
+
+The alternative is an OpenAI-compatible shim, which the existing `openai` STT
+variant reaches with a `base_url`. **Chat-completions compatibility does not
+imply audio compatibility.** A great many local servers advertise "OpenAI
+compatible" and serve only `/v1/chat/completions`; Conduit posts to
+`audio/transcriptions` under the `base_url`, and a server that does not serve
+that path fails at the first turn with a configuration that looked correct when
+it was saved. Confirm the audio endpoint specifically before choosing this
+route. Note also that this variant sends a complete recording and returns one
+final transcript, so its `stream` flag changes nothing about what arrives.
+
+Writing the server that fronts the weights is tracked by
+[issue #106](https://github.com/constructorfleet/conduit/issues/106) — a service
+Conduit reaches, in the shape of `services/speaker-id/`, rather than a provider
+crate. Nothing in this section waits on it: it is the supported wrapper, not the
+only reachable one.
+
+If Canary is the model chosen, its weights are CC-BY-4.0. Commercial use is
+permitted and attribution is required, so a deployment that ships it owes the
+credit.
+
 ### Rewriting What Is Spoken
 
 A model writes for a reader. It emphasises with asterisks, punctuates with
