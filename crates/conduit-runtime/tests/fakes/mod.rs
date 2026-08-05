@@ -51,6 +51,25 @@ pub fn audio_of(chunks: &[&str]) -> ChunkStream<AudioChunk> {
 ///
 /// Payload size is what the capture events report, so a test asserting on a
 /// duration needs to control it rather than count characters in a string.
+/// The same, with each chunk padded to `bytes` so it is a realistic length of
+/// sound.
+///
+/// A stage measuring time — trimming, pre-roll — behaves differently on a
+/// four-byte chunk than on the 100 ms one a device really sends, so a test about
+/// one needs audio the format can measure.
+pub fn audio_of_padded(chunks: &[&str], bytes: usize) -> ChunkStream<AudioChunk> {
+    let chunks: Vec<_> = chunks
+        .iter()
+        .enumerate()
+        .map(|(sequence, data)| {
+            let mut padded = data.as_bytes().to_vec();
+            padded.resize(bytes.max(data.len()), b' ');
+            Ok(AudioChunk { sequence: sequence as u64, data: Bytes::from(padded) })
+        })
+        .collect();
+    Box::pin(futures_util::stream::iter(chunks))
+}
+
 pub fn audio_of_size(count: usize, bytes: usize) -> ChunkStream<AudioChunk> {
     let chunks: Vec<_> = (0..count)
         .map(|sequence| {
@@ -88,6 +107,8 @@ pub struct FakeStt {
     options: Arc<Mutex<Vec<TranscribeOptions>>>,
     /// Whether being handed no audio at all is a test failure.
     demands_audio: bool,
+    /// What each session was given, as text, in the order it arrived.
+    heard: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeStt {
@@ -97,6 +118,7 @@ impl FakeStt {
             descriptor: Descriptor::new("fake-stt", Capability::Stt),
             options: Arc::new(Mutex::new(Vec::new())),
             demands_audio: true,
+            heard: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -114,6 +136,20 @@ impl FakeStt {
     /// The options every transcription session was started with, in order.
     pub fn options(&self) -> Vec<TranscribeOptions> {
         self.options.lock().expect("lock").clone()
+    }
+
+    /// The chunks the recognizer was given, as text, in order.
+    ///
+    /// What a trimming stage forwards is the whole assertion about it, and a
+    /// count would pass for a stage that dropped the wrong chunks.
+    pub fn heard(&self) -> Vec<String> {
+        self.heard.lock().expect("lock").clone()
+    }
+
+    /// The same record, shared, for a test that hands the recognizer to a
+    /// runtime and so no longer owns it.
+    pub fn heard_handle(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.heard)
     }
 
     /// Stops asserting that audio arrived.
@@ -142,7 +178,21 @@ impl SpeechToText for FakeStt {
     ) -> Result<ChunkStream<Transcript>> {
         self.options.lock().expect("lock").push(options);
         // Drain the input so a runtime that never forwards audio fails here.
-        let received = audio.count().await;
+        let mut audio = audio;
+        let mut received = 0_usize;
+        while let Some(chunk) = audio.next().await {
+            // A failed chunk is counted and not propagated: a microphone that
+            // stops mid-utterance is the runtime's story to tell, and a
+            // recognizer that turned it into a transcription error would take
+            // the reporting away from the stage that knows what happened.
+            if let Ok(chunk) = chunk {
+                self.heard
+                    .lock()
+                    .expect("lock")
+                    .push(String::from_utf8_lossy(&chunk.data).into_owned());
+            }
+            received += 1;
+        }
         assert!(received > 0 || !self.demands_audio, "the recognizer was given no audio");
         Ok(stream_of(self.transcripts.clone()))
     }
@@ -760,6 +810,62 @@ impl conduit_provider::wake::WakeWordDetector for FakeWake {
                 phrase: "hey jarvis".to_owned(),
                 confidence: if accept && index + 1 >= after { 0.9 } else { 0.1 },
                 accepted: accept && index + 1 >= after,
+            })
+        })))
+    }
+}
+
+/// A detector that calls a chunk speech when its text contains `word`.
+///
+/// Keyed on content rather than on position so a test can say which of the
+/// chunks it wrote is the speech, and so the assertion reads as the utterance
+/// rather than as arithmetic about indices.
+pub struct FakeVad {
+    word: String,
+    heard: Arc<Mutex<usize>>,
+}
+
+impl FakeVad {
+    /// A detector hearing speech in every chunk whose bytes contain `word`.
+    pub fn hearing(word: &str) -> Self {
+        Self { word: word.to_owned(), heard: Arc::new(Mutex::new(0)) }
+    }
+
+    /// How many chunks the detector was asked about, which must be every chunk
+    /// captured: a stage that stopped asking would pair later verdicts with the
+    /// wrong audio.
+    pub fn heard(&self) -> usize {
+        *self.heard.lock().expect("lock")
+    }
+
+    /// The same count, shared, for a test that hands the detector to a runtime.
+    pub fn heard_handle(&self) -> Arc<Mutex<usize>> {
+        Arc::clone(&self.heard)
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for FakeVad {
+    conduit_provider::stub_descriptor!("fake-vad", Capability::Vad);
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::vad::VoiceActivityDetector for FakeVad {
+    async fn detect(
+        &self,
+        audio: ChunkStream<AudioChunk>,
+        _options: conduit_provider::vad::VadOptions,
+    ) -> Result<ChunkStream<conduit_provider::vad::Activity>> {
+        let word = self.word.clone();
+        let heard = Arc::clone(&self.heard);
+        Ok(Box::pin(audio.map(move |chunk| {
+            *heard.lock().expect("lock") += 1;
+            let chunk = chunk?;
+            let speech = String::from_utf8_lossy(&chunk.data).contains(word.as_str());
+            Ok(if speech {
+                conduit_provider::vad::Activity::speech(0.9)
+            } else {
+                conduit_provider::vad::Activity::silence(0.1)
             })
         })))
     }

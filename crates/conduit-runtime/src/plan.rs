@@ -15,6 +15,7 @@ use conduit_provider::stt::SpeechToText;
 use conduit_provider::tool::Tool;
 use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::TextToSpeech;
+use conduit_provider::vad::{VadOptions, VoiceActivityDetector};
 use conduit_provider::wake::{WakePhrase, WakeWordDetector};
 use conduit_provider::{Provider, Settings};
 use serde_json::{Map, Value};
@@ -44,6 +45,22 @@ fn resolve_overrides(
         .descriptor()
         .validate_overrides(&Value::Object(overrides.clone()))
         .map_err(|error| Error::Config(format!("node `{node}`: {error}")))
+}
+
+/// Reads the detector settings a node wrote into the options a detector takes.
+///
+/// A setting the node left alone is left `None` rather than filled with a zero,
+/// because the definition's own value is what should then stand — and a
+/// threshold of zero would make every frame speech, which is the opposite of
+/// saying nothing.
+fn vad_options(settings: &Settings) -> VadOptions {
+    VadOptions {
+        threshold: settings.get("threshold").and_then(Value::as_f64).map(|value| value as f32),
+        silence_ms: settings
+            .get("silence_ms")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+    }
 }
 
 /// The recognizer a pipeline resolved, and the node that chose it.
@@ -83,6 +100,19 @@ pub struct Identifier {
     pub provider: Arc<dyn SpeakerIdentifier>,
     /// Node id of the identification stage.
     pub node: String,
+}
+
+/// The activity detector a pipeline resolved, and the node that chose it.
+///
+/// `None` on a plan means nothing trims the audio, which is what every pipeline
+/// did before this stage existed: the recognizer hears the silence too.
+pub struct Trimmer {
+    /// The provider that tells speech from silence.
+    pub provider: Arc<dyn VoiceActivityDetector>,
+    /// Node id of the trimming stage.
+    pub node: String,
+    /// What this node asked of the detector, over what its definition set.
+    pub options: VadOptions,
 }
 
 /// One utterance transform a pipeline resolved, and the node that chose it.
@@ -162,6 +192,12 @@ pub struct Plan {
     /// `None` for a pipeline that listens continuously: nothing gates the
     /// audio, because every turn it is given is one somebody already started.
     pub wake: Option<Detector>,
+    /// Activity detector, and the node that selected it.
+    ///
+    /// `None` for a pipeline that hands the recognizer everything it hears.
+    /// Absence is the old behaviour rather than a degraded one — untrimmed audio
+    /// transcribes correctly, it just costs more of it.
+    pub vad: Option<Trimmer>,
     /// Speaker identifier, and the node that selected it.
     ///
     /// `None` for a pipeline that does not care who is speaking. A turn with no
@@ -219,6 +255,7 @@ impl Plan {
     /// cannot execute yet.
     pub fn resolve(graph: &PipelineGraph, providers: &Providers) -> Result<Self> {
         let mut wake = None;
+        let mut vad = None;
         let mut speaker = None;
         let mut stt = None;
         let mut reasoning = None;
@@ -240,6 +277,21 @@ impl Plan {
                     // pointing at one detector cannot listen for different ones.
                     let phrases = detector.descriptor().metadata.phrases.clone();
                     wake = Some(Detector { provider: detector, node: id.clone(), phrases });
+                }
+                Node::Vad { id, provider, settings } => {
+                    reject_duplicate(&vad, node)?;
+                    let detector = providers.vad().require(provider)?;
+                    // The sample rate is not checked here: a plan is resolved
+                    // once and a rate arrives with each turn's audio, so the
+                    // check belongs where the format is known. `crate::trim`
+                    // makes it, and reports a mismatch as a recovered stage
+                    // failure rather than refusing the turn.
+                    let settings = resolve_overrides(detector.as_ref(), id, settings)?;
+                    vad = Some(Trimmer {
+                        provider: detector,
+                        node: id.clone(),
+                        options: vad_options(&settings),
+                    });
                 }
                 Node::SpeakerId { id, provider } => {
                     reject_duplicate(&speaker, node)?;
@@ -324,6 +376,7 @@ impl Plan {
         Ok(Self {
             pipeline: graph.name.clone(),
             wake,
+            vad,
             speaker,
             stt,
             core: CorePlan { node, llm, model, system, settings, tools, memory, max_rounds },
