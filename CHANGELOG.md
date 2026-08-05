@@ -8,6 +8,44 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Added three speech vendors that a base URL does not reach either.
+  `conduit-elevenlabs` transcribes and synthesizes, where the credential is an
+  `xi-api-key` header and the voice is a URL *path segment* rather than a body
+  field. `conduit-google` does both over the Cloud Speech APIs, where the
+  credential is not typed at all. `conduit-marytts` synthesizes against a
+  self-hosted server that form-encodes its request, answers with a WAV, and has
+  no authentication anywhere. All three are selectable in the Providers page and
+  bindable in a pipeline.
+- A voice id that reaches a URL path is a security boundary rather than a
+  correctness one: `../` in a stored definition would move the request to a
+  different API path with the account's credential attached. Every ElevenLabs
+  voice is checked against an allowlist — letters, digits, `-`, `_` — before it
+  can reach a URL, and the console declares the same allowlist as a schema
+  pattern so the form refuses a traversal attempt rather than storing it. Google's
+  language tags and voice names reach a query string and get the same treatment.
+  The management API refuses these by calling the provider crates' own
+  validators rather than keeping a second copy of each rule, because two copies
+  are how a form comes to accept a definition that fails to build on the next
+  server start.
+- Google definitions carry no credential field. The default chain resolves
+  whatever the host already holds — a workload identity, a service account file,
+  a `gcloud` login — and it resolves when the definition is *saved*, so an
+  operator on a credential-less host is told while they are still looking at the
+  form. Discovery is what sits behind the `google` feature, on by default, and
+  only discovery: the REST plumbing is always compiled, so a deployment minting
+  its own access tokens works in either build.
+- MaryTTS suggests no voice, because it ships none and any default would be
+  wrong on every install that did not happen to have it. PicoTTS is deliberately
+  absent: an unmaintained C library with no network interface and no streaming,
+  so reaching it would mean FFI and a vendored blob in exchange for worse output
+  than a MaryTTS container gives.
+- Closed a way a saved credential could be dropped silently. The definition
+  store's key accessors matched the keyed variants by hand with a catch-all
+  fallthrough, so a new keyed variant omitted there lost its credential on every
+  redacted save with no compile error to say so. The two new keyed speech
+  variants are covered, and so are the three that were already keyed and already
+  unguarded — the test that guards this now enumerates every one of them and
+  names the variant that failed rather than only its capability.
 - Added three ways to reach a language model that were not reachable by changing
   a base URL. `conduit-anthropic` speaks the Messages API, which authenticates
   with `x-api-key`, pins a version header, takes system framing as a top-level

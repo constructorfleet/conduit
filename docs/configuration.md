@@ -108,6 +108,9 @@ capability and an inner `variant.type` names the vendor.
 | `llm` | `anthropic` | `conduit-anthropic` | `base_url`, defaulting to the public API |
 | `llm` | `bedrock` | `conduit-bedrock` | `region`: the AWS region is the endpoint |
 | `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
+| `stt` / `tts` | `elevenlabs` | `conduit-elevenlabs` | none: there is one ElevenLabs |
+| `stt` / `tts` | `google` | `conduit-google` | none: the Cloud Speech APIs |
+| `tts` | `marytts` | `conduit-marytts` | `url`, `http` or `https` |
 | `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 | `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
