@@ -1,0 +1,8 @@
+# The recognizer itself, in its own file and its own Docker layer.
+#
+# NeMo is the heaviest thing in the image by a wide margin and it changes far
+# less often than app.py does, so it is installed before the code and kept out
+# of requirements.txt. A deployment serving a transformers engine instead can
+# build with --build-arg ENGINE_REQUIREMENTS pointed elsewhere and never pay for
+# this at all.
+nemo_toolkit[asr]==2.7.3
