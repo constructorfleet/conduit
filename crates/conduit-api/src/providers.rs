@@ -455,6 +455,21 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                 refuse_config(conduit_deepgram::model_id::validate(model))?;
             }
         }
+        // A region rather than an endpoint, as with Bedrock, and no credential at
+        // all: Polly has no API key, so there is no field here to check. What an
+        // operator can get wrong is the region, the voice, or the engine, and all
+        // three reach a request.
+        ProviderDefinitionVariant::Tts {
+            variant: TtsVariant::Polly { region, voice, engine, .. },
+        } => {
+            validate_aws_region(region)?;
+            if let Some(voice) = voice {
+                refuse_config(conduit_polly::validate::voice(&definition.id, voice))?;
+            }
+            if let Some(engine) = engine {
+                refuse_config(conduit_polly::validate::engine(&definition.id, engine))?;
+            }
+        }
         // No endpoint and no credential — Google's are discovered. What an
         // operator can get wrong is a language tag or a voice name, and both
         // reach a request, so both are checked with the provider's own

@@ -198,6 +198,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-polly"
+version = "1.113.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e8975663882d589a52d92643071c48891288c79ef53bbaaaebe7cdc58c53ed2"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "http-body-util",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.105.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -762,6 +792,7 @@ dependencies = [
  "conduit-memory",
  "conduit-metrics",
  "conduit-openai",
+ "conduit-polly",
  "conduit-provider",
  "conduit-runtime",
  "conduit-script",
@@ -965,6 +996,24 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "conduit-polly"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-polly",
+ "aws-smithy-http-client",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "conduit-core",
+ "conduit-http",
+ "conduit-provider",
+ "futures-util",
  "tokio",
  "tracing",
 ]

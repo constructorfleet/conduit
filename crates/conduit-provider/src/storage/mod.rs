@@ -1004,6 +1004,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_keyless_vendor_carries_no_credential_slot_to_lose() {
+        // The other side of the test above. Polly and Google authenticate from
+        // the host rather than from a stored key, so they are deliberately absent
+        // from the `api_key` arms — and this asserts that absence is the intended
+        // one. Were a slot ever added to either variant without being added to
+        // those arms, the test above would not notice, because it enumerates by
+        // hand; this one fails instead.
+        let keyless = [
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::Polly {
+                    region: "us-east-1".to_owned(),
+                    profile: None,
+                    voice: None,
+                    engine: None,
+                },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::Google { language: None, voice: None },
+            },
+        ];
+
+        for variant in keyless {
+            assert!(
+                variant.api_key().is_none(),
+                "{variant:?} authenticates from the host, so it has no key to store"
+            );
+            // And a redacted update cannot damage what is not there: the merge is
+            // a no-op rather than a write of the placeholder.
+            let merged = variant.clone().with_secret_updates_from(Some(&variant));
+            assert_eq!(merged, variant);
+        }
+    }
+
     /// Rewrites the credential on a keyed variant, whatever variant it is.
     fn with_key(
         variant: &ProviderDefinitionVariant,

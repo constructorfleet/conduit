@@ -18,6 +18,7 @@ runtime progress is published as events.
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
 | `conduit-elevenlabs` | Speech recognition and synthesis over ElevenLabs' REST API. Synthesis streams; transcription takes a complete recording. |
 | `conduit-deepgram` | Synthesis over Deepgram's Aura API, which authenticates with `Authorization: Token` and encodes the voice into the model id. |
+| `conduit-polly` | Synthesis over Amazon Polly, reached by region with the deployment's own AWS credential. Polly has no API keys, so a definition carries none. Behind the `polly` feature, on by default. |
 | `conduit-google` | Speech recognition and synthesis over Google Cloud's Speech APIs, authenticated with Application Default Credentials rather than a typed key. Behind the `google` feature, on by default. |
 | `conduit-marytts` | Synthesis over a self-hosted MaryTTS server, which has no authentication and no fixed voice set. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |

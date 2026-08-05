@@ -791,6 +791,16 @@ async fn the_catalog_offers_the_speech_vendors_with_only_the_fields_each_one_has
     // place to say the same thing — and no `base_url`, because there is one
     // Deepgram and nothing else speaks its API.
     assert_component(components, "deepgram.speech", "tts", &["api_key", "model"], &[]);
+    // No `api_key` in that list, and that is the assertion: Polly authenticates
+    // through the AWS credential chain, so a field here would be a box that does
+    // nothing. The region is required because the SDK will not guess one.
+    assert_component(
+        components,
+        "polly.speech",
+        "tts",
+        &["region", "profile", "voice", "engine"],
+        &["region"],
+    );
     assert_component(components, "google.transcription", "stt", &["language", "model"], &[]);
     assert_component(components, "google.speech", "tts", &["language", "voice"], &[]);
     // A URL and nothing else: MaryTTS has no authentication, and it ships no
@@ -2110,6 +2120,106 @@ async fn a_deepgram_model_that_cannot_be_an_aura_id_is_refused_at_the_field() {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("model")), "{body}");
+}
+
+#[tokio::test]
+async fn a_polly_voice_is_stored_read_back_whole_and_still_built() {
+    // The whole registration surface in one pass. Read back *whole* rather than
+    // redacted, which is the difference from every other TTS vendor: there is no
+    // secret in a Polly definition, so nothing is replaced with a placeholder and
+    // an operator reopening the form sees exactly what they saved.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "house",
+        "label": "House (Polly)",
+        "variant": {
+            "type": "tts",
+            "variant": {
+                "type": "polly",
+                "region": "us-west-2",
+                "voice": "Matthew",
+                "engine": "generative",
+            },
+        },
+    });
+
+    let (status, refusal) = call(&state, put_json("/v1/providers/house", definition)).await;
+    assert_eq!(status, StatusCode::CREATED, "{refusal}");
+
+    let (status, body) = call(&state, get("/v1/providers/house")).await;
+    assert_eq!(status, StatusCode::OK);
+    let variant = &body["variant"]["variant"];
+    assert_eq!(variant["region"], "us-west-2");
+    assert_eq!(variant["voice"], "Matthew");
+    assert_eq!(variant["engine"], "generative");
+    assert!(variant.get("api_key").is_none(), "there is no key to carry: {body}");
+    assert_eq!(
+        state.providers().expect("snapshot").tts().names().collect::<Vec<_>>(),
+        ["house"]
+    );
+}
+
+#[tokio::test]
+async fn a_polly_definition_naming_only_a_region_is_enough() {
+    // The usual deployment: a task role supplies the credential, so a region is
+    // the whole of what an operator types.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "house",
+        "label": "House",
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "polly", "region": "eu-west-1" },
+        },
+    });
+
+    let (status, refusal) = call(&state, put_json("/v1/providers/house", definition)).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{refusal}");
+}
+
+#[tokio::test]
+async fn an_engine_polly_does_not_have_is_refused_at_the_field() {
+    // Named here rather than relayed as a vendor error: an engine typo fails every
+    // turn, not one, so the operator gets told while they are looking at the form.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "house",
+        "label": "House",
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "polly", "region": "us-east-1", "engine": "turbo" },
+        },
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/house", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("turbo")), "{body}");
+}
+
+#[tokio::test]
+async fn another_vendors_voice_spelling_is_refused_at_the_field() {
+    // `en-US-Neural2-F` is Google's spelling, and pasting it here is a plausible
+    // mistake for an operator who configured that provider first.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "house",
+        "label": "House",
+        "variant": {
+            "type": "tts",
+            "variant": {
+                "type": "polly",
+                "region": "us-east-1",
+                "voice": "en-US-Neural2-F",
+            },
+        },
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/house", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("voice")), "{body}");
 }
 
 #[tokio::test]

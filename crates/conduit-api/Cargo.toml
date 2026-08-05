@@ -19,6 +19,10 @@ conduit-elevenlabs.workspace = true
 conduit-google.workspace = true
 conduit-marytts.workspace = true
 conduit-openai.workspace = true
+# `default-features = false` so the `polly` feature below is the only thing that
+# pulls the AWS SDK in: a lean build of the API crate is a lean build of its
+# dependencies too.
+conduit-polly = { workspace = true, default-features = false }
 conduit-provider.workspace = true
 conduit-speaker.workspace = true
 conduit-wake.workspace = true
@@ -48,10 +52,14 @@ uuid.workspace = true
 base64.workspace = true
 
 [features]
-default = ["postgres"]
+default = ["postgres", "polly"]
 # PostgreSQL storage for pipeline definitions, and for memory records: a
 # deployment that has a database for one has it for the other.
 postgres = ["conduit-store/postgres", "conduit-memory/postgres", "conduit-memory/openai"]
+# Amazon Polly speech synthesis, and with it some forty AWS SDK crates. Without
+# it the factory still claims a Polly definition and refuses it by naming this
+# feature, rather than leaving the definition looking misspelled.
+polly = ["conduit-polly/polly"]
 # Registers the in-memory echo providers so the server can hold a conversation
 # with no speech engine or model server. For development only.
 dev-providers = ["conduit-provider/testing"]
