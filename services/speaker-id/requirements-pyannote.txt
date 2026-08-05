@@ -1,0 +1,9 @@
+# pyannote.audio, installed only into the `pyannote` image tags.
+#
+# Kept out of requirements.txt because every engine an image does not serve is
+# a download the operator pays for and a dependency tree that can break the one
+# they do serve. The Dockerfile's ENGINE build argument picks this file.
+#
+# The weights this pulls at runtime are gated: see README.md. The package is
+# MIT and installs freely; the model behind it does not.
+pyannote.audio==4.0.7

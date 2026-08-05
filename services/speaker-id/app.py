@@ -26,6 +26,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +40,20 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 LOG = logging.getLogger("speaker-id")
 
 # The embedding models each engine uses when the deployment names none.
-DEFAULT_MODELS = {"speechbrain": "speechbrain/spkrec-ecapa-voxceleb"}
+DEFAULT_MODELS = {
+    "speechbrain": "speechbrain/spkrec-ecapa-voxceleb",
+    "pyannote": "pyannote/embedding",
+    "nemo": "nvidia/speakerverification_en_titanet_large",
+}
+
+# How wide a vector each engine's default model produces.
+#
+# Recorded rather than discovered, because it is what decides whether an
+# enrolment store survives an engine change, and an operator needs to know that
+# before they swap engines rather than after the 409. The store's own guard
+# (`VoicePrints.add`) is still the thing that enforces it; this table is what
+# lets the README state it and what each encoder checks its model against.
+EMBEDDING_WIDTHS = {"speechbrain": 192, "pyannote": 512, "nemo": 192}
 
 # ECAPA-TDNN is trained on 16 kHz speech. Anything else is resampled before it
 # reaches the encoder, because feeding 48 kHz audio to a 16 kHz model does not
@@ -180,12 +194,47 @@ def cosine(left: np.ndarray, right: np.ndarray) -> float:
     return max(0.0, min(1.0, float(np.dot(left, right) / magnitude)))
 
 
+def require_device(torch: object, device: str) -> None:
+    """Refuses `cuda` on a container that has no GPU.
+
+    Said out loud rather than falling back. A GPU image silently running on the
+    CPU is a deployment that looks fine and is twenty times slower.
+    """
+    if device == "cuda" and not torch.cuda.is_available():  # type: ignore[attr-defined]
+        raise RuntimeError(
+            "SPEAKER_ID_DEVICE=cuda but torch reports no CUDA device; "
+            "check the container has GPU access"
+        )
+
+
+def check_width(engine: str, produced: int) -> None:
+    """Checks a model produced the width this service says the engine does.
+
+    The store already refuses a print of one width against a voice of another,
+    and this is the check one layer earlier: a model an operator named with
+    `SPEAKER_ID_MODEL` may be a variant of a different size, and finding that
+    out at load time names the model, where finding it out at the store names
+    only the numbers. Neither replaces the other.
+    """
+    expected = EMBEDDING_WIDTHS.get(engine)
+    if expected is not None and produced != expected:
+        raise RuntimeError(
+            f"engine `{engine}` produces {expected}-dimension embeddings but the "
+            f"loaded model produces {produced}; voice prints enrolled against "
+            f"this engine elsewhere will not compare — set SPEAKER_ID_ENGINE to "
+            "the engine this model belongs to, or enroll into an empty store"
+        )
+
+
 class SpeechBrainEncoder:
     """SpeechBrain's ECAPA-TDNN, loaded once and reused.
 
     The CPU and GPU images differ only in `SPEAKER_ID_DEVICE` and the torch
     wheel underneath, so this class is the same in both.
     """
+
+    # 192, which is what `speechbrain/spkrec-ecapa-voxceleb` emits.
+    width = EMBEDDING_WIDTHS["speechbrain"]
 
     def __init__(self, model: str, cache: Path, device: str) -> None:
         # Imported here rather than at module scope so the tests, which supply
@@ -194,13 +243,7 @@ class SpeechBrainEncoder:
         from speechbrain.inference.speaker import EncoderClassifier
 
         self._torch = torch
-        if device == "cuda" and not torch.cuda.is_available():
-            # Said out loud. A GPU image silently running on the CPU is a
-            # deployment that looks fine and is twenty times slower.
-            raise RuntimeError(
-                "SPEAKER_ID_DEVICE=cuda but torch reports no CUDA device; "
-                "check the container has GPU access"
-            )
+        require_device(torch, device)
         LOG.info("loading %s onto %s", model, device)
         self._model = EncoderClassifier.from_hparams(
             source=model, savedir=str(cache), run_opts={"device": device}
@@ -214,15 +257,142 @@ class SpeechBrainEncoder:
         return embedding.squeeze().cpu().numpy()
 
 
+class PyannoteEncoder:
+    """pyannote.audio's x-vector embeddings.
+
+    `pyannote/embedding` is gated on Hugging Face: the weights are MIT, but
+    downloading them needs an account that has accepted the model's conditions
+    and a read token. The token is read from the environment and never logged —
+    what gets logged is the model name and whether a token was present, because
+    "no token" and "token that has not been granted access" are different
+    operator actions and a bare 401 tells them apart from neither.
+    """
+
+    # 512. pyannote's `XVectorSincNet` defaults to `dimension: int = 512` and
+    # `pyannote/embedding` ships that default, which is why an enrolment store
+    # cannot be shared with the two 192-dimension engines.
+    width = EMBEDDING_WIDTHS["pyannote"]
+
+    def __init__(self, model: str, cache: Path, device: str) -> None:
+        # The token is checked before torch is imported, so the error an
+        # operator sees for a missing token is the one about the agreement
+        # rather than whatever a framework says first.
+        token = hugging_face_token()
+        if token is None:
+            # Refused before the download rather than after it, because the
+            # failure Hugging Face returns for a missing token on a gated repo
+            # is a 401 with no mention of the agreement that would fix it.
+            raise RuntimeError(
+                f"`{model}` is gated on Hugging Face: accept its conditions on "
+                f"https://huggingface.co/{model} with an account, then set "
+                "HF_TOKEN to a read token for that account"
+            )
+
+        import torch
+        from pyannote.audio import Inference, Model
+
+        self._torch = torch
+        require_device(torch, device)
+        LOG.info("loading gated model %s onto %s", model, device)
+        try:
+            loaded = Model.from_pretrained(model, token=token, cache_dir=str(cache))
+        except Exception as error:  # noqa: BLE001 - hub and torch raise broadly
+            # The token exists but the account may not have been granted the
+            # model. Saying which of the two failed is the whole point of
+            # wrapping this, and the token itself stays out of the message.
+            raise RuntimeError(
+                f"could not fetch `{model}` with the token in HF_TOKEN; confirm "
+                f"that account has accepted the conditions on "
+                f"https://huggingface.co/{model} and that the token has read "
+                f"access: {error}"
+            ) from error
+        if loaded is None:
+            raise RuntimeError(f"pyannote returned no model for `{model}`")
+        check_width("pyannote", int(loaded.dimension))
+        # Whole-window rather than sliding: identification embeds one utterance
+        # into one vector, and a sliding window would return a sequence the
+        # cosine comparison downstream has no way to reduce.
+        self._inference = Inference(loaded, window="whole", device=torch.device(device))
+
+    def embed(self, samples: np.ndarray) -> np.ndarray:
+        waveform = self._torch.from_numpy(samples).float().unsqueeze(0)
+        embedding = self._inference(
+            {"waveform": waveform, "sample_rate": MODEL_SAMPLE_RATE}
+        )
+        return np.asarray(embedding).reshape(-1)
+
+
+class NeMoEncoder:
+    """NVIDIA NeMo's TitaNet-Large speaker verification embeddings.
+
+    The weights are CC-BY-4.0 and ungated, so unlike pyannote this needs no
+    token — but NeMo wants a file on disk rather than samples in memory, so an
+    utterance is written to a temporary WAV before it is embedded.
+    """
+
+    # 192, from TitaNet-Large's `emb_sizes: 192` decoder configuration. The
+    # same width as ECAPA, which does *not* make the two interchangeable: the
+    # store's guard cannot catch this swap, so the README says so instead.
+    width = EMBEDDING_WIDTHS["nemo"]
+
+    def __init__(self, model: str, cache: Path, device: str) -> None:
+        import torch
+        import nemo.collections.asr as nemo_asr
+
+        self._torch = torch
+        require_device(torch, device)
+        LOG.info("loading %s onto %s", model, device)
+        # NeMo caches into its own directory rather than taking one, so the
+        # cache is pointed at through the environment the Dockerfile sets.
+        os.environ.setdefault("NEMO_CACHE_DIR", str(cache))
+        self._model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
+            model_name=model
+        )
+        self._model = self._model.to(device)
+        self._model.eval()
+
+    def embed(self, samples: np.ndarray) -> np.ndarray:
+        # Through a file because `get_embedding` takes a path. Written into a
+        # temporary that is removed on the way out, so a long-running container
+        # does not accumulate one WAV per utterance it was asked about.
+        with tempfile.NamedTemporaryFile(suffix=".wav") as scratch:
+            sf.write(scratch.name, samples, MODEL_SAMPLE_RATE, format="WAV")
+            with self._torch.no_grad():
+                embedding = self._model.get_embedding(scratch.name)
+        return embedding.squeeze().cpu().numpy()
+
+
+def hugging_face_token() -> str | None:
+    """The Hugging Face read token, from whichever name the operator used.
+
+    Both names are read because the hub itself honours both, and an operator who
+    set the one this service ignored would see a gating error they had already
+    fixed. The value is never logged.
+    """
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+ENGINE_CLASSES: dict[str, type] = {
+    "speechbrain": SpeechBrainEncoder,
+    "pyannote": PyannoteEncoder,
+    "nemo": NeMoEncoder,
+}
+
+
 def build_encoder(engine: str, model: str, cache: Path, device: str) -> Encoder:
     """The encoder for `engine`.
 
-    One place to add pyannote or NeMo. Conduit's `engine` field already accepts
-    any name, so a new backend is a class here and a tag on an image — nothing
-    the pipeline, the editor, or the contract has to learn about.
+    One place per backend. Conduit's `SpeakerEngine` names the engine in the
+    provider definition, so a new backend here is a class and a tag on an image
+    — nothing the pipeline or the contract has to learn about.
     """
-    if engine == "speechbrain":
-        return SpeechBrainEncoder(model, cache, device)
+    encoder = ENGINE_CLASSES.get(engine)
+    if encoder is not None:
+        return encoder(model, cache, device)
     raise RuntimeError(
         f"unknown SPEAKER_ID_ENGINE `{engine}`; this image serves "
         f"{', '.join(sorted(DEFAULT_MODELS))}"
@@ -345,6 +515,9 @@ def create_app(
             "engine": engine,
             "model": model_name,
             "device": device,
+            # Reported so an operator can tell, before they mount an existing
+            # /data volume, whether the prints in it can be compared at all.
+            "embedding_width": EMBEDDING_WIDTHS.get(engine),
             "enrolled": store.count(),
             # Whether the encoder is in memory yet. A container that has
             # answered no requests has not paid for the model, and saying so is

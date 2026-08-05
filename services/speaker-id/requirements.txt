@@ -1,5 +1,7 @@
+# What every image needs, whichever engine it serves. The engine's own
+# dependency lives in requirements-<engine>.txt and is chosen by the
+# Dockerfile's ENGINE build argument.
 fastapi==0.141.1
 uvicorn[standard]==0.52.1
 numpy==2.5.1
 soundfile==0.14.0
-speechbrain==1.1.0

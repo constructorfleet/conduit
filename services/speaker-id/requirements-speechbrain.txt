@@ -1,0 +1,7 @@
+# SpeechBrain, installed only into the `speechbrain` image tags.
+#
+# Split out of requirements.txt when pyannote and NeMo arrived: with three
+# engines, "the base requirements plus the engine's" is one rule, where
+# "the base requirements, which happen to contain one engine, plus the engine's"
+# is a rule with an exception in it.
+speechbrain==1.1.0
