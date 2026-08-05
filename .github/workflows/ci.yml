@@ -56,6 +56,10 @@ jobs:
       # Without them the in-process detection tests skip, which would make the
       # one thing worth proving about a detector the one thing CI never checks.
       - run: scripts/fetch-wake-models.sh
+      # The Silero model, on the same terms and for the same reason. The script
+      # verifies a pinned checksum, so a substituted or moved upstream artifact
+      # fails here rather than becoming a detector that reports silence forever.
+      - run: scripts/fetch-vad-model.sh
       - run: cargo test --workspace --all-features
       # The default feature set must build too, and so must the lean one.
       - run: cargo build --workspace --no-default-features

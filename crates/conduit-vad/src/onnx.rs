@@ -1,4 +1,4 @@
-//! Scoring the Silero VAD model with `tract`.
+//! Scoring the Silero VAD model with `ort` (ONNX Runtime).
 //!
 //! One model, three inputs, two outputs — which is what makes this shorter than
 //! `conduit-wake`'s chain of three and, in one respect, harder:
@@ -22,15 +22,29 @@
 //! `-1.0..=1.0`, and handing it raw magnitudes saturates every window into
 //! confident speech. Two models, two conventions, and getting either backwards
 //! produces a detector that is wrong in a way that looks like it is working.
+//!
+//! # `ort` here, `tract` in `conduit-wake`
+//!
+//! Two inference backends in one workspace is not a preference, it is what
+//! Silero's graph requires. Its decoder uses ONNX `If` nodes *structurally* — to
+//! reshape — and `tract` implements `If` as an op it can only compile when the
+//! branch condition folds at analysis time. The top-level rate switch does fold
+//! if `sr` is rewritten into a constant, but the decoder's two branches have
+//! genuinely different output shapes, so neither one alone is the model. Every
+//! published export fails this way, including the one upstream named `ifless`
+//! (which is a rate switch over two whole models rather than an `If`-free graph).
+//!
+//! `conduit-wake` keeps `tract`: openWakeWord's three models load under it, and
+//! there is nothing to gain by moving working code onto a second backend.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use conduit_core::{Error, Result};
 use conduit_provider::vad::Activity;
-use tract_onnx::prelude::*;
-
-/// A model compiled for a fixed input shape.
-type Plan = std::sync::Arc<TypedRunnableModel>;
+use ort::session::builder::GraphOptimizationLevel;
+use ort::session::Session;
+use ort::value::Tensor;
 
 /// Samples in one scoring window at 16 kHz — 32 ms, which is the only window
 /// Silero v5 accepts at that rate.
@@ -47,14 +61,20 @@ const STATE_SHAPE: [usize; 3] = [2, 1, 128];
 /// Shared across detection sessions — the weights are read-only — while the
 /// state that makes scoring sequential lives on [`Scorer`].
 pub(crate) struct Model {
-    plan: Plan,
+    /// The loaded session.
+    ///
+    /// Behind a `Mutex` because `Session::run` takes `&mut self`, and behind one
+    /// rather than a session per detection call because the weights are the
+    /// expensive part and every call would otherwise reload them. Contention is
+    /// not a concern: scoring is 32 ms of audio at a time on a blocking thread.
+    session: Mutex<Session>,
     /// Samples one scoring window consumes.
     window: usize,
     /// The rate this model was compiled for, passed to it on every window.
     sample_rate: i64,
 }
 
-/// Written by hand because a compiled `tract` plan is not `Debug`. Reports the
+/// Written by hand because a `Session` is not usefully `Debug`. Reports the
 /// window and rate, which is what anyone printing this wants to know.
 impl std::fmt::Debug for Model {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,8 +91,8 @@ impl Model {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Config`] if the file is missing or is not a model
-    /// `tract` can drive.
+    /// Returns [`Error::Config`] if the file is missing or is not a model the
+    /// runtime can drive.
     pub(crate) fn load(path: &Path) -> Result<Self> {
         Self::load_for_rate(path, 16_000)
     }
@@ -86,7 +106,7 @@ impl Model {
     /// # Errors
     ///
     /// Returns [`Error::Config`] if `sample_rate` is not one Silero was trained
-    /// at, if the file is missing, or if it is not a model `tract` can drive.
+    /// at, if the file is missing, or if it is not a model the runtime can drive.
     pub(crate) fn load_for_rate(path: &Path, sample_rate: u32) -> Result<Self> {
         let window = match sample_rate {
             16_000 => WINDOW_16K,
@@ -104,20 +124,15 @@ impl Model {
             )));
         }
 
-        let plan = tract_onnx::onnx()
-            .model_for_path(path)
-            // Samples, state, rate — the input order of the 16 kHz export.
-            .and_then(|model| model.with_input_fact(0, f32::fact([1, window]).into()))
-            .and_then(|model| model.with_input_fact(1, f32::fact(STATE_SHAPE).into()))
-            // The rate as a rank-0 *constant* rather than as an input shape: the
-            // model compares it against a literal, and a comparison a runtime
-            // cannot fold leaves a branch it cannot analyse. This is also why the
-            // window is a property of the compiled plan — one plan, one rate.
-            .and_then(|model| {
-                model.with_input_fact(2, Tensor::from(i64::from(sample_rate)).into())
-            })
-            .and_then(tract_onnx::prelude::InferenceModelExt::into_optimized)
-            .and_then(tract_onnx::prelude::IntoRunnable::into_runnable)
+        // One thread each, rather than the runtime's default pool: this scores 32 ms
+        // of audio at a time on a thread Conduit already set aside for it, and a
+        // backend spawning its own pool per session would contend with every other
+        // stage for no gain on a workload this small.
+        let session = Session::builder()
+            .and_then(|builder| builder.with_optimization_level(GraphOptimizationLevel::Level3))
+            .and_then(|builder| builder.with_intra_threads(1))
+            .and_then(|builder| builder.with_inter_threads(1))
+            .and_then(|builder| builder.commit_from_file(path))
             .map_err(|error| {
                 Error::Config(format!(
                     "cannot load the Silero VAD model `{}`: {error}",
@@ -125,46 +140,73 @@ impl Model {
                 ))
             })?;
 
-        Ok(Self { plan, window, sample_rate: i64::from(sample_rate) })
+        Ok(Self { session: Mutex::new(session), window, sample_rate: i64::from(sample_rate) })
     }
 
     /// Scores one window, returning the speech probability and the state that
     /// follows it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Provider`] if the session fails, if it is poisoned by a
+    /// previous panic, or if the model does not return both of the outputs a
+    /// stream has to be scored against.
     fn run(&self, samples: &[f32], state: &[f32]) -> Result<(f32, Vec<f32>)> {
-        let failed = |error: TractError| Error::Provider {
+        let failed = |error: &dyn std::fmt::Display| Error::Provider {
             provider: "silero".to_owned(),
             source: Box::new(std::io::Error::other(error.to_string())),
         };
-        let input = Tensor::from_shape(&[1, self.window], samples).map_err(failed)?;
-        let carried = Tensor::from_shape(&STATE_SHAPE, state).map_err(failed)?;
-        let rate = Tensor::from(self.sample_rate);
 
-        let output =
-            self.plan.run(tvec!(input.into(), carried.into(), rate.into())).map_err(failed)?;
+        let input = ndarray::Array2::from_shape_vec((1, self.window), samples.to_vec())
+            .map_err(|error| failed(&error))?;
+        let carried = ndarray::Array3::from_shape_vec(STATE_SHAPE, state.to_vec())
+            .map_err(|error| failed(&error))?;
+        let rate = ndarray::arr0(self.sample_rate);
 
-        let probability: &Tensor = &output[0];
-        let probability = *probability
-            .view()
-            .as_slice::<f32>()
-            .map_err(failed)?
-            .first()
-            .ok_or_else(|| Error::Provider {
-                provider: "silero".to_owned(),
-                source: Box::new(std::io::Error::other("the model produced no probability")),
-            })?;
+        let inputs = ort::inputs![
+            Tensor::from_array(input).map_err(|error| failed(&error))?,
+            Tensor::from_array(carried).map_err(|error| failed(&error))?,
+            Tensor::from_array(rate).map_err(|error| failed(&error))?,
+        ];
+
+        // A poisoned lock means a previous window panicked mid-inference. Reported
+        // rather than unwrapped: the trimming stage recovers by forwarding the rest
+        // of the audio untrimmed, which is a worse turn than it could have been but
+        // is a turn — where a panic here would take the process down with it.
+        let mut session = self.session.lock().map_err(|_| {
+            failed(&"the scoring session panicked on an earlier window and cannot be reused")
+        })?;
+        let outputs = session.run(inputs).map_err(|error| failed(&error))?;
+
+        // By name rather than by position: the model publishes both, and a
+        // positional read would silently swap the probability for the state if an
+        // export ever reordered them.
+        let probability = outputs
+            .get("output")
+            .ok_or_else(|| failed(&"the model produced no probability"))?
+            .try_extract_array::<f32>()
+            .map_err(|error| failed(&error))?
+            .iter()
+            .copied()
+            .next()
+            .ok_or_else(|| failed(&"the model produced an empty probability"))?;
 
         // A model that returned no state is one this session cannot continue
         // against. Carrying the old state forward would score every later window
         // as though the stream restarted, which reads as a detector that goes
         // deaf partway through an utterance.
-        let next: &Tensor = output.get(1).ok_or_else(|| Error::Provider {
-            provider: "silero".to_owned(),
-            source: Box::new(std::io::Error::other(
-                "the model returned no recurrent state, so a stream cannot be scored",
-            )),
-        })?;
+        let next = outputs
+            .get("stateN")
+            .ok_or_else(|| {
+                failed(&"the model returned no recurrent state, so a stream cannot be scored")
+            })?
+            .try_extract_array::<f32>()
+            .map_err(|error| failed(&error))?
+            .iter()
+            .copied()
+            .collect();
 
-        Ok((probability, next.view().as_slice::<f32>().map_err(failed)?.to_vec()))
+        Ok((probability, next))
     }
 }
 
