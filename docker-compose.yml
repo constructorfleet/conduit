@@ -2,6 +2,7 @@
 #
 #   docker compose up                          # just Conduit
 #   docker compose --profile speaker-id up     # and speaker identification
+#   docker compose --profile wyoming-asr up    # and local speech recognition
 #   docker compose --profile openwakeword up   # and a wake word server
 #
 # Waking on a phrase needs no profile at all if you use openWakeWord: Conduit
@@ -71,6 +72,34 @@ services:
       - speaker-id-models:/models
     restart: unless-stopped
 
+  # Speech recognition, reached at tcp://wyoming-asr:10300 from Conduit.
+  #
+  # Create a provider definition of type `wyoming` whose `url` is that address,
+  # then add a Speech-to-text stage to a pipeline. Leave `streaming` false: the
+  # service is batch-only and says so in its own handshake.
+  #
+  # Which weights it serves is ASR_ENGINE and ASR_MODEL, and the model licence is
+  # yours to honour — Canary is CC-BY-4.0. See services/wyoming-asr/README.md.
+  wyoming-asr:
+    profiles: ["wyoming-asr"]
+    image: ${CONDUIT_WYOMING_ASR_IMAGE:-conduit-wyoming-asr:canary}
+    build:
+      context: ./services/wyoming-asr
+    environment:
+      ASR_ENGINE: ${ASR_ENGINE:-canary}
+      ASR_MODEL: ${ASR_MODEL:-}
+      # `cuda` needs a container runtime with GPU access and the GPU tag; the
+      # process refuses to start rather than run twenty times slower in silence.
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}
+      # Spelled out rather than left empty: `float("")` is a crash loop, and an
+      # unset variable in compose arrives as an empty string, not as absent.
+      ASR_MAX_SECONDS: ${ASR_MAX_SECONDS:-120}
+    volumes:
+      # The weights, which run to gigabytes. Without this a restart downloads
+      # them again.
+      - wyoming-asr-models:/models
+    restart: unless-stopped
+
   # Wake word servers, reached at tcp://<service>:10400 from Conduit.
   #
   # One profile per engine, because which one you run decides which phrases you
@@ -110,6 +139,7 @@ volumes:
   wake-models:
   speaker-id-data:
   speaker-id-models:
+  wyoming-asr-models:
   openwakeword-models:
   microwakeword-models:
   nanowakeword-models:

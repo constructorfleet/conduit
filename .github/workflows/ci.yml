@@ -271,6 +271,34 @@ jobs:
           context: services/speaker-id
           push: false
 
+  # The reference Wyoming ASR service ships in this repository, so its tests are
+  # a gate like any other.
+  wyoming-asr:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/wyoming-asr
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/wyoming-asr/requirements-dev.txt
+      # requirements-dev deliberately excludes both NeMo and torch: the tests
+      # inject their own engine, so a CI run downloads no model weights and
+      # touches no network. A test that needed a gigabyte of download is a test
+      # that would not run.
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+      # No image build here, unlike the speaker-id job. NeMo plus a torch wheel
+      # is tens of gigabytes to resolve and install, which is beyond what a
+      # pull-request runner should spend on every commit; the Dockerfile is
+      # checked by the compose job resolving its build context, and the image is
+      # built when it is published.
+
   # `docker compose up` is the documented way to run Conduit, so a compose file
   # that does not parse is a broken front door. `config` resolves variables,
   # profiles, and the build contexts without starting anything.
@@ -282,6 +310,7 @@ jobs:
         run: |
           docker compose config --quiet
           docker compose --profile speaker-id config --quiet
+          docker compose --profile wyoming-asr config --quiet
           # The default `up` must not need the optional profile, or the
           # smallest thing that runs is not the default.
           services=$(docker compose config --services | tr '\n' ' ')
