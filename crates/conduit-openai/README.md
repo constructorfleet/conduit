@@ -10,6 +10,7 @@ by hosted OpenAI and many local model or speech servers.
 | `OpenAi` | `/chat/completions` | `LanguageModel` |
 | `OpenAiStt` | `/audio/transcriptions` | `SpeechToText` |
 | `OpenAiTts` | `/audio/speech` | `TextToSpeech` |
+| `OpenAiEmbeddings` | `/embeddings` | none — a plain struct |
 
 ## Configuration Model
 
@@ -51,3 +52,20 @@ local servers can replace the voice list with `with_voices`.
 
 The speech endpoint can produce signed 16-bit PCM, FLAC, and Opus. It cannot
 produce 32-bit float PCM.
+
+## Embeddings
+
+`OpenAiEmbeddings` posts one text to `/embeddings` and returns the vector. The
+hosted API, Ollama, vLLM, LM Studio, and `text-embeddings-inference` all serve
+this shape, so one implementation reaches all of them.
+
+It is deliberately **not** a `Provider`. There is no embedding capability in
+Conduit and there should not be one: a capability is something an operator binds
+to a pipeline node, and nobody binds "turn text into a vector" to a node — it is
+a dependency of whatever needed the vector, which today means a vector memory
+store. A reply with no embedding in it is an error rather than an empty vector,
+because a stored zero-length vector would match nothing forever with nothing
+appearing to have gone wrong.
+
+The text is never logged. Its length is, which is enough to diagnose a rejected
+request without recording what somebody said to the assistant.

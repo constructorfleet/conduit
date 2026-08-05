@@ -42,6 +42,7 @@
 //! # Ok::<(), conduit_core::Error>(())
 //! ```
 
+pub mod embeddings;
 pub mod llm;
 pub mod stt;
 pub mod tts;
@@ -55,6 +56,7 @@ use std::time::Duration;
 // this provider should not have to know which crate the classification lives
 // in, and it is the same classification either way.
 pub use conduit_http::{Failure, FailureKind};
+pub use embeddings::OpenAiEmbeddings;
 pub use llm::OpenAi;
 pub use stt::OpenAiStt;
 pub use tts::OpenAiTts;
