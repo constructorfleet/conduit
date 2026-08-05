@@ -10,6 +10,7 @@ export type NodeKind =
   | "wake_word"
   | "stt"
   | "speaker_id"
+  | "vad"
   | "core"
   | "transform"
   | "tts"
@@ -66,6 +67,7 @@ export type PipelineNode =
   | (PipelineNodeBase & { kind: "wake_word" })
   | (PipelineNodeBase & { kind: "stt"; settings?: ProviderSettings })
   | (PipelineNodeBase & { kind: "speaker_id" })
+  | (PipelineNodeBase & { kind: "vad"; settings?: ProviderSettings })
   | (PipelineNodeBase & { kind: "transform" })
   | (PipelineNodeBase & { kind: "tts"; voice?: string; settings?: ProviderSettings })
   | (PipelineNodeBase & { kind: "sink"; modality?: Modality })
@@ -158,6 +160,7 @@ export type ProviderCapability =
   | "tool"
   | "wake"
   | "speaker_id"
+  | "vad"
   | "memory";
 /// Inner provider definition variant, paired with `kind` (the outer variant)
 /// to name the full two-level provider definition variant.
@@ -174,6 +177,7 @@ export type ProviderDefinitionVariantType =
   | "mcp"
   | "builtin"
   | "script"
+  | "silero"
   | "openwakeword"
   | "nanowakeword"
   | "microwakeword"
@@ -402,6 +406,21 @@ export type SpeakerIdVariant =
 /// written anywhere and a default bound is a real configuration — and the
 /// vector store's width is, because it is what the vector column is declared
 /// with and nothing can discover it before the first embedding exists.
+/// Voice activity detection, scored in the Conduit process.
+///
+/// One variant, and that is a decision rather than a first instalment: a
+/// detector answers a yes-or-no question about a frame of audio, so what differs
+/// between vendors is accuracy in noise rather than anything an operator would
+/// choose between. There is no URL and no key because there is no service — the
+/// model is a file, and unset means the conventional directory the compose file
+/// mounts.
+export type VadVariant = {
+  type: "silero";
+  model_path?: string;
+  threshold_percent: number;
+  silence_ms: number;
+};
+
 export type MemoryVariant =
   | {
       type: "builtin";
@@ -425,6 +444,7 @@ export type ProviderDefinitionVariant =
   | { type: "tool"; variant: ToolVariant }
   | { type: "wake"; variant: WakeVariant }
   | { type: "speaker_id"; variant: SpeakerIdVariant }
+  | { type: "vad"; variant: VadVariant }
   | { type: "memory"; variant: MemoryVariant };
 
 export type McpTransport =

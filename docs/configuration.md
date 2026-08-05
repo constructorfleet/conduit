@@ -118,6 +118,7 @@ capability and an inner `variant.type` names the vendor.
 | `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
 | `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
 | `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
+| `vad` | `silero` | `conduit-vad`, in process | none: the model is a file on disk |
 | `speaker_id` | `http` / `diarization_server` | `conduit-speaker` | `base_url`, `http` or `https` |
 | `memory` | `builtin` | `conduit-memory` | none: the records are in this process |
 | `memory` | `pgvector` | `conduit-memory` | `url`, `postgres://…`, plus an embedding `embedding_base_url` |
@@ -362,6 +363,47 @@ for or on a Wyoming server. nanoWakeWord's phrase models are recurrent, carrying
 LSTM state between chunks, which is a different scorer from the one Conduit has
 — for now it runs on a Wyoming server, and a `local` runtime is refused with
 that reason.
+
+### Trimming The Silence Around What Was Said
+
+A `vad` definition detects whether a chunk of audio holds speech, and a `vad`
+stage on a pipeline's input path uses those verdicts to trim the silence off
+each end of an utterance before the recognizer sees it. There is one variant,
+`silero`, and it runs in this process for the same reason `local` wake does:
+the model is one file under two megabytes, and running a service beside Conduit
+to answer a yes-or-no question about audio Conduit already holds buys nothing.
+
+```json
+{ "type": "vad", "variant": {
+    "type": "silero",
+    "model_path": "/var/lib/conduit/vad-models/silero_vad.onnx",
+    "threshold_percent": 50,
+    "silence_ms": 700 } }
+```
+
+Nothing is required. A definition that names no `model_path` reads
+`vad-models/silero_vad.onnx` under the data directory, which is the volume the
+compose file mounts; `scripts/fetch-vad-model.sh` downloads the model.
+`threshold_percent` is how confident a window must be to count as speech, and
+`silence_ms` is how long a pause may run before the utterance is treated as
+over. A node may override `silence_ms` for one pipeline; it cannot cut the
+trailing silence below 300 ms, which is what a recognizer needs to hear an
+ending.
+
+Silero was trained at 8 kHz and 16 kHz and scores a fixed number of samples at
+a time, so a rate outside those two is **refused rather than resampled**. A
+wrong rate does not degrade the detector — it makes each window the wrong
+*length of sound*, and the model then reports confidently about audio it never
+heard. Refusing says so while an operator is still looking at the pipeline.
+
+A detector that fails mid-utterance does **not** end the turn. The stage
+forwards the remaining audio untrimmed and the recognizer hears the whole
+stream, silence included — which is the behaviour without a `vad` stage at all.
+This is deliberately unlike the wake gate, where a failure ends the turn: a
+gate decides whether there is a turn, and a trimmer only decides how much of
+one to forward. The samples themselves are never rewritten, only dropped or
+passed through, so a recognizer downstream hears exactly the bytes the
+microphone produced.
 
 An MCP definition describes a *server*, which may advertise several tools. Each
 advertised tool is registered as `<definition id>.<tool name>`, so a core can

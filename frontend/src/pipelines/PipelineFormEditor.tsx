@@ -34,6 +34,7 @@ export interface ProviderOptions {
   transform: readonly ProviderOption[];
   wake: readonly ProviderOption[];
   speakerId: readonly ProviderOption[];
+  vad: readonly ProviderOption[];
 }
 
 /// The voices the selected synthesizer offers.
@@ -215,6 +216,13 @@ export function PipelineFormEditor({
           fallbackId: "wake_word",
           options: providers.wake,
           onStageChange: (wakeWord) => update({ wakeWord }),
+        })}
+        {optionalStage({
+          label: "Voice activity",
+          stage: form.vad,
+          fallbackId: "vad",
+          options: providers.vad,
+          onStageChange: (vad) => update({ vad }),
         })}
         {optionalStage({
           label: "Speech to text",

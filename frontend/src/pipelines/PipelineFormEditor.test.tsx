@@ -36,6 +36,7 @@ const providers: ProviderOptions = {
     { id: "okay-nabu", label: "On-device (okay nabu)" },
   ],
   speakerId: [{ id: "voices", label: "SpeechBrain" }],
+  vad: [{ id: "silero", label: "Silero" }],
   /// Nothing configured, which is the state most deployments are in: the
   /// stage should not be offered at all.
   transform: [],

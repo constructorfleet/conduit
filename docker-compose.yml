@@ -11,6 +11,10 @@
 # need a service — microWakeWord, nanoWakeWord, or an openWakeWord you would
 # rather run separately.
 #
+# Voice activity detection is the same arrangement and has no profile at all:
+# Silero is one small model Conduit scores itself, so the `vad-models` volume is
+# the whole of it.
+#
 # Everything optional sits behind a profile, so the default is the smallest
 # thing that runs. Optional services are deliberately not published to the
 # host: Conduit reaches them over the compose network by service name, and a
@@ -40,6 +44,13 @@ services:
       # per wake phrase in here; `scripts/fetch-wake-models.sh` downloads a set.
       # A definition that names no `models_dir` reads exactly this directory.
       - wake-models:/var/lib/conduit/wake-models
+      # The Silero VAD model, for a `vad` stage. One file rather than three —
+      # Silero is a single model, not a chain — and `scripts/fetch-vad-model.sh`
+      # downloads it. A definition that names no `model_path` reads exactly this
+      # directory. There is no profile and no service here for the same reason
+      # `local` wake needs none: the model is under two megabytes and Conduit
+      # scores it in process.
+      - vad-models:/var/lib/conduit/vad-models
       # Where a token file goes when you use one. Create ./secrets/tokens.json
       # and set CONDUIT_TOKENS=/run/secrets/tokens.json; the file must not be
       # group- or world-readable, which Conduit checks at startup.
@@ -137,6 +148,7 @@ services:
 volumes:
   conduit-data:
   wake-models:
+  vad-models:
   speaker-id-data:
   speaker-id-models:
   wyoming-asr-models:

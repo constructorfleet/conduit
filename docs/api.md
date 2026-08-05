@@ -382,6 +382,7 @@ a Runtime Provider under the definition id:
 | `tts` | `marytts` | One provider under the definition id | `url` must be `http` or `https`; no authentication |
 | `wake` | `openwakeword`, `nanowakeword` | One wake word detector under the definition id | `runtime.where` is `local` or `wyoming` |
 | `wake` | `microwakeword` | One wake word detector under the definition id | `runtime.where` is `device` or `wyoming` |
+| `vad` | `silero` | One voice activity detector under the definition id | Nothing required; an absent `model_path` reads `vad-models` under the data directory. No endpoint and no credential: the model is a file, scored in process |
 | `speaker_id` | `http` | One speaker identifier under the definition id | `base_url` must be `http` or `https` |
 | `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `transform` | `builtin` | One transform under the definition id | `rules` names the rewrites to apply, in order |
@@ -426,6 +427,27 @@ Definitions written before the engine became the variant — a `wyoming_wake` or
 `device_wake` type, or a `wake` variant of `wyoming` or `device` naming an
 `engine` — are still read, and are rewritten into the shape above the next time
 they are saved.
+
+A `vad` definition has one variant, `silero`, and requires nothing:
+
+```jsonc
+{ "type": "vad", "variant": {
+    "type": "silero",
+    "model_path": "/var/lib/conduit/vad-models/silero_vad.onnx",
+    "threshold_percent": 50,
+    "silence_ms": 700 } }
+```
+
+Validation checks nothing beyond the shape, deliberately: there is no endpoint
+to parse and no credential to require, and whether a path holds a model a
+runtime can drive is not something a definition can say. It is found out when
+the detector is built, which is where it is reported — saving a definition whose
+model is missing fails there rather than at the first turn.
+
+A `vad` node on a pipeline may override `silence_ms` for that pipeline alone.
+The floor is 300 ms of trailing silence whatever either says, because a
+recognizer needs to hear an utterance end. A detector that fails mid-stream does
+not end the turn: the remaining audio is forwarded untrimmed.
 
 A `speaker_id` definition with the `diarization_server` variant points at an
 existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server),

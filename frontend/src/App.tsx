@@ -1024,6 +1024,9 @@ function providerKindLabel(kind: ProviderFilter): string {
   if (kind === "speaker_id") {
     return "Speaker ID";
   }
+  if (kind === "vad") {
+    return "Voice activity";
+  }
   if (kind === "memory") {
     return "Memory";
   }
@@ -1160,6 +1163,7 @@ function ProvidersPanel({
     "transform",
     "wake",
     "speaker_id",
+    "vad",
     "memory",
   ];
   const referencedProviderCount = new Set(
@@ -2831,6 +2835,7 @@ function PipelinesPanel({
     transform: providerOptionsFor("transform"),
     wake: providerOptionsFor("wake"),
     speakerId: providerOptionsFor("speaker_id"),
+    vad: providerOptionsFor("vad"),
   };
   /// The voices the draft's synthesizer offers, asked of the provider itself.
   ///
@@ -3908,6 +3913,7 @@ const PROVIDER_STAGE_ORDER: readonly ProviderKind[] = [
   "transform",
   "wake",
   "speaker_id",
+  "vad",
   "memory",
 ];
 
@@ -4242,6 +4248,15 @@ function configFromProviderVariant(
       api_key: secretToConfigValue(variant.variant.api_key),
       embedding_model: variant.variant.embedding_model,
       dimensions: variant.variant.dimensions,
+    };
+  }
+  if (variant.type === "vad") {
+    return {
+      ...(variant.variant.model_path
+        ? { model_path: variant.variant.model_path }
+        : {}),
+      threshold_percent: variant.variant.threshold_percent,
+      silence_ms: variant.variant.silence_ms,
     };
   }
   if (variant.type === "speaker_id") {
@@ -4581,6 +4596,17 @@ function variantFromProviderDefinition(
       },
     };
   }
+  if (definition.component === "silero.vad") {
+    return {
+      type: "vad",
+      variant: {
+        type: "silero",
+        ...(text("model_path") ? { model_path: text("model_path") } : {}),
+        threshold_percent: whole("threshold_percent"),
+        silence_ms: whole("silence_ms"),
+      },
+    };
+  }
   if (definition.component === "speaker.diarization_server") {
     return {
       type: "speaker_id",
@@ -4888,6 +4914,9 @@ function capabilityForNodeKind(kind: NodeKind): ProviderCapability | null {
   }
   if (kind === "speaker_id") {
     return "speaker_id";
+  }
+  if (kind === "vad") {
+    return "vad";
   }
   if (kind === "transform") {
     return "transform";

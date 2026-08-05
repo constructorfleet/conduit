@@ -18,6 +18,7 @@ export type ProviderKind =
   | "transform"
   | "wake"
   | "speaker_id"
+  | "vad"
   | "memory";
 export type ProviderStatusState = "unavailable" | "configured" | "reachable" | "proven";
 export type SnapshotResource =

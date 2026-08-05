@@ -48,6 +48,7 @@ export interface PipelineForm {
   name: string;
   source: EndpointField;
   wakeWord: StageField | null;
+  vad: StageField | null;
   stt: StageField | null;
   speakerId: StageField | null;
   core: CoreField;
@@ -61,6 +62,7 @@ export interface PipelineForm {
 const DEFAULT_STAGE_IDS = {
   source: "mic",
   wake_word: "wake_word",
+  vad: "vad",
   stt: "stt",
   speaker_id: "speaker_id",
   core: "core",
@@ -78,6 +80,7 @@ export function formFromGraph(graph: PipelineGraph): PipelineForm {
   const sink = find("sink");
   const core = find("core");
   const wakeWord = find("wake_word");
+  const vad = find("vad");
   const stt = find("stt");
   const speakerId = find("speaker_id");
   const transform = find("transform");
@@ -93,6 +96,7 @@ export function formFromGraph(graph: PipelineGraph): PipelineForm {
     wakeWord: wakeWord
       ? { id: wakeWord.id, provider: wakeWord.provider }
       : null,
+    vad: vad ? { id: vad.id, provider: vad.provider } : null,
     stt: stt ? { id: stt.id, provider: stt.provider } : null,
     speakerId: speakerId
       ? { id: speakerId.id, provider: speakerId.provider }
@@ -138,6 +142,15 @@ export function graphFromForm(form: PipelineForm): PipelineGraph {
             id: form.wakeWord.id,
             kind: "wake_word" as const,
             provider: form.wakeWord.provider,
+          },
+        ]
+      : []),
+    ...(form.vad
+      ? [
+          {
+            id: form.vad.id,
+            kind: "vad" as const,
+            provider: form.vad.provider,
           },
         ]
       : []),

@@ -56,6 +56,7 @@ const SPEAKER_DIR: &str = "CONDUIT_SPEAKER_DIR";
 /// Named only in the error a missing data directory raises: a wake definition
 /// carries its own `models_dir`, so there is no variable to set instead.
 const WAKE_MODELS_DIR: &str = "the definition's `models_dir`";
+const VAD_MODEL_PATH: &str = "the definition's `model_path`";
 /// Explicit value for a disposable in-memory pipeline store.
 const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
@@ -289,6 +290,24 @@ pub fn wake_models_dir_from_env() -> Result<PathBuf> {
         WAKE_MODELS_DIR,
         conduit_wake::DEFAULT_MODELS_DIR,
     )
+}
+
+/// Where a detector definition reads its model from when it names no path.
+///
+/// The same data directory the wake models live under, and the same volume the
+/// compose file mounts — so an operator who dropped the model where the
+/// documentation said gets a definition that needs no path at all.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if there is no data directory to derive it from.
+pub fn vad_model_path_from_env() -> Result<PathBuf> {
+    Ok(default_data_subdir(
+        &std::env::vars().collect(),
+        VAD_MODEL_PATH,
+        conduit_vad::DEFAULT_MODELS_DIR,
+    )?
+    .join(conduit_vad::DEFAULT_MODEL_FILE))
 }
 
 fn default_data_subdir(

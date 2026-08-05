@@ -443,6 +443,7 @@ fn provider_capability_for_node(kind: NodeKind) -> Option<ProviderCapability> {
         NodeKind::Transform => Some(ProviderCapability::Transform),
         NodeKind::WakeWord => Some(ProviderCapability::Wake),
         NodeKind::SpeakerId => Some(ProviderCapability::SpeakerId),
+        NodeKind::Vad => Some(ProviderCapability::Vad),
         _ => None,
     }
 }
@@ -456,6 +457,7 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
         ProviderCapability::Transform => "transform",
         ProviderCapability::Wake => "wake",
         ProviderCapability::SpeakerId => "speaker_id",
+        ProviderCapability::Vad => "vad",
         ProviderCapability::Memory => "memory",
     }
 }
@@ -816,6 +818,24 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
                     ("threshold_percent", integer_property()),
                 ]),
                 required: vec!["base_url"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "silero.vad",
+            label: "Voice activity detection",
+            kind: ProviderCapability::Vad,
+            definition_variant: "silero",
+            schema: ComponentConfigSchema {
+                // Nothing required: a detector reaches no service, so an
+                // operator who dropped the model where the compose file said to
+                // has nothing left to say. The path is theirs to override, and
+                // the two numbers are what the detector decides with.
+                properties: properties([
+                    ("model_path", string_property(None, None)),
+                    ("threshold_percent", integer_property()),
+                    ("silence_ms", integer_property()),
+                ]),
+                required: Vec::new(),
             },
         },
         ProviderComponentDescriptor {
