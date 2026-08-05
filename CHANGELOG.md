@@ -8,6 +8,15 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- A Wyoming STT server that advertises transcript streaming and then sends no partials
+  is recorded once per session, at info, alongside the final transcript it did send.
+  Some servers do this — `insanely-fast-whisper` answers
+  `supports_transcript_streaming: true` and sends only a final, confirmed over the raw
+  protocol. The turn was already correct and still is; what was missing was any way to
+  tell that case apart from `streaming: false`, from a server that never claimed to
+  stream, and from a fault in Conduit. All four looked like partials never arriving.
+  The `supports_transcript_streaming: False` fallback was already logged; this is its
+  other half.
 - Voice activity detection on the input path, as a `vad` capability, a `vad` pipeline
   stage, and a `conduit-vad` crate scoring Silero. The stage trims the silence around
   an utterance before the recognizer sees it: a recognizer billed per second, or one
