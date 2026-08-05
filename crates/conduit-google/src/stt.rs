@@ -243,7 +243,7 @@ fn duration_ms(value: &str) -> Option<u64> {
 /// pipeline wants one final transcript, so the best alternative of each segment
 /// is joined in order — which is what the segments are, consecutive spans of the
 /// same recording.
-fn transcript_of(response: &Response, format: AudioFormat) -> Transcript {
+fn transcript_of(response: &Response) -> Transcript {
     let best: Vec<&Alternative> =
         response.results.iter().filter_map(|result| result.alternatives.first()).collect();
 
@@ -271,7 +271,6 @@ fn transcript_of(response: &Response, format: AudioFormat) -> Transcript {
         .and_then(|result| result.result_end_time.as_deref())
         .and_then(duration_ms)
         .map(|_| 0);
-    let _ = format;
 
     Transcript {
         confidence,
@@ -386,7 +385,7 @@ impl SpeechToText for GoogleStt {
             .await
             .map_err(|error| self.http.body_failure("transcript", error))?;
 
-        let transcript = transcript_of(&recognized, options.format);
+        let transcript = transcript_of(&recognized);
         tracing::debug!(
             provider = %self.http.name(),
             characters = transcript.text.len(),
@@ -485,7 +484,7 @@ mod tests {
             }],
         }));
 
-        let transcript = transcript_of(&recognized, AudioFormat::DEFAULT);
+        let transcript = transcript_of(&recognized);
         assert_eq!(transcript.text, "turn on the kitchen light");
         assert!(transcript.is_final, "this endpoint has only finals to give");
         assert_eq!(transcript.confidence, Some(0.97));
@@ -502,7 +501,7 @@ mod tests {
             ],
         }));
 
-        let transcript = transcript_of(&recognized, AudioFormat::DEFAULT);
+        let transcript = transcript_of(&recognized);
         assert_eq!(transcript.text, "turn on the light");
     }
 
@@ -519,7 +518,7 @@ mod tests {
             }],
         }));
 
-        assert_eq!(transcript_of(&recognized, AudioFormat::DEFAULT).text, "turn on the light");
+        assert_eq!(transcript_of(&recognized).text, "turn on the light");
     }
 
     #[test]
@@ -531,7 +530,7 @@ mod tests {
             ],
         }));
 
-        assert_eq!(transcript_of(&recognized, AudioFormat::DEFAULT).confidence, Some(0.31));
+        assert_eq!(transcript_of(&recognized).confidence, Some(0.31));
     }
 
     #[test]
@@ -539,7 +538,7 @@ mod tests {
         // Google answers a recording with no speech in it with `{}` — no
         // `results` at all. That is a successful recognition of nothing, and the
         // pipeline needs the final to know the turn is over.
-        let transcript = transcript_of(&response(serde_json::json!({})), AudioFormat::DEFAULT);
+        let transcript = transcript_of(&response(serde_json::json!({})));
         assert_eq!(transcript.text, "");
         assert!(transcript.is_final);
         assert_eq!(transcript.confidence, None);
@@ -554,6 +553,6 @@ mod tests {
                 { "alternatives": [{ "transcript": "hello" }] },
             ],
         }));
-        assert_eq!(transcript_of(&recognized, AudioFormat::DEFAULT).text, "hello");
+        assert_eq!(transcript_of(&recognized).text, "hello");
     }
 }
