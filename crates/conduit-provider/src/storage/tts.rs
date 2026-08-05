@@ -47,6 +47,36 @@ pub enum TtsVariant {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
+    /// Amazon Polly speech synthesis.
+    ///
+    /// Named by region rather than by URL, like `LlmVariant::Bedrock`: the SDK
+    /// resolves the endpoint, so a base URL would record something nothing reads.
+    ///
+    /// No credential slot at all — not even an optional one, which is where this
+    /// differs from Bedrock. Bedrock has API keys as an alternative to signing;
+    /// Polly has none, so a field here would be a box that does nothing, and an
+    /// operator who filled it in would reasonably believe they had configured
+    /// something. The credential comes from the AWS chain. This is also why Polly
+    /// is absent from the `api_key`/`api_key_mut` arms in `mod.rs`: it is not a
+    /// keyed variant, and adding it there would mean adding a slot to add.
+    Polly {
+        /// AWS region to synthesize in, e.g. `us-west-2`.
+        region: String,
+        /// Named profile from the shared AWS config file to load credentials
+        /// from.
+        ///
+        /// `None` uses the default chain — environment, task role, instance
+        /// profile, default profile.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        /// Voice to speak with, e.g. `Joanna`. Absent uses the crate's default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voice: Option<String>,
+        /// Engine to synthesize with: `neural`, `generative`, `long-form`, or
+        /// `standard`. Absent uses `neural`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+    },
     /// ElevenLabs speech synthesizer.
     #[serde(rename = "elevenlabs")]
     ElevenLabs {
@@ -102,6 +132,15 @@ impl TtsVariant {
             Self::Deepgram { api_key, model } => {
                 Self::Deepgram { api_key: redact_secret(api_key), model: model.clone() }
             }
+            // Nothing to redact: Polly carries no secret, because Polly has no
+            // key. Cloned wholesale rather than given a `redact_secret` call
+            // that would have nothing to act on.
+            Self::Polly { region, profile, voice, engine } => Self::Polly {
+                region: region.clone(),
+                profile: profile.clone(),
+                voice: voice.clone(),
+                engine: engine.clone(),
+            },
             Self::ElevenLabs { api_key, model, voice } => Self::ElevenLabs {
                 api_key: redact_secret(api_key),
                 model: model.clone(),
@@ -127,6 +166,15 @@ mod tests {
         // silently orphans every definition an operator has already saved.
         let spellings = [
             (TtsVariant::Deepgram { api_key: None, model: None }, "deepgram"),
+            (
+                TtsVariant::Polly {
+                    region: "us-east-1".to_owned(),
+                    profile: None,
+                    voice: None,
+                    engine: None,
+                },
+                "polly",
+            ),
             (TtsVariant::ElevenLabs { api_key: None, model: None, voice: None }, "elevenlabs"),
             (TtsVariant::Google { language: None, voice: None }, "google"),
             (

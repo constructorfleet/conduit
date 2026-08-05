@@ -527,6 +527,7 @@ export type ProviderDefinitionVariantType =
   | "wyoming"
   | "elevenlabs"
   | "deepgram"
+  | "polly"
   | "google"
   | "marytts"
   | "mcp"
@@ -631,6 +632,13 @@ export type TtsVariant =
       type: "deepgram";
       api_key?: ProviderSecret;
       model?: string;
+    }}
+  | {{
+      type: "polly";
+      region: string;
+      profile?: string;
+      voice?: string;
+      engine?: string;
     }}
   | {{
       type: "elevenlabs";

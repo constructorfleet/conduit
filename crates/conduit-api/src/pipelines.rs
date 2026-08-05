@@ -663,6 +663,32 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "polly.speech",
+            label: "Amazon Polly",
+            kind: ProviderCapability::Tts,
+            definition_variant: "polly",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("region", string_property(None, Some("[a-z0-9-]+"))),
+                    ("profile", string_property(None, None)),
+                    // A Polly voice id is a bare capitalized name. The pattern is
+                    // the shape the provider enforces, so a console refuses
+                    // another vendor's spelling while the operator is still
+                    // typing rather than at the first turn.
+                    ("voice", string_property(None, Some("[A-Za-z0-9]+"))),
+                    // A closed set of four, unlike the voices: offered as choices
+                    // so an operator picks rather than guesses.
+                    ("engine", choice_property(conduit_polly::validate::ENGINES.to_vec())),
+                ]),
+                // Only the region — and deliberately no `api_key` property at
+                // all. Polly has no API key, so a box to paste one into would be
+                // a box that does nothing, and an operator who filled it in would
+                // reasonably believe they had configured something. The
+                // credential comes from the AWS chain.
+                required: vec!["region"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "google.transcription",
             label: "Google Speech-to-Text",
             kind: ProviderCapability::Stt,

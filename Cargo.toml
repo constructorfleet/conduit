@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-deepgram", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
+members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-deepgram", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-polly", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,11 @@ conduit-metrics = { path = "crates/conduit-metrics", version = "0.1.0" }
 conduit-memory = { path = "crates/conduit-memory", version = "0.1.0" }
 conduit-http = { path = "crates/conduit-http", version = "0.1.0" }
 conduit-openai = { path = "crates/conduit-openai", version = "0.1.0" }
+# `default-features = false` here rather than only at the use site: a member
+# crate's `default-features` is ignored unless the workspace entry declares it,
+# so without this the AWS SDK is compiled even by a build that turned the
+# `conduit-api/polly` feature off — silently, with a warning that is easy to miss.
+conduit-polly = { path = "crates/conduit-polly", version = "0.1.0", default-features = false }
 conduit-script = { path = "crates/conduit-script", version = "0.1.0" }
 conduit-google = { path = "crates/conduit-google", version = "0.1.0" }
 conduit-marytts = { path = "crates/conduit-marytts", version = "0.1.0" }

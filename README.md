@@ -29,6 +29,7 @@ echoes described under [Running](#running).
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
 | [`conduit-elevenlabs`](crates/conduit-elevenlabs) | Speech recognition and synthesis over ElevenLabs' REST API |
 | [`conduit-deepgram`](crates/conduit-deepgram) | Synthesis over Deepgram's Aura API, where the voice is the model |
+| [`conduit-polly`](crates/conduit-polly) | Synthesis over Amazon Polly, reached by region with the deployment's own AWS credential |
 | [`conduit-google`](crates/conduit-google) | Speech recognition and synthesis over Google Cloud's Speech APIs |
 | [`conduit-marytts`](crates/conduit-marytts) | Synthesis over a self-hosted MaryTTS server |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
@@ -696,13 +697,14 @@ because Opus needs a container this code does not build; capture as PCM or
 FLAC.
 
 Speech has the same story as language models: most servers are reached by
-changing `conduit-openai`'s base URL, and three vendors are not, each for a
+changing `conduit-openai`'s base URL, and four vendors are not, each for a
 reason that shows up in the API rather than the hostname.
 
 | Crate | Capabilities | Why it is not a base URL |
 | --- | --- | --- |
 | [`conduit-elevenlabs`](crates/conduit-elevenlabs) | `stt`, `tts` | The credential is an `xi-api-key` header and the voice is a URL *path segment* |
 | [`conduit-deepgram`](crates/conduit-deepgram) | `tts` | `Authorization: Token`, not `Bearer`; the voice *is* the model, in the query |
+| [`conduit-polly`](crates/conduit-polly) | `tts` | A region rather than an endpoint, and SigV4 over the AWS credential chain rather than a key |
 | [`conduit-google`](crates/conduit-google) | `stt`, `tts` | The credential is not typed at all: Application Default Credentials, refreshed per request |
 | [`conduit-marytts`](crates/conduit-marytts) | `tts` | A form-encoded request answering with a WAV, and no authentication anywhere |
 
@@ -735,6 +737,20 @@ nowhere on the wire to send one. The model id is checked loosely and explicitly
 *not* as a security boundary — it is a query parameter rather than a path segment,
 so a pattern that guessed at the vendor's naming would only refuse voices Deepgram
 later releases.
+
+Polly is the other one with nothing to type. It has no API keys at all — that is
+where it differs from Bedrock, which added them as an alternative to signing — so
+the variant carries no credential field, the schema declares none, and the console
+shows no box. A field that does nothing is worse than no field: an operator who
+pasted a key into it would reasonably believe they had configured something. What
+*is* configured is a region, and optionally a voice and an engine. The engine is a
+closed set of four that is the same everywhere, so it is a menu and a wrong value
+is refused at the field; the 106 voices are not, because AWS adds them, so the
+voice is checked for shape — a bare capitalized name — which catches the real
+mistake of pasting Google's `en-US-Neural2-F` spelling in. Only PCM leaves that
+crate: `Encoding` can name none of Polly's compressed containers, and its `json`
+format is speech marks — visemes and word timings — which are not audio at all and
+have nowhere in a `SpeechChunk` to go.
 
 MaryTTS ships no voices, so Conduit suggests none: a default here would be wrong
 on every install that did not happen to have it. PicoTTS is deliberately absent.

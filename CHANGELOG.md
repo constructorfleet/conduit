@@ -8,6 +8,50 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Amazon Polly synthesis, as `conduit-polly` and a `polly` TTS variant. A region
+  rather than a base URL, like `conduit-bedrock`: the SDK resolves the endpoint and
+  the credential is SigV4 over the AWS chain, so neither is reachable by pointing
+  `conduit-openai` somewhere else.
+- The Polly definition has **no credential field at all** — not in the variant, not
+  in the component schema, not in the console. This is where it differs from
+  Bedrock, which carries an optional key because Bedrock added API keys as an
+  alternative to signing; Polly has none. A box that does nothing is worse than no
+  box, because an operator who pasted a key into it would reasonably believe they
+  had configured something. The absence is pinned by a test rather than left to
+  look like an oversight.
+- Only PCM is requested, and Polly's other formats are refused rather than
+  mislabelled. `Encoding` can name none of `mp3`, `ogg_vorbis`, `ogg_opus`, `alaw`,
+  or `mulaw`, so their bytes could only be labelled as something they are not — and
+  a mislabelled chunk plays back as noise several stages later with nothing pointing
+  at the request. `json` is not audio at all: it is the speech-marks channel, and a
+  viseme has nowhere in a `SpeechChunk` to go, so that format and the four
+  speech-mark types are absent from the schema entirely.
+- The cost of that is the sample rates: `pcm` comes at 8 kHz and 16 kHz only.
+  Conduit's default is 16 kHz so the common case is exact; anything else is served
+  at the nearer of the two and logged, because a rate mismatch is something the
+  pipeline can resample and an encoding mismatch is not.
+- The engine is validated against a closed set and offered as a menu; the voice is
+  checked for shape and not against a list. There are four engines and they are the
+  same in every region, so a wrong one fails every turn and is worth refusing at the
+  field. The 106 voices are AWS's to add, so a build that refused one released after
+  it shipped would be worse than one that let the API say so — the shape check
+  catches the real mistake, which is pasting Google's `en-US-Neural2-F` spelling
+  into the box.
+- `neural` is the default engine rather than `generative`. Generative sounds better
+  and is available for far fewer voices in far fewer regions, so defaulting to it
+  would mean a definition naming a region and nothing else often fails.
+- Polly synthesis does **not** stream from the first byte, unlike
+  `conduit-deepgram`. The SDK's `ByteStream` offers no chunk-by-chunk reader that
+  does not go through `collect`, so an utterance arrives as one chunk; this is
+  recorded rather than papered over.
+- The AWS SDK reaches Polly with the same rustls-ring HTTP client `conduit-bedrock`
+  builds, rather than the SDK's own `rustls` feature, which selects `aws-lc-rs` — C,
+  wants cmake, and would put a second crypto provider in a binary that already links
+  ring for every other provider. `aws-lc` stays absent from `Cargo.lock`, and CI
+  checks it.
+- Compiled without the `polly` feature the factory still *claims* a Polly
+  definition and refuses it by naming the feature. An unclaimed definition would
+  read as a typo in the variant name, and it is spelled correctly.
 - Deepgram Aura synthesis, as `conduit-deepgram` and a `deepgram` TTS variant.
   Three things stop this being the `openai` variant with a different base URL, and
   the first is the one that costs an afternoon: the key travels as

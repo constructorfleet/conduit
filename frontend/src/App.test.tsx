@@ -2163,6 +2163,83 @@ describe("Providers workspace", () => {
     expect(screen.getByLabelText("API Key")).toHaveDisplayValue("dg-stored");
   });
 
+  it("asks a Polly voice for a region and offers no box to paste a key into", async () => {
+    // Polly has no API key — it authenticates through the AWS credential chain.
+    // A box here would be a box that does nothing, and an operator who filled it
+    // in would reasonably believe they had configured something. No Base URL
+    // either: the region is the endpoint.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text-to-speech" }));
+    await user.click(screen.getByRole("menuitem", { name: "Amazon Polly" }));
+
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "house");
+    await user.type(screen.getByLabelText("Region"), "us-west-2");
+    await user.type(screen.getByLabelText("Voice"), "Matthew");
+    // A closed set of four, so the engine is a menu rather than a text box an
+    // operator can misspell.
+    await user.selectOptions(screen.getByLabelText("Engine"), "generative");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider house saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toEqual({
+      type: "tts",
+      variant: {
+        type: "polly",
+        region: "us-west-2",
+        voice: "Matthew",
+        engine: "generative",
+      },
+    });
+  });
+
+  it("reopens a stored Polly voice with every field it was saved with", async () => {
+    // Nothing is redacted on the way back, which is the difference from every
+    // other speech vendor: there is no secret in a Polly definition, so a
+    // reopened form shows what was saved rather than a placeholder.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "house",
+            label: "House (Polly)",
+            kind: "tts",
+            component: "polly.speech",
+            config: {
+              region: "eu-west-1",
+              profile: "voice",
+              voice: "Amy",
+              engine: "neural",
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "house");
+
+    expect(screen.getByLabelText("Region")).toHaveDisplayValue("eu-west-1");
+    expect(screen.getByLabelText("Profile")).toHaveDisplayValue("voice");
+    expect(screen.getByLabelText("Voice")).toHaveDisplayValue("Amy");
+    expect(screen.getByLabelText("Engine")).toHaveDisplayValue("neural");
+  });
+
   it("offers a Google voice no box to paste a credential into", async () => {
     // Google's credentials are discovered from the host rather than typed, so a
     // key field here would be a field that does nothing — and an operator who
@@ -3692,6 +3769,26 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "polly.speech",
+        label: "Amazon Polly",
+        kind: "tts",
+        definition_variant: "polly",
+        schema: {
+          // A region rather than a URL, and no `api_key` at all: Polly
+          // authenticates through the AWS credential chain.
+          properties: {
+            region: { type: "string", pattern: "[a-z0-9-]+" },
+            profile: { type: "string" },
+            voice: { type: "string", pattern: "[A-Za-z0-9]+" },
+            engine: {
+              type: "string",
+              options: ["generative", "long-form", "neural", "standard"],
+            },
+          },
+          required: ["region"],
+        },
+      },
+      {
         id: "google.transcription",
         label: "Google Speech-to-Text",
         kind: "stt",
@@ -4338,6 +4435,23 @@ function providerDefinitionFixture({
           type: "deepgram",
           ...(apiKey ? { api_key: apiKey } : {}),
           ...(text("model") ? { model: text("model") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "polly.speech") {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "tts",
+        variant: {
+          type: "polly",
+          region: text("region"),
+          ...(text("profile") ? { profile: text("profile") } : {}),
+          ...(text("voice") ? { voice: text("voice") } : {}),
+          ...(text("engine") ? { engine: text("engine") } : {}),
         },
       },
     };

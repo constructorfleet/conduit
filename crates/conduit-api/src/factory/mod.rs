@@ -33,6 +33,7 @@ mod marytts;
 mod mcp;
 mod memory;
 mod openai;
+mod polly;
 mod script;
 mod speaker;
 mod transform;
@@ -53,6 +54,7 @@ pub use marytts::MaryTtsServer;
 pub use mcp::Mcp;
 pub use memory::{BuiltinMemory, PgVectorMemory};
 pub use openai::OpenAi;
+pub use polly::Polly;
 // Named for the factory's role on the same terms as `BedrockRuntime`:
 // `conduit_script::Script` is the provider it builds.
 pub use script::ScriptedTransform;
@@ -124,6 +126,7 @@ impl Factories {
             .with(BedrockRuntime)
             .with(ElevenLabs)
             .with(Deepgram)
+            .with(Polly)
             .with(Google)
             .with(MaryTtsServer)
             .with(Wyoming)

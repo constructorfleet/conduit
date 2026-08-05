@@ -4156,6 +4156,17 @@ function configFromProviderVariant(
         model: variant.variant.model ?? "",
       };
     }
+    // Named by region rather than by URL, like Bedrock — and with no key field
+    // at all, because Polly has none. Nothing here is redacted on the way back,
+    // so a reopened form shows exactly what was saved.
+    if (variant.variant.type === "polly") {
+      return {
+        region: variant.variant.region,
+        profile: variant.variant.profile ?? "",
+        voice: variant.variant.voice ?? "",
+        engine: variant.variant.engine ?? "",
+      };
+    }
     if (variant.variant.type === "google") {
       return {
         language: variant.variant.language ?? "",
@@ -4394,6 +4405,21 @@ function variantFromProviderDefinition(
         // single `model` field is the whole of what an operator chooses.
         ...(apiKey ? { api_key: apiKey } : {}),
         ...(text("model") ? { model: text("model") } : {}),
+      },
+    };
+  }
+  if (definition.component === "polly.speech") {
+    return {
+      type: "tts",
+      variant: {
+        type: "polly",
+        // A region, not a base URL: the SDK builds the endpoint. And no
+        // `api_key`, because Polly authenticates through the AWS credential
+        // chain — a box to paste a key into would be a box that does nothing.
+        region: text("region"),
+        ...(text("profile") ? { profile: text("profile") } : {}),
+        ...(text("voice") ? { voice: text("voice") } : {}),
+        ...(text("engine") ? { engine: text("engine") } : {}),
       },
     };
   }

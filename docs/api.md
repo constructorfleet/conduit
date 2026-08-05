@@ -377,6 +377,7 @@ a Runtime Provider under the definition id:
 | `stt`, `tts` | `wyoming` | One provider under the definition id | `url` must be `tcp://host:port` |
 | `stt`, `tts` | `elevenlabs` | One provider under the definition id | No URL: there is one ElevenLabs. A `voice` must be an id, not a path |
 | `tts` | `deepgram` | One provider under the definition id | No URL: there is one Deepgram. No `voice` either — the `model` id is the voice |
+| `tts` | `polly` | One provider under the definition id | `region` rather than a URL, and no credential field at all: Polly has no API keys. `engine` is one of four; `voice` is a bare name like `Joanna` |
 | `stt`, `tts` | `google` | One provider under the definition id | No credential field: Application Default Credentials, resolved when the definition is saved |
 | `tts` | `marytts` | One provider under the definition id | `url` must be `http` or `https`; no authentication |
 | `wake` | `openwakeword`, `nanowakeword` | One wake word detector under the definition id | `runtime.where` is `local` or `wyoming` |
