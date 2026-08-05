@@ -756,6 +756,7 @@ dependencies = [
  "conduit-openai",
  "conduit-provider",
  "conduit-runtime",
+ "conduit-script",
  "conduit-speaker",
  "conduit-store",
  "conduit-transform",

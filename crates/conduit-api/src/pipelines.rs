@@ -111,6 +111,12 @@ pub enum ComponentConfigValueType {
 pub enum ComponentConfigFormat {
     /// URL text input.
     Url,
+    /// Text spanning more than one line, e.g. a script.
+    ///
+    /// A hint about the box rather than about the value: everything a
+    /// single-line input accepts is still accepted, and what this says is that
+    /// a person is going to want to see more than 40 characters of it at once.
+    Multiline,
 }
 
 /// Provider component catalog response.
@@ -457,6 +463,12 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
 /// offers them.
 const TRANSFORM_RULES: [&str; 3] = ["markdown_to_speech", "strip_emoji", "collapse_whitespace"];
 
+/// The interpreters a scripted transform can name.
+///
+/// One, and still a menu rather than a hidden constant: the field is stored in
+/// the definition, so an operator should see what their script is being run as.
+const SCRIPT_ENGINES: [&str; 1] = ["rhai"];
+
 /// The embedding models a speaker identification service may be running.
 const SPEAKER_ENGINES: [&str; 3] = ["speechbrain", "resemblyzer", "pyannote"];
 
@@ -684,6 +696,34 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
                     choice_list_property(TRANSFORM_RULES.to_vec()),
                 )]),
                 required: vec!["rules"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "transform.script",
+            label: "Script",
+            kind: ProviderCapability::Transform,
+            definition_variant: "script",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    // A menu of one, and named rather than assumed: a stored
+                    // definition says which language its source is in, so a
+                    // second engine could arrive without every saved script
+                    // silently changing meaning.
+                    (
+                        "engine",
+                        ComponentConfigProperty {
+                            default: Some(SCRIPT_ENGINES[0]),
+                            ..choice_property(SCRIPT_ENGINES.to_vec())
+                        },
+                    ),
+                    ("source", string_property(Some(ComponentConfigFormat::Multiline), None)),
+                    // Left out of `required` deliberately: a definition that
+                    // names no deadline gets `conduit-script`'s rather than an
+                    // unbounded one, so the form need not make somebody pick a
+                    // number to save a two-line script.
+                    ("timeout_ms", integer_property()),
+                ]),
+                required: vec!["engine", "source"],
             },
         },
         ProviderComponentDescriptor {

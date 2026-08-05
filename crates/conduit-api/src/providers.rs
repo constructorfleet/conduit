@@ -6,10 +6,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use conduit_provider::storage::{
     LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
-    ProviderDefinitionVariant, SpeakerIdVariant, SttVariant, ToolVariant, TransformVariant,
-    TtsVariant, WakeEngine,
+    ProviderDefinitionVariant, ScriptEngine, SpeakerIdVariant, SttVariant, ToolVariant,
+    TransformVariant, TtsVariant, WakeEngine,
 };
 use conduit_provider::Health;
+use conduit_script::Script as ScriptTransform;
 use serde::Serialize;
 
 use crate::auth::ManagementCaller;
@@ -470,6 +471,39 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         // operator is still filling in, and refusing to save one would be the
         // form arguing with them mid-edit.
         ProviderDefinitionVariant::Transform { variant: TransformVariant::Builtin { .. } } => {}
+        // A script reaches nothing outside the process either, but unlike a
+        // rule list it can be wrong in a way the operator wrote: a typo, or a
+        // deadline the engine will not accept. Both are asked of
+        // `conduit-script` rather than restated here, because a second copy of
+        // the rule is how a form comes to accept a definition that fails to
+        // build on the next server start.
+        ProviderDefinitionVariant::Transform {
+            variant: TransformVariant::Script { engine, source, timeout_ms },
+        } => match engine {
+            ScriptEngine::Rhai => {
+                validate_script_timeout(*timeout_ms)?;
+                ScriptTransform::check(source)
+                    .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+            }
+        },
+    }
+    Ok(())
+}
+
+/// Refuses a scripted transform's deadline before it reaches the engine.
+///
+/// The bound is `conduit-script`'s, read from its own constants rather than
+/// restated, so widening it there widens it here. What this adds is *when*: an
+/// operator saving the definition is told, rather than the server refusing to
+/// build it on the next start.
+fn validate_script_timeout(timeout_ms: u64) -> Result<(), ApiError> {
+    let requested = std::time::Duration::from_millis(timeout_ms);
+    if requested < conduit_script::MIN_TIMEOUT || requested > conduit_script::MAX_TIMEOUT {
+        return Err(ApiError::unprocessable(format!(
+            "timeout_ms must be between {} and {}, got `{timeout_ms}`",
+            conduit_script::MIN_TIMEOUT.as_millis(),
+            conduit_script::MAX_TIMEOUT.as_millis(),
+        )));
     }
     Ok(())
 }

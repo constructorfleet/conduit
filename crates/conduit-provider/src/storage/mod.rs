@@ -23,7 +23,7 @@ pub use roster::{EnrolledSpeaker, SpeakerRosterStore};
 pub use speaker::SpeakerIdVariant;
 pub use stt::SttVariant;
 pub use tool::{McpTransport, ToolVariant};
-pub use transform::{Rule, TransformVariant};
+pub use transform::{Rule, ScriptEngine, TransformVariant};
 pub use tts::TtsVariant;
 pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 

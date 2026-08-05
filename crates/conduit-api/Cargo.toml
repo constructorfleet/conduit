@@ -18,6 +18,7 @@ conduit-provider.workspace = true
 conduit-speaker.workspace = true
 conduit-wake.workspace = true
 conduit-store.workspace = true
+conduit-script.workspace = true
 conduit-transform.workspace = true
 conduit-runtime.workspace = true
 conduit-wyoming.workspace = true

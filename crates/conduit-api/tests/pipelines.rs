@@ -853,6 +853,154 @@ async fn the_speech_cleanup_component_offers_only_rules_this_build_implements() 
 }
 
 #[tokio::test]
+async fn a_scripted_transform_is_stored_and_read_back_with_the_script_as_written() {
+    // The source is the definition rather than a secret in it, so a read-back
+    // must return it verbatim: an operator reopening the form has to see the
+    // script they are editing, not a row of asterisks.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "shouting",
+        "label": "Shouting",
+        "variant": {
+            "type": "transform",
+            "variant": {
+                "type": "script",
+                "engine": "rhai",
+                "source": "segment.to_upper()",
+                "timeout_ms": 25
+            }
+        }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/shouting", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, get("/v1/providers/shouting")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["variant"]["variant"]["engine"], "rhai");
+    assert_eq!(body["variant"]["variant"]["source"], "segment.to_upper()");
+    assert_eq!(body["variant"]["variant"]["timeout_ms"], 25);
+}
+
+#[tokio::test]
+async fn a_script_that_names_no_deadline_is_stored_with_the_one_it_gets() {
+    // A missing deadline must not become an unbounded one: a script that never
+    // returns would end every turn on the pipeline rather than one segment.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "trimming",
+        "label": "Trimming",
+        "variant": {
+            "type": "transform",
+            "variant": { "type": "script", "engine": "rhai", "source": "segment.trim()" }
+        }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/trimming", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (_, body) = call(&state, get("/v1/providers/trimming")).await;
+    assert!(
+        body["variant"]["variant"]["timeout_ms"].as_u64().is_some_and(|ms| ms > 0),
+        "a stored script carries a deadline it did not have to type: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_script_that_cannot_compile_is_refused_when_it_is_saved() {
+    // The alternative is a definition that stores cleanly and then fails to
+    // build on the next server start, which is a syntax error discovered by
+    // whoever next speaks to the pipeline.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "broken",
+        "label": "Broken",
+        "variant": {
+            "type": "transform",
+            "variant": { "type": "script", "engine": "rhai", "source": "segment.to_upper(" }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/broken", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().is_some_and(|message| message.contains("did not compile")),
+        "the refusal should say what is wrong with the script: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_script_deadline_the_engine_will_not_accept_is_refused_when_it_is_saved() {
+    // The bound belongs to `conduit-script`, and this is the check that saving
+    // consults it rather than trusting the definition — a form that stores a
+    // minute-long deadline has stored a provider that refuses to be built.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "patient",
+        "label": "Patient",
+        "variant": {
+            "type": "transform",
+            "variant": {
+                "type": "script",
+                "engine": "rhai",
+                "source": "segment",
+                "timeout_ms": 60_000
+            }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/patient", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().is_some_and(|message| message.contains("timeout_ms")),
+        "the refusal should name the field to fix: {body}"
+    );
+}
+
+#[tokio::test]
+async fn the_script_component_offers_an_engine_a_source_and_an_optional_deadline() {
+    // The console builds its form from this catalog, so this is what decides
+    // whether an operator gets a box big enough to write a script in and a
+    // deadline they are not forced to invent.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+    assert_component(
+        components,
+        "transform.script",
+        "transform",
+        &["engine", "source", "timeout_ms"],
+        // Not `timeout_ms`: a definition that names none gets one anyway, so
+        // requiring it would make somebody pick a number to save two lines.
+        &["engine", "source"],
+    );
+
+    let component = components
+        .iter()
+        .find(|component| component["id"] == "transform.script")
+        .expect("the scripted transform is offered");
+    assert_eq!(component["definition_variant"], "script");
+    assert_eq!(
+        component["schema"]["properties"]["engine"],
+        serde_json::json!({ "type": "string", "options": ["rhai"], "default": "rhai" })
+    );
+    assert_eq!(
+        component["schema"]["properties"]["source"],
+        serde_json::json!({ "type": "string", "format": "multiline" })
+    );
+    assert_eq!(
+        component["schema"]["properties"]["timeout_ms"],
+        serde_json::json!({ "type": "integer" })
+    );
+}
+
+#[tokio::test]
 async fn each_wake_engine_offers_only_the_places_it_runs() {
     // The console builds its form from this catalog, so the catalog is what
     // keeps an operator from describing a detector that cannot exist: an engine
