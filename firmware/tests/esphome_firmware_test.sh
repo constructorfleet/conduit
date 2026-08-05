@@ -25,6 +25,43 @@ refute() {
   fi
 }
 
+# Every credential-bearing field, on every board, comes from `secrets.yaml`.
+#
+# Asserted by shape rather than by name because the name is what the old
+# assertions checked: they grepped for the *key* `debug_wake_event_url` and for
+# the literal `token: !secret conduit_token`, so Voice PE passing the wake
+# webhook URL as a committed substitution satisfied both while Satellite1 took
+# the same URL from secrets with a comment explaining why it had to. One rule,
+# two boards, and the test could not see the disagreement.
+#
+# A Home Assistant webhook URL carries its token in the path, so the URL is the
+# credential. Substitutions are committed; secrets are git-ignored.
+for board in "$sat1" "$voicepe"; do
+  for field in token debug_wake_event_url; do
+    if ! grep -Eq "^  ${field}: !secret " "$board"; then
+      printf '%s: %s must be "!secret ..." — substitutions are committed\n' \
+        "$board" "$field" >&2
+      exit 1
+    fi
+  done
+  # And no credential-shaped key may be *defined* as a substitution, which is
+  # how the Voice PE case arose: declared up top, interpolated below, reading
+  # as ordinary configuration all the way down. Only the substitutions block is
+  # scanned — `awk` stops at the next top-level key — because `!secret` uses
+  # further down are the correct spelling and must not trip this.
+  offender=$(
+    awk '/^substitutions:/ { inside = 1; next }
+         /^[a-z_]+:/ { inside = 0 }
+         inside && /^  [a-z_]*(token|secret|password)[a-z_]*:/ { print }
+         inside && /^  [a-z_]*_url:/ { print }' "$board"
+  )
+  if [ -n "$offender" ]; then
+    printf '%s: credential-shaped substitution is committed:\n%s\n' \
+      "$board" "$offender" >&2
+    exit 1
+  fi
+done
+
 require "futureproofhomes/satellite1-esphome" "$sat1"
 require "592a9687206709046f475b5464941702beacb093" "$sat1"
 require "microphone: sat1_mics" "$sat1"

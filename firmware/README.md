@@ -122,17 +122,17 @@ Set the substitutions before flashing:
   `~/src/wakeword/esphome-wakeword-debug/` ingest. Empty disables UDP debug
   audio.
 - `wake_debug_udp_port`: UDP ingest port. Defaults to `6056`.
-- `wake_debug_event_url` (Voice PE only): debug ingest HTTP wake endpoint, for
-  example `http://192.168.1.10:8000/wake_event`. Empty disables wake-event
-  posting. Satellite1 reads this from `secrets.yaml` instead — see below.
+Both targets read `wifi_ssid`, `wifi_password`, `api_encryption_key`,
+`conduit_token`, and `wake_debug_event_url` from an ESPHome `secrets.yaml` you
+create next to the YAML. That file holds credentials and is git-ignored, along
+with the `.esphome/` build directory. Never commit either.
 
-Both targets also read `wifi_ssid`, `wifi_password`, `api_encryption_key`, and
-`conduit_token` from an ESPHome `secrets.yaml` you create next to the YAML.
-Satellite1 additionally reads `wake_debug_event_url` from there: a Home
-Assistant webhook URL carries its token in the path, so it is a credential and
-must not sit in a committed substitution. Set it to `""` to disable wake-event
-posting. That file holds credentials and is git-ignored, along with the
-`.esphome/` build directory. Never commit either.
+`wake_debug_event_url` is the debug ingest HTTP wake endpoint, for example
+`http://192.168.1.10:8000/wake_event`; set it to `""` to disable wake-event
+posting. It is a secret rather than a substitution because a Home Assistant
+webhook URL carries its token in the path, which makes the whole URL a
+credential. Voice PE used to take it as a substitution while Satellite1 took it
+from `secrets.yaml`, which was one rule applied to one of two boards.
 
 `conduit_token` is the device token Conduit authenticates the satellite with. It
 must match a `devices` entry in the server's token file, and each satellite
