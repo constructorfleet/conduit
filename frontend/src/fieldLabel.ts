@@ -14,6 +14,10 @@
 /// initialism. A field whose word is not here is title-cased, which is the
 /// right answer for every ordinary word and a mild wrong answer for an
 /// initialism nobody has added yet.
+///
+/// Unit symbols are deliberately not here. `ms` is milliseconds, written lower
+/// case wherever a unit is written, so `timeout_ms` reads as `Timeout Ms`
+/// rather than as an abbreviation of a word nobody can name.
 const INITIALISMS = new Set([
   "api",
   "cpu",
@@ -26,7 +30,6 @@ const INITIALISMS = new Set([
   "json",
   "llm",
   "mcp",
-  "ms",
   "pcm",
   "sse",
   "ssl",

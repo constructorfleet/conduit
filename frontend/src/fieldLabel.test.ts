@@ -16,6 +16,13 @@ describe("field labels", () => {
     expect(fieldLabel("speaker_id")).toBe("Speaker ID");
   });
 
+  it("leaves a unit symbol as a word rather than shouting it", () => {
+    // `ms` is milliseconds, and a unit is written lower case wherever it is
+    // written. Upper-casing it reads as an abbreviation of a word nobody can
+    // name, which is what an initialism list will do to a unit left in it.
+    expect(fieldLabel("timeout_ms")).toBe("Timeout Ms");
+  });
+
   it("reads hyphens as word separators too", () => {
     expect(fieldLabel("max-rounds")).toBe("Max Rounds");
   });

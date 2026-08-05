@@ -2168,6 +2168,80 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("gives a script a box it can be read in and saves it as typed", async () => {
+    // A script is written over several lines and the whitespace in it is part of
+    // the program, so the box is a textarea and what it holds is sent untrimmed
+    // — unlike every other text field in this form, where a stray space is a
+    // typo rather than an indent.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Transform" }));
+    await user.click(screen.getByRole("menuitem", { name: "Script" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "shouting");
+
+    // The engine arrives already chosen, so a one-entry menu is not a question.
+    expect(screen.getByLabelText("Engine")).toHaveDisplayValue("rhai");
+    await user.type(
+      screen.getByLabelText("Source"),
+      "let loud = segment.to_upper();{enter}loud",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(saved[0]?.variant).toMatchObject({
+      type: "transform",
+      variant: {
+        type: "script",
+        engine: "rhai",
+        source: "let loud = segment.to_upper();\nloud",
+      },
+    });
+    // No deadline typed and none invented: the server stores its own, and a
+    // zero here would be a script that can never finish.
+    expect(saved[0]?.variant.variant).not.toHaveProperty("timeout_ms");
+  });
+
+  it("reopens a stored script with the program it was saved with", async () => {
+    // The source is the definition rather than a secret in it, so it must come
+    // back whole: an operator fixing one line cannot retype the other twenty.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "shouting",
+            label: "Shouting",
+            component: "transform.script",
+            config: { source: "segment.to_upper()", timeout_ms: 25 },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "shouting");
+
+    expect(screen.getByLabelText("Provider component")).toHaveDisplayValue(
+      "Script",
+    );
+    expect(screen.getByLabelText("Source")).toHaveDisplayValue(
+      "segment.to_upper()",
+    );
+    expect(screen.getByLabelText("Timeout Ms")).toHaveDisplayValue("25");
+    expect(screen.getByLabelText("Engine")).toHaveDisplayValue("rhai");
+  });
+
   it("keeps a satellite off the engines it is too small to run", async () => {
     // The engine used to be a field beside the place, so a definition could say
     // openWakeWord on a satellite and only find out at the server. Now each
@@ -3304,6 +3378,23 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "transform.script",
+        label: "Script",
+        kind: "transform",
+        definition_variant: "script",
+        schema: {
+          properties: {
+            engine: { type: "string", options: ["rhai"], default: "rhai" },
+            source: { type: "string", format: "multiline" },
+            timeout_ms: { type: "integer" },
+          },
+          // Not the deadline: a definition that names none is stored with one
+          // anyway, so requiring it would make somebody pick a number to save
+          // two lines.
+          required: ["engine", "source"],
+        },
+      },
+      {
         id: "mcp.sse",
         label: "MCP SSE",
         kind: "tool",
@@ -3804,6 +3895,24 @@ function providerDefinitionFixture({
             ? { voice: text("voice") || text("model") }
             : {}),
           streaming: flag("streaming"),
+        },
+      },
+    };
+  }
+  if (component === "transform.script") {
+    return {
+      id,
+      label,
+      kind: "transform",
+      variant: {
+        type: "transform",
+        variant: {
+          type: "script",
+          engine: "rhai",
+          source: text("source"),
+          ...(typeof config.timeout_ms === "number"
+            ? { timeout_ms: config.timeout_ms }
+            : {}),
         },
       },
     };

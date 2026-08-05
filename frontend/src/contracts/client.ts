@@ -115,7 +115,10 @@ export type ComponentConfigValueType =
   | "boolean"
   | "integer"
   | "string_list";
-export type ComponentConfigFormat = "url";
+/// A hint about the input a field wants rather than about the value it holds:
+/// `multiline` accepts everything a single-line box does, and says a person is
+/// going to want to see more than one line of it at once.
+export type ComponentConfigFormat = "url" | "multiline";
 
 export interface ComponentConfigProperty {
   type: ComponentConfigValueType;
@@ -164,6 +167,7 @@ export type ProviderDefinitionVariantType =
   | "wyoming"
   | "mcp"
   | "builtin"
+  | "script"
   | "openwakeword"
   | "nanowakeword"
   | "microwakeword"
@@ -249,10 +253,33 @@ export type TransformRule =
   | "markdown_to_speech"
   | "collapse_whitespace";
 
-export type TransformVariant = {
-  type: "builtin";
-  rules: TransformRule[];
-};
+/// A rewrite of what a model said, on its way to being spoken.
+///
+/// `builtin` names rules somebody had to write and release; `script` is the
+/// other half of that trade, and takes effect on the next utterance. A script
+/// carries no credential — its source is the definition rather than a secret in
+/// it — so it survives a redacted read-back whole, and the editor reopens the
+/// script the operator wrote.
+export type TransformVariant =
+  | {
+      type: "builtin";
+      rules: TransformRule[];
+    }
+  | {
+      type: "script";
+      engine: ScriptEngine;
+      source: string;
+      /// How long one evaluation may run. Optional because a definition that
+      /// names no deadline is stored with one anyway: a transform sits inside
+      /// the turn loop, so a script that never returns would end every turn on
+      /// the pipeline rather than one segment.
+      timeout_ms?: number;
+    };
+
+/// The interpreter a scripted transform runs on. One today, and still named in
+/// the definition rather than assumed, so a second engine could arrive without
+/// every stored script silently changing language.
+export type ScriptEngine = "rhai";
 
 /// Where a detector Conduit can score itself is running.
 export type WakeRuntime =
