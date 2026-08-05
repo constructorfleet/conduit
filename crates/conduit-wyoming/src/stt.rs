@@ -24,6 +24,39 @@ use crate::protocol::{
 /// The one encoding Wyoming audio events carry.
 const ENCODINGS: [Encoding; 1] = [Encoding::PcmS16Le];
 
+/// What the transcript loop carries between polls.
+///
+/// A struct rather than the tuple this was, because the fields it needs are no
+/// longer only the ones the loop reads: `partials` is counted for a line written
+/// at the end of the session, and threading a sixth positional field through
+/// eight return sites is how the wrong one gets bound.
+struct Session {
+    /// The session socket, buffered.
+    reader: BufReader<tokio::net::tcp::OwnedReadHalf>,
+    /// Provider identity, for every log line the loop writes.
+    provider: String,
+    /// Whether partials are passed on: this definition asked and the server did
+    /// not decline. See [`WyomingStt::server_streams`].
+    emit_partials: bool,
+    /// How many partials the server actually sent.
+    ///
+    /// Counted only to tell "this server does not stream" from "this server
+    /// said it streams and then did not", which are the same silence from
+    /// outside and have different fixes.
+    partials: usize,
+    /// Whether the final transcript — or a refusal, which also ends things —
+    /// has been seen.
+    saw_final: bool,
+    /// The write half, held and never read.
+    ///
+    /// Underscored because that is the whole job: it keeps the socket from
+    /// closing while the caller is still reading transcripts off it. See where it
+    /// is created for why closing it early destroyed transcripts a server had
+    /// already produced. The tuple this replaced hid the fact that nothing reads
+    /// it, which is exactly the sort of field a later reader deletes.
+    _writer: std::sync::Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+}
+
 /// A speech-to-text provider backed by a Wyoming TCP server.
 #[derive(Debug, Clone)]
 pub struct WyomingStt {
@@ -310,8 +343,15 @@ impl SpeechToText for WyomingStt {
 
         let reader = BufReader::new(read_half);
         Ok(Box::pin(stream::unfold(
-            (reader, provider, emit_partials, false, writer),
-            |(mut reader, provider, emit_partials, mut saw_final, writer)| async move {
+            Session {
+                reader,
+                provider,
+                emit_partials,
+                partials: 0,
+                saw_final: false,
+                _writer: writer,
+            },
+            |mut session: Session| async move {
                 // The final transcript ends the session: it is the answer the
                 // turn was waiting for, and there is nothing further to read.
                 // Waiting for the server to hang up instead only worked while
@@ -319,11 +359,11 @@ impl SpeechToText for WyomingStt {
                 // a server that keeps the connection open for another utterance
                 // never sends EOF, and the stage timed out sixty seconds after
                 // the transcript it had already read.
-                if saw_final {
+                if session.saw_final {
                     return None;
                 }
                 loop {
-                    match read_wyoming_event(&mut reader).await {
+                    match read_wyoming_event(&mut session.reader).await {
                         Ok(Some(event))
                             if event.event_type == "transcript"
                                 || event.event_type == TRANSCRIPT_CHUNK =>
@@ -335,14 +375,32 @@ impl SpeechToText for WyomingStt {
                             // and the two look identical from outside. One
                             // line per turn.
                             tracing::info!(
-                                provider,
+                                provider = session.provider,
                                 event = %event.event_type,
                                 is_final,
                                 chars = text.len(),
                                 "received a Wyoming transcript"
                             );
                             if is_final {
-                                saw_final = true;
+                                session.saw_final = true;
+                                // The one place a promise can be checked against
+                                // what arrived. A server whose `describe` says
+                                // it streams and which then sends only a final
+                                // is not a failure — the transcript is correct
+                                // and the turn worked — but it is indisputably
+                                // not what the operator configured, and without
+                                // this line it is indistinguishable from a
+                                // server that never claimed to stream, from
+                                // `streaming: false` in the definition, and from
+                                // a bug in Conduit. All four look like no
+                                // partials arriving.
+                                if session.emit_partials && session.partials == 0 {
+                                    tracing::info!(
+                                        provider = session.provider,
+                                        "server advertised transcript streaming but sent no \
+                                         partials; the final transcript is unaffected"
+                                    );
+                                }
                                 let transcript = Transcript {
                                     text,
                                     is_final: true,
@@ -350,16 +408,11 @@ impl SpeechToText for WyomingStt {
                                     language: None,
                                     start_ms: None,
                                 };
-                                return Some((
-                                    Ok(transcript),
-                                    (reader, provider, emit_partials, saw_final, writer),
-                                ));
+                                return Some((Ok(transcript), session));
                             }
-                            if emit_partials {
-                                return Some((
-                                    Ok(Transcript::partial(text)),
-                                    (reader, provider, emit_partials, saw_final, writer),
-                                ));
+                            if session.emit_partials {
+                                session.partials += 1;
+                                return Some((Ok(Transcript::partial(text)), session));
                             }
                         }
                         // A refusal the server took the trouble to explain.
@@ -377,9 +430,9 @@ impl SpeechToText for WyomingStt {
                         // for the server that does it anyway.
                         Ok(Some(event)) if event.event_type == ERROR => {
                             let message = error_message(&event);
-                            if saw_final {
+                            if session.saw_final {
                                 tracing::warn!(
-                                    provider,
+                                    provider = session.provider,
                                     message = %message,
                                     "Wyoming server reported an error after the final transcript; \
                                      keeping the transcript"
@@ -387,7 +440,7 @@ impl SpeechToText for WyomingStt {
                                 return None;
                             }
                             tracing::warn!(
-                                provider,
+                                provider = session.provider,
                                 message = %message,
                                 "Wyoming server refused the transcription"
                             );
@@ -395,18 +448,16 @@ impl SpeechToText for WyomingStt {
                             // close. Set before returning so a subsequent poll
                             // stops rather than reading the EOF as a second,
                             // less accurate failure.
-                            saw_final = true;
-                            return Some((
-                                Err(Error::provider(
-                                    provider.clone(),
-                                    WyomingServerError::new(message),
-                                )),
-                                (reader, provider, emit_partials, saw_final, writer),
-                            ));
+                            session.saw_final = true;
+                            let error = Error::provider(
+                                session.provider.clone(),
+                                WyomingServerError::new(message),
+                            );
+                            return Some((Err(error), session));
                         }
                         Ok(Some(event)) => {
                             tracing::debug!(
-                                provider,
+                                provider = session.provider,
                                 event = %event.event_type,
                                 "ignoring a Wyoming event that is not a transcript"
                             );
@@ -414,35 +465,31 @@ impl SpeechToText for WyomingStt {
                         Ok(None) => {
                             // A clean end of stream still owes us a final
                             // transcript; report it once, then finish.
-                            if !saw_final {
+                            if !session.saw_final {
                                 // A clean EOF here means the server closed
                                 // without answering. Recording it separately
                                 // from the error the turn reports says whether
                                 // the close arrived before the transcript was
                                 // written or after it was lost.
                                 tracing::warn!(
-                                    provider,
+                                    provider = session.provider,
                                     "Wyoming server closed the connection with no final transcript"
                                 );
-                                saw_final = true;
-                                return Some((
-                                    Err(Error::provider(
-                                        provider.clone(),
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::UnexpectedEof,
-                                            "connection closed before final transcript",
-                                        ),
-                                    )),
-                                    (reader, provider, emit_partials, saw_final, writer),
-                                ));
+                                session.saw_final = true;
+                                let error = Error::provider(
+                                    session.provider.clone(),
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::UnexpectedEof,
+                                        "connection closed before final transcript",
+                                    ),
+                                );
+                                return Some((Err(error), session));
                             }
                             return None;
                         }
                         Err(error) => {
-                            return Some((
-                                Err(Error::provider(provider.clone(), error)),
-                                (reader, provider, emit_partials, saw_final, writer),
-                            ));
+                            let error = Error::provider(session.provider.clone(), error);
+                            return Some((Err(error), session));
                         }
                     }
                 }
@@ -906,6 +953,29 @@ mod tests {
         assert_eq!(transcripts.len(), 1, "only the final, got: {transcripts:?}");
         assert!(transcripts[0].is_final);
         assert_eq!(transcripts[0].text, "a whole sentence");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_promises_partials_and_sends_none_still_transcribes() {
+        // A real server does this: `insanely-fast-whisper` answers `describe`
+        // with `supports_transcript_streaming: true` and then sends only the
+        // final transcript. Verified against a live one, twice, including over
+        // the raw protocol with the crate out of the picture — so this is the
+        // server overclaiming rather than Conduit dropping anything.
+        //
+        // The turn is correct and must stay correct: one accurate final is a
+        // working transcription. What the code adds for this case is a line
+        // saying so, because from outside it is identical to `streaming: false`,
+        // to a server that never claimed to stream, and to a bug here. The
+        // assertion cannot read a log — nothing in the workspace captures one —
+        // so it pins the behaviour the log describes: negotiation said yes,
+        // nothing partial arrived, the final is intact.
+        let transcripts =
+            transcripts_from(Describes::Streaming, true, true, &[], "all of it at once").await;
+
+        assert_eq!(transcripts.len(), 1, "the final alone, got: {transcripts:?}");
+        assert!(transcripts[0].is_final);
+        assert_eq!(transcripts[0].text, "all of it at once");
     }
 
     #[tokio::test]
