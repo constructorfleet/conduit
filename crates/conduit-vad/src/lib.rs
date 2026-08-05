@@ -60,12 +60,11 @@ pub const DEFAULT_MODELS_DIR: &str = "vad-models";
 
 /// The file name the model is read from.
 ///
-/// Upstream's `ifless` export rather than the headline `silero_vad.onnx`: the
-/// default export dispatches on the sample rate with an ONNX `If`, and a graph
-/// whose branch condition a runtime cannot fold is a graph it cannot analyse, so
-/// `tract` refuses to load it at all. Silero publishes this variant for exactly
-/// that case, and `scripts/fetch-vad-model.sh` fetches it.
-pub const DEFAULT_MODEL_FILE: &str = "silero_vad_16k_op15.onnx";
+/// Upstream's headline export, at the version `scripts/fetch-vad-model.sh` pins
+/// and checksums. The pin is not housekeeping: the v6.2.1 file of this same name
+/// loads, runs, and reports about 0.001 for every window including real speech,
+/// which is a detector that trims away every word while appearing to work.
+pub const DEFAULT_MODEL_FILE: &str = "silero_vad.onnx";
 
 /// The sample rates Silero was trained at, in hertz.
 ///
