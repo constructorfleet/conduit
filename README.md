@@ -27,6 +27,9 @@ echoes described under [Running](#running).
 | [`conduit-anthropic`](crates/conduit-anthropic) | Language models over Anthropic's Messages API |
 | [`conduit-bedrock`](crates/conduit-bedrock) | Language models over Amazon Bedrock's Converse API |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
+| [`conduit-elevenlabs`](crates/conduit-elevenlabs) | Speech recognition and synthesis over ElevenLabs' REST API |
+| [`conduit-google`](crates/conduit-google) | Speech recognition and synthesis over Google Cloud's Speech APIs |
+| [`conduit-marytts`](crates/conduit-marytts) | Synthesis over a self-hosted MaryTTS server |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
 | [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
@@ -653,6 +656,41 @@ transcripts — it genuinely has none, and inventing them would make the pipelin
 look more responsive than it is. And raw Opus frames cannot be uploaded,
 because Opus needs a container this code does not build; capture as PCM or
 FLAC.
+
+Speech has the same story as language models: most servers are reached by
+changing `conduit-openai`'s base URL, and three vendors are not, each for a
+reason that shows up in the API rather than the hostname.
+
+| Crate | Capabilities | Why it is not a base URL |
+| --- | --- | --- |
+| [`conduit-elevenlabs`](crates/conduit-elevenlabs) | `stt`, `tts` | The credential is an `xi-api-key` header and the voice is a URL *path segment* |
+| [`conduit-google`](crates/conduit-google) | `stt`, `tts` | The credential is not typed at all: Application Default Credentials, refreshed per request |
+| [`conduit-marytts`](crates/conduit-marytts) | `tts` | A form-encoded request answering with a WAV, and no authentication anywhere |
+
+A voice id reaching a URL path is a security boundary rather than a correctness
+one: `../` in a stored definition would move the request to a different API path
+with the account's credential attached. So every ElevenLabs voice is checked
+against an allowlist — letters, digits, `-`, `_` — before it can reach a URL, and
+the console declares the same allowlist as a pattern so the form refuses it
+first. The same reasoning covers Google's language tags and voice names, which
+reach a query string.
+
+Google's credential is the interesting one to configure, because there is
+nothing to configure. A definition carries no key field; the SDK's default chain
+resolves whatever the host holds — a workload identity, a service account file at
+`GOOGLE_APPLICATION_CREDENTIALS`, a `gcloud` login. That resolution happens when
+the definition is *saved*, so an operator on a host with no credentials is told
+so while they are still looking at the form. Discovery is what sits behind the
+`google` feature — on by default — and only discovery: the REST plumbing is
+always compiled, so a deployment that mints its own access tokens works in
+either build, and a build without the feature still registers both providers and
+refuses by name.
+
+MaryTTS ships no voices, so Conduit suggests none: a default here would be wrong
+on every install that did not happen to have it. PicoTTS is deliberately absent.
+It is an unmaintained C library with no network interface and no streaming, so
+reaching it would mean FFI and a vendored blob in exchange for worse output than
+a MaryTTS container gives.
 
 ## Next
 

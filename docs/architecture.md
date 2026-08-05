@@ -16,6 +16,9 @@ runtime progress is published as events.
 | `conduit-anthropic` | Language models over Anthropic's Messages API, which authenticates and frames its stream differently from chat completions. |
 | `conduit-bedrock` | Language models over Amazon Bedrock's Converse API, reached by region with the deployment's own AWS credential. Behind the `bedrock` feature, on by default. |
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
+| `conduit-elevenlabs` | Speech recognition and synthesis over ElevenLabs' REST API. Synthesis streams; transcription takes a complete recording. |
+| `conduit-google` | Speech recognition and synthesis over Google Cloud's Speech APIs, authenticated with Application Default Credentials rather than a typed key. Behind the `google` feature, on by default. |
+| `conduit-marytts` | Synthesis over a self-hosted MaryTTS server, which has no authentication and no fixed voice set. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |
 | `services/speaker-id` | The reference implementation of that contract, published as `conduit-speaker-id` with CPU and GPU tags. |
 | `conduit-transform` | The rewrites that ship with Conduit — flatten markdown, strip emoji, collapse whitespace — applied to what a model said on its way to being spoken. |

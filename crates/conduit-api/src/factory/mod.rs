@@ -26,6 +26,9 @@ use conduit_runtime::Providers;
 
 mod anthropic;
 mod bedrock;
+mod elevenlabs;
+mod google;
+mod marytts;
 mod mcp;
 mod openai;
 mod script;
@@ -39,6 +42,11 @@ pub use anthropic::Anthropic;
 // `conduit_bedrock::Bedrock` is the provider it builds and the two would collide
 // wherever both are in scope.
 pub use bedrock::Bedrock as BedrockRuntime;
+pub use elevenlabs::ElevenLabs;
+pub use google::Google;
+// Named for what it reaches rather than for the vendor, on the same terms as
+// `BedrockRuntime`: `conduit_marytts::MaryTts` is the provider it builds.
+pub use marytts::MaryTtsServer;
 pub use mcp::Mcp;
 pub use openai::OpenAi;
 // Named for the factory's role on the same terms as `BedrockRuntime`:
@@ -110,6 +118,9 @@ impl Factories {
             .with(OpenAi)
             .with(Anthropic)
             .with(BedrockRuntime)
+            .with(ElevenLabs)
+            .with(Google)
+            .with(MaryTtsServer)
             .with(Wyoming)
             .with(OpenWakeWord)
             .with(DeviceWake)
@@ -344,6 +355,25 @@ mod tests {
                     api_key: None,
                     engine: SpeakerEngine::SpeechBrain,
                     threshold_percent: 70,
+                },
+            },
+            ProviderDefinitionVariant::Stt {
+                variant: SttVariant::ElevenLabs { api_key: None, model: None },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::ElevenLabs { api_key: None, model: None, voice: None },
+            },
+            ProviderDefinitionVariant::Stt {
+                variant: SttVariant::Google { language: None, model: None },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::Google { language: None, voice: None },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::MaryTts {
+                    url: "http://marytts:59125".to_owned(),
+                    voice: None,
+                    locale: None,
                 },
             },
             ProviderDefinitionVariant::Transform {

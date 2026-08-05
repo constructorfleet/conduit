@@ -1,0 +1,29 @@
+[package]
+name = "conduit-marytts"
+description = "MaryTTS speech synthesis provider for Conduit, for deployments that will not send audio to a vendor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-http.workspace = true
+conduit-provider.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+# The stand-in server parses a POST entity the way MaryTTS does, as URL-encoded
+# parameters. Already in the tree via `reqwest`, which encodes the same form.
+serde_urlencoded = "0.7"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[lints]
+workspace = true
