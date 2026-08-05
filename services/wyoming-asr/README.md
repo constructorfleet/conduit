@@ -99,13 +99,20 @@ So the flag is made honest in both directions:
 
 - `describe` reports `supports_transcript_streaming: false`, which is what Home
   Assistant reads before it decides what to ask for.
-- Conduit gates partials on its own per-request `partials` option, and a request
-  that asks for them simply receives the one final transcript rather than
-  silently waiting for chunks that are not coming.
+- Conduit reads the same answer. A recognizer with `streaming` on sends a
+  `describe`, sees the `false`, logs it once naming the server, and proceeds to
+  one final transcript rather than waiting for chunks that are not coming.
 
-Set `streaming: false` in the provider definition. If a streaming engine is added
-later it will advertise `true` from the same handshake, and no Conduit-side
-configuration will have to change to find out.
+Setting `streaming: false` in the provider definition therefore saves a TCP round
+trip rather than avoiding a misconfiguration — leaving it on against this service
+is correct and works. If a streaming engine is added later it will advertise
+`true` from the same handshake and Conduit will start asking for partials with no
+configuration change at all.
+
+This was confirmed end to end rather than assumed: the real `WyomingStt` driving
+the real server over TCP, with a stub engine in place of Canary's weights,
+returns one final transcript with `streaming` on and with it off, and the
+handshake answers `supports_transcript_streaming: False` in both cases.
 
 ## Refusals
 
