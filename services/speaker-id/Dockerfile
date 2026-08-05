@@ -1,19 +1,29 @@
 # Conduit's speaker identification service.
 #
-# One file builds both published tags, because two Dockerfiles for one service
-# drift and only one of them gets tested:
+# One file builds every published tag, because a Dockerfile per engine drifts
+# and only one of them gets tested. Two arguments vary: ENGINE picks the
+# embedding backend, and BASE_IMAGE/TORCH_INDEX/DEVICE pick CPU or GPU.
 #
 #   CPU: docker build -t conduit-speaker-id:speechbrain services/speaker-id
 #   GPU: docker build -t conduit-speaker-id:speechbrain-gpu \
 #          --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
 #          --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
 #          --build-arg DEVICE=cuda services/speaker-id
+#
+#   pyannote: --build-arg ENGINE=pyannote  -t conduit-speaker-id:pyannote
+#   NeMo:     --build-arg ENGINE=nemo      -t conduit-speaker-id:nemo
+#
+# No image ships weights. pyannote's are gated behind a Hugging Face access
+# agreement, so an image containing them could not legally be pulled by someone
+# who had not accepted it; every engine downloads its model on first use into
+# the /models volume instead. See README.md.
 ARG BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${BASE_IMAGE}
 
 # Repeated after FROM: an ARG declared before it is out of scope afterwards.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG DEVICE=cpu
+ARG ENGINE=speechbrain
 
 # The CUDA images ship no Python, and the slim Python image ships no libsndfile.
 # Installing both unconditionally keeps one path through this file.
@@ -43,6 +53,12 @@ RUN pip install --no-cache-dir --index-url "${TORCH_INDEX}" -r requirements-torc
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Only the chosen engine's dependency, so a SpeechBrain image does not carry
+# NeMo's several gigabytes of collections it will never call. Copying all three
+# and installing one keeps the COPY cacheable across engines.
+COPY requirements-speechbrain.txt requirements-pyannote.txt requirements-nemo.txt ./
+RUN pip install --no-cache-dir -r "requirements-${ENGINE}.txt"
+
 COPY app.py ./
 
 # Written to at runtime, so they exist and are owned before the drop to a
@@ -51,14 +67,18 @@ RUN useradd --create-home --shell /usr/sbin/nologin speaker \
     && mkdir -p /data /models \
     && chown speaker:speaker /data /models
 
-ENV SPEAKER_ID_ENGINE=speechbrain \
+# The engine the image was built for is also the engine it defaults to, so an
+# operator cannot select one whose dependency this image does not contain by
+# leaving the variable alone.
+ENV SPEAKER_ID_ENGINE=${ENGINE} \
     SPEAKER_ID_DATA_DIR=/data \
     SPEAKER_ID_MODEL_DIR=/models \
     SPEAKER_ID_DEVICE=${DEVICE} \
-    # Where SpeechBrain and HuggingFace put their own caches. Pointed at the
-    # model volume so a restart does not re-download the model into a layer
+    # Where SpeechBrain, HuggingFace, and NeMo put their own caches. Pointed at
+    # the model volume so a restart does not re-download the model into a layer
     # that vanishes with the container.
-    HF_HOME=/models/huggingface
+    HF_HOME=/models/huggingface \
+    NEMO_CACHE_DIR=/models/nemo
 
 USER speaker
 EXPOSE 8080

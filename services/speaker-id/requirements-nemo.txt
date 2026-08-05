@@ -1,0 +1,6 @@
+# NVIDIA NeMo's ASR collection, installed only into the `nemo` image tags.
+#
+# `nemo_toolkit[asr]` rather than `[all]`: the `all` extra pulls the NLP and TTS
+# collections too, which is several gigabytes of models this service will never
+# call. See requirements-pyannote.txt for why this is a separate file.
+nemo_toolkit[asr]==2.7.3

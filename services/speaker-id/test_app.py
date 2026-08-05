@@ -18,7 +18,22 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from app import MODEL_SAMPLE_RATE, VoicePrints, cosine, create_app, resample
+from app import (
+    DEFAULT_MODELS,
+    EMBEDDING_WIDTHS,
+    ENGINE_CLASSES,
+    MODEL_SAMPLE_RATE,
+    NeMoEncoder,
+    PyannoteEncoder,
+    SpeechBrainEncoder,
+    VoicePrints,
+    build_encoder,
+    check_width,
+    cosine,
+    create_app,
+    hugging_face_token,
+    resample,
+)
 
 
 class ToneEncoder:
@@ -236,6 +251,162 @@ def test_changing_the_encoder_under_a_store_is_refused_not_scored(store) -> None
     identified = wide.post("/identify", content=tone(440))
     assert identified.status_code == 200
     assert identified.json()["speaker"] is None
+
+
+def test_every_engine_is_reachable_by_name_and_names_a_default_model() -> None:
+    # `SPEAKER_ID_ENGINE` is the whole selection mechanism, so an engine with a
+    # class and no default model is an engine an operator can only start by
+    # also knowing a model name off by heart.
+    assert set(ENGINE_CLASSES) == {"speechbrain", "pyannote", "nemo"}
+    for engine in ENGINE_CLASSES:
+        assert DEFAULT_MODELS[engine]
+        assert EMBEDDING_WIDTHS[engine]
+
+
+@pytest.mark.parametrize(
+    ("engine", "expected"),
+    [
+        ("speechbrain", SpeechBrainEncoder),
+        ("pyannote", PyannoteEncoder),
+        ("nemo", NeMoEncoder),
+    ],
+)
+def test_selecting_an_engine_reaches_that_engines_class(
+    monkeypatch, tmp_path: Path, engine: str, expected: type
+) -> None:
+    # Checked by interception rather than by loading: constructing the real
+    # class downloads gigabytes, and what is under test is the selection, not
+    # the model. The class is replaced so a wrong mapping fails here rather
+    # than in a container nobody can run in CI.
+    built: dict[str, object] = {}
+
+    class Recorded:
+        def __init__(self, model: str, cache: Path, device: str) -> None:
+            built.update(model=model, cache=cache, device=device)
+
+        def embed(self, samples: np.ndarray) -> np.ndarray:
+            return np.zeros(EMBEDDING_WIDTHS[engine])
+
+    monkeypatch.setitem(ENGINE_CLASSES, engine, Recorded)
+    encoder = build_encoder(engine, DEFAULT_MODELS[engine], tmp_path, "cpu")
+
+    assert isinstance(encoder, Recorded)
+    assert ENGINE_CLASSES[engine] is not expected  # the stub is what ran
+    assert built["model"] == DEFAULT_MODELS[engine]
+    assert built["device"] == "cpu"
+
+
+def test_an_unknown_engine_names_the_ones_this_image_serves() -> None:
+    with pytest.raises(RuntimeError) as refused:
+        build_encoder("resemblyzer", "", Path("/models"), "cpu")
+
+    assert "resemblyzer" in str(refused.value)
+    assert "pyannote" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("engine", "width"),
+    [("speechbrain", 192), ("pyannote", 512), ("nemo", 192)],
+)
+def test_each_engine_declares_the_width_its_model_produces(
+    engine: str, width: int
+) -> None:
+    # The widths are what decide whether an enrolment store survives an engine
+    # change, so they are asserted rather than left to a README that drifts.
+    # Only a real model download proves a loaded model agrees; `check_width`
+    # is the runtime half of this pair.
+    assert EMBEDDING_WIDTHS[engine] == width
+    assert ENGINE_CLASSES[engine].width == width
+
+
+def test_a_model_of_the_wrong_width_for_its_engine_is_refused_at_load() -> None:
+    # An operator may point `SPEAKER_ID_MODEL` at a variant of another size.
+    # Caught while the model name is still in hand, because the store's own
+    # guard can only report two numbers.
+    check_width("pyannote", 512)
+
+    with pytest.raises(RuntimeError) as refused:
+        check_width("pyannote", 192)
+
+    assert "512" in str(refused.value)
+    assert "192" in str(refused.value)
+
+
+def test_a_gated_pyannote_model_without_a_token_says_which_terms_to_accept(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # The failure Hugging Face itself returns is a 401 that mentions neither the
+    # agreement nor the token, and an operator cannot act on that.
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError) as refused:
+        PyannoteEncoder("pyannote/embedding", tmp_path, "cpu")
+
+    message = str(refused.value)
+    assert "gated" in message
+    assert "huggingface.co/pyannote/embedding" in message
+    assert "HF_TOKEN" in message
+
+
+def test_either_hugging_face_token_variable_is_honoured(monkeypatch) -> None:
+    # The hub honours both names, so a service that read only one would report
+    # gating an operator had already resolved.
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf-read-token")
+    assert hugging_face_token() == "hf-read-token"
+
+    monkeypatch.setenv("HF_TOKEN", "preferred")
+    assert hugging_face_token() == "preferred"
+
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN")
+    assert hugging_face_token() is None
+
+
+@pytest.mark.parametrize(
+    ("enrolled_with", "then"), [("speechbrain", "pyannote"), ("pyannote", "nemo")]
+)
+def test_swapping_between_engines_of_different_widths_is_refused_not_scored(
+    store, enrolled_with: str, then: str
+) -> None:
+    # The most damaging failure this service has: a 512-dimension voice scored
+    # against a 192-dimension print is not a low score, it is confident
+    # nonsense that identifies the wrong person. Adding engines must not make
+    # that reachable.
+    speaker = uuid.uuid4()
+    first = TestClient(
+        create_app(
+            encoder=ToneEncoder(width=EMBEDDING_WIDTHS[enrolled_with]), prints=store
+        )
+    )
+    first.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    second = TestClient(
+        create_app(encoder=ToneEncoder(width=EMBEDDING_WIDTHS[then]), prints=store)
+    )
+    refused = second.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    assert refused.status_code == 409
+    assert "re-enroll" in refused.json()["detail"]
+    assert second.post("/identify", content=tone(440)).json()["speaker"] is None
+
+
+def test_two_engines_of_the_same_width_cannot_be_caught_by_the_store(store) -> None:
+    # SpeechBrain and TitaNet both emit 192 dimensions, so the guard cannot
+    # tell a store built by one from a voice embedded by the other — it will
+    # score them, and score them wrongly. There is no check that fixes this,
+    # which is exactly why the README says an engine swap needs a re-enrolment
+    # and a re-tuned threshold. Pinned as a known limit rather than a bug.
+    assert EMBEDDING_WIDTHS["speechbrain"] == EMBEDDING_WIDTHS["nemo"]
+
+    speaker = uuid.uuid4()
+    ecapa = TestClient(create_app(encoder=ToneEncoder(width=192), prints=store))
+    ecapa.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    titanet = TestClient(create_app(encoder=ToneEncoder(width=192), prints=store))
+    accepted = titanet.post(f"/speakers/{speaker}/enroll", content=tone(440))
+    assert accepted.status_code == 200
 
 
 def test_resampling_preserves_duration() -> None:
