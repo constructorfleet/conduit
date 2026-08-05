@@ -16,8 +16,8 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 
 use crate::protocol::{
-    read_wyoming_event, tcp_address, write_wyoming_event, write_wyoming_event_with_payload,
-    WyomingEvent, CONNECT_TIMEOUT,
+    error_message, read_wyoming_event, tcp_address, write_wyoming_event,
+    write_wyoming_event_with_payload, WyomingEvent, WyomingServerError, CONNECT_TIMEOUT, ERROR,
 };
 
 /// The one encoding Wyoming audio events carry.
@@ -289,6 +289,48 @@ impl SpeechToText for WyomingStt {
                                     (reader, provider, emit_partials, saw_final, writer),
                                 ));
                             }
+                        }
+                        // A refusal the server took the trouble to explain.
+                        // Reported as the session's failure, because the server
+                        // closes next and the EOF branch below would otherwise
+                        // report a closed connection — which reads as a network
+                        // fault for what is usually a format mismatch the
+                        // operator can fix in the console.
+                        //
+                        // `saw_final` is checked first so this cannot undo a
+                        // turn that already succeeded: a server free to send an
+                        // error after answering would otherwise fail a
+                        // transcript the caller has already been handed. In
+                        // practice the stream has ended by then; the guard is
+                        // for the server that does it anyway.
+                        Ok(Some(event)) if event.event_type == ERROR => {
+                            let message = error_message(&event);
+                            if saw_final {
+                                tracing::warn!(
+                                    provider,
+                                    message = %message,
+                                    "Wyoming server reported an error after the final transcript; \
+                                     keeping the transcript"
+                                );
+                                return None;
+                            }
+                            tracing::warn!(
+                                provider,
+                                message = %message,
+                                "Wyoming server refused the transcription"
+                            );
+                            // Ends the session: the server has said no and will
+                            // close. Set before returning so a subsequent poll
+                            // stops rather than reading the EOF as a second,
+                            // less accurate failure.
+                            saw_final = true;
+                            return Some((
+                                Err(Error::provider(
+                                    provider.clone(),
+                                    WyomingServerError::new(message),
+                                )),
+                                (reader, provider, emit_partials, saw_final, writer),
+                            ));
                         }
                         Ok(Some(event)) => {
                             tracing::debug!(
@@ -625,5 +667,194 @@ mod tests {
         let (text, _, is_final) = transcript_from_event(&event);
         assert_eq!(text, "what time");
         assert!(!is_final);
+    }
+
+    /// Drives a real session against a server that refuses, and returns the
+    /// error the caller sees.
+    ///
+    /// The server sends `error` and then closes, which is what a Wyoming
+    /// server does on a format it will not accept. Closing matters: it is the
+    /// EOF branch that used to win the race to report a failure.
+    async fn refused_session_error(refusal: Value) -> Error {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            // Refuses on `audio-start`, before any audio, as a server checking
+            // the declared format does.
+            let _ = read_wyoming_event(&mut reader).await;
+            write_wyoming_event(&mut write_half, "error", refusal)
+                .await
+                .expect("error written");
+            drop(write_half);
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+        let error = transcripts
+            .next()
+            .await
+            .expect("the refusal must be reported, not swallowed")
+            .expect_err("a refused session is not a transcript");
+        server.abort();
+        error
+    }
+
+    #[tokio::test]
+    async fn a_server_refusal_reaches_the_operator_instead_of_a_closed_connection() {
+        // The symptom this fixes: a server refusing a sample-rate mismatch sent
+        // a message naming what arrived and what it wanted, Conduit had no arm
+        // for `error`, and the operator was told the connection closed — which
+        // reads as a network fault for a configuration mistake.
+        let error = refused_session_error(
+            json!({ "text": "sample rate 16000 is not supported, expected 48000" }),
+        )
+        .await;
+
+        let message = error.to_string();
+        assert!(
+            message.contains("sample rate 16000 is not supported, expected 48000"),
+            "the server's own message must reach the operator, got: {message}"
+        );
+        assert!(
+            !message.contains("connection closed before final transcript"),
+            "the EOF message must not stand in for a refusal the server explained, got: {message}"
+        );
+        assert!(
+            matches!(&error, Error::Provider { provider, .. } if provider == "whisper"),
+            "a refusal is a provider failure naming the provider, got: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_carrying_a_code_reports_the_code_too() {
+        // Some servers send `code` alongside `text`, and some send only one of
+        // the two. Whatever arrives has to end up in front of the operator.
+        let error = refused_session_error(
+            json!({ "text": "unsupported format", "code": "bad_request" }),
+        )
+        .await;
+
+        let message = error.to_string();
+        assert!(message.contains("unsupported format"), "got: {message}");
+        assert!(message.contains("bad_request"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_with_no_message_still_says_a_refusal_arrived() {
+        // Both fields are optional in practice. Reporting nothing would hand
+        // the caller straight back to the closed-connection story.
+        let error = refused_session_error(json!({})).await;
+
+        let message = error.to_string();
+        assert!(
+            !message.contains("connection closed before final transcript"),
+            "an empty refusal is still a refusal, got: {message}"
+        );
+        assert!(message.contains("error"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn an_error_after_the_final_transcript_does_not_fail_the_turn() {
+        // Which wins, decided: the transcript. The caller has already been
+        // handed it, and a turn that produced correct text is a turn that
+        // succeeded — retracting it because the server spoke again afterwards
+        // would fail a session on something the operator cannot act on.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                if event.event_type == "audio-stop" {
+                    break;
+                }
+            }
+            write_wyoming_event(
+                &mut write_half,
+                "transcript",
+                json!({ "text": "the whole of it" }),
+            )
+            .await
+            .expect("transcript written");
+            write_wyoming_event(
+                &mut write_half,
+                "error",
+                json!({ "text": "too late to matter" }),
+            )
+            .await
+            .expect("error written");
+            drop(write_half);
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let transcript = transcripts.next().await.expect("a transcript").expect("not an error");
+        assert_eq!(transcript.text, "the whole of it");
+        assert!(transcript.is_final);
+        assert!(
+            transcripts.next().await.is_none(),
+            "a late error must not be reported after a turn that already answered"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_close_with_no_error_and_no_transcript_keeps_its_own_message() {
+        // This change narrows when the EOF message appears; it does not replace
+        // it. A server that closes without explaining itself genuinely is a
+        // closed connection, and saying so is still the most accurate thing.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("provider connects");
+            // Reads the session out before closing. Dropping the socket the
+            // instant it is accepted resets the connection instead of ending it,
+            // which is a different failure than the one this covers.
+            let (read_half, write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            while let Ok(Some(event)) = read_wyoming_event(&mut reader).await {
+                if event.event_type == "audio-stop" {
+                    break;
+                }
+            }
+            drop(write_half);
+        });
+
+        let provider = WyomingStt::new("whisper", &format!("tcp://{address}"), None, false)
+            .expect("built");
+        let audio =
+            stream::iter([Ok(AudioChunk { sequence: 0, data: vec![1, 2, 3, 4].into() })]);
+        let options =
+            TranscribeOptions { format: AudioFormat::DEFAULT, ..TranscribeOptions::default() };
+        let mut transcripts =
+            provider.transcribe(Box::pin(audio), options).await.expect("session");
+
+        let error = transcripts
+            .next()
+            .await
+            .expect("a silent close is still a failure")
+            .expect_err("no transcript arrived");
+        assert!(
+            error.to_string().contains("connection closed before final transcript"),
+            "got: {error}"
+        );
+        server.abort();
     }
 }

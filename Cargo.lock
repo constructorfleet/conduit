@@ -1067,6 +1067,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
 ]

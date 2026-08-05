@@ -8,6 +8,21 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- A Wyoming server's `error` event reaches the operator. All three Wyoming
+  clients — speech-to-text, text-to-speech, and wake word — read the event and
+  report the message the server sent, instead of letting it fall through the
+  "ignoring an event" branch and then reporting whatever happened next. The
+  symptom was a refused sample rate: the server named both what arrived and what
+  it wanted, then closed, and Conduit reported `connection closed before final
+  transcript` — which reads as a network fault for a configuration mistake the
+  operator can fix in the console. Recognition was the worst of the three, since
+  the close raced the refusal; synthesis returned empty audio, which sounds like
+  a turn with nothing to say, and a refused wake detector was indistinguishable
+  from a quiet room. An `error` arriving *after* a final transcript is logged and
+  discarded rather than retracting a turn that already answered, and a server
+  that closes without explaining itself keeps the existing end-of-connection
+  message, because that genuinely is a closed connection.
+
 - Bedrock credential resolution is covered by tests rather than assumed. A named
   `profile` reaches the loader, an `api_key` prefers bearer auth over signing,
   and naming neither leaves the AWS default chain and SigV4 in place. The middle

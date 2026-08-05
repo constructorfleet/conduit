@@ -160,6 +160,47 @@ fn merge_data(base: &mut Value, extra: Value) {
     }
 }
 
+/// The event type a Wyoming server sends to refuse a request.
+///
+/// A server that will not serve a session says why and then closes. Reading it
+/// is the difference between an operator seeing "sample rate 16000 is not
+/// supported, expected 48000" and seeing a closed connection.
+pub(crate) const ERROR: &str = "error";
+
+/// A refusal a Wyoming server sent, carried as the source of an
+/// [`Error::Provider`].
+///
+/// A distinct type rather than an [`std::io::Error`]: this is the server
+/// answering, not the transport failing, and `Error::Provider`'s display puts
+/// the source text straight in front of the operator.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct WyomingServerError(String);
+
+impl WyomingServerError {
+    /// Wraps the message a server sent.
+    pub(crate) const fn new(message: String) -> Self {
+        Self(message)
+    }
+}
+
+/// Renders a Wyoming `error` event as the message an operator should read.
+///
+/// The protocol carries `text` and, on some servers, `code`. Both are optional
+/// in practice, so a server that sends an `error` with neither still produces a
+/// message that says an error arrived — reporting nothing at all would leave
+/// the caller with the closed-connection story this exists to replace.
+pub(crate) fn error_message(event: &WyomingEvent) -> String {
+    let text = event.data.get("text").and_then(Value::as_str).filter(|text| !text.is_empty());
+    let code = event.data.get("code").and_then(Value::as_str).filter(|code| !code.is_empty());
+    match (text, code) {
+        (Some(text), Some(code)) => format!("{text} (code {code})"),
+        (Some(text), None) => text.to_owned(),
+        (None, Some(code)) => format!("server reported error code {code}"),
+        (None, None) => "server reported an error with no message".to_owned(),
+    }
+}
+
 /// Parses `tcp://host:port` into `host:port`, or `None` for any other scheme.
 pub(crate) fn tcp_address(url: &str) -> Option<String> {
     url.strip_prefix("tcp://")
