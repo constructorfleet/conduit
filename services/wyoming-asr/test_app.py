@@ -25,6 +25,7 @@ from wyoming.event import Event, async_read_event, async_write_event
 from wyoming.info import Describe, Info
 
 from app import (
+    DEFAULT_MAX_SECONDS,
     MODEL_CHANNELS,
     MODEL_SAMPLE_RATE,
     MODEL_WIDTH,
@@ -32,6 +33,7 @@ from app import (
     Limits,
     build_engine,
     engine_from_environment,
+    limits_from_environment,
 )
 
 
@@ -620,6 +622,30 @@ def test_the_engine_selector_defaults_to_canary(monkeypatch: Any) -> None:
 
     assert selected.engine == "canary"
     assert selected.model == "nvidia/canary-1b-v2"
+
+
+def test_an_unset_max_seconds_falls_back_to_the_default(monkeypatch: Any) -> None:
+    # An unset compose variable arrives as an empty string rather than as
+    # absent, and `float("")` is a crash loop.
+    monkeypatch.setenv("ASR_MAX_SECONDS", "")
+    assert limits_from_environment().max_seconds == DEFAULT_MAX_SECONDS
+
+
+def test_a_max_seconds_that_is_not_a_number_is_refused(monkeypatch: Any) -> None:
+    monkeypatch.setenv("ASR_MAX_SECONDS", "two minutes")
+    with pytest.raises(RuntimeError) as refused:
+        limits_from_environment()
+    assert "ASR_MAX_SECONDS" in str(refused.value)
+
+
+def test_a_max_seconds_of_zero_is_refused_rather_than_accepting_nothing(
+    monkeypatch: Any,
+) -> None:
+    # Zero is not "no limit", it is a service that refuses every utterance — and
+    # a negative one is the same thing with a worse message.
+    monkeypatch.setenv("ASR_MAX_SECONDS", "0")
+    with pytest.raises(RuntimeError):
+        limits_from_environment()
 
 
 def test_the_engine_and_model_come_from_the_environment(monkeypatch: Any) -> None:

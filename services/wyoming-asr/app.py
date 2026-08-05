@@ -243,9 +243,28 @@ def engine_from_environment() -> Selection:
 
 
 def limits_from_environment() -> Limits:
-    return Limits(
-        max_seconds=float(os.environ.get("ASR_MAX_SECONDS", DEFAULT_MAX_SECONDS))
-    )
+    """The utterance ceiling, validated where it is read.
+
+    An unset compose variable arrives as an empty string rather than as absent,
+    and a nonsensical value is a memory limit that is not one — so both are
+    refused here with the variable named, rather than surfacing as a `ValueError`
+    traceback or, worse, as no limit at all.
+    """
+    configured = os.environ.get("ASR_MAX_SECONDS", "").strip()
+    if not configured:
+        return Limits()
+    try:
+        max_seconds = float(configured)
+    except ValueError as error:
+        raise RuntimeError(
+            f"ASR_MAX_SECONDS must be a number of seconds, not `{configured}`"
+        ) from error
+    if max_seconds <= 0:
+        raise RuntimeError(
+            f"ASR_MAX_SECONDS must be positive, not `{configured}`; "
+            "a zero ceiling accepts no audio at all"
+        )
+    return Limits(max_seconds=max_seconds)
 
 
 def describe(engine: Engine) -> Info:
