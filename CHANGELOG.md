@@ -24,6 +24,24 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   One server can legitimately serve chat and speech under one base URL, and those
   are two presets an operator picks between by what the stage needs; keyed on URL
   alone, the first such pair would have failed the check as a duplicate.
+- The docs no longer promise the ASR wrapper service as future work, because it
+  shipped: `docs/configuration.md` points at `services/wyoming-asr/` and the
+  compose profile that brings it up, in place of a link to a closed issue. An
+  operator following that section previously reached the end and was told the
+  server they needed did not exist yet.
+- Confirmed end to end that a Wyoming ASR server is reachable and transcribes:
+  the real `WyomingStt` against the real service over TCP, with a stub engine in
+  place of Canary's weights. One final transcript arrives with `streaming` on and
+  with it off, and the handshake answers `supports_transcript_streaming: False`,
+  so the fallback path is exercised rather than assumed. No new `SttVariant` was
+  needed — the point of the exercise.
+- The service's own account of streaming is corrected where it had gone stale.
+  It said Conduit never sends `describe` and gates partials on a per-request flag
+  alone; both stopped being true when the recognizer learned to negotiate. Its
+  `supports_transcript_streaming: false` is now load-bearing rather than
+  informational, and `streaming: false` in a definition saves a round trip rather
+  than avoiding a misconfiguration — leaving it on against this service is
+  correct and works.
 - Two more OpenAI-compatible chat endpoints arrive as catalogue presets:
   Moonshot (Kimi) and Z.Ai. Both are the existing `openai` variant with the
   `base_url` filled in, so there is no new crate, no factory arm, and nothing to

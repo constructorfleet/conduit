@@ -230,11 +230,13 @@ it is a different request shape and a server-sent event stream rather than a
 parameter, so it is a change rather than a setting. Unlike the `wyoming`
 variant's `streaming`, turning this on asks for nothing and reports nothing.
 
-Writing the server that fronts the weights is tracked by
-[issue #106](https://github.com/constructorfleet/conduit/issues/106) — a service
-Conduit reaches, in the shape of `services/speaker-id/`, rather than a provider
-crate. Nothing in this section waits on it: it is the supported wrapper, not the
-only reachable one.
+The server that fronts the weights ships with Conduit:
+[`services/wyoming-asr/`](../services/wyoming-asr/README.md), a Python service in
+the shape of `services/speaker-id/` rather than a provider crate. Bring it up with
+`docker compose --profile wyoming-asr up` and point a `wyoming` definition at
+`tcp://wyoming-asr:10300`. `ASR_ENGINE` picks the backend, so adding Qwen or
+Granite is a class in that service and nothing Conduit has to learn. It is the
+supported wrapper, not the only reachable one — any server speaking Wyoming works.
 
 If Canary is the model chosen, its weights are CC-BY-4.0. Commercial use is
 permitted and attribution is required, so a deployment that ships it owes the

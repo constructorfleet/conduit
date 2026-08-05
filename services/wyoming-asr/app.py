@@ -19,8 +19,10 @@ Conduit knows about — the same seam `services/speaker-id/` keeps at
 It does not stream partial transcripts. See the README: the recognizers this
 wraps are offline encoder-decoder models that answer once, and a server that
 accepted a streaming request and never sent a partial would be lying. `describe`
-reports `supports_transcript_streaming: false`, and Conduit gates partials on its
-own per-request flag, so the honest answer is the one it reads.
+reports `supports_transcript_streaming: false`, and a Conduit recognizer with
+`streaming` on reads exactly that and falls back to one final per utterance,
+logging the reason once. So the honest answer is not merely documentation — it is
+what keeps a client from waiting for partials that are never coming.
 
 It does not resample, and it does not mix down. A 16 kHz recognizer fed 48 kHz
 samples produces fluent nonsense rather than an error, which an operator reads as
@@ -270,9 +272,11 @@ def limits_from_environment() -> Limits:
 def describe(engine: Engine) -> Info:
     """What this process serves, for a client that asks before it sends audio.
 
-    Conduit never asks — it opens a connection and writes `audio-start`. Home
-    Assistant does, and an unanswered `describe` makes the service invisible
-    there, so answering costs nothing and buys another client.
+    Conduit asks whenever its `streaming` flag is on, and reads
+    `supports_transcript_streaming` off this answer to decide whether to expect
+    partials — so the `False` below is load-bearing rather than informational.
+    Home Assistant asks unconditionally, and an unanswered `describe` makes the
+    service invisible there.
     """
     attribution = ATTRIBUTION.get(
         engine.name, Attribution(name=engine.name, url="")
