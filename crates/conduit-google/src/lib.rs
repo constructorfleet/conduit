@@ -5,9 +5,10 @@
 //! | [`GoogleTts`] | `POST https://texttospeech.googleapis.com/v1/text:synthesize` |
 //! | [`GoogleStt`] | `POST https://speech.googleapis.com/v1/speech:recognize` |
 //!
-//! Both are reached over hand-rolled REST with a bearer token from Application
-//! Default Credentials. See [`crates/conduit-google/README.md`][readme] for why
-//! the official SDK is not used and what synthesis buffering costs.
+//! Both are reached over REST through [`conduit_http`], with a bearer token
+//! from Application Default Credentials fetched per request because it expires.
+//! See [`crates/conduit-google/README.md`][readme] for why the official SDK is
+//! not used and what synthesis buffering costs.
 //!
 //! ```no_run
 //! # async fn example() -> conduit_core::Result<()> {
@@ -29,16 +30,16 @@
 #![cfg_attr(not(feature = "google"), allow(unused_imports))]
 
 pub mod auth;
-pub mod failure;
 pub mod stt;
 pub mod tts;
-
-mod http;
 
 use std::time::Duration;
 
 pub use auth::Credentials;
-pub use failure::{Failure, FailureKind};
+// Re-exported so a caller classifying a Google failure does not have to know
+// which crate does the classifying. Google's failures are the same shapes every
+// HTTP-backed provider produces, so they are the same type.
+pub use conduit_http::{Failure, FailureKind};
 pub use stt::GoogleStt;
 pub use tts::GoogleTts;
 

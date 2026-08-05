@@ -63,7 +63,8 @@ works in either build.
 ## Why Not The Official SDK
 
 `google-cloud-texttospeech-v1` and `google-cloud-speech-v2` exist. This crate
-hand-rolls REST instead, for two reasons that were checked rather than assumed.
+posts REST through `conduit-http` instead, for two reasons that were checked
+rather than assumed.
 
 **The official SDK would link a second crypto provider.** This workspace links
 exactly one: rustls with `ring`. `google-cloud-auth` enables by default:

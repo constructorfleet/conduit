@@ -57,6 +57,11 @@ impl std::fmt::Debug for Credentials {
 ///
 /// Cloned by every capability built from one configuration, so the token cache
 /// underneath is shared rather than duplicated per provider.
+///
+/// Handed to [`conduit_http`] as a [`conduit_http::Credential::Refreshed`],
+/// which asks for a token on every request. That is the whole reason this is a
+/// source rather than a string: [`Self::Adc`] refreshes underneath, and a token
+/// captured once would go on being sent for an hour after it expired.
 #[derive(Clone)]
 pub enum Tokens {
     /// A token provider that refreshes on demand.
@@ -120,7 +125,7 @@ impl Tokens {
                     // its error text.
                     Error::provider(
                         provider,
-                        crate::failure::Failure::malformed(format!(
+                        conduit_http::Failure::malformed(format!(
                             "cannot obtain a Google access token: {error}"
                         )),
                     )
@@ -168,6 +173,33 @@ impl Tokens {
              this build cannot discover: it was compiled without the `google` feature. Supply an \
              access token directly, or rebuild with `--features google`"
         )))
+    }
+}
+
+/// A token source bound to the provider whose errors it names.
+///
+/// [`Tokens::bearer`] needs a provider name for the error it may return, and
+/// [`conduit_http::BearerSource::token`] takes no arguments — the client asking
+/// for a token has no business knowing which provider it belongs to. Pairing
+/// them here is what closes that gap.
+#[derive(Debug, Clone)]
+pub struct Bearer {
+    provider: String,
+    tokens: Tokens,
+}
+
+impl Bearer {
+    /// Binds `tokens` to the provider named `provider`.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, tokens: Tokens) -> Self {
+        Self { provider: provider.into(), tokens }
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_http::BearerSource for Bearer {
+    async fn token(&self) -> Result<Arc<str>> {
+        self.tokens.bearer(&self.provider).await
     }
 }
 

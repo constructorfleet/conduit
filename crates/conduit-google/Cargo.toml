@@ -1,6 +1,6 @@
 [package]
 name = "conduit-google"
-description = "Google Cloud speech providers for Conduit: Cloud Text-to-Speech synthesis and Cloud Speech-to-Text recognition over hand-rolled REST with Application Default Credentials."
+description = "Google Cloud speech providers for Conduit: Cloud Text-to-Speech synthesis and Cloud Speech-to-Text recognition over REST with Application Default Credentials."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,6 +20,7 @@ google = ["dep:gcp_auth"]
 
 [dependencies]
 conduit-core.workspace = true
+conduit-http.workspace = true
 conduit-provider.workspace = true
 
 async-trait.workspace = true
@@ -31,11 +32,6 @@ futures-util.workspace = true
 # `default-features = false` is what keeps a future default flip from linking a
 # second crypto provider beside the one this workspace already has.
 gcp_auth = { version = "0.12", default-features = false, features = ["ring"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "stream",
-    "rustls-tls",
-] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

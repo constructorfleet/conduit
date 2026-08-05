@@ -36,8 +36,9 @@ use conduit_provider::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::auth::Tokens;
-use crate::http::Http;
+use conduit_http::{Credential, Http, HttpConfig};
+
+use crate::auth::{Bearer, Tokens};
 use crate::GoogleConfig;
 
 /// The synthesis path under the service's base URL.
@@ -114,13 +115,14 @@ impl GoogleTts {
         }
 
         let tokens = Tokens::resolve(&config.name, &config.credentials).await?;
-        let http = Http::new(
-            &config.name,
-            &config.tts_base_url,
-            tokens,
-            config.connect_timeout,
-            config.read_timeout,
-        )?;
+        let http = Http::new(HttpConfig {
+            base_url: config.tts_base_url.clone(),
+            name: config.name.clone(),
+            credential: Credential::refreshed(Bearer::new(&config.name, tokens)),
+            headers: Vec::new(),
+            connect_timeout: config.connect_timeout,
+            read_timeout: config.read_timeout,
+        })?;
 
         // The configured voice is the catalogue until `refresh_voices` fetches
         // the real one: a descriptor built before any request can only advertise
@@ -175,8 +177,11 @@ impl GoogleTts {
         // Checked at construction, and checked again here because this is the
         // one value that reaches a URL query string.
         crate::validate_language(&self.language)?;
-        let response =
-            self.http.get(VOICES_PATH, &[("languageCode", self.language.as_str())]).await?;
+        // `reqwest` percent-encodes query values, so a language tag with a
+        // surprise in it cannot escape its parameter and become another one.
+        let request =
+            self.http.get(VOICES_PATH).query(&[("languageCode", self.language.as_str())]);
+        let response = self.http.send(request).await?;
         let listing: VoiceListing = response
             .json()
             .await
@@ -477,7 +482,7 @@ impl TextToSpeech for GoogleTts {
         // Awaited whole, because that is the only thing this endpoint offers.
         // See the module documentation: chunking below is delivery, not
         // streaming, and the first chunk waits for the last syllable.
-        let response = self.http.post_json(SYNTHESIZE_PATH, &body).await?;
+        let response = self.http.send(self.http.post(SYNTHESIZE_PATH).json(&body)).await?;
         let synthesized: Response = response
             .json()
             .await
@@ -643,13 +648,17 @@ mod tests {
     }
 
     fn http() -> Http {
-        Http::new(
-            "google",
-            "https://texttospeech.googleapis.com/v1",
-            crate::auth::Tokens::Fixed(std::sync::Arc::from("t0ken")),
-            std::time::Duration::from_secs(1),
-            None,
-        )
+        Http::new(HttpConfig {
+            base_url: "https://texttospeech.googleapis.com/v1".to_owned(),
+            name: "google".to_owned(),
+            credential: Credential::refreshed(Bearer::new(
+                "google",
+                crate::auth::Tokens::Fixed(std::sync::Arc::from("t0ken")),
+            )),
+            headers: Vec::new(),
+            connect_timeout: std::time::Duration::from_secs(1),
+            read_timeout: None,
+        })
         .expect("a client")
     }
 

@@ -40,8 +40,9 @@ use conduit_provider::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::Tokens;
-use crate::http::Http;
+use conduit_http::{Credential, Http, HttpConfig};
+
+use crate::auth::{Bearer, Tokens};
 use crate::GoogleConfig;
 
 /// The recognition path under the service's base URL.
@@ -105,13 +106,14 @@ impl GoogleStt {
         crate::validate_language(&config.language)?;
 
         let tokens = Tokens::resolve(&config.name, &config.credentials).await?;
-        let http = Http::new(
-            &config.name,
-            &config.stt_base_url,
-            tokens,
-            config.connect_timeout,
-            config.read_timeout,
-        )?;
+        let http = Http::new(HttpConfig {
+            base_url: config.stt_base_url.clone(),
+            name: config.name.clone(),
+            credential: Credential::refreshed(Bearer::new(&config.name, tokens)),
+            headers: Vec::new(),
+            connect_timeout: config.connect_timeout,
+            read_timeout: config.read_timeout,
+        })?;
 
         let descriptor = config
             .descriptor(Capability::Stt)
@@ -314,7 +316,7 @@ impl Provider for GoogleStt {
                 content: base64::engine::general_purpose::STANDARD.encode(&silence),
             },
         };
-        match self.http.post_json(RECOGNIZE_PATH, &body).await {
+        match self.http.send(self.http.post(RECOGNIZE_PATH).json(&body)).await {
             Ok(_) => Health::Healthy,
             Err(error) => Health::Unhealthy { reason: error.to_string() },
         }
@@ -383,7 +385,7 @@ impl SpeechToText for GoogleStt {
             "transcribing utterance"
         );
 
-        let response = self.http.post_json(RECOGNIZE_PATH, &body).await?;
+        let response = self.http.send(self.http.post(RECOGNIZE_PATH).json(&body)).await?;
         // A body that is not the documented shape will not become one on a second
         // attempt. `body_failure` says so, while still reporting a body that
         // stalled halfway as the timeout it is.
