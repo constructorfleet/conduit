@@ -67,9 +67,8 @@ recognition feeding the model, the model feeding synthesis and any tools. A
 pipeline wired `tts -> llm -> stt` is refused rather than quietly run forwards.
 The check is reachability rather than adjacency, so a node may sit between two
 stages without breaking the chain. The graph model stays the wider of the two
-layers — it can express shapes the runtime cannot yet run, such as a `router`
-choosing between two models — and those are refused at prepare time, with the
-node named.
+layers — it can express shapes the runtime cannot yet run, such as a second
+`core` node — and those are refused at prepare time, with the node named.
 
 **Providers are interfaces, not special cases.** Adding ElevenLabs means
 implementing [`TextToSpeech`](crates/conduit-provider/src/tts.rs) and registering
@@ -118,9 +117,10 @@ and — once a voice has been identified — the speaker to decide with. A
 permission that is anything other than "allow" means the tool is not invoked
 and the model is told what was refused and why. That includes
 `deny_until_confirmed`, which is how a tool says it needs a human in the loop:
-Conduit cannot put a question to a speaker mid-turn yet, so such a call is
-refused rather than run, and the refusal is worded so a model reports the
-action as *not* performed. See [Known gaps](#known-gaps).
+the runtime asks and would wait for an answer, but nothing in a deployment can
+send one yet, so such a call is refused rather than run, and the refusal is
+worded so a model reports the action as *not* performed. See
+[Known gaps](#known-gaps).
 
 ## Running
 
@@ -574,7 +574,7 @@ A configuration describes one *server*, not one capability, so a host serving
 all three is described once and used three times. Because the registry keys on
 the provider name, differently configured servers can be registered side by
 side — a local model and a hosted one — though today only one of them can be
-reached from a given pipeline, because the runtime executes a single `llm` node
+reached from a given pipeline, because the runtime executes a single `core` node
 per turn.
 
 The Providers page names the common ones — Ollama, vLLM, LM Studio, OpenRouter,
@@ -857,20 +857,28 @@ startup and never rechecks.
 **A device id does not survive a restart.** Each token-file device entry is
 assigned a fresh id when the file is read, so `/v1/events?device=` matches within
 one run of the server but the id it matched yesterday means nothing today, and
-nothing joins events across a restart. There is also no route that reports which
-id belongs to which device name, so finding one means reading it off an event.
-Both follow from tokens being a file rather than a device registry.
+nothing joins events across a restart. This follows from tokens being a file
+rather than a device registry. Finding the current id for a name does not require
+reading it off an event, though: `/v1/status` reports both, for satellites
+connected now and for those active recently.
 
 **Conduit serves plain HTTP.** TLS termination belongs to a proxy. On a
 plaintext LAN a bearer token is sniffable — an accepted risk for a local-first
 appliance, not a solved problem.
 
-**One node of each kind.** A second `llm` or `tts` node is rejected as a
-duplicate, so the two-model arrangement described under
-[Providers](#providers) cannot yet be expressed as a runnable graph. The graph
-model can describe it, and a `router` node choosing between the two validates
-as a graph; the runtime refuses both, so the shape is expressible before it is
-executable rather than silently mis-run.
+**One node of each stage, except transforms.** A second `core`, `tts`, `stt`,
+`wake`, `vad`, or `speaker_id` node is rejected as a duplicate when the pipeline
+is prepared, so a two-model arrangement cannot yet be expressed as a runnable
+graph. The graph model can describe it — the shape is expressible before it is
+executable, rather than silently mis-run. `transform` is the deliberate
+exception: several chain in order, which is the point of putting rewrites in the
+graph at all.
+
+**There is no `router` node.** Choosing between two models at runtime is
+sometimes described as the next step for the shape above, but nothing in the
+graph model names it: `NodeKind` has no `Router` variant, so a router is not
+something a graph can currently express *or* validate, let alone run. It is an
+idea, not a pending implementation.
 
 **Barge-in is not detected, only requested.** A client can say `stop`, and that
 turn is cancelled as `user_requested`. What no one does is *notice* someone
@@ -882,11 +890,14 @@ around what was said, and a turn's playback is not audio it is given. Detecting
 speech over the assistant needs a second thing: audio captured while synthesis is
 playing, which is a device and transport question rather than a detector one.
 
-**A tool cannot ask before it acts.** A tool that needs a human in the loop
-marks itself `deny_until_confirmed`, and there is nowhere to put the question:
-answering one would need a device to send a control message mid-turn and a
-bounded wait for the reply, neither of which exists. So such a call is refused
-outright. The refusal is deliberately blunt — the model is told the tool was
+**A tool cannot ask before it acts, because nothing carries the answer.** A tool
+that needs a human in the loop marks itself `deny_until_confirmed`, and the
+runtime side of asking now exists: `ToolConfirmationRequested` is emitted, and a
+turn waits for a decision when something is listening for one. What is missing is
+the transport. No route and no socket message answers a request, so nothing in a
+running deployment ever listens, the turn always finds the question unanswerable,
+and such a call is refused outright — reached by a different path than before,
+with the same outcome. Only the runtime's own tests exercise the answering side. The refusal is deliberately blunt — the model is told the tool was
 *not* run — because anything ambiguous reads to a model as permission granted,
 and it will announce a door unlocked. Operators see these as the
 `awaiting_confirmation` tool outcome; read it as "blocked on a human", not
@@ -921,7 +932,5 @@ microphones, the room, and how much audio a turn captured, so tune
 carries its confidence, including the ones that matched nobody, which is what
 shows you where the two populations separate.
 
-**Routing is graph-only.** The graph model describes `router` nodes, but the
-runtime does not run them and there is no provider trait for one yet. Memory is
-no longer in this list: a `memory` definition names a store, a core binds it, and
-the turn retrieves before it reasons and writes after it answers.
+Memory is no longer in this list: a `memory` definition names a store, a core
+binds it, and the turn retrieves before it reasons and writes after it answers.
