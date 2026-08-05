@@ -521,6 +521,9 @@ export type ProviderDefinitionVariantType =
   | "anthropic"
   | "bedrock"
   | "wyoming"
+  | "elevenlabs"
+  | "google"
+  | "marytts"
   | "mcp"
   | "builtin"
   | "openwakeword"
@@ -566,6 +569,13 @@ export type LlmVariant =
       system_prompt?: string;
     }};
 
+/// A speech recognizer.
+///
+/// The vendors that discover their own credentials have no `api_key` field at
+/// all rather than an optional one — Google's arrive from the environment, so a
+/// box to paste one into would be a box that does nothing. ElevenLabs has no
+/// `streaming` flag for the same kind of reason: its realtime transcription is a
+/// separate websocket protocol, not a setting on the batch endpoint.
 export type SttVariant =
   | {{
       type: "openai";
@@ -579,8 +589,22 @@ export type SttVariant =
       url: string;
       model?: string;
       streaming: boolean;
+    }}
+  | {{
+      type: "elevenlabs";
+      api_key?: ProviderSecret;
+      model?: string;
+    }}
+  | {{
+      type: "google";
+      language?: string;
+      model?: string;
     }};
 
+/// A speech synthesizer.
+///
+/// MaryTTS names a URL and no credential: it is self-hosted and has no
+/// authentication to configure. Google, again, discovers its own.
 export type TtsVariant =
   | {{
       type: "openai";
@@ -594,6 +618,23 @@ export type TtsVariant =
       url: string;
       voice?: string;
       streaming: boolean;
+    }}
+  | {{
+      type: "elevenlabs";
+      api_key?: ProviderSecret;
+      model?: string;
+      voice?: string;
+    }}
+  | {{
+      type: "google";
+      language?: string;
+      voice?: string;
+    }}
+  | {{
+      type: "marytts";
+      url: string;
+      voice?: string;
+      locale?: string;
     }};
 
 export type ToolVariant = {{

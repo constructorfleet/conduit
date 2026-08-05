@@ -2058,6 +2058,154 @@ describe("Providers workspace", () => {
     expect(saved[0]?.variant).not.toHaveProperty("variant.base_url");
   });
 
+  it("saves an ElevenLabs voice under its own variant with no URL to answer for", async () => {
+    // There is one ElevenLabs, so the form asks for a key and a voice and
+    // nothing about where to send them. Sending this as an `openai` variant
+    // would build a provider that speaks the wrong wire format to the right
+    // host, which fails on the first turn rather than in the form.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text-to-speech" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "ElevenLabs Speech" }),
+    );
+
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "eleven-voice");
+    await user.type(screen.getByLabelText("API Key"), "sk-eleven-test");
+    await user.type(screen.getByLabelText("Voice"), "21m00Tcm4TlvDq8ikWAM");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider eleven-voice saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toMatchObject({
+      type: "tts",
+      variant: {
+        type: "elevenlabs",
+        api_key: { type: "inline", value: "sk-eleven-test" },
+        voice: "21m00Tcm4TlvDq8ikWAM",
+      },
+    });
+  });
+
+  it("offers a Google voice no box to paste a credential into", async () => {
+    // Google's credentials are discovered from the host rather than typed, so a
+    // key field here would be a field that does nothing — and an operator who
+    // filled it in would reasonably believe they had configured something.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text-to-speech" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Google Text-to-Speech" }),
+    );
+
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "google-voice");
+    await user.type(screen.getByLabelText("Language"), "en-GB");
+    await user.type(screen.getByLabelText("Voice"), "en-GB-Neural2-A");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider google-voice saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toEqual({
+      type: "tts",
+      variant: {
+        type: "google",
+        language: "en-GB",
+        voice: "en-GB-Neural2-A",
+      },
+    });
+  });
+
+  it("saves a MaryTTS server by URL and no credential", async () => {
+    // MaryTTS is self-hosted and unauthenticated: the URL is the whole answer,
+    // and it is the one field that has to be there.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Text-to-speech" }));
+    await user.click(screen.getByRole("menuitem", { name: "MaryTTS" }));
+
+    expect(screen.getByLabelText("URL")).toBeRequired();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "mary");
+    await user.type(screen.getByLabelText("URL"), "http://mary.local:59125");
+    await user.type(screen.getByLabelText("Locale"), "en_GB");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider mary saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toEqual({
+      type: "tts",
+      variant: {
+        type: "marytts",
+        url: "http://mary.local:59125",
+        locale: "en_GB",
+      },
+    });
+  });
+
+  it("reopens a stored speech definition with the fields it was saved with", async () => {
+    // Round-tripping is where a missing arm in the reverse mapping shows up: a
+    // definition the form cannot read back opens blank, and saving that blank
+    // form is how a working provider loses its settings.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "eleven-ears",
+            label: "ElevenLabs Ears",
+            kind: "stt",
+            component: "elevenlabs.transcription",
+            config: { api_key: "sk-eleven-stored", model: "scribe_v1" },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "eleven-ears");
+
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("scribe_v1");
+    // The stored key is shown because it was stored inline; a redacted one
+    // would come back empty and be kept by the server on save.
+    expect(screen.getByLabelText("API Key")).toHaveDisplayValue(
+      "sk-eleven-stored",
+    );
+  });
+
   it("names config fields the way a person reads them and enforces the required ones", async () => {
     // The wire spelling belongs on the wire. A form that showed `base_url` and
     // the word "required" beside it was asking the operator to translate, and
@@ -3285,6 +3433,86 @@ function componentCatalog(): ProviderComponentCatalog {
         },
       },
       {
+        id: "elevenlabs.transcription",
+        label: "ElevenLabs Transcription",
+        kind: "stt",
+        definition_variant: "elevenlabs",
+        schema: {
+          // No URL, because there is one ElevenLabs, and nothing required,
+          // because a key can arrive after the definition does.
+          properties: {
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._-]+" },
+          },
+          required: [],
+        },
+      },
+      {
+        id: "elevenlabs.speech",
+        label: "ElevenLabs Speech",
+        kind: "tts",
+        definition_variant: "elevenlabs",
+        schema: {
+          properties: {
+            api_key: { type: "string" },
+            model: { type: "string", pattern: "[A-Za-z0-9._-]+" },
+            voice: { type: "string", pattern: "[A-Za-z0-9_-]+" },
+          },
+          required: [],
+        },
+      },
+      {
+        id: "google.transcription",
+        label: "Google Speech-to-Text",
+        kind: "stt",
+        definition_variant: "google",
+        schema: {
+          // No credential field at all: Google's are discovered from the
+          // environment, so a box to paste one into would do nothing.
+          properties: {
+            language: {
+              type: "string",
+              pattern: "[A-Za-z0-9]+(-[A-Za-z0-9]+)*",
+            },
+            model: { type: "string" },
+          },
+          required: [],
+        },
+      },
+      {
+        id: "google.speech",
+        label: "Google Text-to-Speech",
+        kind: "tts",
+        definition_variant: "google",
+        schema: {
+          properties: {
+            language: {
+              type: "string",
+              pattern: "[A-Za-z0-9]+(-[A-Za-z0-9]+)*",
+            },
+            voice: { type: "string", pattern: "[A-Za-z0-9]+(-[A-Za-z0-9]+)*" },
+          },
+          required: [],
+        },
+      },
+      {
+        id: "marytts",
+        label: "MaryTTS",
+        kind: "tts",
+        definition_variant: "marytts",
+        schema: {
+          properties: {
+            url: { type: "string", format: "url" },
+            voice: { type: "string", pattern: "[A-Za-z0-9._-]+" },
+            locale: {
+              type: "string",
+              pattern: "[A-Za-z]{2,3}([-_][A-Za-z0-9]+)*",
+            },
+          },
+          required: ["url"],
+        },
+      },
+      {
         id: "transform.builtin",
         label: "Speech cleanup",
         kind: "transform",
@@ -3783,6 +4011,83 @@ function providerDefinitionFixture({
           ...(apiKey ? { api_key: apiKey } : {}),
           models: text("model") ? [text("model")] : [],
           streaming: flag("streaming"),
+        },
+      },
+    };
+  }
+  if (component === "elevenlabs.transcription") {
+    return {
+      id,
+      label,
+      kind: "stt",
+      variant: {
+        type: "stt",
+        variant: {
+          type: "elevenlabs",
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(text("model") ? { model: text("model") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "elevenlabs.speech") {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "tts",
+        variant: {
+          type: "elevenlabs",
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(text("model") ? { model: text("model") } : {}),
+          ...(text("voice") ? { voice: text("voice") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "google.transcription") {
+    return {
+      id,
+      label,
+      kind: "stt",
+      variant: {
+        type: "stt",
+        variant: {
+          type: "google",
+          ...(text("language") ? { language: text("language") } : {}),
+          ...(text("model") ? { model: text("model") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "google.speech") {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "tts",
+        variant: {
+          type: "google",
+          ...(text("language") ? { language: text("language") } : {}),
+          ...(text("voice") ? { voice: text("voice") } : {}),
+        },
+      },
+    };
+  }
+  if (component === "marytts") {
+    return {
+      id,
+      label,
+      kind: "tts",
+      variant: {
+        type: "tts",
+        variant: {
+          type: "marytts",
+          url: text("url"),
+          ...(text("voice") ? { voice: text("voice") } : {}),
+          ...(text("locale") ? { locale: text("locale") } : {}),
         },
       },
     };

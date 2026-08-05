@@ -4103,6 +4103,20 @@ function configFromProviderVariant(
         stream: variant.variant.stream,
       };
     }
+    if (variant.variant.type === "elevenlabs") {
+      return {
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.model ?? "",
+      };
+    }
+    if (variant.variant.type === "google") {
+      // No `api_key` key at all rather than an empty one: an empty string here
+      // would come back as a field the form thinks it can fill.
+      return {
+        language: variant.variant.language ?? "",
+        model: variant.variant.model ?? "",
+      };
+    }
     return {
       url: variant.variant.url,
       model: variant.variant.model ?? "",
@@ -4116,6 +4130,26 @@ function configFromProviderVariant(
         api_key: secretToConfigValue(variant.variant.api_key),
         model: variant.variant.model,
         voices: variant.variant.voices.join(", "),
+      };
+    }
+    if (variant.variant.type === "elevenlabs") {
+      return {
+        api_key: secretToConfigValue(variant.variant.api_key),
+        model: variant.variant.model ?? "",
+        voice: variant.variant.voice ?? "",
+      };
+    }
+    if (variant.variant.type === "google") {
+      return {
+        language: variant.variant.language ?? "",
+        voice: variant.variant.voice ?? "",
+      };
+    }
+    if (variant.variant.type === "marytts") {
+      return {
+        url: variant.variant.url,
+        voice: variant.variant.voice ?? "",
+        locale: variant.variant.locale ?? "",
       };
     }
     return {
@@ -4278,6 +4312,62 @@ function variantFromProviderDefinition(
         model: text("model"),
         ...(apiKey ? { api_key: apiKey } : {}),
         voices: list("voices"),
+      },
+    };
+  }
+  if (definition.component === "elevenlabs.transcription") {
+    return {
+      type: "stt",
+      variant: {
+        type: "elevenlabs",
+        // No base URL and no streaming flag: there is one ElevenLabs, and its
+        // realtime transcription is a different protocol rather than a setting.
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(text("model") ? { model: text("model") } : {}),
+      },
+    };
+  }
+  if (definition.component === "elevenlabs.speech") {
+    return {
+      type: "tts",
+      variant: {
+        type: "elevenlabs",
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(text("model") ? { model: text("model") } : {}),
+        ...(text("voice") ? { voice: text("voice") } : {}),
+      },
+    };
+  }
+  if (definition.component === "google.transcription") {
+    return {
+      type: "stt",
+      // No credential: Google's are discovered from the environment, so there
+      // is nothing the form could have collected to send.
+      variant: {
+        type: "google",
+        ...(text("language") ? { language: text("language") } : {}),
+        ...(text("model") ? { model: text("model") } : {}),
+      },
+    };
+  }
+  if (definition.component === "google.speech") {
+    return {
+      type: "tts",
+      variant: {
+        type: "google",
+        ...(text("language") ? { language: text("language") } : {}),
+        ...(text("voice") ? { voice: text("voice") } : {}),
+      },
+    };
+  }
+  if (definition.component === "marytts") {
+    return {
+      type: "tts",
+      variant: {
+        type: "marytts",
+        url: text("url"),
+        ...(text("voice") ? { voice: text("voice") } : {}),
+        ...(text("locale") ? { locale: text("locale") } : {}),
       },
     };
   }
