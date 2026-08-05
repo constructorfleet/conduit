@@ -758,6 +758,19 @@ It is an unmaintained C library with no network interface and no streaming, so
 reaching it would mean FFI and a vendored blob in exchange for worse output than
 a MaryTTS container gives.
 
+Coqui is absent for a related reason, though it is a much better synthesizer than
+PicoTTS. The original `coqui-ai/TTS` is unmaintained and the live fork is
+`idiap/coqui-ai-TTS`, which does ship an HTTP server — but a bespoke one rather
+than an OpenAI-compatible one. So it is not reachable by changing a base URL, and
+supporting it would mean either a hand-written variant tracking one project's own
+API or a wrapper service Conduit would then have to own and ship. What that buys
+over the vendors already here is voice cloning, and cloning is the part Conduit is
+least suited to offer: XTTS clones from a reference clip, which is a recording of a
+real person's voice, usually someone who is not the operator. That makes consent
+and retention a question about biometric data, and one worth answering before
+building a feature rather than after. A synthesizer behind a bespoke API, whose
+distinguishing feature carries that question, is not a good trade.
+
 `conduit-memory` is where what the assistant remembers lives, and the two
 backends are two *retrievals* rather than two places to put the same records.
 `Builtin` ranks with BM25 over unigrams and needs nothing at all: no service, no
