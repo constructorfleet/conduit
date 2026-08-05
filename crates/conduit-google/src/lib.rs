@@ -183,10 +183,14 @@ pub(crate) fn layered_settings(
 /// alphanumeric separated by hyphens, and anything outside that alphabet is
 /// either a typo or an attempt to smuggle a second query parameter.
 ///
+/// Public so the management API can refuse a definition with this rule rather
+/// than a second copy of it: a form that accepted a tag this crate rejects would
+/// store a definition that fails to build on the next server start.
+///
 /// # Errors
 ///
 /// Returns [`conduit_core::Error::Config`] naming the offending tag.
-pub(crate) fn validate_language(tag: &str) -> conduit_core::Result<()> {
+pub fn validate_language(tag: &str) -> conduit_core::Result<()> {
     let valid = !tag.is_empty()
         && tag.len() <= 35
         && tag.split('-').all(|subtag| {
@@ -208,10 +212,12 @@ pub(crate) fn validate_language(tag: &str) -> conduit_core::Result<()> {
 /// `en-GB-Chirp3-HD-Achernar`. The same alphabet as a language tag, so the same
 /// check with a longer bound.
 ///
+/// Public on the same terms as [`validate_language`].
+///
 /// # Errors
 ///
 /// Returns [`conduit_core::Error::Config`] naming the offending voice.
-pub(crate) fn validate_voice(name: &str) -> conduit_core::Result<()> {
+pub fn validate_voice(name: &str) -> conduit_core::Result<()> {
     let valid = !name.is_empty()
         && name.len() <= 64
         && name.split('-').all(|part| {

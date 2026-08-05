@@ -760,6 +760,60 @@ async fn component_catalog_includes_openai_audio_and_mcp_tool_providers() {
 }
 
 #[tokio::test]
+async fn the_catalog_offers_the_speech_vendors_with_only_the_fields_each_one_has() {
+    // The console builds its form from this catalog, so a credential box for a
+    // vendor that discovers its own would be a box that does nothing, and a
+    // missing one for a vendor that needs a key would make the form unusable.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+
+    assert_component(
+        components,
+        "elevenlabs.transcription",
+        "stt",
+        &["api_key", "model"],
+        // Nothing required: the key can arrive later and the crate documents a
+        // default model.
+        &[],
+    );
+    assert_component(
+        components,
+        "elevenlabs.speech",
+        "tts",
+        &["api_key", "model", "voice"],
+        &[],
+    );
+    assert_component(components, "google.transcription", "stt", &["language", "model"], &[]);
+    assert_component(components, "google.speech", "tts", &["language", "voice"], &[]);
+    // A URL and nothing else: MaryTTS has no authentication, and it ships no
+    // voices, so any voice suggested here would be wrong on some installs.
+    assert_component(components, "marytts", "tts", &["url", "voice", "locale"], &["url"]);
+
+    for id in ["google.transcription", "google.speech"] {
+        let component = components
+            .iter()
+            .find(|component| component["id"] == id)
+            .unwrap_or_else(|| panic!("missing component {id}"));
+        assert!(
+            component["schema"]["properties"].get("api_key").is_none(),
+            "{id} has no key to type: Google credentials are discovered"
+        );
+    }
+
+    let voice = components
+        .iter()
+        .find(|component| component["id"] == "elevenlabs.speech")
+        .expect("missing component elevenlabs.speech");
+    assert_eq!(
+        voice["schema"]["properties"]["voice"]["pattern"], "[A-Za-z0-9_-]+",
+        "the voice becomes a URL path segment, so the form declares the allowlist"
+    );
+}
+
+#[tokio::test]
 async fn the_catalog_offers_the_servers_that_speak_openai_by_name() {
     // A local Ollama is an OpenAI-compatible endpoint, and an operator who
     // knows that still has to know its port and its `/v1` suffix. Naming the
@@ -1418,6 +1472,155 @@ async fn invalid_mcp_provider_definition_urls_are_rejected_without_storing() {
     let (status, body) = call(&state, get("/v1/providers/home-tools")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
+}
+
+#[tokio::test]
+async fn an_elevenlabs_voice_that_could_move_the_request_is_rejected_without_storing() {
+    // The voice becomes a URL path segment with the account's key attached, so a
+    // value carrying `../` would move the request to another API path. Refused
+    // while the operator is looking at the form, not on the first turn.
+    let state = AppState::new(EventBus::default());
+    let invalid = serde_json::json!({
+        "id": "house-voice",
+        "label": "House Voice",
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "elevenlabs", "voice": "../../v1/user" }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/house-voice", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "invalid");
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("voice")));
+
+    let (status, _) = call(&state, get("/v1/providers/house-voice")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a refused definition is not stored");
+}
+
+#[tokio::test]
+async fn a_google_language_tag_that_could_carry_a_second_query_parameter_is_rejected() {
+    // The tag reaches a URL query on the voices endpoint. A value holding `&`
+    // would be a second parameter if it were trusted.
+    let state = AppState::new(EventBus::default());
+    let invalid = serde_json::json!({
+        "id": "google-voice",
+        "label": "Google Voice",
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "google", "language": "en-US&key=leaked" }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/google-voice", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("BCP-47")), "{body}");
+
+    let (status, _) = call(&state, get("/v1/providers/google-voice")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a refused definition is not stored");
+}
+
+#[tokio::test]
+async fn a_marytts_definition_without_a_reachable_url_is_rejected_without_storing() {
+    let state = AppState::new(EventBus::default());
+    let invalid = serde_json::json!({
+        "id": "house",
+        "label": "House",
+        "variant": { "type": "tts", "variant": { "type": "marytts", "url": "marytts:59125" } }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/house", invalid)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("url")), "{body}");
+}
+
+#[tokio::test]
+async fn a_speech_definition_with_no_vendor_credential_is_stored_and_read_back() {
+    // MaryTTS has no authentication at all, so a definition that names no key is
+    // complete rather than half-filled — and it has to survive the round trip
+    // that redacts secrets it does not have.
+    //
+    // Google is the other credential-less vendor but is not exercised here:
+    // saving one resolves Application Default Credentials, so the outcome
+    // depends on whether the host running the tests has any. What Google's
+    // definitions round-trip to is asserted in `conduit-provider`, where no
+    // vendor is reached.
+    let state = AppState::new(EventBus::default());
+    let variant = serde_json::json!({
+        "type": "marytts",
+        "url": "http://marytts.lan:59125",
+        "voice": "cmu-slt-hsmm",
+    });
+    let definition = serde_json::json!({
+        "id": "house",
+        "label": "House",
+        "variant": { "type": "tts", "variant": variant.clone() },
+    });
+
+    let (status, refusal) = call(&state, put_json("/v1/providers/house", definition)).await;
+    assert_eq!(status, StatusCode::CREATED, "{refusal}");
+
+    let (status, body) = call(&state, get("/v1/providers/house")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["variant"]["variant"], variant, "it reads back as it was written");
+    assert_eq!(
+        state.providers().expect("snapshot").tts().names().collect::<Vec<_>>(),
+        ["house"],
+        "and it built a synthesizer without a server listening"
+    );
+}
+
+#[tokio::test]
+async fn an_elevenlabs_key_is_kept_when_the_form_is_saved_back_redacted() {
+    // The console reads a definition back with `Redacted` in the credential slot
+    // and saves the same shape. Storing that as the key would silently break the
+    // provider — this is the guard for the API path, not just the merge.
+    let state = AppState::new(EventBus::default());
+    let stored = serde_json::json!({
+        "id": "scribe",
+        "label": "Scribe",
+        "variant": {
+            "type": "stt",
+            "variant": {
+                "type": "elevenlabs",
+                "api_key": { "type": "inline", "value": "sk_live" },
+                "model": "scribe_v2",
+            },
+        },
+    });
+    call(&state, put_json("/v1/providers/scribe", stored)).await;
+
+    let (status, body) = call(&state, get("/v1/providers/scribe")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" }),
+        "the key is never read back"
+    );
+
+    // Saved back exactly as read, which is what a console form does.
+    let (status, _) = call(
+        &state,
+        put_json(
+            "/v1/providers/scribe",
+            serde_json::json!({
+                "id": "scribe",
+                "label": "Scribe",
+                "variant": { "type": "stt", "variant": body["variant"]["variant"].clone() },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        state.providers().expect("snapshot").stt().names().collect::<Vec<_>>(),
+        ["scribe"],
+        "the recognizer is still built, which it would not be with a placeholder key"
+    );
 }
 
 #[tokio::test]
