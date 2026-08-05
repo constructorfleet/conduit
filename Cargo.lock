@@ -754,6 +754,7 @@ dependencies = [
  "conduit-anthropic",
  "conduit-bedrock",
  "conduit-core",
+ "conduit-deepgram",
  "conduit-elevenlabs",
  "conduit-google",
  "conduit-marytts",
@@ -823,6 +824,22 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "conduit-deepgram"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "conduit-core",
+ "conduit-http",
+ "conduit-provider",
+ "futures-util",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

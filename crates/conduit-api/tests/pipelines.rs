@@ -786,6 +786,11 @@ async fn the_catalog_offers_the_speech_vendors_with_only_the_fields_each_one_has
         &["api_key", "model", "voice"],
         &[],
     );
+    // One field for the voice, not two: an Aura id names the voice and the model
+    // together (`aura-2-thalia-en`), so a separate `voice` box would be a second
+    // place to say the same thing — and no `base_url`, because there is one
+    // Deepgram and nothing else speaks its API.
+    assert_component(components, "deepgram.speech", "tts", &["api_key", "model"], &[]);
     assert_component(components, "google.transcription", "stt", &["language", "model"], &[]);
     assert_component(components, "google.speech", "tts", &["language", "voice"], &[]);
     // A URL and nothing else: MaryTTS has no authentication, and it ships no
@@ -2049,6 +2054,62 @@ async fn an_elevenlabs_key_is_kept_when_the_form_is_saved_back_redacted() {
         ["scribe"],
         "the recognizer is still built, which it would not be with a placeholder key"
     );
+}
+
+#[tokio::test]
+async fn a_deepgram_voice_is_stored_read_back_redacted_and_still_built() {
+    // The whole registration surface in one pass: the variant deserializes, the
+    // model passes validation, the key redacts on read, and a synthesizer is
+    // registered without Deepgram being reachable from a test host.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "aura",
+        "label": "Aura",
+        "variant": {
+            "type": "tts",
+            "variant": {
+                "type": "deepgram",
+                "api_key": { "type": "inline", "value": "dg_live" },
+                "model": "aura-2-thalia-en",
+            },
+        },
+    });
+
+    let (status, refusal) = call(&state, put_json("/v1/providers/aura", definition)).await;
+    assert_eq!(status, StatusCode::CREATED, "{refusal}");
+
+    let (status, body) = call(&state, get("/v1/providers/aura")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" }),
+        "the key is never read back"
+    );
+    assert_eq!(body["variant"]["variant"]["model"], "aura-2-thalia-en");
+    assert_eq!(
+        state.providers().expect("snapshot").tts().names().collect::<Vec<_>>(),
+        ["aura"]
+    );
+}
+
+#[tokio::test]
+async fn a_deepgram_model_that_cannot_be_an_aura_id_is_refused_at_the_field() {
+    // Named here rather than relayed as a vendor 400: the operator gets told
+    // which field is wrong before a request is billed.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "aura",
+        "label": "Aura",
+        "variant": {
+            "type": "tts",
+            "variant": { "type": "deepgram", "model": "aura?model=other" },
+        },
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/aura", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("model")), "{body}");
 }
 
 #[tokio::test]

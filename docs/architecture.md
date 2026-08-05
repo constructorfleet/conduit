@@ -17,6 +17,7 @@ runtime progress is published as events.
 | `conduit-bedrock` | Language models over Amazon Bedrock's Converse API, reached by region with the deployment's own AWS credential. Behind the `bedrock` feature, on by default. |
 | `conduit-wyoming` | Wyoming protocol speech recognition, synthesis, and wake word detection over a TCP endpoint. |
 | `conduit-elevenlabs` | Speech recognition and synthesis over ElevenLabs' REST API. Synthesis streams; transcription takes a complete recording. |
+| `conduit-deepgram` | Synthesis over Deepgram's Aura API, which authenticates with `Authorization: Token` and encodes the voice into the model id. |
 | `conduit-google` | Speech recognition and synthesis over Google Cloud's Speech APIs, authenticated with Application Default Credentials rather than a typed key. Behind the `google` feature, on by default. |
 | `conduit-marytts` | Synthesis over a self-hosted MaryTTS server, which has no authentication and no fixed voice set. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |

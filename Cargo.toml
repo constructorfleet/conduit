@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
+members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-deepgram", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,6 +28,7 @@ conduit-openai = { path = "crates/conduit-openai", version = "0.1.0" }
 conduit-script = { path = "crates/conduit-script", version = "0.1.0" }
 conduit-google = { path = "crates/conduit-google", version = "0.1.0" }
 conduit-marytts = { path = "crates/conduit-marytts", version = "0.1.0" }
+conduit-deepgram = { path = "crates/conduit-deepgram", version = "0.1.0" }
 conduit-speaker = { path = "crates/conduit-speaker", version = "0.1.0" }
 conduit-wake = { path = "crates/conduit-wake", version = "0.1.0" }
 conduit-store = { path = "crates/conduit-store", version = "0.1.0" }

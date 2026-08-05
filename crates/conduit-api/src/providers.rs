@@ -447,6 +447,14 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                 refuse_config(conduit_elevenlabs::voice_id::validate(voice))?;
             }
         }
+        // No endpoint to get wrong: there is one Deepgram. The model reaches a
+        // query parameter, so it is checked with the provider's own validator
+        // rather than a second rule here that could drift from it.
+        ProviderDefinitionVariant::Tts { variant: TtsVariant::Deepgram { model, .. } } => {
+            if let Some(model) = model {
+                refuse_config(conduit_deepgram::model_id::validate(model))?;
+            }
+        }
         // No endpoint and no credential — Google's are discovered. What an
         // operator can get wrong is a language tag or a voice name, and both
         // reach a request, so both are checked with the provider's own

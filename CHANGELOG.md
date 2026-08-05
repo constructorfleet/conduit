@@ -8,6 +8,45 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Deepgram Aura synthesis, as `conduit-deepgram` and a `deepgram` TTS variant.
+  Three things stop this being the `openai` variant with a different base URL, and
+  the first is the one that costs an afternoon: the key travels as
+  `Authorization: Token`, not `Bearer`. A `Bearer` key is accepted by the
+  transport and refused by the API with a 401, which reads as a wrong key rather
+  than a wrong scheme — so an operator checks their key against the dashboard and
+  finds nothing wrong with it. The other two: the voice *is* the model and it
+  travels in the query string, and the body is `{"text": …}` rather than
+  `{"input": …}`.
+- The Deepgram definition has no `voice` field, in the schema or the console,
+  because `aura-2-thalia-en` is family, voice, and language in one id and there is
+  nowhere on the wire to send a second one. A `model` sent in the *body* is
+  silently ignored in favour of the account default, which presents as a provider
+  that will not honour a voice choice.
+- Synthesis asks Deepgram for `container=none`. The parameter defaults to `wav`,
+  so leaving it unset rides a 44-byte RIFF header into a stream the pipeline
+  treats as samples: every utterance would start with a click, and nothing
+  downstream would point back at the request that caused it.
+- `PcmF32Le` and `Opus` are refused by name rather than approximated. Deepgram
+  does not produce the former, and its Opus is Ogg-encapsulated at a fixed rate
+  while `Encoding::Opus` here means raw frames — mislabelled Opus decodes to
+  silence, which is harder to diagnose than a refusal.
+- An utterance over Deepgram's 2 000-character limit is refused here with both the
+  limit and the actual length named, rather than relayed as a vendor 400. The
+  count is characters rather than bytes, because counting bytes would refuse a
+  legitimate utterance a third of the way in and would do so only for
+  non-English speech.
+- Deepgram model ids are validated loosely and explicitly not as a security
+  boundary: unlike an ElevenLabs voice id this is a query parameter rather than a
+  URL path segment, and there is no traversal to prevent. The check exists to name
+  the wrong field at save time; it admits anything that could plausibly be an id,
+  because a provider that refuses a voice the vendor has released is worse than
+  one that forwards an unknown name.
+- Deepgram's streaming WebSocket interface is deliberately not implemented. The
+  REST endpoint already streams from the first byte, which is the latency property
+  the socket is wanted for; what the socket adds is incremental *input*, and
+  nothing can feed it because `SynthesisRequest` arrives with its text complete.
+  Following `conduit-elevenlabs`, a websocket is a protocol rather than a setting,
+  so it would be a second provider and not a flag on this one.
 - Kokoro is a synthesis preset, so the presets are no longer chat-only. It points
   the `openai` TTS variant at Kokoro-FastAPI on `8880` and fills the model in as
   well as the endpoint, because that server hosts exactly one model and it is

@@ -28,6 +28,7 @@ echoes described under [Running](#running).
 | [`conduit-bedrock`](crates/conduit-bedrock) | Language models over Amazon Bedrock's Converse API |
 | [`conduit-wyoming`](crates/conduit-wyoming) | Wyoming protocol speech recognition, synthesis, and wake word detection |
 | [`conduit-elevenlabs`](crates/conduit-elevenlabs) | Speech recognition and synthesis over ElevenLabs' REST API |
+| [`conduit-deepgram`](crates/conduit-deepgram) | Synthesis over Deepgram's Aura API, where the voice is the model |
 | [`conduit-google`](crates/conduit-google) | Speech recognition and synthesis over Google Cloud's Speech APIs |
 | [`conduit-marytts`](crates/conduit-marytts) | Synthesis over a self-hosted MaryTTS server |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
@@ -701,6 +702,7 @@ reason that shows up in the API rather than the hostname.
 | Crate | Capabilities | Why it is not a base URL |
 | --- | --- | --- |
 | [`conduit-elevenlabs`](crates/conduit-elevenlabs) | `stt`, `tts` | The credential is an `xi-api-key` header and the voice is a URL *path segment* |
+| [`conduit-deepgram`](crates/conduit-deepgram) | `tts` | `Authorization: Token`, not `Bearer`; the voice *is* the model, in the query |
 | [`conduit-google`](crates/conduit-google) | `stt`, `tts` | The credential is not typed at all: Application Default Credentials, refreshed per request |
 | [`conduit-marytts`](crates/conduit-marytts) | `tts` | A form-encoded request answering with a WAV, and no authentication anywhere |
 
@@ -722,6 +724,17 @@ so while they are still looking at the form. Discovery is what sits behind the
 always compiled, so a deployment that mints its own access tokens works in
 either build, and a build without the feature still registers both providers and
 refuses by name.
+
+Deepgram's is a subtler kind of not-a-base-URL. A key sent as `Bearer` — which is
+what every other vendor here wants — is accepted by the transport and refused by
+the API with a 401, so it reads as a wrong key rather than a wrong scheme, and an
+operator checks their key against the dashboard and finds nothing wrong with it.
+The voice is the model id, `aura-2-thalia-en`, which means there is no separate
+voice field anywhere: not in the definition, not in the console, because there is
+nowhere on the wire to send one. The model id is checked loosely and explicitly
+*not* as a security boundary — it is a query parameter rather than a path segment,
+so a pattern that guessed at the vendor's naming would only refuse voices Deepgram
+later releases.
 
 MaryTTS ships no voices, so Conduit suggests none: a default here would be wrong
 on every install that did not happen to have it. PicoTTS is deliberately absent.

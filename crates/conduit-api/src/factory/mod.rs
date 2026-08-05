@@ -26,6 +26,7 @@ use conduit_runtime::Providers;
 
 mod anthropic;
 mod bedrock;
+mod deepgram;
 mod elevenlabs;
 mod google;
 mod marytts;
@@ -43,6 +44,7 @@ pub use anthropic::Anthropic;
 // `conduit_bedrock::Bedrock` is the provider it builds and the two would collide
 // wherever both are in scope.
 pub use bedrock::Bedrock as BedrockRuntime;
+pub use deepgram::Deepgram;
 pub use elevenlabs::ElevenLabs;
 pub use google::Google;
 // Named for what it reaches rather than for the vendor, on the same terms as
@@ -121,6 +123,7 @@ impl Factories {
             .with(Anthropic)
             .with(BedrockRuntime)
             .with(ElevenLabs)
+            .with(Deepgram)
             .with(Google)
             .with(MaryTtsServer)
             .with(Wyoming)

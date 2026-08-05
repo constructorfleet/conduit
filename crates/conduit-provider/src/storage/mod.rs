@@ -432,7 +432,9 @@ impl ProviderDefinitionVariant {
             }
             | Self::Tts {
                 variant:
-                    TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
+                    TtsVariant::OpenAi { api_key, .. }
+                    | TtsVariant::ElevenLabs { api_key, .. }
+                    | TtsVariant::Deepgram { api_key, .. },
             }
             | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } }
             | Self::Memory { variant: MemoryVariant::PgVector { api_key, .. } } => {
@@ -457,7 +459,9 @@ impl ProviderDefinitionVariant {
             }
             | Self::Tts {
                 variant:
-                    TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
+                    TtsVariant::OpenAi { api_key, .. }
+                    | TtsVariant::ElevenLabs { api_key, .. }
+                    | TtsVariant::Deepgram { api_key, .. },
             }
             | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } }
             | Self::Memory { variant: MemoryVariant::PgVector { api_key, .. } } => {
@@ -960,6 +964,9 @@ mod tests {
             },
             ProviderDefinitionVariant::Tts {
                 variant: TtsVariant::ElevenLabs { api_key: None, model: None, voice: None },
+            },
+            ProviderDefinitionVariant::Tts {
+                variant: TtsVariant::Deepgram { api_key: None, model: None },
             },
             ProviderDefinitionVariant::SpeakerId {
                 variant: SpeakerIdVariant::Http {

@@ -642,6 +642,27 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "deepgram.speech",
+            label: "Deepgram Speech",
+            kind: ProviderCapability::Tts,
+            definition_variant: "deepgram",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("api_key", string_property(None, None)),
+                    // The voice *is* the model here, so there is one field
+                    // rather than two. The pattern is the same allowlist the
+                    // provider enforces, declared so the console refuses a value
+                    // that cannot be an id while the operator is still typing.
+                    ("model", string_property(None, Some("[A-Za-z0-9._-]+"))),
+                ]),
+                // Nothing required: Deepgram has its own default voice, and a
+                // key an operator has not pasted yet is a definition they are
+                // still filling in rather than an invalid one. No `base_url`,
+                // because there is one Deepgram.
+                required: Vec::new(),
+            },
+        },
+        ProviderComponentDescriptor {
             id: "google.transcription",
             label: "Google Speech-to-Text",
             kind: ProviderCapability::Stt,
