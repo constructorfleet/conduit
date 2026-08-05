@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 conduit-core.workspace = true
 conduit-mcp.workspace = true
+conduit-memory.workspace = true
 conduit-metrics.workspace = true
 conduit-anthropic.workspace = true
 conduit-bedrock.workspace = true
@@ -47,8 +48,9 @@ base64.workspace = true
 
 [features]
 default = ["postgres"]
-# PostgreSQL storage for pipeline definitions.
-postgres = ["conduit-store/postgres"]
+# PostgreSQL storage for pipeline definitions, and for memory records: a
+# deployment that has a database for one has it for the other.
+postgres = ["conduit-store/postgres", "conduit-memory/postgres", "conduit-memory/openai"]
 # Registers the in-memory echo providers so the server can hold a conversation
 # with no speech engine or model server. For development only.
 dev-providers = ["conduit-provider/testing"]

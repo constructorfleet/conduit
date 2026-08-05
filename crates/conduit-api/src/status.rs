@@ -1099,8 +1099,6 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
 /// [`Capability`](conduit_provider::Capability) describes what the runtime
 /// *registered*; both are reported through one [`ProviderKind`], so a provider
 /// reads the same whether it came from a stored definition or from the bundle.
-/// Memory has no stored definition variant today, which is why only this
-/// direction mentions it.
 const fn provider_kind_for(capability: conduit_provider::Capability) -> ProviderKind {
     match capability {
         conduit_provider::Capability::Stt => ProviderKind::Stt,
@@ -1123,6 +1121,7 @@ fn provider_kind_for_capability(capability: ProviderCapability) -> ProviderKind 
         ProviderCapability::Transform => ProviderKind::Transform,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
+        ProviderCapability::Memory => ProviderKind::Memory,
     }
 }
 
