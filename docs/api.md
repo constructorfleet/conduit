@@ -308,11 +308,15 @@ already holds a credential — a task role, an instance profile, a named profile
 Two components can also share a `definition_variant` and differ only in what
 their schema suggests. `ollama`, `vllm`, `lmstudio`, `openrouter`, `moonshot`,
 and `zai` are `openai` components whose `base_url` carries a `default`, so the
-console opens their forms with the endpoint already typed. Each endpoint is
-offered under exactly one name, which
+console opens their forms with the endpoint already typed. `kokoro` is the same
+arrangement for synthesis — an `openai` component of kind `tts` — and it defaults
+the `model` as well, because that server hosts exactly one. Each endpoint is
+offered under exactly one name *per capability*, which
 `no_two_presets_name_the_same_endpoint` asserts: Moonshot and Kimi Code read
 like two vendors and are one service, and two entries for one backend is a menu
-an operator cannot choose from correctly. A `default` is a suggestion, not a
+an operator cannot choose from correctly. The capability is part of the key
+because one server may serve chat and speech under the same base URL, and those
+are two presets rather than a duplicate. A `default` is a suggestion, not a
 constraint: the console seeds a fresh form with it, an operator may replace it,
 and a stored definition that omits the field is never filled in on the server.
 

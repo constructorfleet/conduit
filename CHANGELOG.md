@@ -8,6 +8,22 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Kokoro is a synthesis preset, so the presets are no longer chat-only. It points
+  the `openai` TTS variant at Kokoro-FastAPI on `8880` and fills the model in as
+  well as the endpoint, because that server hosts exactly one model and it is
+  called `kokoro` — a required field left blank invites a guess at a name that
+  does not exist. No new crate and no factory arm; `conduit-openai` already posts
+  to `audio/speech`.
+- A speech preset asserts that `/v1/audio/speech` specifically answers, which is
+  why it is a sibling helper rather than a flag on the chat one and why these are
+  added one verified server at a time. Chat compatibility does not imply audio
+  compatibility, and a server advertising "OpenAI compatible" while serving only
+  `/v1/chat/completions` produces a definition that looks right and fails on the
+  first turn.
+- `no_two_presets_name_the_same_endpoint` now keys on capability as well as URL.
+  One server can legitimately serve chat and speech under one base URL, and those
+  are two presets an operator picks between by what the stage needs; keyed on URL
+  alone, the first such pair would have failed the check as a duplicate.
 - Two more OpenAI-compatible chat endpoints arrive as catalogue presets:
   Moonshot (Kimi) and Z.Ai. Both are the existing `openai` variant with the
   `base_url` filled in, so there is no new crate, no factory arm, and nothing to
