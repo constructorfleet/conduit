@@ -142,6 +142,17 @@ impl Bedrock {
     /// better served by a provider that appears and says `Unhealthy` with the
     /// reason.
     async fn client(config: &BedrockConfig) -> aws_sdk_bedrockruntime::Client {
+        aws_sdk_bedrockruntime::Client::new(&Self::loader(config).load().await)
+    }
+
+    /// The credential chain and transport `config` asks for, before it is loaded.
+    ///
+    /// Separated from [`Self::client`] so the credential decisions — which are
+    /// the whole of what an operator configures here, and the part that fails
+    /// most confusingly when it is wrong — can be asserted without an AWS
+    /// account: loading this yields an `SdkConfig` whose region, timeouts, token
+    /// provider, and auth scheme preference are all readable.
+    fn loader(config: &BedrockConfig) -> aws_config::ConfigLoader {
         use aws_config::{BehaviorVersion, Region};
         use aws_smithy_http_client::tls;
         use aws_smithy_runtime_api::client::auth::http::HTTP_BEARER_AUTH_SCHEME_ID;
@@ -178,7 +189,7 @@ impl Bedrock {
                 .auth_scheme_preference([HTTP_BEARER_AUTH_SCHEME_ID]);
         }
 
-        aws_sdk_bedrockruntime::Client::new(&loader.load().await)
+        loader
     }
 }
 
@@ -389,6 +400,135 @@ mod tests {
 
         assert!(message.contains("bedrock"), "{message}");
         assert!(message.contains("feature"), "the operator is told what to change: {message}");
+    }
+
+    /// What an operator configures about credentials, asserted without an
+    /// account.
+    ///
+    /// Loading a [`aws_config::ConfigLoader`] resolves region, timeouts, and the
+    /// auth decisions eagerly, but leaves the credential *chain* lazy — so these
+    /// read the resolved configuration and never send a request. The one test
+    /// that does resolve a credential resolves it from a file it wrote itself,
+    /// which short-circuits the chain before the container and instance-metadata
+    /// links that would reach the network.
+    #[cfg(feature = "bedrock")]
+    mod credentials {
+        use super::*;
+        use aws_smithy_runtime_api::client::auth::http::HTTP_BEARER_AUTH_SCHEME_ID;
+        use aws_types::os_shim_internal::{Env, Fs};
+
+        /// A config with nothing but a region, which is the shape a deployment
+        /// holding its own role uses.
+        fn in_region() -> BedrockConfig {
+            BedrockConfig { region: "us-west-2".to_owned(), ..BedrockConfig::default() }
+        }
+
+        #[tokio::test]
+        async fn a_named_profile_is_where_the_credential_comes_from() {
+            // The named profile has to reach the loader for this to resolve at
+            // all: the file holds a profile and a `default` that disagree, so a
+            // loader that dropped `profile` would resolve the default's key and
+            // this would fail with the wrong one rather than pass vacuously.
+            //
+            // `Env`/`Fs` overrides rather than the real environment, so nothing
+            // on the machine running this is read and nothing is mutated — the
+            // process-wide `set_var` alternative is `unsafe` and races the other
+            // tests in this binary.
+            let config = Bedrock::loader(&BedrockConfig {
+                profile: Some("bedrock-operator".to_owned()),
+                ..in_region()
+            })
+            .env(Env::from_slice(&[("HOME", "/home/operator")]))
+            .fs(Fs::from_slice(&[(
+                "/home/operator/.aws/credentials",
+                "[default]\n\
+                 aws_access_key_id = AKIAIOSFODNN7DEFAULT\n\
+                 aws_secret_access_key = the-default-profiles\n\
+                 \n\
+                 [bedrock-operator]\n\
+                 aws_access_key_id = AKIAIOSFODNN7NAMEDONE\n\
+                 aws_secret_access_key = the-named-profiles\n",
+            )]))
+            .load()
+            .await;
+
+            let provider = config.credentials_provider().expect("the chain is configured");
+            let resolved =
+                aws_credential_types::provider::ProvideCredentials::provide_credentials(
+                    &provider,
+                )
+                .await
+                .expect("the named profile in the file this test supplied");
+
+            assert_eq!(
+                resolved.access_key_id(),
+                "AKIAIOSFODNN7NAMEDONE",
+                "the configured profile answered, not the default one"
+            );
+        }
+
+        /// A syntactically plausible key that is not one. Never logged.
+        const KEY: &str = "not-a-real-bedrock-api-key";
+
+        #[tokio::test]
+        async fn an_api_key_prefers_bearer_auth_rather_than_signing() {
+            // The load-bearing one. Without the explicit preference the SDK
+            // accepts the token and then signs with whatever the chain resolved
+            // — an instance role the operator never named — so a configured key
+            // is silently ignored and the failure points at the wrong thing.
+            let config = Bedrock::loader(&BedrockConfig {
+                api_key: Some(KEY.to_owned()),
+                ..in_region()
+            })
+            // An empty environment: the preference is also readable from
+            // `AWS_AUTH_SCHEME_PREFERENCE`, and the claim under test is
+            // that the *definition* sets it.
+            .env(Env::from_slice(&[]))
+            .fs(Fs::from_slice(&[]))
+            .load()
+            .await;
+
+            let preference = config
+                .auth_scheme_preference()
+                .expect("a key without a stated preference would be signed over");
+            assert!(
+                preference
+                    .clone()
+                    .into_iter()
+                    .any(|scheme| scheme == HTTP_BEARER_AUTH_SCHEME_ID),
+                "bearer auth is preferred"
+            );
+            // The default chain installs a token provider of its own for SSO, so
+            // its mere presence proves nothing; what proves the key was carried
+            // is that resolving the token yields this one. Compared, never
+            // logged.
+            let token = aws_credential_types::provider::token::ProvideToken::provide_token(
+                &config.token_provider().expect("a token provider"),
+            )
+            .await
+            .expect("the key this test configured");
+            assert!(token.token() == KEY, "the configured key is what would be sent");
+        }
+
+        #[tokio::test]
+        async fn omitting_both_leaves_the_default_chain_to_answer() {
+            // Neither a profile nor a key: the deployment has an identity of its
+            // own — a task role, an instance profile, an SSO session — and the
+            // chain must be left to find it and to sign, which is what saying
+            // nothing about the auth scheme means.
+            let config = Bedrock::loader(&in_region())
+                .env(Env::from_slice(&[]))
+                .fs(Fs::from_slice(&[]))
+                .load()
+                .await;
+
+            assert!(
+                config.auth_scheme_preference().is_none(),
+                "nothing overrides SigV4, so the chain's credential signs"
+            );
+            assert!(config.credentials_provider().is_some(), "the default chain is installed");
+            assert_eq!(config.region().map(aws_config::Region::as_ref), Some("us-west-2"));
+        }
     }
 
     #[test]

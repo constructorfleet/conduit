@@ -123,6 +123,29 @@ capability and an inner `variant.type` names the vendor.
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
 
+### Reaching Bedrock
+
+`bedrock` is the one variant whose credential is usually not in the definition
+at all. A definition names a `region` and a `model`; if it names neither
+`profile` nor `api_key`, the AWS default chain resolves whatever the deployment
+already holds, in its usual order: the environment, the shared config file, a
+web identity token, a container or task role, then instance metadata. SSO
+sessions and `credential_process` helpers resolve too — both features are
+compiled in.
+
+`profile` selects a named profile from the shared config file, which is also how
+a deployment assumes a role: put `role_arn` and `source_profile` in the profile
+and let the chain perform the `sts:AssumeRole`. There is no `role_arn` field on
+the definition, so an ARN cannot be passed inline.
+
+`api_key` is a Bedrock API key — a bearer token, not an access key pair — for a
+deployment with no AWS identity to give this process. Naming it also makes bearer
+auth the preferred scheme, so the key is used rather than quietly passed over in
+favour of an ambient role. It is stored as a secret and redacted on read-back
+like every other inline credential. See
+[`crates/conduit-bedrock/README.md`](../crates/conduit-bedrock/README.md) for the
+mechanism-by-mechanism table.
+
 ### Rewriting What Is Spoken
 
 A model writes for a reader. It emphasises with asterisks, punctuates with

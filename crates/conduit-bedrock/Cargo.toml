@@ -58,6 +58,13 @@ aws-smithy-runtime-api = { version = "1.14", default-features = false, features 
 aws-smithy-types = { version = "1.6", default-features = false, optional = true }
 
 [dev-dependencies]
+# `test-util` for the `env`/`fs` overrides on the config loader, which is what
+# lets a credential-resolution test read a profile out of an in-memory file
+# rather than mutating this process's environment — the latter is `unsafe` and
+# races the other tests in the binary. Not a TLS feature: it enables
+# `aws-runtime/test-util`, no crypto provider of its own.
+aws-config = { version = "1.10", default-features = false, features = ["test-util"] }
+aws-types = { version = "1.5", default-features = false }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
