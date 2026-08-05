@@ -198,10 +198,18 @@ and it asks the server before assuming:
 - **On, against a server that cannot stream** — the server says so, Conduit logs
   it once naming the server, and the session proceeds to a single final
   transcript. This is the designed fallback, not a misconfiguration: a
-  non-streaming recognizer is a fully working recognizer. faster-whisper answers
-  `describe` with `supports_transcript_streaming: False`, and a NeMo model loaded
-  per utterance behaves the same way, so this is the common case for local
-  weights today.
+  non-streaming recognizer is a fully working recognizer. A model loaded per
+  utterance — a NeMo checkpoint, say — has no partial to offer, so this is the
+  common case for local weights today.
+- **On, against a server that says yes and then sends only a final** — also a
+  working turn, and also logged once. Some servers advertise
+  `supports_transcript_streaming: true` and never send a `transcript-chunk`;
+  `insanely-fast-whisper` is one, confirmed over the raw protocol. Conduit cannot
+  make partials that were never sent, so it records the discrepancy and hands
+  over the final transcript. Without that line the case is indistinguishable
+  from `streaming: false`, from a server that never claimed to stream, and from a
+  fault in Conduit — so if partials are missing and this log line is present, the
+  configuration is right and the server is the thing to change.
 
 A server that answers `describe` without mentioning the capability is asked for
 partials anyway. The key was added to Wyoming after transcript streaming itself,
