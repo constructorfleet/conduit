@@ -837,6 +837,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit-marytts"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "conduit-core",
+ "conduit-http",
+ "conduit-provider",
+ "futures-util",
+ "serde_json",
+ "serde_urlencoded",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "conduit-mcp"
 version = "0.1.0"
 dependencies = [
