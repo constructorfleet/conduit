@@ -830,6 +830,8 @@ async fn the_catalog_offers_the_servers_that_speak_openai_by_name() {
         ("vllm", "http://localhost:8000/v1"),
         ("lmstudio", "http://localhost:1234/v1"),
         ("openrouter", "https://openrouter.ai/api/v1"),
+        ("moonshot", "https://api.moonshot.ai/v1"),
+        ("zai", "https://api.z.ai/api/paas/v4/"),
     ] {
         let component = components
             .iter()
@@ -846,6 +848,43 @@ async fn the_catalog_offers_the_servers_that_speak_openai_by_name() {
             "the form arrives with the endpoint already typed"
         );
     }
+}
+
+#[tokio::test]
+async fn no_two_presets_name_the_same_endpoint() {
+    // Moonshot and Kimi Code read like two vendors and are one service, so the
+    // catalogue nearly carried both. Two entries for one backend is a menu an
+    // operator cannot choose from correctly: whichever they pick, the other
+    // looks like a different capability they are missing.
+    //
+    // Keyed on the base URL rather than on the label, because that is what
+    // actually decides where a turn goes.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut by_url: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for component in body["components"].as_array().expect("component list") {
+        // Presets are the components carrying a filled-in default; a bare
+        // `openai` form has none and is not one.
+        if let Some(base_url) =
+            component["schema"]["properties"]["base_url"]["default"].as_str()
+        {
+            by_url
+                .entry(base_url.to_owned())
+                .or_default()
+                .push(component["id"].as_str().unwrap_or_default().to_owned());
+        }
+    }
+
+    let mut shared: Vec<_> = by_url.iter().filter(|(_, ids)| ids.len() > 1).collect();
+    shared.sort();
+    assert!(
+        shared.is_empty(),
+        "each endpoint must be offered under exactly one name, found: {shared:?}"
+    );
 }
 
 #[tokio::test]
