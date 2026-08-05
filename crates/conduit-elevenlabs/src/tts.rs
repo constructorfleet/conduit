@@ -223,7 +223,7 @@ impl ElevenLabsTts {
             // The request's rate, not a declared setting: `SynthesisRequest`
             // already has a field for this, and two ways to say it means one
             // silently loses.
-            speed: request.rate.map(f64::from),
+            speed: request.rate,
         }
     }
 
@@ -307,17 +307,32 @@ impl TextToSpeech for ElevenLabsTts {
         // is how barge-in silences the assistant mid-sentence.
         let name = self.http.name().to_owned();
         let format = output.produced;
-        let mut sequence = 0_u64;
-        let chunks = response.bytes_stream().map(move |packet| match packet {
-            Ok(data) => {
-                let chunk = SpeechChunk { sequence, format, data };
-                sequence += 1;
-                Ok(chunk)
+        // `unfold` rather than `map`, and the difference matters: a `reqwest`
+        // body that has failed keeps reporting the same failure every time it is
+        // polled, so mapping it would yield an endless stream of identical
+        // errors. A caller draining a lost turn would spin forever instead of
+        // moving on. Carrying the body in an `Option` ends the stream after the
+        // one error that explains it.
+        let state = Some((Box::pin(response.bytes_stream()), 0_u64));
+        let chunks = futures_util::stream::unfold(state, move |state| {
+            let name = name.clone();
+            async move {
+                let (mut body, sequence) = state?;
+                match body.next().await? {
+                    Ok(data) => {
+                        let chunk = SpeechChunk { sequence, format, data };
+                        Some((Ok(chunk), Some((body, sequence + 1))))
+                    }
+                    // Audio that stops arriving partway through becomes an error
+                    // *item* rather than a clean end: a turn that lost its voice
+                    // halfway must be distinguishable from one that finished
+                    // speaking, or the pipeline waits for a reply to half a
+                    // sentence.
+                    Err(error) => {
+                        Some((Err(Error::provider(&name, Failure::transport(&error))), None))
+                    }
+                }
             }
-            // Audio that stops arriving partway through becomes an error *item*
-            // rather than ending the stream quietly: a turn that lost its voice
-            // halfway must be distinguishable from one that finished speaking.
-            Err(error) => Err(Error::provider(&name, Failure::transport(&error))),
         });
 
         Ok(Box::pin(chunks))

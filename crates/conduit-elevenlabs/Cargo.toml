@@ -29,6 +29,7 @@ axum.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-stream.workspace = true
 
 [lints]
 workspace = true

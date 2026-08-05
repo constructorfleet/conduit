@@ -183,9 +183,13 @@ pub struct VoiceSettings {
     /// also a declared setting: two ways to say the same thing means one of
     /// them silently loses.
     ///
+    /// `f32` rather than the `f64` of its neighbours, matching the type the
+    /// request carries: widening `1.1_f32` sends `1.100000023841858`, which is
+    /// the same rate and a worse thing to read in a request log.
+    ///
     /// [`SynthesisRequest::rate`]: conduit_provider::tts::SynthesisRequest::rate
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed: Option<f64>,
+    pub speed: Option<f32>,
 }
 
 impl VoiceSettings {
@@ -422,8 +426,14 @@ mod tests {
         assert_eq!(json["voice_settings"]["similarity_boost"], 0.9);
         assert_eq!(json["voice_settings"]["style"], 0.1);
         assert_eq!(json["voice_settings"]["use_speaker_boost"], false);
-        assert_eq!(json["voice_settings"]["speed"], 1.2);
         assert_eq!(json["language_code"], "en");
+
+        // `speed` is checked against the bytes rather than against `to_value`,
+        // which widens the `f32` to an `f64` and so reports
+        // `1.2000000476837158`. The request body is serialized directly, and
+        // that is what the assertion needs to be about.
+        let sent = serde_json::to_string(&body).expect("serializes");
+        assert!(sent.contains(r#""speed":1.2"#), "{sent}");
     }
 
     #[test]
