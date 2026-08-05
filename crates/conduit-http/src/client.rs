@@ -6,6 +6,27 @@ use conduit_core::{Error, Result};
 
 use crate::failure::Failure;
 
+/// A credential that has to be fetched afresh for each request.
+///
+/// Implemented by a provider whose credential expires: a Google access token
+/// from Application Default Credentials lives about an hour and the library
+/// underneath refreshes it, so a client that captured one string would keep
+/// sending it long after it stopped working.
+///
+/// The returned token is used as `Authorization: Bearer <token>`, which is the
+/// scheme every short-lived credential in this workspace uses.
+#[async_trait::async_trait]
+pub trait BearerSource: std::fmt::Debug + Send + Sync {
+    /// A token good for the next request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the credential cannot be obtained or refreshed — an
+    /// expired refresh token, a metadata server that has gone away, a revoked
+    /// service account.
+    async fn token(&self) -> Result<std::sync::Arc<str>>;
+}
+
 /// How a provider proves who it is.
 ///
 /// Named rather than passed as an optional token because vendors disagree on
@@ -13,7 +34,7 @@ use crate::failure::Failure;
 /// token, Anthropic takes the key in `x-api-key`, and a local server takes
 /// nothing at all. A caller that only had `Option<String>` had to hope the
 /// scheme its vendor wanted was the one baked in here.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum Credential {
     /// No credential, which is the usual shape for a server on the LAN.
     None,
@@ -26,6 +47,11 @@ pub enum Credential {
         /// Header value, which is the secret itself.
         value: String,
     },
+    /// A bearer token fetched per request, for a credential that expires.
+    ///
+    /// Unlike the other variants this one can *fail* at send time, because
+    /// obtaining it is a fallible operation rather than a lookup.
+    Refreshed(std::sync::Arc<dyn BearerSource>),
 }
 
 impl Credential {
@@ -41,6 +67,12 @@ impl Credential {
         key.map_or(Self::None, |value| Self::Header { name: name.into(), value })
     }
 
+    /// A bearer token fetched afresh for every request.
+    #[must_use]
+    pub fn refreshed(source: impl BearerSource + 'static) -> Self {
+        Self::Refreshed(std::sync::Arc::new(source))
+    }
+
     /// Whether a credential was configured at all.
     #[must_use]
     pub const fn is_some(&self) -> bool {
@@ -48,14 +80,47 @@ impl Credential {
     }
 
     /// Applies this credential to `request`.
-    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match self {
+    ///
+    /// Async because [`Self::Refreshed`] has to go and get a token, which can
+    /// fail. That is also why this happens when the request is sent rather than
+    /// when it is built: a builder cannot await, and a token fetched any earlier
+    /// than the send is a token that might already have expired.
+    async fn apply(&self, request: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+        Ok(match self {
             Self::None => request,
+            // `bearer_auth` marks the header sensitive, so a `reqwest` trace of
+            // the request elides it rather than printing it.
             Self::Bearer(token) => request.bearer_auth(token),
             Self::Header { name, value } => request.header(name, value),
+            Self::Refreshed(source) => request.bearer_auth(&*source.token().await?),
+        })
+    }
+}
+
+/// Compares what a credential *is*, never what it holds.
+///
+/// Two refreshed credentials are the same when they draw on the same source,
+/// which is the only comparison available: a token source has no value to
+/// compare, and asking it for one to find out would be a network call.
+impl PartialEq for Credential {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Bearer(ours), Self::Bearer(theirs)) => ours == theirs,
+            (
+                Self::Header { name: ours, value: our_value },
+                Self::Header { name: theirs, value: their_value },
+            ) => ours == theirs && our_value == their_value,
+            (Self::Refreshed(ours), Self::Refreshed(theirs)) => std::ptr::eq(
+                std::sync::Arc::as_ptr(ours).cast::<u8>(),
+                std::sync::Arc::as_ptr(theirs).cast::<u8>(),
+            ),
+            _ => false,
         }
     }
 }
+
+impl Eq for Credential {}
 
 /// Prints whether a credential exists, never what it is.
 ///
@@ -69,6 +134,7 @@ impl std::fmt::Debug for Credential {
             Self::Header { name, .. } => {
                 write!(formatter, "Credential::Header {{ name: {name:?}, value: <redacted> }}")
             }
+            Self::Refreshed(_) => formatter.write_str("Credential::Refreshed(<redacted>)"),
         }
     }
 }
@@ -135,12 +201,15 @@ impl Http {
         &self.name
     }
 
-    /// A POST to `path`, authenticated when a credential is configured.
+    /// A POST to `path`, carrying any pinned headers.
+    ///
+    /// The credential is attached by [`Self::send`], not here — see
+    /// [`Credential::apply`].
     pub fn post(&self, path: &str) -> reqwest::RequestBuilder {
         self.prepare(self.client.post(self.endpoint(path)))
     }
 
-    /// A GET from `path`, authenticated when a credential is configured.
+    /// A GET from `path`, carrying any pinned headers.
     pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
         self.prepare(self.client.get(self.endpoint(path)))
     }
@@ -178,10 +247,12 @@ impl Http {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Provider`] for transport failures and for any status
-    /// outside 2xx, naming the status and as much of the body as is likely to
-    /// be a message rather than a document.
+    /// Returns [`Error::Provider`] for transport failures, for any status
+    /// outside 2xx — naming the status and as much of the body as is likely to
+    /// be a message rather than a document — and for a
+    /// [`Credential::Refreshed`] that could not be obtained.
     pub async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let request = self.credential.apply(request).await?;
         let response = request.send().await.map_err(|error| self.failure(error))?;
         if response.status().is_success() {
             return Ok(response);
@@ -215,13 +286,9 @@ impl Http {
         format!("{}/{}", self.base_url.trim_end_matches('/'), path.trim_start_matches('/'))
     }
 
-    /// Applies the credential and any pinned headers.
+    /// Applies the headers pinned for every request.
     fn prepare(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        let request = self
-            .headers
-            .iter()
-            .fold(request, |request, (name, value)| request.header(name, value));
-        self.credential.apply(request)
+        self.headers.iter().fold(request, |request, (name, value)| request.header(name, value))
     }
 }
 
@@ -283,6 +350,68 @@ mod tests {
 
         assert_eq!(http.endpoint("/messages"), "https://api.example/v1/messages");
         assert_eq!(http.endpoint("messages"), "https://api.example/v1/messages");
+    }
+
+    /// A source that hands out a different token every time it is asked.
+    #[derive(Debug, Default)]
+    struct Counting(std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl BearerSource for Counting {
+        async fn token(&self) -> Result<std::sync::Arc<str>> {
+            let nth = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(std::sync::Arc::from(format!("token-{nth}").as_str()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refreshed_credential_is_fetched_for_every_request() {
+        // The whole reason this variant exists: a token captured once keeps
+        // being sent for an hour after it expires. Two applications of the same
+        // credential must ask twice.
+        let credential = Credential::refreshed(Counting::default());
+        let client = reqwest::Client::new();
+
+        for expected in ["token-0", "token-1"] {
+            let request = credential
+                .apply(client.get("https://api.example/v1/models"))
+                .await
+                .expect("a token");
+            let built = request.build().expect("a request");
+            let header = built
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .expect("an authorization header");
+            assert_eq!(header.to_str().expect("ascii"), format!("Bearer {expected}"));
+            assert!(header.is_sensitive(), "a token must not reach a request trace");
+        }
+    }
+
+    #[derive(Debug)]
+    struct Refusing;
+
+    #[async_trait::async_trait]
+    impl BearerSource for Refusing {
+        async fn token(&self) -> Result<std::sync::Arc<str>> {
+            Err(Error::Config("no credentials on this host".to_owned()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_credential_that_cannot_be_obtained_fails_the_request_rather_than_sending_it() {
+        // Sending it unauthenticated would earn a 401 that reads like a
+        // permissions problem, hiding the real cause.
+        let error = Credential::refreshed(Refusing)
+            .apply(reqwest::Client::new().get("https://api.example/v1/models"))
+            .await
+            .expect_err("no token, no request");
+        assert!(error.to_string().contains("no credentials"), "{error}");
+    }
+
+    #[test]
+    fn a_refreshed_credential_never_prints_its_source() {
+        let printed = format!("{:?}", Credential::refreshed(Counting::default()));
+        assert!(printed.contains("<redacted>"), "{printed}");
     }
 
     #[test]

@@ -80,7 +80,7 @@ impl Failure {
             kind: FailureKind::Status,
             status: Some(status),
             retry_after: retry_after.and_then(parse_retry_after),
-            detail: body.chars().take(Self::DETAIL_LIMIT).collect(),
+            detail: vendor_message(body).chars().take(Self::DETAIL_LIMIT).collect(),
         }
     }
 
@@ -224,6 +224,22 @@ const fn is_transient_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429) || (status >= 500 && status != 501)
 }
 
+/// The sentence out of a vendor error body, or the body itself.
+///
+/// OpenAI, Anthropic and Google all wrap a status explanation the same way —
+/// `{"error": {"message": ...}}` — and the `message` is the whole of what an
+/// operator needs: "Invalid recognition config: bad sample rate" rather than
+/// eight lines of JSON wrapping it. A body that is not that shape is quoted
+/// as-is, because an unexpected body is evidence and discarding it would leave
+/// nothing to diagnose.
+fn vendor_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .as_ref()
+        .and_then(|json| json.get("error")?.get("message")?.as_str())
+        .map_or_else(|| body.to_owned(), str::to_owned)
+}
+
 /// Reads a `Retry-After` expressed as a whole number of seconds.
 fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse::<u64>().ok().map(Duration::from_secs)
@@ -265,6 +281,35 @@ mod tests {
     #[test]
     fn a_malformed_response_is_never_retryable() {
         assert!(!Failure::malformed("not json").is_retryable());
+    }
+
+    #[test]
+    fn a_vendor_error_body_is_reduced_to_its_message() {
+        let body = serde_json::json!({
+            "error": {
+                "code": 400,
+                "message": "Invalid recognition config: bad sample rate",
+                "status": "INVALID_ARGUMENT",
+            }
+        })
+        .to_string();
+
+        let failure = Failure::status_failure(400, None, &body);
+        assert_eq!(
+            failure.to_string(),
+            "HTTP 400: Invalid recognition config: bad sample rate"
+        );
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_vendor_error_is_quoted_whole() {
+        // An HTML error page from a proxy in front of the API is still the only
+        // evidence there is, and a plain-text explanation is already the message.
+        let page = Failure::status_failure(502, None, "<html>bad gateway</html>");
+        assert!(page.to_string().contains("bad gateway"), "{page}");
+
+        let plain = Failure::status_failure(500, None, "model is loading");
+        assert_eq!(plain.to_string(), "HTTP 500: model is loading");
     }
 
     #[test]

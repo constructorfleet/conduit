@@ -807,8 +807,11 @@ dependencies = [
 name = "conduit-http"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "conduit-core",
  "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 
