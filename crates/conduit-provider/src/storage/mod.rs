@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub mod llm;
+pub mod memory;
 pub mod roster;
 pub mod speaker;
 pub mod stt;
@@ -19,6 +20,7 @@ pub mod tts;
 pub mod wake;
 
 pub use llm::LlmVariant;
+pub use memory::MemoryVariant;
 pub use roster::{EnrolledSpeaker, SpeakerRosterStore};
 pub use speaker::SpeakerIdVariant;
 pub use stt::SttVariant;
@@ -148,6 +150,8 @@ pub enum ProviderCapability {
     Wake,
     /// Speaker identification.
     SpeakerId,
+    /// Recalling what was said before.
+    Memory,
 }
 
 /// The detector behind a wake word definition.
@@ -360,6 +364,11 @@ pub enum ProviderDefinitionVariant {
         /// Provider-specific settings.
         variant: SpeakerIdVariant,
     },
+    /// Recalling what was said before.
+    Memory {
+        /// Provider-specific settings.
+        variant: MemoryVariant,
+    },
 }
 
 impl ProviderDefinitionVariant {
@@ -374,6 +383,7 @@ impl ProviderDefinitionVariant {
             Self::Tool { .. } => ProviderCapability::Tool,
             Self::Wake { .. } => ProviderCapability::Wake,
             Self::SpeakerId { .. } => ProviderCapability::SpeakerId,
+            Self::Memory { .. } => ProviderCapability::Memory,
         }
     }
 
@@ -388,6 +398,7 @@ impl ProviderDefinitionVariant {
             Self::Tool { variant } => Self::Tool { variant: variant.redacted() },
             Self::Wake { variant } => Self::Wake { variant: variant.redacted() },
             Self::SpeakerId { variant } => Self::SpeakerId { variant: variant.redacted() },
+            Self::Memory { variant } => Self::Memory { variant: variant.redacted() },
         }
     }
 
@@ -423,7 +434,8 @@ impl ProviderDefinitionVariant {
                 variant:
                     TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
             }
-            | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
+            | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } }
+            | Self::Memory { variant: MemoryVariant::PgVector { api_key, .. } } => {
                 api_key.as_ref()
             }
             _ => None,
@@ -447,7 +459,8 @@ impl ProviderDefinitionVariant {
                 variant:
                     TtsVariant::OpenAi { api_key, .. } | TtsVariant::ElevenLabs { api_key, .. },
             }
-            | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } } => {
+            | Self::SpeakerId { variant: SpeakerIdVariant::Http { api_key, .. } }
+            | Self::Memory { variant: MemoryVariant::PgVector { api_key, .. } } => {
                 Some(api_key)
             }
             _ => None,
@@ -471,6 +484,7 @@ enum WireProviderDefinitionVariant {
     Tool { variant: ToolVariant },
     Wake { variant: WakeVariant },
     SpeakerId { variant: SpeakerIdVariant },
+    Memory { variant: MemoryVariant },
 }
 
 impl From<WireProviderDefinitionVariant> for ProviderDefinitionVariant {
@@ -483,6 +497,7 @@ impl From<WireProviderDefinitionVariant> for ProviderDefinitionVariant {
             WireProviderDefinitionVariant::Tool { variant } => Self::Tool { variant },
             WireProviderDefinitionVariant::Wake { variant } => Self::Wake { variant },
             WireProviderDefinitionVariant::SpeakerId { variant } => Self::SpeakerId { variant },
+            WireProviderDefinitionVariant::Memory { variant } => Self::Memory { variant },
         }
     }
 }
@@ -952,6 +967,15 @@ mod tests {
                     api_key: None,
                     engine: SpeakerEngine::SpeechBrain,
                     threshold_percent: default_threshold_percent(),
+                },
+            },
+            ProviderDefinitionVariant::Memory {
+                variant: MemoryVariant::PgVector {
+                    url: "postgres://localhost/conduit".to_owned(),
+                    embedding_base_url: "https://api.openai.com/v1".to_owned(),
+                    api_key: None,
+                    embedding_model: "text-embedding-3-small".to_owned(),
+                    dimensions: 1536,
                 },
             },
         ];

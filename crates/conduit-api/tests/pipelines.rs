@@ -1055,6 +1055,207 @@ async fn the_script_component_offers_an_engine_a_source_and_an_optional_deadline
 }
 
 #[tokio::test]
+async fn a_built_in_memory_definition_that_names_nothing_is_stored_as_the_ephemeral_default() {
+    // Both fields optional, and both defaults deliberate: nothing is written
+    // anywhere, and a bound exists because nothing deletes a record. An
+    // operator who fills in neither should get a working store, so saving one
+    // that names neither has to succeed.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "recall",
+        "label": "Household memory",
+        "variant": { "type": "memory", "variant": { "type": "builtin" } }
+    });
+
+    let (status, _) = call(&state, put_json("/v1/providers/recall", definition)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = call(&state, get("/v1/providers/recall")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["kind"], "memory");
+    assert_eq!(body["variant"]["variant"]["type"], "builtin");
+    assert!(
+        body["variant"]["variant"].get("path").is_none(),
+        "an absent path means nothing is written anywhere: {body}"
+    );
+    assert_eq!(
+        body["variant"]["variant"]["capacity"], 1000,
+        "the bound is written back so an operator can see what they got"
+    );
+}
+
+#[tokio::test]
+async fn a_memory_store_that_would_keep_nothing_is_refused() {
+    // The store's own builder refuses a capacity of zero, so accepting one here
+    // would store a definition that fails to build on the next server start.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "recall",
+        "label": "Household memory",
+        "variant": { "type": "memory", "variant": { "type": "builtin", "capacity": 0 } }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/recall", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["detail"].as_str().is_some_and(|detail| detail.contains("capacity")),
+        "the message names the field: {body}"
+    );
+}
+
+/// Saving a pgvector store hides its embedding key on the way back.
+///
+/// Needs a real database, because a store is built as part of the save: the
+/// snapshot is rebuilt so that a definition which cannot become a provider is
+/// refused by the write that would have stored it. Skipped rather than mocked
+/// when none is configured — the redaction rule itself is covered without one,
+/// in `conduit-provider`'s own tests.
+#[tokio::test]
+async fn a_pgvector_memory_definition_hides_its_embedding_key_on_the_way_back() {
+    let Some(url) =
+        std::env::var("CONDUIT_TEST_POSTGRES_URL").ok().filter(|url| !url.is_empty())
+    else {
+        eprintln!("skipped: set CONDUIT_TEST_POSTGRES_URL to run this");
+        return;
+    };
+    // The API refuses a URL carrying a password, so this needs one without.
+    // Skipped rather than rewritten: stripping the password would leave a URL
+    // that cannot connect, and the test would fail for a reason having nothing
+    // to do with redaction.
+    let after_scheme = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+    if after_scheme.split_once('@').is_some_and(|(userinfo, _)| userinfo.contains(':')) {
+        eprintln!(
+            "skipped: CONDUIT_TEST_POSTGRES_URL carries a password, which a definition may \
+             not; point it at a password-less URL and set PGPASSWORD"
+        );
+        return;
+    }
+
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "recall",
+        "label": "Household memory",
+        "variant": {
+            "type": "memory",
+            "variant": {
+                "type": "pgvector",
+                "url": url,
+                "embedding_base_url": "https://api.openai.com/v1",
+                "api_key": { "type": "inline", "value": "sk-test" },
+                "embedding_model": "text-embedding-3-small",
+                "dimensions": 1536
+            }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/recall", definition)).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        body["variant"]["variant"]["api_key"],
+        serde_json::json!({ "type": "redacted" })
+    );
+    assert_eq!(
+        body["variant"]["variant"]["dimensions"], 1536,
+        "the width is the vector column's, so it is not a secret"
+    );
+    assert_eq!(
+        body["variant"]["variant"]["url"], url,
+        "the URL is left whole, as every other endpoint is: it carries no password to hide"
+    );
+}
+
+#[tokio::test]
+async fn a_memory_url_carrying_a_password_is_refused_rather_than_stored_in_the_clear() {
+    // Every other credential in a definition lives in its own secret field,
+    // which is what lets a read response hide it. A password in a URL's
+    // userinfo has no such field, so it would be handed back in the clear to
+    // anyone who can read the provider list.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "recall",
+        "label": "Household memory",
+        "variant": {
+            "type": "memory",
+            "variant": {
+                "type": "pgvector",
+                "url": "postgres://conduit:hunter2@db.internal/conduit",
+                "embedding_base_url": "https://api.openai.com/v1",
+                "embedding_model": "text-embedding-3-small",
+                "dimensions": 1536
+            }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/recall", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = body["detail"].as_str().expect("a message");
+    assert!(detail.contains("password"), "the message says what is wrong: {detail}");
+    assert!(
+        !detail.contains("hunter2"),
+        "and it does not repeat the password back into a log: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn an_embedding_width_of_zero_is_refused() {
+    // The width is what the `vector(n)` column is declared with, so zero is not
+    // a narrow vector — it is a column that cannot exist.
+    let state = AppState::new(EventBus::default());
+    let definition = serde_json::json!({
+        "id": "recall",
+        "label": "Household memory",
+        "variant": {
+            "type": "memory",
+            "variant": {
+                "type": "pgvector",
+                "url": "postgres://conduit@db.internal/conduit",
+                "embedding_base_url": "https://api.openai.com/v1",
+                "embedding_model": "text-embedding-3-small",
+                "dimensions": 0
+            }
+        }
+    });
+
+    let (status, body) = call(&state, put_json("/v1/providers/recall", definition)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["detail"].as_str().is_some_and(|detail| detail.contains("dimensions")),
+        "the message names the field: {body}"
+    );
+}
+
+#[tokio::test]
+async fn the_catalog_offers_both_memory_stores() {
+    // The console builds its form from this catalog, so a store missing from it
+    // is a store an operator cannot configure.
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, get("/v1/catalog/providers")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let components = body["components"].as_array().expect("component list");
+    assert_component(components, "memory.builtin", "memory", &["path", "capacity"], &[]);
+    assert_component(
+        components,
+        "memory.pgvector",
+        "memory",
+        &["url", "embedding_base_url", "api_key", "embedding_model", "dimensions"],
+        &["url", "embedding_base_url", "embedding_model", "dimensions"],
+    );
+
+    let builtin = components
+        .iter()
+        .find(|component| component["id"] == "memory.builtin")
+        .expect("the built-in store is offered");
+    assert_eq!(builtin["definition_variant"], "builtin");
+}
+
+#[tokio::test]
 async fn each_wake_engine_offers_only_the_places_it_runs() {
     // The console builds its form from this catalog, so the catalog is what
     // keeps an operator from describing a detector that cannot exist: an engine

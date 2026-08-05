@@ -1222,17 +1222,10 @@ function ProvidersPanel({
       return;
     }
 
-    // A card whose kind names no configurable capability — a memory store the
-    // runtime holds but no definition variant describes — has nothing to edit.
-    const capability = capabilityForProviderKind(card.kind);
-    if (!capability) {
-      return;
-    }
-
     setDraftProvider({
       id: card.id,
       label: card.label,
-      kind: capability,
+      kind: capabilityForProviderKind(card.kind),
       component: card.component ?? card.id,
       config: {},
       source: "local",
@@ -3817,13 +3810,9 @@ function componentForProviderStatus(
   catalog: ProviderComponentCatalog,
   provider: ProviderStatus,
 ): ProviderComponentDescriptor | null {
-  const nodeKind = capabilityForProviderKind(provider.kind);
-  if (!nodeKind) {
-    return null;
-  }
   return componentForNode(catalog, {
     id: provider.id,
-    kind: nodeKind,
+    kind: capabilityForProviderKind(provider.kind),
     provider: provider.id,
   } as PipelineNode);
 }
@@ -4219,6 +4208,25 @@ function configFromProviderVariant(
     // built, like every other list field in this form.
     return { rules: variant.variant.rules.join(", ") };
   }
+  if (variant.type === "memory") {
+    if (variant.variant.type === "builtin") {
+      return {
+        path: variant.variant.path ?? "",
+        // Written back as the number the server stored, so an operator sees the
+        // bound they got rather than an empty box that looks unset.
+        ...(typeof variant.variant.capacity === "number"
+          ? { capacity: variant.variant.capacity }
+          : {}),
+      };
+    }
+    return {
+      url: variant.variant.url,
+      embedding_base_url: variant.variant.embedding_base_url,
+      api_key: secretToConfigValue(variant.variant.api_key),
+      embedding_model: variant.variant.embedding_model,
+      dimensions: variant.variant.dimensions,
+    };
+  }
   if (variant.type === "speaker_id") {
     if (variant.variant.type === "diarization_server") {
       return {
@@ -4495,6 +4503,40 @@ function variantFromProviderDefinition(
       },
     };
   }
+  if (definition.component === "memory.builtin") {
+    return {
+      type: "memory",
+      variant: {
+        type: "builtin",
+        // Both omitted rather than guessed when the box is empty: an absent
+        // path means nothing is written anywhere, and an absent bound means the
+        // server's own. A `""` here would be a file in whatever directory the
+        // server was started from, and a `0` a store that remembers nothing.
+        ...(text("path") ? { path: text("path") } : {}),
+        ...(typeof config.capacity === "number"
+          ? { capacity: config.capacity }
+          : {}),
+      },
+    };
+  }
+  if (definition.component === "memory.pgvector") {
+    return {
+      type: "memory",
+      variant: {
+        type: "pgvector",
+        url: text("url"),
+        embedding_base_url: text("embedding_base_url"),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        embedding_model: text("embedding_model"),
+        // Required, unlike every other number in this form: it is the width the
+        // vector column is declared with, so there is no server-side default to
+        // fall back to. Zero is refused by the API, which is what an empty box
+        // becomes and what an operator is then told about.
+        dimensions:
+          typeof config.dimensions === "number" ? config.dimensions : 0,
+      },
+    };
+  }
   if (definition.component === "speaker.diarization_server") {
     return {
       type: "speaker_id",
@@ -4600,18 +4642,11 @@ function defaultProviderDefinitions(
   );
   const fromStatus: ProviderDefinition[] =
     snapshot?.providers.flatMap((provider) => {
-      // A provider whose kind names no configurable capability is reported on
-      // the status page and cannot be bound in a pipeline, so there is no
-      // definition to infer for it.
-      const capability = capabilityForProviderKind(provider.kind);
-      if (!capability) {
-        return [];
-      }
       return [
         {
           id: provider.id,
           label: provider.id,
-          kind: capability,
+          kind: capabilityForProviderKind(provider.kind),
           component:
             componentForProviderStatus(catalog, provider)?.id ?? provider.id,
           config: {},
@@ -4780,17 +4815,14 @@ function pruneEmptyConfig(
   );
 }
 
-/// The capability a status kind names, or `null` when it names none.
+/// The capability a status kind names.
 ///
-/// The two vocabularies overlap but are not the same: `ProviderKind` describes
-/// what the runtime registered and `ProviderCapability` describes what an
-/// operator can configure. Memory is the difference — the runtime can hold a
-/// memory store, but there is no provider definition variant to write one down
-/// as, so it appears on the status page and has nothing to edit.
-function capabilityForProviderKind(
-  kind: ProviderKind,
-): ProviderCapability | null {
-  return kind === "memory" ? null : kind;
+/// Total now that a memory store has a definition variant. It was not: memory
+/// used to be a kind the runtime could register and an operator could not write
+/// down, so this returned `null` for it and every caller carried a branch for a
+/// provider that appeared on the status page with nothing to edit.
+function capabilityForProviderKind(kind: ProviderKind): ProviderCapability {
+  return kind;
 }
 
 /// What a node's provider has to be able to do, when the node names one.

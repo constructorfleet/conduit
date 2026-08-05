@@ -456,6 +456,7 @@ fn provider_capability_label(capability: ProviderCapability) -> &'static str {
         ProviderCapability::Transform => "transform",
         ProviderCapability::Wake => "wake",
         ProviderCapability::SpeakerId => "speaker_id",
+        ProviderCapability::Memory => "memory",
     }
 }
 
@@ -798,6 +799,44 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
                     ("timeout_ms", integer_property()),
                 ]),
                 required: vec!["engine", "source"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "memory.builtin",
+            label: "Built-in memory",
+            kind: ProviderCapability::Memory,
+            definition_variant: "builtin",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("path", string_property(None, None)),
+                    ("capacity", integer_property()),
+                ]),
+                // Neither field is required: a store with no path and no bound
+                // is the ephemeral one this crate defaults to, which is a
+                // reasonable thing to configure by configuring nothing.
+                required: Vec::new(),
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "memory.pgvector",
+            label: "PostgreSQL memory",
+            kind: ProviderCapability::Memory,
+            definition_variant: "pgvector",
+            schema: ComponentConfigSchema {
+                properties: properties([
+                    ("url", string_property(None, None)),
+                    (
+                        "embedding_base_url",
+                        string_property(Some(ComponentConfigFormat::Url), None),
+                    ),
+                    ("api_key", string_property(None, None)),
+                    ("embedding_model", string_property(None, Some("[A-Za-z0-9._:/-]+"))),
+                    ("dimensions", integer_property()),
+                ]),
+                // The width is required because it is what the vector column is
+                // declared with, and nothing can discover it before the first
+                // embedding exists.
+                required: vec!["url", "embedding_base_url", "embedding_model", "dimensions"],
             },
         },
         ProviderComponentDescriptor {

@@ -30,6 +30,7 @@ mod elevenlabs;
 mod google;
 mod marytts;
 mod mcp;
+mod memory;
 mod openai;
 mod script;
 mod speaker;
@@ -48,6 +49,7 @@ pub use google::Google;
 // `BedrockRuntime`: `conduit_marytts::MaryTts` is the provider it builds.
 pub use marytts::MaryTtsServer;
 pub use mcp::Mcp;
+pub use memory::{BuiltinMemory, PgVectorMemory};
 pub use openai::OpenAi;
 // Named for the factory's role on the same terms as `BedrockRuntime`:
 // `conduit_script::Script` is the provider it builds.
@@ -129,6 +131,8 @@ impl Factories {
             .with(HttpSpeaker)
             .with(BuiltinTransform)
             .with(ScriptedTransform)
+            .with(BuiltinMemory)
+            .with(PgVectorMemory)
     }
 
     /// Adds `factory` after the ones already registered.
@@ -217,9 +221,9 @@ fn secret_value(secret: &Option<ProviderSecret>) -> Option<String> {
 mod tests {
     use super::*;
     use conduit_provider::storage::{
-        LlmVariant, McpTransport, MicroWakeWordRuntime, ProviderDefinitionVariant,
-        ScriptEngine, SpeakerEngine, SpeakerIdVariant, SttVariant, ToolVariant,
-        TransformVariant, TtsVariant, WakeRuntime, WakeVariant,
+        LlmVariant, McpTransport, MemoryVariant, MicroWakeWordRuntime,
+        ProviderDefinitionVariant, ScriptEngine, SpeakerEngine, SpeakerIdVariant, SttVariant,
+        ToolVariant, TransformVariant, TtsVariant, WakeRuntime, WakeVariant,
     };
     use conduit_provider::testing::EchoStt;
 
@@ -384,6 +388,18 @@ mod tests {
                     engine: ScriptEngine::Rhai,
                     source: "segment".to_owned(),
                     timeout_ms: 50,
+                },
+            },
+            ProviderDefinitionVariant::Memory {
+                variant: MemoryVariant::Builtin { path: None, capacity: 100 },
+            },
+            ProviderDefinitionVariant::Memory {
+                variant: MemoryVariant::PgVector {
+                    url: "postgres://localhost/conduit".to_owned(),
+                    embedding_base_url: "https://api.openai.com/v1".to_owned(),
+                    api_key: None,
+                    embedding_model: "text-embedding-3-small".to_owned(),
+                    dimensions: 1536,
                 },
             },
         ]

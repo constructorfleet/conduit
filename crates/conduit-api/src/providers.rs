@@ -5,7 +5,7 @@ use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use conduit_provider::storage::{
-    LlmVariant, McpTransport, ProviderCapability, ProviderDefinition,
+    LlmVariant, McpTransport, MemoryVariant, ProviderCapability, ProviderDefinition,
     ProviderDefinitionVariant, ScriptEngine, SpeakerIdVariant, SttVariant, ToolVariant,
     TransformVariant, TtsVariant, WakeEngine,
 };
@@ -372,6 +372,7 @@ const fn runtime_capability(capability: ProviderCapability) -> conduit_provider:
         ProviderCapability::Tool => conduit_provider::Capability::Tool,
         ProviderCapability::Wake => conduit_provider::Capability::Wake,
         ProviderCapability::SpeakerId => conduit_provider::Capability::SpeakerId,
+        ProviderCapability::Memory => conduit_provider::Capability::Memory,
     }
 }
 
@@ -391,6 +392,7 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Tool => ProviderKind::Tool,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
+        ProviderCapability::Memory => ProviderKind::Memory,
     }
 }
 
@@ -525,6 +527,33 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                     .map_err(|error| ApiError::unprocessable(error.to_string()))?;
             }
         },
+        // A capacity of zero is a store that accepts every write and remembers
+        // nothing. The store's own builder refuses it, so an operator who saves
+        // one would get a definition that stores cleanly and fails to build on
+        // the next start; refusing it here is the same rule, applied while the
+        // form is still on screen.
+        ProviderDefinitionVariant::Memory {
+            variant: MemoryVariant::Builtin { capacity, .. },
+        } => {
+            if *capacity == 0 {
+                return Err(ApiError::unprocessable(
+                    "capacity must be at least 1: a store that keeps nothing remembers nothing"
+                        .to_owned(),
+                ));
+            }
+        }
+        ProviderDefinitionVariant::Memory {
+            variant: MemoryVariant::PgVector { url, embedding_base_url, dimensions, .. },
+        } => {
+            validate_postgres_url("url", url)?;
+            validate_http_url("embedding_base_url", embedding_base_url)?;
+            if *dimensions == 0 {
+                return Err(ApiError::unprocessable(
+                    "dimensions must be at least 1: it is the width of the vector column"
+                        .to_owned(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -542,6 +571,40 @@ fn validate_script_timeout(timeout_ms: u64) -> Result<(), ApiError> {
             "timeout_ms must be between {} and {}, got `{timeout_ms}`",
             conduit_script::MIN_TIMEOUT.as_millis(),
             conduit_script::MAX_TIMEOUT.as_millis(),
+        )));
+    }
+    Ok(())
+}
+
+/// Checks that `value` is a PostgreSQL connection URL with no password in it.
+///
+/// The password is refused rather than redacted. Every other credential in a
+/// definition lives in its own [`ProviderSecret`] field, which is what makes a
+/// read response able to hide it and an update able to keep it; a password
+/// buried in a URL's userinfo has neither, so it would be stored in the clear
+/// and handed back in the clear to every operator who can read the provider
+/// list. `PGPASSWORD`, a `.pgpass` file, or a password-less local role are all
+/// ways to say it somewhere the definition does not.
+///
+/// [`ProviderSecret`]: conduit_provider::storage::ProviderSecret
+fn validate_postgres_url(field: &str, value: &str) -> Result<(), ApiError> {
+    let uri = validate_absolute_url(field, value)?;
+    let scheme = uri.scheme_str().expect("absolute URL has a scheme");
+    if !matches!(scheme, "postgres" | "postgresql") {
+        return Err(ApiError::unprocessable(format!(
+            "{field} must use postgres or postgresql, got `{scheme}`"
+        )));
+    }
+    // Split on `@` rather than searching for a colon: a port is a colon too, and
+    // only the userinfo half of the authority can carry a password.
+    let carries_password = uri
+        .authority()
+        .and_then(|authority| authority.as_str().split_once('@'))
+        .is_some_and(|(userinfo, _)| userinfo.contains(':'));
+    if carries_password {
+        return Err(ApiError::unprocessable(format!(
+            "{field} must not carry a password: a definition cannot hide one written into the \
+             URL. Use PGPASSWORD, a .pgpass file, or a role that needs none."
         )));
     }
     Ok(())

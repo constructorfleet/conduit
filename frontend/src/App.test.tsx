@@ -2206,6 +2206,83 @@ describe("Providers workspace", () => {
     );
   });
 
+  it("saves a built-in memory store that names nothing as the ephemeral one", async () => {
+    // Neither field is required and neither is guessed. An empty path box has
+    // to reach the server as no path at all rather than as `""`, which would be
+    // a file in whatever directory the server was started from.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Memory" }));
+    await user.click(screen.getByRole("menuitem", { name: "Built-in memory" }));
+
+    expect(screen.getByLabelText("Path")).not.toBeRequired();
+    expect(screen.getByLabelText("Capacity")).not.toBeRequired();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "household-recall");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(
+      screen.getByText("Provider household-recall saved"),
+    ).toBeInTheDocument();
+    expect(saved[0]?.variant).toMatchObject({
+      type: "memory",
+      variant: { type: "builtin" },
+    });
+    expect(saved[0]?.variant).not.toHaveProperty("variant.path");
+    expect(saved[0]?.variant).not.toHaveProperty("variant.capacity");
+  });
+
+  it("asks a pgvector store for the embedding width and reopens it with what was stored", async () => {
+    // The width is the one number in this form with no server-side default: it
+    // is what the vector column is declared with. Reopening matters as much as
+    // saving — an operator who came back to change the model would otherwise
+    // find the width blank and save a store declared `vector(0)`.
+    const user = userEvent.setup();
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={[
+          providerDefinitionFixture({
+            id: "recall",
+            label: "Household Memory",
+            component: "memory.pgvector",
+            config: {
+              url: "postgres://conduit@db.local/conduit",
+              embedding_base_url: "http://localhost:11434/v1",
+              embedding_model: "nomic-embed-text",
+              dimensions: 768,
+            },
+          }),
+        ]}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "recall");
+
+    expect(screen.getByLabelText("URL")).toHaveDisplayValue(
+      "postgres://conduit@db.local/conduit",
+    );
+    expect(screen.getByLabelText("Embedding Base URL")).toHaveDisplayValue(
+      "http://localhost:11434/v1",
+    );
+    expect(screen.getByLabelText("Embedding Model")).toHaveDisplayValue(
+      "nomic-embed-text",
+    );
+    expect(screen.getByLabelText("Dimensions")).toHaveDisplayValue("768");
+    expect(screen.getByLabelText("Dimensions")).toBeRequired();
+  });
+
   it("names config fields the way a person reads them and enforces the required ones", async () => {
     // The wire spelling belongs on the wire. A form that showed `base_url` and
     // the word "required" beside it was asking the operator to translate, and
@@ -3658,6 +3735,40 @@ function componentCatalog(): ProviderComponentCatalog {
           required: ["command"],
         },
       },
+      {
+        id: "memory.builtin",
+        label: "Built-in memory",
+        kind: "memory",
+        definition_variant: "builtin",
+        schema: {
+          properties: {
+            path: { type: "string" },
+            capacity: { type: "integer" },
+          },
+          required: [],
+        },
+      },
+      {
+        id: "memory.pgvector",
+        label: "PostgreSQL memory",
+        kind: "memory",
+        definition_variant: "pgvector",
+        schema: {
+          properties: {
+            url: { type: "string" },
+            embedding_base_url: { type: "string", format: "url" },
+            api_key: { type: "string" },
+            embedding_model: { type: "string", pattern: "[A-Za-z0-9._:/-]+" },
+            dimensions: { type: "integer" },
+          },
+          required: [
+            "url",
+            "embedding_base_url",
+            "embedding_model",
+            "dimensions",
+          ],
+        },
+      },
     ],
   };
 }
@@ -4218,6 +4329,42 @@ function providerDefinitionFixture({
           ...(typeof config.timeout_ms === "number"
             ? { timeout_ms: config.timeout_ms }
             : {}),
+        },
+      },
+    };
+  }
+  if (component === "memory.builtin") {
+    return {
+      id,
+      label,
+      kind: "memory",
+      variant: {
+        type: "memory",
+        variant: {
+          type: "builtin",
+          ...(text("path") ? { path: text("path") } : {}),
+          ...(typeof config.capacity === "number"
+            ? { capacity: config.capacity }
+            : {}),
+        },
+      },
+    };
+  }
+  if (component === "memory.pgvector") {
+    return {
+      id,
+      label,
+      kind: "memory",
+      variant: {
+        type: "memory",
+        variant: {
+          type: "pgvector",
+          url: text("url"),
+          embedding_base_url: text("embedding_base_url"),
+          ...(apiKey ? { api_key: apiKey } : {}),
+          embedding_model: text("embedding_model"),
+          dimensions:
+            typeof config.dimensions === "number" ? config.dimensions : 0,
         },
       },
     };

@@ -377,6 +377,8 @@ a Runtime Provider under the definition id:
 | `transform` | `builtin` | One transform under the definition id | `rules` names the rewrites to apply, in order |
 | `transform` | `script` | One transform under the definition id | `engine` is `rhai`; the script is compiled and its deadline checked when the definition is saved |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+| `memory` | `builtin` | One memory store under the definition id | Nothing required; an absent `path` writes nowhere |
+| `memory` | `pgvector` | One memory store under the definition id | `url` must be `postgres://` or `postgresql://` and carry no password; needs `--features postgres` |
 
 A `wake` definition names its detector as the variant — `openwakeword`,
 `nanowakeword`, or `microwakeword` — and where that detector runs as a
@@ -440,6 +442,46 @@ whole server, and offers the model every tool that definition registered.
 Discovery needs the server, but saving does not: a server that cannot be
 reached within five seconds saves the definition and registers no tools, and
 `POST /v1/providers/{id}/test` rediscovers them once it answers.
+
+A `memory` definition names where the assistant keeps what it should remember.
+The two variants are two *retrievals*, not two places to put the same records: a
+question phrased in words the stored record never used is found by `pgvector` and
+missed by `builtin`.
+
+```jsonc
+{ "type": "memory", "variant": { "type": "builtin", "capacity": 1000 } }
+
+{ "type": "memory", "variant": {
+    "type": "pgvector",
+    "url": "postgres://conduit@db.internal/conduit",
+    "embedding_base_url": "http://localhost:11434/v1",
+    "embedding_model": "nomic-embed-text",
+    "dimensions": 768 } }
+```
+
+`builtin` requires nothing. An absent `path` writes nowhere, so a store
+configured by configuring nothing is ephemeral — a jump to recording every
+conversation to disk is not something to get by omission. `capacity` bounds it at
+1000 records by default, oldest dropped first, because nothing else forgets one:
+the runtime never calls `forget_conversation`, so an unbounded in-process store
+grows for as long as the process runs. A `capacity` of zero is refused rather
+than kept as a store that remembers nothing.
+
+`pgvector` needs a database, and ideally the `pgvector` extension in it; without
+the extension the store still works and ranks by keyword, which is why the
+extension is not part of the definition. `dimensions` is required and not
+discovered, because it is what the `vector(n)` column is declared with and
+nothing can learn it before the first embedding exists — whoever chose the model
+knows its width. Saving one connects to the database, so an unreachable URL is
+reported at save rather than at the first turn.
+
+The `url` may not carry a password. Every other credential in a definition lives
+in its own secret field, which is what lets a read hide it and an update keep it;
+a password buried in a URL's userinfo has neither, so it would be stored in the
+clear and handed back in the clear to every operator who can read the provider
+list. Say it in `PGPASSWORD`, a `.pgpass` file, or a password-less local role
+instead. `api_key` is the embedding endpoint's credential and is redacted like
+any other; local embedding servers usually need none.
 
 ### `GET /v1/providers/{id}/voices`
 

@@ -33,6 +33,44 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
   the definition rather than a secret in it, so reopening the form shows the
   program there is to edit. `timeout_ms` also reads as `Timeout Ms` rather than
   `Timeout MS`: a unit symbol is not an initialism.
+- Added `conduit-memory`, so what the assistant remembers is something an
+  operator configures rather than something the runtime happens to hold. The
+  runtime has retrieved before it reasons and written after it answers since
+  flows landed; what was missing was any way to say *where*. A `memory` provider
+  definition is that, and a core binds it the way it binds a tool.
+- The two backends are two retrievals rather than two places to put the same
+  records, which is why they are separate variants and not one variant with a
+  storage field. `builtin` ranks with BM25 over unigrams and needs nothing —
+  no service, no database, and with no `path` no file either, so a store
+  configured by configuring nothing is ephemeral. Recording every conversation
+  to disk is not a thing to get by leaving a field blank. `pgvector` ranks by
+  cosine distance over an embedding, so a question phrased in words the stored
+  record never used still finds it, and degrades to keyword ranking where the
+  extension is missing rather than refusing to answer.
+- A built-in store is bounded — a thousand records by default, oldest dropped
+  first — because nothing else forgets one: the runtime never calls
+  `forget_conversation`, so an unbounded in-process store grows for as long as
+  the process runs. A capacity of zero is refused rather than kept as a store
+  that remembers nothing.
+- A pgvector definition supplies the embedding width instead of discovering it,
+  because that number is what the `vector(n)` column is declared with and
+  nothing can learn it before the first embedding exists. Its connection URL may
+  not carry a password, and one is refused rather than redacted: every other
+  credential in a definition lives in its own secret field, which is what lets a
+  read hide it and a later save keep it, and a password in a URL's userinfo has
+  neither — it would be stored in the clear and handed back in the clear to
+  every operator who can read the provider list. The refusal does not echo the
+  password it refused.
+- The store shares the API's `postgres` feature, since a deployment with a
+  database for pipeline definitions has one for records. A build without it
+  still claims the definition and refuses by name, so an operator learns which
+  feature is missing when they save rather than when someone asks the assistant
+  what it remembers.
+- Memory is no longer a capability the console could show and not edit. It has a
+  definition variant now, so the two stores appear in the provider catalogue,
+  save from the Providers page, and reopen with what was stored — which removes
+  the branch every kind-to-capability caller carried for the one kind that had
+  nothing behind it.
 - Added three speech vendors that a base URL does not reach either.
   `conduit-elevenlabs` transcribes and synthesizes, where the credential is an
   `xi-api-key` header and the voice is a URL *path segment* rather than a body

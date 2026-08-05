@@ -101,6 +101,7 @@ impl MockServer {
             .route("/chat/completions", post(chat))
             .route("/audio/transcriptions", post(transcriptions))
             .route("/audio/speech", post(chat))
+            .route("/embeddings", post(embeddings))
             .route("/models", get(models))
             .with_state(state);
 
@@ -239,6 +240,50 @@ fn unending(chunks: Vec<String>) -> Body {
 
     let sent = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
     Body::from_stream(sent.chain(futures_util::stream::once(std::future::pending())))
+}
+
+/// Records the request and replies with a plain JSON body.
+///
+/// Separate from [`chat`] only because the reply is not server-sent events: an
+/// embeddings response is one JSON document, and a client that accepted it
+/// framed as SSE would be accepting something no server sends.
+async fn embeddings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Response, (StatusCode, String)> {
+    {
+        let mut received = state.received.lock().await;
+        received.body = serde_json::from_str(&body).ok();
+        received.authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+    }
+
+    match state.reply {
+        Reply::Body(body) => Ok(Response::builder()
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("response")),
+        Reply::Chunks(chunks) | Reply::StallAfter(chunks) => {
+            let stream =
+                futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+            Ok(Response::builder()
+                .header("content-type", "application/json")
+                .body(Body::from_stream(stream))
+                .expect("response"))
+        }
+        Reply::Status(status, message) => {
+            Err((StatusCode::from_u16(status).expect("valid status"), message))
+        }
+        Reply::StatusRetryAfter(status, message, retry_after) => Ok(Response::builder()
+            .status(StatusCode::from_u16(status).expect("valid status"))
+            .header("retry-after", retry_after)
+            .body(Body::from(message))
+            .expect("response")),
+        Reply::Stall => Ok(never().await),
+    }
 }
 
 /// Minimal model listing, enough for a health check.

@@ -1,0 +1,42 @@
+[package]
+name = "conduit-memory"
+description = "Memory store backends for Conduit: an in-process BM25 store and PostgreSQL with pgvector."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+conduit-core.workspace = true
+conduit-provider.workspace = true
+# Only the embedding adapter needs it, and only a pgvector store needs that.
+conduit-openai = { workspace = true, optional = true }
+
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx = { version = "0.9", default-features = false, features = [
+    "postgres",
+    "json",
+    "uuid",
+    "runtime-tokio",
+    "tls-rustls-ring",
+], optional = true }
+tokio = { workspace = true, features = ["fs", "time"] }
+tracing.workspace = true
+uuid = { workspace = true, optional = true }
+
+[features]
+default = []
+# The pgvector backend, for deployments sharing the API's PostgreSQL.
+postgres = ["dep:sqlx", "dep:uuid"]
+# An `Embedder` served by an OpenAI-compatible `/embeddings` endpoint.
+openai = ["dep:conduit-openai"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "time"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -561,6 +561,11 @@ fn validate_definition_settings(
                 provider.descriptor().validate_settings(&values)?;
             }
         }
+        ProviderCapability::Memory => {
+            if let Some(provider) = providers.memory().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
         // An MCP tool server registers no provider under the definition id, so
         // there is no single descriptor to check default settings against.
         ProviderCapability::Tool => {}
