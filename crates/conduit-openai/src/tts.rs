@@ -182,18 +182,37 @@ impl TextToSpeech for OpenAiTts {
         // start before synthesis finishes.
         let name = self.http.name().to_owned();
         let format = request.format;
-        let mut sequence = 0_u64;
-        let chunks = response.bytes_stream().map(move |packet| match packet {
-            Ok(data) => {
-                let chunk = SpeechChunk { sequence, format, data };
-                sequence += 1;
-                Ok(chunk)
-            }
-            // Audio that stops arriving partway through is classified like any
-            // other transport failure, so a caller can tell a stalled server
-            // from a rejected request.
-            Err(error) => Err(Error::provider(&name, Failure::transport(&error))),
-        });
+
+        // `unfold` over an `Option` rather than `map` over the body, because a
+        // failed `reqwest` body re-reports the same error on *every* poll: a
+        // plain `map` yields an unbounded stream of identical errors, so a
+        // consumer draining until the stream ends never finishes and a lost
+        // turn becomes a hung one. Taking the body out of the `Option` on the
+        // first failure is what ends the stream after reporting it once.
+        let chunks = futures_util::stream::unfold(
+            (Some(response.bytes_stream()), 0_u64),
+            move |(body, sequence)| {
+                let name = name.clone();
+                async move {
+                    let mut body = body?;
+                    match body.next().await {
+                        Some(Ok(data)) => Some((
+                            Ok(SpeechChunk { sequence, format, data }),
+                            (Some(body), sequence + 1),
+                        )),
+                        // Audio that stops arriving partway through is
+                        // classified like any other transport failure, so a
+                        // caller can tell a stalled server from a rejected
+                        // request. The body is dropped rather than polled again.
+                        Some(Err(error)) => Some((
+                            Err(Error::provider(&name, Failure::transport(&error))),
+                            (None, sequence),
+                        )),
+                        None => None,
+                    }
+                }
+            },
+        );
 
         Ok(Box::pin(chunks))
     }
