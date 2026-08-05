@@ -8,6 +8,27 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- [ADR-0015](docs/adr/0015-render-the-conduit-part-of-the-firmware.md) decides how the
+  ESPHome firmware gets rendered from a pipeline: Conduit renders the `conduit_voice:`
+  and `micro_wake_word:` blocks as an includable fragment, and renders **nothing** about
+  the board. Reading the two existing board files against each other is what settled it
+  — they share 140 of 497 lines, and what differs is an SPI bus, a USB-PD negotiator, a
+  DAC proxy and an amplifier activation script, which is not duplication to factor out
+  but hardware to leave alone. A renderer that owned those would need a board-profile
+  format expressive enough to replace ESPHome YAML, and every board it did not model
+  would be a board Conduit could not flash. No implementation yet; the ADR records the
+  decision.
+- The motivating gap the ADR closes, stated where it can be read: a pipeline's
+  `WakeVariant::MicroWakeWord` phrases and the models actually flashed onto a device are
+  connected by nothing but someone remembering to hand-write the same list twice. The
+  type's own documentation says the server never scores them, which is true and is also
+  the problem.
+- Found while auditing the firmware for that ADR, and fixed there: `conduit-voicepe.yaml`
+  passed the wake debug webhook URL as a committed substitution, where `conduit-sat1.yaml`
+  deliberately uses `!secret` with a comment saying the URL carries a token and
+  substitutions are committed. The firmware suite greps both files for the *key* and for
+  `token: !secret conduit_token`, so it caught a missing token secret and missed this
+  one. One rule, two boards, one of them breaking it.
 - A Wyoming STT server that advertises transcript streaming and then sends no partials
   is recorded once per session, at info, alongside the final transcript it did send.
   Some servers do this — `insanely-fast-whisper` answers
