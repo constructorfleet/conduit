@@ -1,0 +1,6 @@
+# What the tests need, which is neither NeMo nor torch: they inject their own
+# engine, so a test run downloads no model weights and touches no network.
+wyoming==1.10.0
+numpy==2.5.1
+pytest==9.1.1
+pytest-asyncio==1.4.0

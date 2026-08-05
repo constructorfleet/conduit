@@ -1,0 +1,4 @@
+# The protocol and the arithmetic. Deliberately not NeMo: see
+# requirements-engine.txt for why the recognizer is installed separately.
+wyoming==1.10.0
+numpy==2.5.1
