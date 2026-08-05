@@ -157,7 +157,8 @@ export type ProviderCapability =
   | "transform"
   | "tool"
   | "wake"
-  | "speaker_id";
+  | "speaker_id"
+  | "memory";
 /// Inner provider definition variant, paired with `kind` (the outer variant)
 /// to name the full two-level provider definition variant.
 export type ProviderDefinitionVariantType =
@@ -175,7 +176,8 @@ export type ProviderDefinitionVariantType =
   | "nanowakeword"
   | "microwakeword"
   | "http"
-  | "diarization_server";
+  | "diarization_server"
+  | "pgvector";
 
 /// The three wake word detectors Conduit speaks to. Each is its own wake
 /// variant, because the three do not run in the same places.
@@ -377,6 +379,29 @@ export type SpeakerIdVariant =
       threshold_percent: number;
     };
 
+/// Where the assistant keeps what it should remember.
+///
+/// The two are not two places to put the same records: a question phrased in
+/// words the stored record never used is found by `pgvector` and missed by
+/// `builtin`. Neither of the built-in store's fields is required — nothing
+/// written anywhere and a default bound is a real configuration — and the
+/// vector store's width is, because it is what the vector column is declared
+/// with and nothing can discover it before the first embedding exists.
+export type MemoryVariant =
+  | {
+      type: "builtin";
+      path?: string;
+      capacity?: number;
+    }
+  | {
+      type: "pgvector";
+      url: string;
+      embedding_base_url: string;
+      api_key?: ProviderSecret;
+      embedding_model: string;
+      dimensions: number;
+    };
+
 export type ProviderDefinitionVariant =
   | { type: "llm"; variant: LlmVariant }
   | { type: "stt"; variant: SttVariant }
@@ -384,7 +409,8 @@ export type ProviderDefinitionVariant =
   | { type: "transform"; variant: TransformVariant }
   | { type: "tool"; variant: ToolVariant }
   | { type: "wake"; variant: WakeVariant }
-  | { type: "speaker_id"; variant: SpeakerIdVariant };
+  | { type: "speaker_id"; variant: SpeakerIdVariant }
+  | { type: "memory"; variant: MemoryVariant };
 
 export type McpTransport =
   | { type: "sse"; url: string }
