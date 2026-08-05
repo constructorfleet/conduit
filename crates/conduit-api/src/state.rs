@@ -561,6 +561,11 @@ fn validate_definition_settings(
                 provider.descriptor().validate_settings(&values)?;
             }
         }
+        ProviderCapability::Vad => {
+            if let Some(provider) = providers.vad().get(id) {
+                provider.descriptor().validate_settings(&values)?;
+            }
+        }
         ProviderCapability::Memory => {
             if let Some(provider) = providers.memory().get(id) {
                 provider.descriptor().validate_settings(&values)?;

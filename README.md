@@ -20,7 +20,7 @@ echoes described under [Running](#running).
 | Crate | What it holds |
 | --- | --- |
 | [`conduit-core`](crates/conduit-core) | Identifiers, the event vocabulary, the event bus, the pipeline graph |
-| [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, speaker ID, tool, and memory plugin implements |
+| [`conduit-provider`](crates/conduit-provider) | The traits every STT, TTS, LLM, wake word, voice activity, speaker ID, tool, and memory plugin implements |
 | [`conduit-runtime`](crates/conduit-runtime) | Executes a graph: audio in, speech out, events throughout |
 | [`conduit-http`](crates/conduit-http) | Shared HTTP plumbing every HTTP-backed provider uses: sending, failure classification, SSE framing |
 | [`conduit-openai`](crates/conduit-openai) | OpenAI-compatible models, speech recognition, and synthesis |
@@ -33,6 +33,7 @@ echoes described under [Running](#running).
 | [`conduit-google`](crates/conduit-google) | Speech recognition and synthesis over Google Cloud's Speech APIs |
 | [`conduit-marytts`](crates/conduit-marytts) | Synthesis over a self-hosted MaryTTS server |
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
+| [`conduit-vad`](crates/conduit-vad) | In-process voice activity detection, scoring the Silero ONNX model with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
 | [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
 | [`conduit-transform`](crates/conduit-transform) | The rewrites that ship with Conduit: flatten markdown, strip emoji, collapse whitespace |
@@ -771,6 +772,40 @@ and retention a question about biometric data, and one worth answering before
 building a feature rather than after. A synthesizer behind a bespoke API, whose
 distinguishing feature carries that question, is not a good trade.
 
+Voice activity detection sits between the microphone and the recognizer, and
+`conduit-vad` scores it in process for the same reason `conduit-wake` does: the
+Silero model is one ONNX file under two megabytes, so running a service beside
+Conduit to answer a yes-or-no question about a frame of audio would be a
+deployment to operate for nothing. There is no base URL and no API key, because
+there is nothing to reach — the model is a file an operator places, and the
+compose file mounts a volume for it.
+
+Two things about it are decisions rather than defaults. The first is that a wrong
+sample rate is **refused rather than resampled**: Silero scores a fixed 512
+samples at 16 kHz, so audio at 44.1 kHz does not degrade the detector, it makes
+the window the wrong *length of sound* and the model reports confidently about
+something it never heard. The rates it was trained at are declared on the
+descriptor, and a pipeline whose format is outside them is told so. The second is
+that a detector which **fails does not end the turn**. Whatever it could not score
+is forwarded untrimmed and a recovered `StageFailed` is published, because
+untrimmed audio is exactly how every pipeline behaved before the stage existed —
+this is the identification precedent rather than the wake one, where a gate that
+cannot tell whether it was addressed must not guess. Trimming also never rewrites
+samples: it decides *which* chunks the recognizer hears, so what it forwards is
+byte for byte what the microphone produced.
+
+One variant, and that is also a decision. A detector answers a yes-or-no question,
+so unlike recognition or synthesis there is nothing for competing vendors to
+differ *about* that an operator would choose between — what differs is accuracy in
+noise, which is the model's business. WebRTC's VAD is the classic alternative and
+is energy-based rather than learned, so it calls a running tap speech; Silero
+outperforms it on every published comparison at a comparable cost. Picovoice Cobra
+is accurate and proprietary, requiring an access key and a per-device license,
+which is the wrong shape for a local-first appliance that should keep working
+offline and unregistered. NVIDIA's MarbleNet and the TEN VAD are both good models
+behind runtimes Conduit does not carry — a NeMo or a bespoke inference stack — and
+neither buys enough over Silero to justify a second one.
+
 `conduit-memory` is where what the assistant remembers lives, and the two
 backends are two *retrievals* rather than two places to put the same records.
 `Builtin` ranks with BM25 over unigrams and needs nothing at all: no service, no
@@ -839,10 +874,13 @@ executable rather than silently mis-run.
 
 **Barge-in is not detected, only requested.** A client can say `stop`, and that
 turn is cancelled as `user_requested`. What no one does is *notice* someone
-speaking over the assistant: nothing runs voice activity detection during
-playback, so the `barge_in` reason has no emitter. A device that wants the
-interrupting behaviour has to decide on its own that it heard something and send
-`stop`.
+speaking over the assistant: no detector runs during playback, so the `barge_in`
+reason has no emitter. A device that wants the interrupting behaviour has to
+decide on its own that it heard something and send `stop`. Conduit now has a
+detector and a `vad` stage — but it runs on the *input* path, trimming silence
+around what was said, and a turn's playback is not audio it is given. Detecting
+speech over the assistant needs a second thing: audio captured while synthesis is
+playing, which is a device and transport question rather than a detector one.
 
 **A tool cannot ask before it acts.** A tool that needs a human in the loop
 marks itself `deny_until_confirmed`, and there is nowhere to put the question:

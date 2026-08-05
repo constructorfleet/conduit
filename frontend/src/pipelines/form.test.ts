@@ -170,6 +170,25 @@ describe("graphFromForm", () => {
     });
   });
 
+  it("puts trimming between the wake word and the recognizer", () => {
+    // Where a trimmer goes is not a preference: after the gate, because the
+    // gate's pre-roll is deliberately silence a trimmer placed first would
+    // remove, and before the recognizer, which is the whole point.
+    const form = formFromGraph(voiceLoop());
+    form.wakeWord = { id: "wake", provider: "openwakeword" };
+    form.vad = { id: "trim", provider: "silero" };
+
+    expect(graphFromForm(form).nodes.map((node) => node.id)).toEqual([
+      "mic",
+      "wake",
+      "trim",
+      "stt",
+      "core",
+      "tts",
+      "speaker",
+    ]);
+  });
+
   it("never produces an edge naming a node it did not build", () => {
     const form = formFromGraph(voiceLoop());
     form.wakeWord = { id: "wake", provider: "porcupine" };

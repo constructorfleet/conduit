@@ -2316,6 +2316,42 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("saves a detector with no endpoint and no credential to answer for", async () => {
+    // A detector reaches nothing: the model is a file on disk, so there is no
+    // URL and no key, and nothing is required at all — an operator who followed
+    // the compose file has already answered every question.
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Voice activity" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Voice activity detection" }),
+    );
+
+    expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "silero");
+    await user.type(screen.getByLabelText("Threshold Percent"), "60");
+    await user.type(screen.getByLabelText("Silence Ms"), "400");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(screen.getByText("Provider silero saved")).toBeInTheDocument();
+    expect(saved[0]?.variant).toEqual({
+      type: "vad",
+      variant: { type: "silero", threshold_percent: 60, silence_ms: 400 },
+    });
+  });
+
   it("reopens a stored speech definition with the fields it was saved with", async () => {
     // Round-tripping is where a missing arm in the reverse mapping shows up: a
     // definition the form cannot read back opens blank, and saving that blank
@@ -3665,6 +3701,22 @@ function componentCatalog(): ProviderComponentCatalog {
             threshold_percent: { type: "integer" },
           },
           required: ["where"],
+        },
+      },
+      {
+        id: "silero.vad",
+        label: "Voice activity detection",
+        kind: "vad",
+        definition_variant: "silero",
+        schema: {
+          // Nothing required: a detector reaches no service, so an operator who
+          // put the model where the compose file said to has nothing to fill in.
+          properties: {
+            model_path: { type: "string" },
+            threshold_percent: { type: "integer" },
+            silence_ms: { type: "integer" },
+          },
+          required: [],
         },
       },
       {

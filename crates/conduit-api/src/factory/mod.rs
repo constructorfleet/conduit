@@ -37,6 +37,7 @@ mod polly;
 mod script;
 mod speaker;
 mod transform;
+mod vad;
 mod wake;
 mod wyoming;
 
@@ -60,6 +61,7 @@ pub use polly::Polly;
 pub use script::ScriptedTransform;
 pub use speaker::{DiarizationServer, HttpSpeaker};
 pub use transform::BuiltinTransform;
+pub use vad::Silero;
 pub use wake::{DeviceWake, OpenWakeWord};
 pub use wyoming::Wyoming;
 
@@ -135,6 +137,7 @@ impl Factories {
             .with(Mcp)
             .with(DiarizationServer)
             .with(HttpSpeaker)
+            .with(Silero)
             .with(BuiltinTransform)
             .with(ScriptedTransform)
             .with(BuiltinMemory)

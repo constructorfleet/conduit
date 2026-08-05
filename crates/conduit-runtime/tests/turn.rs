@@ -19,7 +19,8 @@ use conduit_core::Error;
 use conduit_provider::stt::Transcript;
 use conduit_runtime::{Providers, Reply, Runner};
 use fakes::{
-    audio_of, FailingStt, FakeLlm, FakeSpeaker, FakeStt, FakeTts, FakeWake, HangingTts, SlowTts,
+    audio_of, FailingStt, FakeLlm, FakeSpeaker, FakeStt, FakeTts, FakeVad, FakeWake,
+    HangingTts, SlowTts,
 };
 use futures_util::StreamExt;
 
@@ -849,6 +850,57 @@ async fn a_wake_word_opens_the_pipeline_and_is_published() {
         seen.iter().any(|event| matches!(event, Event::SpeechFinal { .. })),
         "and the audio after it was transcribed"
     );
+}
+
+#[tokio::test]
+async fn the_silence_around_an_utterance_does_not_reach_the_recognizer() {
+    // The stage end to end: what a detector called silence is not transcribed,
+    // and what it called speech is — with the chunk just before the first speech
+    // kept, because a detector confirms speech a frame after it began.
+    let stt = FakeStt::new(vec![Transcript::final_text("lights on")]);
+    let heard = stt.heard_handle();
+    let detector = FakeVad::hearing("lights");
+    let scored = detector.heard_handle();
+    let providers = Providers::new()
+        .with_vad(detector)
+        .with_stt(stt)
+        .with_llm(FakeLlm::new(vec!["on"]))
+        .with_tts(FakeTts::new());
+
+    let graph = PipelineGraph::new("trimmed")
+        .with_node(Node::source("mic", "test", Modality::Audio))
+        .with_node(Node::vad("trim", "fake-vad"))
+        .with_node(Node::stt("stt", "fake-stt"))
+        .with_node(Node::core("core", "fake-llm"))
+        .with_node(Node::tts("tts", "fake-tts"))
+        .with_edge(Edge::new("mic", "trim"))
+        .with_edge(Edge::new("trim", "stt"))
+        .with_edge(Edge::new("stt", "core"))
+        .with_edge(Edge::new("core", "tts"));
+
+    let bus = EventBus::default();
+    let runner = Runner::prepare(&graph, &providers, bus.clone()).expect("prepares");
+    // Realistic chunk sizes — 100 ms each at the interchange format — because the
+    // lead-in and the tail are both measured as time.
+    // Three chunks of room before the word and twelve after, which is longer
+    // than the detector's own 700 ms pause — so there is silence here that the
+    // stage has no reason to keep.
+    let mut spoken = vec!["room"; 3];
+    spoken.push("lights");
+    spoken.extend(std::iter::repeat_n("room", 12));
+    let conversation = runner.run(fakes::audio_of_padded(&spoken, 3_200));
+    let _reply: Vec<_> = conversation.output.collect().await;
+
+    let transcribed: Vec<String> =
+        heard.lock().expect("lock").iter().map(|text| text.trim_end().to_owned()).collect();
+    assert!(
+        transcribed.contains(&"lights".to_owned()),
+        "the speech reached it: {transcribed:?}"
+    );
+    let rooms = transcribed.iter().filter(|text| *text == "room").count();
+    assert!(rooms > 0, "the lead-in and the tail are kept: {transcribed:?}");
+    assert!(rooms < 15, "but the silence beyond them is not: {transcribed:?}");
+    assert_eq!(*scored.lock().expect("lock"), 16, "every captured chunk was scored, in order");
 }
 
 #[tokio::test]

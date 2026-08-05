@@ -25,6 +25,7 @@ conduit-openai.workspace = true
 conduit-polly = { workspace = true, default-features = false }
 conduit-provider.workspace = true
 conduit-speaker.workspace = true
+conduit-vad.workspace = true
 conduit-wake.workspace = true
 conduit-store.workspace = true
 conduit-script.workspace = true

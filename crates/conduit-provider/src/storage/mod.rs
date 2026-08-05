@@ -17,6 +17,7 @@ pub mod stt;
 pub mod tool;
 pub mod transform;
 pub mod tts;
+pub mod vad;
 pub mod wake;
 
 pub use llm::LlmVariant;
@@ -27,6 +28,7 @@ pub use stt::SttVariant;
 pub use tool::{McpTransport, ToolVariant};
 pub use transform::{Rule, ScriptEngine, TransformVariant};
 pub use tts::TtsVariant;
+pub use vad::{default_silence_ms, VadVariant};
 pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 
 /// The longest a pipeline name may be.
@@ -150,6 +152,8 @@ pub enum ProviderCapability {
     Wake,
     /// Speaker identification.
     SpeakerId,
+    /// Telling speech from silence.
+    Vad,
     /// Recalling what was said before.
     Memory,
 }
@@ -364,6 +368,11 @@ pub enum ProviderDefinitionVariant {
         /// Provider-specific settings.
         variant: SpeakerIdVariant,
     },
+    /// Telling speech from silence.
+    Vad {
+        /// Provider-specific settings.
+        variant: VadVariant,
+    },
     /// Recalling what was said before.
     Memory {
         /// Provider-specific settings.
@@ -383,6 +392,7 @@ impl ProviderDefinitionVariant {
             Self::Tool { .. } => ProviderCapability::Tool,
             Self::Wake { .. } => ProviderCapability::Wake,
             Self::SpeakerId { .. } => ProviderCapability::SpeakerId,
+            Self::Vad { .. } => ProviderCapability::Vad,
             Self::Memory { .. } => ProviderCapability::Memory,
         }
     }
@@ -398,6 +408,7 @@ impl ProviderDefinitionVariant {
             Self::Tool { variant } => Self::Tool { variant: variant.redacted() },
             Self::Wake { variant } => Self::Wake { variant: variant.redacted() },
             Self::SpeakerId { variant } => Self::SpeakerId { variant: variant.redacted() },
+            Self::Vad { variant } => Self::Vad { variant: variant.redacted() },
             Self::Memory { variant } => Self::Memory { variant: variant.redacted() },
         }
     }

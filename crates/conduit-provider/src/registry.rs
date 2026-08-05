@@ -45,6 +45,8 @@ pub enum Capability {
     Wake,
     /// Speaker identification.
     SpeakerId,
+    /// Telling speech from silence.
+    Vad,
 }
 
 impl Capability {
@@ -53,7 +55,7 @@ impl Capability {
     /// The single list that must grow when a capability is added. It lives on
     /// the enum rather than in a bundle so that a bundle builds itself from
     /// this rather than naming each capability on its own.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Stt,
         Self::Llm,
         Self::Tts,
@@ -62,6 +64,7 @@ impl Capability {
         Self::Memory,
         Self::Wake,
         Self::SpeakerId,
+        Self::Vad,
     ];
 
     /// The word this capability is written as in diagnostics and listings.
@@ -76,6 +79,7 @@ impl Capability {
             Self::Memory => "memory",
             Self::Wake => "wake",
             Self::SpeakerId => "speaker_id",
+            Self::Vad => "vad",
         }
     }
 }
@@ -393,10 +397,10 @@ mod tests {
 
     #[test]
     fn every_capability_is_listed_once() {
-        assert_eq!(Capability::ALL.len(), 8);
+        assert_eq!(Capability::ALL.len(), 9);
         assert_eq!(
             Capability::ALL.iter().copied().collect::<std::collections::BTreeSet<_>>().len(),
-            8,
+            9,
             "no capability is listed twice"
         );
     }

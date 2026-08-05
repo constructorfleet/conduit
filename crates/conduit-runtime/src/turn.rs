@@ -286,6 +286,24 @@ impl Turn {
             None => audio,
         };
 
+        // After the gate and before the fork. After, because trimming silence
+        // out of audio nobody asked to be heard is work for nothing — and
+        // because the gate's pre-roll is deliberately silence, which a trimmer
+        // placed first would remove. Before, because identification should hear
+        // the same trimmed utterance the recognizer does: a voice print built
+        // partly from room noise is a worse voice print.
+        let audio = match &self.plan.vad {
+            Some(vad) => crate::trim::trim(
+                Arc::clone(&vad.provider),
+                vad.options,
+                vad.node.clone(),
+                self.emitter.clone(),
+                self.format,
+                audio,
+            ),
+            None => audio,
+        };
+
         // Identification runs beside recognition rather than before it: both
         // want the whole utterance, and asking in sequence would double how
         // long the person waits for an answer.

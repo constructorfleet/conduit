@@ -23,6 +23,7 @@ pub mod testing;
 pub mod tool;
 pub mod transform;
 pub mod tts;
+pub mod vad;
 pub mod wake;
 
 use std::pin::Pin;

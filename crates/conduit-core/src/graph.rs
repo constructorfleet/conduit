@@ -46,6 +46,8 @@ pub enum NodeKind {
     Stt,
     /// Speaker identification.
     SpeakerId,
+    /// Trimming the silence around what was said.
+    Vad,
     /// A language model with its tool and memory bindings.
     Core,
     /// Rewriting an utterance before it is rendered.
@@ -68,6 +70,7 @@ impl NodeKind {
             Self::WakeWord => "wake_word",
             Self::Stt => "stt",
             Self::SpeakerId => "speaker_id",
+            Self::Vad => "vad",
             Self::Core => "core",
             Self::Transform => "transform",
             Self::Tts => "tts",
@@ -325,6 +328,25 @@ pub enum Node {
         /// Provider definition id.
         provider: String,
     },
+    /// Trimming the silence around what was said.
+    ///
+    /// Reads audio and writes audio: what comes out is the same utterance with
+    /// less nothing at either end, so it wires anywhere audio does and its
+    /// edges are checked like any other transport stage's.
+    Vad {
+        /// Author-chosen identifier, unique within the graph.
+        id: NodeId,
+        /// Provider definition id, e.g. `"silero"`.
+        provider: String,
+        /// Request settings this node overrides on the Configured Provider.
+        ///
+        /// A detector takes them — sensitivity, and how much silence ends an
+        /// utterance — which is what separates this from the wake and
+        /// identification stages, whose thresholds live on the definition
+        /// because a phrase model and a voiceprint are the definition.
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        settings: Map<String, Value>,
+    },
     /// A language model with its tool and memory bindings.
     Core {
         /// Author-chosen identifier, unique within the graph.
@@ -427,6 +449,12 @@ impl Node {
         Self::SpeakerId { id: id.into(), provider: provider.into() }
     }
 
+    /// Creates a `vad` node overriding none of its provider's settings.
+    #[must_use]
+    pub fn vad(id: impl Into<NodeId>, provider: impl Into<String>) -> Self {
+        Self::Vad { id: id.into(), provider: provider.into(), settings: Map::new() }
+    }
+
     /// Creates a `core` node reasoning with whichever model `provider` serves
     /// first, bound to no tools and no memory.
     ///
@@ -475,6 +503,7 @@ impl Node {
             | Self::WakeWord { id, .. }
             | Self::Stt { id, .. }
             | Self::SpeakerId { id, .. }
+            | Self::Vad { id, .. }
             | Self::Core { id, .. }
             | Self::Transform { id, .. }
             | Self::Tts { id, .. }
@@ -495,6 +524,7 @@ impl Node {
             | Self::WakeWord { provider, .. }
             | Self::Stt { provider, .. }
             | Self::SpeakerId { provider, .. }
+            | Self::Vad { provider, .. }
             | Self::Transform { provider, .. }
             | Self::Tts { provider, .. }
             | Self::Sink { provider, .. } => provider,
@@ -513,7 +543,9 @@ impl Node {
     #[must_use]
     pub fn settings(&self) -> &Map<String, Value> {
         match self {
-            Self::Stt { settings, .. } | Self::Tts { settings, .. } => settings,
+            Self::Stt { settings, .. }
+            | Self::Tts { settings, .. }
+            | Self::Vad { settings, .. } => settings,
             Self::Core { core, .. } => &core.model.settings,
             Self::Source { .. }
             | Self::WakeWord { .. }
@@ -548,6 +580,7 @@ impl Node {
             Self::WakeWord { .. } => NodeKind::WakeWord,
             Self::Stt { .. } => NodeKind::Stt,
             Self::SpeakerId { .. } => NodeKind::SpeakerId,
+            Self::Vad { .. } => NodeKind::Vad,
             Self::Core { .. } => NodeKind::Core,
             Self::Transform { .. } => NodeKind::Transform,
             Self::Tts { .. } => NodeKind::Tts,
@@ -569,9 +602,10 @@ impl Node {
     pub const fn output_modality(&self) -> Option<Modality> {
         match self {
             Self::Source { modality, .. } => Some(*modality),
-            Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Tts { .. } => {
-                Some(Modality::Audio)
-            }
+            Self::WakeWord { .. }
+            | Self::SpeakerId { .. }
+            | Self::Vad { .. }
+            | Self::Tts { .. } => Some(Modality::Audio),
             Self::Stt { .. } => Some(Modality::Text),
             // A transform changes the words, not what they are. What comes out
             // of one is still something nothing has decided how to render, so
@@ -596,9 +630,10 @@ impl Node {
     pub const fn accepted_modalities(&self) -> &'static [Modality] {
         match self {
             Self::Source { .. } => &[],
-            Self::WakeWord { .. } | Self::SpeakerId { .. } | Self::Stt { .. } => {
-                &[Modality::Audio]
-            }
+            Self::WakeWord { .. }
+            | Self::SpeakerId { .. }
+            | Self::Vad { .. }
+            | Self::Stt { .. } => &[Modality::Audio],
             Self::Core { .. } => &[Modality::Text],
             // Only an utterance. A transform rewrites what a model said on the
             // way to being rendered, which is a stage that exists between a
@@ -653,6 +688,7 @@ impl Node {
             | Self::WakeWord { provider, .. }
             | Self::Stt { provider, .. }
             | Self::SpeakerId { provider, .. }
+            | Self::Vad { provider, .. }
             | Self::Transform { provider, .. }
             | Self::Tts { provider, .. }
             | Self::Sink { provider, .. } => rename_reference(provider, from, to),
@@ -1617,6 +1653,73 @@ mod tests {
             .with_edge(Edge::new("core", "tts"))
             .validate()
             .expect("a core sits where a model node sat");
+    }
+
+    #[test]
+    fn a_vad_reads_audio_and_hands_on_audio() {
+        // The whole of the modality claim: a trimmer takes an utterance's
+        // samples and returns the same utterance's samples, so it wires
+        // wherever audio does and nothing downstream has to know it was there.
+        let vad = Node::vad("trim", "silero");
+
+        assert_eq!(vad.output_modality(), Some(Modality::Audio));
+        assert_eq!(vad.accepted_modalities(), &[Modality::Audio][..]);
+
+        PipelineGraph::new("trimmed")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(vad)
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::core("core", "ollama"))
+            .with_node(Node::tts("tts", "piper"))
+            .with_edge(Edge::new("mic", "trim"))
+            .with_edge(Edge::new("trim", "stt"))
+            .with_edge(Edge::new("stt", "core"))
+            .with_edge(Edge::new("core", "tts"))
+            .validate()
+            .expect("a trimmer sits between the microphone and the recognizer");
+    }
+
+    #[test]
+    fn a_vad_wired_to_a_text_edge_is_refused_by_naming_the_edge() {
+        // The reason this kind is modality-checked at all rather than joining
+        // the unchecked category tools and memory used to be in: a trimmer
+        // handed a transcript has nothing to trim, and finding that out at
+        // runtime would look like a recognizer that lost its audio.
+        let graph = PipelineGraph::new("miswired")
+            .with_node(Node::source("mic", "websocket", Modality::Audio))
+            .with_node(Node::stt("stt", "whisper"))
+            .with_node(Node::vad("trim", "silero"))
+            .with_node(Node::core("core", "ollama"))
+            .with_edge(Edge::new("mic", "stt"))
+            .with_edge(Edge::new("stt", "trim"))
+            .with_edge(Edge::new("trim", "core"));
+
+        assert_eq!(
+            graph.validate(),
+            Err(GraphError::ModalityMismatch {
+                edge: 1,
+                from: "stt".to_owned(),
+                to: "trim".to_owned(),
+                produced: Modality::Text,
+                expected: vec![Modality::Audio],
+            }),
+            "a trimmer handed words says which edge is wrong"
+        );
+    }
+
+    #[test]
+    fn a_vad_carries_the_settings_a_detector_takes() {
+        // Unlike the wake and identification stages, whose thresholds are the
+        // definition, a trimmer's sensitivity is per-pipeline: the same
+        // detector is jumpier in a kitchen than in an office.
+        let quiet = Node::Vad {
+            id: "trim".to_owned(),
+            provider: "silero".to_owned(),
+            settings: [("threshold".to_owned(), Value::from(0.7))].into_iter().collect(),
+        };
+
+        assert_eq!(quiet.settings().get("threshold"), Some(&Value::from(0.7)));
+        assert!(Node::vad("trim", "silero").settings().is_empty(), "none by default");
     }
 
     #[test]

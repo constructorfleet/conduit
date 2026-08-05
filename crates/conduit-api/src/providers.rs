@@ -372,6 +372,7 @@ const fn runtime_capability(capability: ProviderCapability) -> conduit_provider:
         ProviderCapability::Tool => conduit_provider::Capability::Tool,
         ProviderCapability::Wake => conduit_provider::Capability::Wake,
         ProviderCapability::SpeakerId => conduit_provider::Capability::SpeakerId,
+        ProviderCapability::Vad => conduit_provider::Capability::Vad,
         ProviderCapability::Memory => conduit_provider::Capability::Memory,
     }
 }
@@ -392,6 +393,7 @@ fn provider_kind(capability: ProviderCapability) -> ProviderKind {
         ProviderCapability::Tool => ProviderKind::Tool,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
+        ProviderCapability::Vad => ProviderKind::Vad,
         ProviderCapability::Memory => ProviderKind::Memory,
     }
 }
@@ -498,6 +500,11 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                 refuse_config(conduit_marytts::validate::locale(&definition.id, locale))?;
             }
         }
+        // Nothing to check: a detector reading a model off local disk has no
+        // endpoint and no credential, and whether the path holds an ONNX model
+        // is not something a definition can say — that is found out when the
+        // detector is built, which is where it is reported.
+        ProviderDefinitionVariant::Vad { .. } => {}
         ProviderDefinitionVariant::SpeakerId {
             variant: SpeakerIdVariant::Http { base_url, .. },
         }

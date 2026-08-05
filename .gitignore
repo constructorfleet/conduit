@@ -14,6 +14,10 @@ output/playwright/
 # release artifacts rather than ours, so they are downloaded and not carried.
 /crates/conduit-wake/tests/models/
 
+# The Silero VAD model, fetched by scripts/fetch-vad-model.sh, on the same
+# terms: an upstream artifact, downloaded rather than carried.
+/crates/conduit-vad/tests/models/
+
 # ESPHome build output and credentials (Wi-Fi password, API encryption key).
 .esphome/
 secrets.yaml

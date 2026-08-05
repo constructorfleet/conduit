@@ -24,6 +24,7 @@ export const DEFAULT_MEMORY_LIMIT = 8;
 export const LINEAR_STAGE_ORDER: NodeKind[] = [
   "source",
   "wake_word",
+  "vad",
   "stt",
   "speaker_id",
   "core",
@@ -160,6 +161,7 @@ export function outputModality(
       return node.modality ?? "audio";
     case "wake_word":
     case "speaker_id":
+    case "vad":
     case "tts":
       return "audio";
     case "stt":

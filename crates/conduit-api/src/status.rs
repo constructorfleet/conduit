@@ -235,6 +235,8 @@ pub enum ProviderKind {
     Wake,
     /// Speaker identification provider.
     SpeakerId,
+    /// Voice activity detector.
+    Vad,
     /// Long-term memory store.
     Memory,
 }
@@ -1089,6 +1091,7 @@ fn provider_kind_for_node(kind: NodeKind) -> Option<ProviderKind> {
         NodeKind::Transform => Some(ProviderKind::Transform),
         NodeKind::WakeWord => Some(ProviderKind::Wake),
         NodeKind::SpeakerId => Some(ProviderKind::SpeakerId),
+        NodeKind::Vad => Some(ProviderKind::Vad),
         _ => None,
     }
 }
@@ -1109,6 +1112,7 @@ const fn provider_kind_for(capability: conduit_provider::Capability) -> Provider
         conduit_provider::Capability::Memory => ProviderKind::Memory,
         conduit_provider::Capability::Wake => ProviderKind::Wake,
         conduit_provider::Capability::SpeakerId => ProviderKind::SpeakerId,
+        conduit_provider::Capability::Vad => ProviderKind::Vad,
     }
 }
 
@@ -1121,6 +1125,7 @@ fn provider_kind_for_capability(capability: ProviderCapability) -> ProviderKind 
         ProviderCapability::Transform => ProviderKind::Transform,
         ProviderCapability::Wake => ProviderKind::Wake,
         ProviderCapability::SpeakerId => ProviderKind::SpeakerId,
+        ProviderCapability::Vad => ProviderKind::Vad,
         ProviderCapability::Memory => ProviderKind::Memory,
     }
 }
@@ -1138,6 +1143,7 @@ fn unavailable_slot_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Transform => "transform",
         ProviderKind::Wake => "wake",
         ProviderKind::SpeakerId => "speaker_id",
+        ProviderKind::Vad => "vad",
         ProviderKind::Memory => "memory",
     }
 }
@@ -1151,6 +1157,7 @@ fn unavailable_message(kind: ProviderKind) -> &'static str {
         ProviderKind::Transform => "no utterance transform provider is registered",
         ProviderKind::Wake => "no wake word provider is registered",
         ProviderKind::SpeakerId => "no speaker identification provider is registered",
+        ProviderKind::Vad => "no voice activity detection provider is registered",
         ProviderKind::Memory => "no memory provider is registered",
     }
 }

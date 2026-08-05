@@ -8,6 +8,51 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Voice activity detection on the input path, as a `vad` capability, a `vad` pipeline
+  stage, and a `conduit-vad` crate scoring Silero. The stage trims the silence around
+  an utterance before the recognizer sees it: a recognizer billed per second, or one
+  deciding for itself where speech ended, is handed the speech rather than the room.
+- The detector takes the wake gate's *position* and the speaker identifier's *failure
+  semantics*, which [ADR-0014](docs/adr/0014-voice-activity-detection-as-two-decisions.md)
+  records as two separate decisions. It sits in the stream, so it can hold audio back
+  — but a detector that fails does **not** end the turn: the remaining audio is
+  forwarded untrimmed, which is the behaviour without the stage at all. A gate decides
+  whether there is a turn; a trimmer only decides how much of one to forward.
+- A detector returns exactly one verdict per chunk, in order, and the trimming stage
+  pairs them positionally. That is the trait's contract rather than a convenience: a
+  detector answering only about the chunks it had opinions on would leave the stage
+  unable to tell which chunk a verdict skipped, and every later pairing would land on
+  the wrong audio. A chunk too short to complete a scoring window repeats the previous
+  verdict — the sound has not been re-evaluated rather than fallen silent — because
+  reporting silence there punches a hole in the middle of a word for any device sending
+  chunks under 32 ms.
+- `silence_ms` is tunable per node over a **300 ms floor** an operator cannot cut
+  below. Two levels because they are two different things: how long a mid-sentence
+  pause may run is a judgement about how someone speaks, and how much trailing silence
+  a recognizer needs to hear an ending is a fact about the recognizer. A setting that
+  could cut the second would let a pipeline configure clipped final words.
+- A chunk whose duration rounds to zero still counts against that pause. Found while
+  testing it: a tiny buffer, or an encoding whose byte count says nothing about its
+  length, would otherwise never close the tail — and a stage that never closes the
+  tail forwards the whole stream while appearing to trim.
+- Silero's rates — 8 kHz and 16 kHz — are declared on the descriptor and a mismatch is
+  **refused rather than resampled**. A wrong rate does not degrade the detector, it
+  makes each window the wrong *length of sound*: the same 512 samples become 11 ms
+  instead of 32 ms, and the model reports confidently about audio it never heard.
+  Resampling silently would also be deciding on an operator's behalf that a rate they
+  configured was wrong.
+- Samples are never rewritten, only dropped or passed through, so a recognizer
+  downstream hears exactly the bytes the microphone produced.
+- PCM is normalized to `-1.0..=1.0` here, which is the **opposite** of
+  `conduit-wake`'s convention: openWakeWord scores raw `i16` magnitudes. Two models,
+  two conventions, and getting either backwards produces a detector that calls
+  everything speech or nothing — a trimmer that looks like it is working. This is the
+  one hazard a fake detector cannot catch, so it is what the real-model test asserts.
+- WebRTC's VAD, Picovoice Cobra, MarbleNet and TEN VAD are deliberately not offered.
+  WebRTC's is energy-based and mistakes a fan for a voice, which is the failure a
+  learned detector exists to avoid. Cobra is proprietary, needing an access key and a
+  per-device license for something Conduit does in process from a file. The other two
+  sit behind runtimes Conduit does not carry.
 - Coqui is deliberately not supported, recorded alongside the PicoTTS refusal it
   resembles. The live fork, `idiap/coqui-ai-TTS`, ships an HTTP server, but a bespoke
   one rather than an OpenAI-compatible one — so it is not reachable by changing a base

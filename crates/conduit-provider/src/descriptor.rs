@@ -173,8 +173,9 @@ macro_rules! stub_descriptor {
 /// What a provider can do, in the one shape every capability shares.
 ///
 /// A recognizer fills in `languages` and `encodings`, a model fills in `models`
-/// and `tools`, a synthesizer fills in `voices` and `encodings`, a detector
-/// fills in `phrases` — and anything reading a provider generically reads the
+/// and `tools`, a synthesizer fills in `voices` and `encodings`, a wake detector
+/// fills in `phrases`, an activity detector fills in `sample_rates` — and
+/// anything reading a provider generically reads the
 /// same struct for all of them. An empty list means "unrestricted", not
 /// "none": that is what an OpenAI-compatible local endpoint says when it
 /// passes any model name straight through, and what a Wyoming server says when
@@ -195,6 +196,14 @@ pub struct Metadata {
     /// Audio encodings this provider accepts or produces. Empty means it
     /// decides at runtime and accepts whatever it is given.
     pub encodings: Vec<Encoding>,
+    /// Sample rates this provider scores audio at, in hertz. Empty means it
+    /// accepts any.
+    ///
+    /// Declared by the fixed-window providers, which is to say the activity
+    /// detectors: a wrong rate does not degrade one, it makes its window the
+    /// wrong length of sound, so the mismatch is refused at registration rather
+    /// than resampled away. A served detector that adapts declares none.
+    pub sample_rates: Vec<u32>,
     /// Whether this provider can execute tool calls.
     pub tools: bool,
 }
@@ -232,6 +241,13 @@ impl Metadata {
     #[must_use]
     pub fn with_encodings(mut self, encodings: Vec<Encoding>) -> Self {
         self.encodings = encodings;
+        self
+    }
+
+    /// Sets the sample rates this provider scores audio at.
+    #[must_use]
+    pub fn with_sample_rates(mut self, sample_rates: Vec<u32>) -> Self {
+        self.sample_rates = sample_rates;
         self
     }
 

@@ -34,6 +34,7 @@ pub mod plan;
 pub mod sentences;
 pub mod stop;
 pub mod tools;
+pub mod trim;
 mod turn;
 pub mod wake;
 
@@ -53,6 +54,7 @@ use conduit_provider::stt::{AudioChunk, SpeechToText};
 use conduit_provider::tool::Tool;
 use conduit_provider::transform::UtteranceTransform;
 use conduit_provider::tts::{SpeechChunk, TextToSpeech};
+use conduit_provider::vad::VoiceActivityDetector;
 use conduit_provider::wake::WakeWordDetector;
 use conduit_provider::{Capability, ChunkStream, Provider, Registry, RegistryHandle};
 use futures_util::StreamExt;
@@ -212,6 +214,13 @@ impl Providers {
         self.with::<dyn SpeakerIdentifier>(Capability::SpeakerId, name, Arc::new(provider))
     }
 
+    /// Registers a voice activity detector under its own name.
+    #[must_use]
+    pub fn with_vad<P: VoiceActivityDetector>(self, provider: P) -> Self {
+        let name = provider.name().to_owned();
+        self.with::<dyn VoiceActivityDetector>(Capability::Vad, name, Arc::new(provider))
+    }
+
     /// The registered recognizers.
     #[must_use]
     pub fn stt(&self) -> &Registry<dyn SpeechToText> {
@@ -258,6 +267,12 @@ impl Providers {
     #[must_use]
     pub fn speaker(&self) -> &Registry<dyn SpeakerIdentifier> {
         self.registry(Capability::SpeakerId)
+    }
+
+    /// The registered voice activity detectors.
+    #[must_use]
+    pub fn vad(&self) -> &Registry<dyn VoiceActivityDetector> {
+        self.registry(Capability::Vad)
     }
 
     /// Every capability with at least one registered provider, and the names
@@ -336,6 +351,7 @@ fn empty_registry(capability: Capability) -> Box<dyn RegistryHandle> {
         Capability::Memory => Box::new(Registry::<dyn Memory>::new()),
         Capability::Wake => Box::new(Registry::<dyn WakeWordDetector>::new()),
         Capability::SpeakerId => Box::new(Registry::<dyn SpeakerIdentifier>::new()),
+        Capability::Vad => Box::new(Registry::<dyn VoiceActivityDetector>::new()),
     }
 }
 
