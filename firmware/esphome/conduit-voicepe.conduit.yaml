@@ -1,0 +1,51 @@
+# Rendered by Conduit. Edits are lost on the next render.
+#
+# Included by a hand-written board file, which owns everything about what
+# the board is made of. See docs/adr/0015-render-the-conduit-part-of-the-firmware.md
+#
+# Credentials are `!secret` references, never values, so this file is safe
+# to commit. Define them in your ESPHome `secrets.yaml`.
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 4
+  stop_after_detection: false
+  vad:
+  models:
+    - model: https://github.com/kahrendt/microWakeWord/releases/download/okay_nabu_20241226.3/okay_nabu.json
+      id: okay_nabu
+    - model: hey_jarvis
+      id: hey_jarvis
+    - model: hey_mycroft
+      id: hey_mycroft
+    - model: https://github.com/kahrendt/microWakeWord/releases/download/stop/stop.json
+      id: stop
+      internal: true
+  on_wake_word_detected:
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          - conduit_voice.wake_debug_event:
+              id: conduit
+          - conduit_voice.start:
+              id: conduit
+
+conduit_voice:
+  id: conduit
+  server: 192.168.1.10:8080
+  scheme: ws
+  pipeline: kitchen
+  # A reference, never a value: this file is committed.
+  token: !secret conduit_token
+  max_utterance_ms: 8000
+  debug_assistant_id: kitchen
+  debug_udp_host: ""
+  debug_udp_port: 6056
+  # A reference, never a value: the URL carries a webhook token.
+  debug_wake_event_url: !secret wake_debug_event_url
+  microphone: i2s_mics
+  speaker: announcement_resampling_speaker

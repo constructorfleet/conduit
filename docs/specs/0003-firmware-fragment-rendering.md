@@ -208,6 +208,18 @@ something to grep and a reviewer can see the output. That fragment is a fixture:
 a test regenerates it from the renderer and fails if it drifts, which is the
 same mechanism `protocol_parity.rs` already uses for `notices.fixture`.
 
+**What converting actually surfaced**, and why this track was worth doing last:
+the renderer emitted neither the per-model `id:` both board files give every
+model, nor the `internal: true` both use to keep the stop word off the entity
+list. Converting without those would have published a "Stop" switch the
+hand-written files deliberately hid, and left the document with no handle for a
+model. Track A's `WakeModel` grew both, and the boards merge the fragment
+through ESPHome's `packages:` rather than a bare `!include`, which is the
+mechanism that merges top-level keys. Every rendered `conduit_voice:` value is
+the literal the substitution it replaced expanded to, and `micro_wake_word:` is
+byte-identical on both boards — so the seven now-dead substitutions are gone
+from the board files and from `firmware/README.md`.
+
 ## Track D — Console affordance
 
 A device's page offers its fragment for download, with the board IDs as fields.

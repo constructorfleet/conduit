@@ -4,6 +4,11 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 sat1="$root/firmware/esphome/conduit-sat1.yaml"
 voicepe="$root/firmware/esphome/conduit-voicepe.yaml"
+# The rendered halves. Per ADR-0015 the board files own the hardware and
+# Conduit renders its own blocks, so an assertion about a key belongs to
+# whichever of the two files now holds it.
+sat1_fragment="$root/firmware/esphome/conduit-sat1.conduit.yaml"
+voicepe_fragment="$root/firmware/esphome/conduit-voicepe.conduit.yaml"
 component="$root/firmware/esphome/components/conduit_voice"
 sat1_overlay="$root/firmware/esphome/components/SAT1_OVERLAY.md"
 
@@ -36,14 +41,21 @@ refute() {
 #
 # A Home Assistant webhook URL carries its token in the path, so the URL is the
 # credential. Substitutions are committed; secrets are git-ignored.
-for board in "$sat1" "$voicepe"; do
+# The shape rule follows the credential: it now lives in the rendered fragment,
+# and a rendered credential is exactly as committed as a hand-written one.
+for board in "$sat1_fragment" "$voicepe_fragment"; do
   for field in token debug_wake_event_url; do
     if ! grep -Eq "^  ${field}: !secret " "$board"; then
-      printf '%s: %s must be "!secret ..." — substitutions are committed\n' \
+      printf '%s: %s must be "!secret ..." — this file is committed\n' \
         "$board" "$field" >&2
       exit 1
     fi
   done
+done
+
+# The substitutions scan stays on the board files, which are where a
+# substitutions block still exists.
+for board in "$sat1" "$voicepe"; do
   # And no credential-shaped key may be *defined* as a substitution, which is
   # how the Voice PE case arose: declared up top, interpolated below, reading
   # as ordinary configuration all the way down. Only the substitutions block is
@@ -62,17 +74,34 @@ for board in "$sat1" "$voicepe"; do
   fi
 done
 
+# Each board pulls in its rendered half. Without this, a board file that lost
+# its include would still pass every assertion below — and flash a device with
+# no `conduit_voice:` block at all.
+require "conduit: !include conduit-sat1.conduit.yaml" "$sat1"
+require "conduit: !include conduit-voicepe.conduit.yaml" "$voicepe"
+# And each block must be defined in exactly one place, or ESPHome sees two.
+# Matched at column zero so the prose above the include, which names both
+# blocks to say where they went, does not read as a definition.
+for board in "$sat1" "$voicepe"; do
+  for block in conduit_voice micro_wake_word; do
+    if grep -Eq "^${block}:" "$board"; then
+      printf '%s: %s is defined here and in the fragment\n' "$board" "$block" >&2
+      exit 1
+    fi
+  done
+done
+
 require "futureproofhomes/satellite1-esphome" "$sat1"
 require "592a9687206709046f475b5464941702beacb093" "$sat1"
-require "microphone: sat1_mics" "$sat1"
-require "speaker: announcement_resampling_speaker" "$sat1"
+require "microphone: sat1_mics" "$sat1_fragment"
+require "speaker: announcement_resampling_speaker" "$sat1_fragment"
 require "conduit_voice.start" "$sat1"
 require "conduit_voice.interrupt" "$sat1"
-require "conduit_voice.wake_debug_event" "$sat1"
-require "debug_udp_host" "$sat1"
-require "debug_wake_event_url" "$sat1"
-require "token: !secret conduit_token" "$sat1"
-require "max_utterance_ms" "$sat1"
+require "conduit_voice.wake_debug_event" "$sat1_fragment"
+require "debug_udp_host" "$sat1_fragment"
+require "debug_wake_event_url" "$sat1_fragment"
+require "token: !secret conduit_token" "$sat1_fragment"
+require "max_utterance_ms" "$sat1_fragment"
 require "components:" "$sat1"
 require "- pcm5122" "$sat1"
 require "- satellite1" "$sat1"
@@ -82,15 +111,15 @@ require "dump_summary(char *buffer, size_t len)" "$root/firmware/esphome/compone
 
 require "esphome/home-assistant-voice-pe" "$voicepe"
 require "0579e7b9d8504264719c593474c85447253c9dc1" "$voicepe"
-require "microphone: i2s_mics" "$voicepe"
-require "speaker: announcement_resampling_speaker" "$voicepe"
+require "microphone: i2s_mics" "$voicepe_fragment"
+require "speaker: announcement_resampling_speaker" "$voicepe_fragment"
 require "conduit_voice.start" "$voicepe"
 require "conduit_voice.interrupt" "$voicepe"
-require "conduit_voice.wake_debug_event" "$voicepe"
-require "debug_udp_host" "$voicepe"
-require "debug_wake_event_url" "$voicepe"
-require "token: !secret conduit_token" "$voicepe"
-require "max_utterance_ms" "$voicepe"
+require "conduit_voice.wake_debug_event" "$voicepe_fragment"
+require "debug_udp_host" "$voicepe_fragment"
+require "debug_wake_event_url" "$voicepe_fragment"
+require "token: !secret conduit_token" "$voicepe_fragment"
+require "max_utterance_ms" "$voicepe_fragment"
 
 require "esp_websocket_client_send_bin" "$component/conduit_voice.cpp"
 require "esp_websocket_client_send_text" "$component/conduit_voice.cpp"

@@ -319,6 +319,12 @@ fn render_fragment(request: &RenderRequest, models: &[WakeModel]) -> String {
         yaml.push_str("  stop_after_detection: false\n  vad:\n  models:\n");
         for model in models {
             yaml.push_str(&format!("    - model: {}\n", model.rendered()));
+            yaml.push_str(&format!("      id: {}\n", model.id));
+            // Emitted only when true, matching the board files: an explicit
+            // `internal: false` on every wake word would be noise.
+            if model.internal {
+                yaml.push_str("      internal: true\n");
+            }
         }
         yaml.push_str(&format!(
             "  on_wake_word_detected:\n\
@@ -355,6 +361,7 @@ fn render_fragment(request: &RenderRequest, models: &[WakeModel]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conduit_provider::storage::wake_models::ModelReference;
 
     fn request() -> RenderRequest {
         RenderRequest {
@@ -371,12 +378,30 @@ mod tests {
         }
     }
 
+    /// A wake word resolved from microWakeWord's manifest.
+    fn manifest(phrase: &str) -> WakeModel {
+        WakeModel {
+            reference: ModelReference::Manifest(phrase.to_owned()),
+            id: phrase.to_owned(),
+            internal: false,
+        }
+    }
+
+    /// A wake word whose model file the definition named.
+    fn url(id: &str, url: &str) -> WakeModel {
+        WakeModel {
+            reference: ModelReference::Url(url.to_owned()),
+            id: id.to_owned(),
+            internal: false,
+        }
+    }
+
     #[test]
     fn no_credential_is_ever_rendered_as_a_value() {
         // The security property, asserted as a property rather than as a
         // spot-check of one field: the renderer takes no credential as input, so
         // there is nothing it could leak, and the output says `!secret`.
-        let yaml = render_fragment(&request(), &[WakeModel::Manifest("hey_jarvis".to_owned())]);
+        let yaml = render_fragment(&request(), &[manifest("hey_jarvis")]);
 
         assert!(yaml.contains("token: !secret conduit_token"));
         assert!(yaml.contains("debug_wake_event_url: !secret wake_debug_event_url"));
@@ -405,8 +430,8 @@ mod tests {
         let yaml = render_fragment(
             &request(),
             &[
-                WakeModel::Manifest("hey_jarvis".to_owned()),
-                WakeModel::Url("https://example.invalid/okay_nabu.json".to_owned()),
+                manifest("hey_jarvis"),
+                url("okay_nabu", "https://example.invalid/okay_nabu.json"),
             ],
         );
 
@@ -416,10 +441,28 @@ mod tests {
     }
 
     #[test]
+    fn a_model_carries_the_id_and_visibility_the_board_files_give_it() {
+        // Both hand-written files give every model an `id:` and hide the stop
+        // word. Rendering neither would publish a "Stop" switch the boards
+        // deliberately suppressed, and leave the document with no handle for a
+        // model — a regression the moment a board file switches to `!include`.
+        let mut stop = manifest("stop");
+        stop.internal = true;
+        let yaml = render_fragment(&request(), &[manifest("hey_jarvis"), stop]);
+
+        assert!(yaml.contains("    - model: hey_jarvis\n      id: hey_jarvis\n"), "{yaml}");
+        assert!(
+            yaml.contains("    - model: stop\n      id: stop\n      internal: true\n"),
+            "{yaml}"
+        );
+        assert_eq!(yaml.matches("internal: true").count(), 1, "only the stop word is hidden");
+    }
+
+    #[test]
     fn the_fragment_refers_to_the_board_only_through_ids_it_was_given() {
         // The whole contract between rendered and hand-written parts. A board
         // Conduit has never heard of works because these are all it names.
-        let yaml = render_fragment(&request(), &[WakeModel::Manifest("stop".to_owned())]);
+        let yaml = render_fragment(&request(), &[manifest("stop")]);
 
         assert!(yaml.contains("microphone: sat1_mics"));
         assert!(yaml.contains("speaker: announcement_resampling_speaker"));
@@ -435,7 +478,7 @@ mod tests {
     fn rendering_the_same_request_twice_is_byte_identical() {
         // A fragment that churned would make every re-render look like a change
         // worth flashing.
-        let models = [WakeModel::Manifest("okay_nabu".to_owned())];
+        let models = [manifest("okay_nabu")];
         assert_eq!(render_fragment(&request(), &models), render_fragment(&request(), &models));
     }
 
@@ -528,7 +571,7 @@ mod tests {
         voicepe.microphone = "i2s_mics".to_owned();
         voicepe.gain_factor = 4;
 
-        let yaml = render_fragment(&voicepe, &[WakeModel::Manifest("hey_jarvis".to_owned())]);
+        let yaml = render_fragment(&voicepe, &[manifest("hey_jarvis")]);
 
         assert!(yaml.contains("microphone: i2s_mics"));
         assert!(yaml.contains("gain_factor: 4"));

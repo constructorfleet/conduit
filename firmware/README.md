@@ -86,10 +86,12 @@ Run the firmware helper tests with:
 Conduit provides ESPHome firmware targets for the two supported satellite
 boards:
 
-- `esphome/conduit-sat1.yaml` uses FutureProofHomes Satellite1 firmware from
+- `esphome/conduit-sat1.yaml`, with `esphome/conduit-sat1.conduit.yaml`, uses
+  FutureProofHomes Satellite1 firmware from
   `futureproofhomes/satellite1-esphome` pinned to
   `592a9687206709046f475b5464941702beacb093`.
-- `esphome/conduit-voicepe.yaml` uses Home Assistant Voice PE firmware from
+- `esphome/conduit-voicepe.yaml`, with `esphome/conduit-voicepe.conduit.yaml`,
+  uses Home Assistant Voice PE firmware from
   `esphome/home-assistant-voice-pe` pinned to
   `0579e7b9d8504264719c593474c85447253c9dc1`.
 
@@ -99,29 +101,57 @@ firmware sources without routing conversations through ESPHome's native
 `conduit_voice.start` action, which opens:
 
 ```text
-ws://{conduit_server}/v1/pipelines/{conduit_pipeline}/converse
+ws://{server}/v1/pipelines/{pipeline}/converse
 ```
 
-Set the substitutions before flashing:
+where `server` and `pipeline` are the ones rendered into the fragment.
 
-- `conduit_server`: host and port for Conduit, for example `192.168.1.10:8080`.
-- `conduit_pipeline`: the Conduit pipeline name.
-- `conduit_scheme`: `ws` or `wss`. `wss` and an `https` wake-debug endpoint
-  verify the server against the ESP-IDF root certificate bundle, which both
-  targets enable through `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`. A server whose
-  certificate is signed by a private CA is not in that bundle and will be
-  refused; use `ws` behind a trusted network, or add the CA to the build.
-- `conduit_authorization`: optional value for the WebSocket `Authorization`
-  header, for example `Bearer ...`. Empty disables the header.
-- `conduit_max_utterance_ms`: maximum microphone streaming window after a
-  socket connects. Defaults to `8000`; set `0` only if some other automation
-  calls `conduit_voice.stop`.
-- `wake_debug_assistant_id`: assistant id used for debug packets and wake
-  events. Defaults to `conduit_pipeline`.
-- `wake_debug_udp_host`: host running
-  `~/src/wakeword/esphome-wakeword-debug/` ingest. Empty disables UDP debug
-  audio.
-- `wake_debug_udp_port`: UDP ingest port. Defaults to `6056`.
+Each board file is now two files. The hand-written one owns the hardware; the
+Conduit half — the `conduit_voice:` and `micro_wake_word:` blocks — is rendered
+by the server and merged in as a package:
+
+```yaml
+packages:
+  conduit: !include conduit-sat1.conduit.yaml
+```
+
+Per [ADR-0015](../docs/adr/0015-render-the-conduit-part-of-the-firmware.md), the
+board file is the board profile and is never generated; the fragment names only
+ids the board file declares, and nothing about what the board is made of.
+
+Re-render the fragment when the pipeline, the server address, or the flashed
+phrases change:
+
+```sh
+curl -H "Authorization: Bearer $CONDUIT_MANAGEMENT_TOKEN" \
+  "http://192.168.1.10:8080/v1/devices/kitchen/firmware?\
+pipeline=kitchen&microphone=sat1_mics&speaker=announcement_resampling_speaker\
+&mute_switch=master_mute_switch&gain_factor=6&server=192.168.1.10:8080" \
+  > firmware/esphome/conduit-sat1.conduit.yaml
+```
+
+The board ids are parameters because only the board file knows them, and none
+has a default: a default microphone id would render something that compiles
+cleanly against somebody else's board. `scheme` defaults to `ws`;
+`max_utterance_ms` to `8000`; `debug_udp_port` to `6056`. See
+[the API reference](../docs/api.md) for the full parameter list.
+
+`wss` and an `https` wake-debug endpoint verify the server against the ESP-IDF
+root certificate bundle, which both targets enable through
+`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`. A server whose certificate is signed by a
+private CA is not in that bundle and will be refused; use `ws` behind a trusted
+network, or add the CA to the build.
+
+The two committed fragments are checked in so this suite has something to grep
+and a reviewer can read the output. They are not hand-edited —
+`cargo test -p conduit-api --test firmware_fragments` regenerates them and fails
+when the two differ. Set `CONDUIT_REGENERATE_FIXTURES=1` to update them.
+
+Still set as substitutions, because they are properties of the device rather
+than of the pipeline:
+
+- `name` and `friendly_name`: what the device calls itself.
+
 Both targets read `wifi_ssid`, `wifi_password`, `api_encryption_key`,
 `conduit_token`, and `wake_debug_event_url` from an ESPHome `secrets.yaml` you
 create next to the YAML. That file holds credentials and is git-ignored, along
@@ -132,7 +162,9 @@ with the `.esphome/` build directory. Never commit either.
 posting. It is a secret rather than a substitution because a Home Assistant
 webhook URL carries its token in the path, which makes the whole URL a
 credential. Voice PE used to take it as a substitution while Satellite1 took it
-from `secrets.yaml`, which was one rule applied to one of two boards.
+from `secrets.yaml`, which was one rule applied to one of two boards. The
+renderer emits it as a `!secret` reference for both, which is what makes a
+rendered fragment safe to commit.
 
 `conduit_token` is the device token Conduit authenticates the satellite with. It
 must match a `devices` entry in the server's token file, and each satellite
@@ -155,7 +187,7 @@ The option is optional, for a server started with `CONDUIT_ALLOW_ANONYMOUS`.
 Against any other server, omitting it means the upgrade is refused with 401.
 
 The local component streams microphone audio as binary WebSocket frames, sends
-`{"type":"end"}` when stopped or when `conduit_max_utterance_ms` elapses,
+`{"type":"end"}` when stopped or when `max_utterance_ms` elapses,
 parses Conduit text notices, and writes binary reply frames to the board
 speaker. It exposes three actions and one condition:
 
@@ -184,7 +216,7 @@ signature so the firmware actually compiles with current ESPHome.
   (`announcement_resampling_speaker`), through the `satellite1` DAC proxy.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
   `conduit_voice.start`; the component sends `end` automatically after
-  `conduit_max_utterance_ms`.
+  `max_utterance_ms`.
 - Button trigger: the `btn_action` GPIO `on_multi_click` calls
   `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
   running — a press during a reply cuts it off. Starting is gated on
@@ -204,7 +236,7 @@ target, so the LED ring is dark.
   (`announcement_resampling_speaker`), through the `aic3204` DAC.
 - Wake trigger: `micro_wake_word` `on_wake_word_detected` calls
   `conduit_voice.start`; the component sends `end` automatically after
-  `conduit_max_utterance_ms`.
+  `max_utterance_ms`.
 - Button trigger: the `center_button` GPIO `on_multi_click` calls
   `conduit_voice.start`, or `conduit_voice.interrupt` if a turn is already
   running — a press during a reply cuts it off. Starting is gated on
@@ -214,7 +246,7 @@ target, so the LED ring is dark.
 Still needed: LED states for connecting, listening, thinking, speaking, and
 failed. The YAML defines no `light:` block, so the LED ring is dark.
 
-When `wake_debug_udp_host` is set, the local component also streams the same
+When `debug_udp_host` is set, the local component also streams the same
 16 kHz mono signed little-endian PCM that feeds wake-word detection to the
 debug receiver using WWD2 UDP packets:
 
@@ -224,6 +256,6 @@ magic=WWD2 assistant_id channels=1 bits=16 encoding=pcm_s16le sample_rate=16000
 
 On wake-word detection, the YAML calls `conduit_voice.wake_debug_event` before
 starting the Conduit conversation. That action posts to `wake_debug_event_url`
-with `assistant_id={wake_debug_assistant_id}` so
+with the fragment's `debug_assistant_id` so
 `esphome-wakeword-debug` can align the wake event with the continuous WWD2
 audio stream.

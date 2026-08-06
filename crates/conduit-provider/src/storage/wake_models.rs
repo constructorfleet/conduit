@@ -27,16 +27,25 @@ use super::wake::{MicroWakeWordRuntime, WakeVariant};
 /// `hey_jarvis`.
 const MANIFEST_PHRASES: &[&str] = &["alexa", "hey_jarvis", "hey_mycroft", "okay_nabu", "stop"];
 
-/// How a rendered `micro_wake_word:` entry names its model.
+/// Phrases that end a reply rather than beginning a turn.
+///
+/// microWakeWord scores these like any other model, but they are not wake
+/// words: nobody wants a "Stop" toggle in their smart-home app beside the
+/// wake words, so both board files mark this one `internal: true`. Rendering
+/// it as an ordinary model would publish an entity the hand-written files
+/// deliberately hid.
+const STOP_PHRASES: &[&str] = &["stop"];
+
+/// Where a rendered `micro_wake_word:` entry gets its model file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WakeModel {
+pub enum ModelReference {
     /// A name ESPHome resolves from microWakeWord's own manifest.
     Manifest(String),
     /// An explicit `.json` manifest URL, emitted verbatim.
     Url(String),
 }
 
-impl WakeModel {
+impl ModelReference {
     /// The value to render after `model:`.
     ///
     /// Both arms render as their inner string; the variants exist so a caller
@@ -47,6 +56,30 @@ impl WakeModel {
             Self::Manifest(name) => name,
             Self::Url(url) => url,
         }
+    }
+}
+
+/// One entry in a rendered `micro_wake_word:` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WakeModel {
+    /// Where the model file comes from.
+    pub reference: ModelReference,
+    /// The ESPHome id for this model.
+    ///
+    /// Always the manifest spelling of the phrase, even when the model itself
+    /// is an explicit URL — that is what both board files do, and an id is a
+    /// handle for the rest of the document rather than a description of the
+    /// file it loads.
+    pub id: String,
+    /// Whether ESPHome should keep this model's switch off the entity list.
+    pub internal: bool,
+}
+
+impl WakeModel {
+    /// The value to render after `model:`.
+    #[must_use]
+    pub fn rendered(&self) -> &str {
+        self.reference.rendered()
     }
 }
 
@@ -91,25 +124,41 @@ pub fn models_for(variant: &WakeVariant) -> Result<Vec<WakeModel>, UnknownPhrase
     phrases
         .iter()
         .map(|phrase| {
+            let id = identifier(phrase);
             // The definition wins: an operator who named a URL for a phrase the
-            // table also knows meant their model, not ours.
-            if let Some(url) = variant.model_url(phrase) {
-                return Ok(WakeModel::Url(url.to_owned()));
-            }
-            manifest_name(phrase)
-                .map(WakeModel::Manifest)
-                .ok_or_else(|| UnknownPhrase { phrase: phrase.clone() })
+            // table also knows meant their model, not ours. An unknown phrase
+            // is only unknown when nothing named a file for it, so a URL alone
+            // is enough — that is what the escape hatch is for.
+            let reference = match variant.model_url(phrase) {
+                Some(url) => ModelReference::Url(url.to_owned()),
+                None => ModelReference::Manifest(
+                    manifest_name(phrase)
+                        .ok_or_else(|| UnknownPhrase { phrase: phrase.clone() })?,
+                ),
+            };
+
+            Ok(WakeModel { reference, internal: is_stop_phrase(&id), id })
         })
         .collect()
 }
 
+/// The ESPHome id for `phrase`: its normalised spelling.
+fn identifier(phrase: &str) -> String {
+    phrase.trim().to_lowercase().replace([' ', '-'], "_")
+}
+
 /// The manifest spelling of `phrase`, if microWakeWord ships one.
 fn manifest_name(phrase: &str) -> Option<String> {
-    let normalised = phrase.trim().to_lowercase().replace([' ', '-'], "_");
+    let normalised = identifier(phrase);
     MANIFEST_PHRASES
         .iter()
         .find(|known| **known == normalised.as_str())
         .map(|known| (*known).to_owned())
+}
+
+/// Whether `id` names a phrase that stops a reply rather than starting a turn.
+fn is_stop_phrase(id: &str) -> bool {
+    STOP_PHRASES.contains(&id)
 }
 
 #[cfg(test)]
@@ -135,8 +184,10 @@ mod tests {
         // would pin a copy of a file upstream already ships.
         let models = models_for(&on_device(&["hey_jarvis"], &[])).expect("a known phrase");
 
-        assert_eq!(models, vec![WakeModel::Manifest("hey_jarvis".to_owned())]);
+        assert_eq!(models[0].reference, ModelReference::Manifest("hey_jarvis".to_owned()));
         assert_eq!(models[0].rendered(), "hey_jarvis");
+        assert_eq!(models[0].id, "hey_jarvis");
+        assert!(!models[0].internal, "a wake word belongs on the entity list");
     }
 
     #[test]
@@ -156,8 +207,43 @@ mod tests {
             "https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/custom.json";
         let models = models_for(&on_device(&["custom"], &[("custom", url)])).expect("a url");
 
-        assert_eq!(models, vec![WakeModel::Url(url.to_owned())]);
+        assert_eq!(models[0].reference, ModelReference::Url(url.to_owned()));
         assert_eq!(models[0].rendered(), url);
+    }
+
+    #[test]
+    fn a_stop_phrase_is_internal_so_no_switch_appears_for_it() {
+        // Both board files hide this one, because a "Stop" toggle beside the
+        // wake words in a smart-home app is not something anybody asked for.
+        let models = models_for(&on_device(&["stop"], &[])).expect("a known phrase");
+
+        assert!(models[0].internal, "a stop word is not a wake word");
+        assert_eq!(models[0].id, "stop");
+    }
+
+    #[test]
+    fn a_phrase_with_only_a_url_still_gets_an_id_from_its_spelling() {
+        // The id is a handle for the rest of the document, so it comes from the
+        // phrase rather than from the file name in the URL — which is what both
+        // board files do for their S3 and GitHub models.
+        let url = "https://example.invalid/whatever-the-file-is-called.json";
+        let models = models_for(&on_device(&["Okay Nabu"], &[("Okay Nabu", url)]))
+            .expect("a url needs no table entry");
+
+        assert_eq!(models[0].id, "okay_nabu");
+        assert_eq!(models[0].rendered(), url);
+    }
+
+    #[test]
+    fn a_url_for_a_phrase_the_table_never_heard_of_resolves() {
+        // The escape hatch has to actually be an escape hatch: naming a file is
+        // enough, or a household could only flash the five phrases we listed.
+        let url = "https://example.invalid/pod_bay_doors.json";
+        let models = models_for(&on_device(&["pod bay doors"], &[("pod bay doors", url)]))
+            .expect("a named file is enough");
+
+        assert_eq!(models[0].rendered(), url);
+        assert_eq!(models[0].id, "pod_bay_doors");
     }
 
     #[test]
