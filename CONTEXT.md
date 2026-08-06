@@ -204,6 +204,42 @@ _Avoid_: Node status
 A completed conversation turn in which every pipeline component that was actually invoked completed without an unrecovered error. Components that were not needed for that turn, such as tools when the model requested none, do not have to run for the turn to be successful.
 _Avoid_: Full pipeline pass
 
+**Component Location**:
+Where a provider definition's component runs: inside the Conduit process, or in a separate process reached over the network. Location is a property of the definition rather than of the pipeline, so moving a component between a laptop and a GPU host is an edit to one definition and not a change to any graph.
+_Avoid_: Deployment mode, local vs remote pipeline
+
+**Remote Component Host**:
+A process that serves one or more components to Conduit over the network. A remote component host is packaging, not a domain concept: which components it happens to host is deployment configuration, and co-location is what happens when several definitions name the same host.
+_Avoid_: Vox, Echo, Nexus, node, worker tier
+
+**Audio Stage Set**:
+The components that consume the same captured audio stream — voice activity detection, wake word detection, recognition, and speaker identification. This is the one grouping Conduit models, because sending one audio stream to one host once is different from sending it to four hosts separately.
+_Avoid_: Ingestion group, Vox, input tier
+
+**Component Protocol**:
+The documented contract a process implements to serve a component to Conduit without being compiled into it. The component protocol is how a provider written in another language becomes usable, so adding one is running a process rather than rebuilding Conduit.
+_Avoid_: Plugin API, dynamic plugin, provider SDK
+
+**Pipeline Comparison**:
+Running the same input through two or more pipelines and reporting where they differed and what each cost. A pipeline comparison exists to make a configuration choice — an engine, a model, a location, whether to stream — decidable by measurement rather than by argument.
+_Avoid_: Benchmark, A/B test
+
+**Shadow Turn**:
+A turn a candidate pipeline runs on real captured audio alongside the live pipeline, whose output no satellite ever hears. A shadow turn is how a comparison gets real utterances instead of fixtures; the live pipeline remains the only one that answers.
+_Avoid_: Dry run, canary, replay
+
+**Shadow Tool Intent**:
+A tool call a shadow turn's reasoning core requested, recorded with its arguments and answered with a synthetic result. A shadow turn never invokes a tool, so the intent is the evidence and the tool's real effect never happens.
+_Avoid_: Stubbed tool call, mocked tool, sandboxed tool
+
+**Turn Capture**:
+The retained record of a turn — its audio, transcripts, utterances, and tool intents — kept for later comparison or training. Turn capture is enabled per pipeline and independently for live and shadow turns, is off until an operator turns it on, and what it holds is visible and deletable.
+_Avoid_: Logging, telemetry, recording
+
+**Capture Retention**:
+The operator-chosen bound on what turn capture keeps, by count or by age, with keeping everything as an explicit choice rather than the default. Retention separates capturing to decide something from capturing to build a corpus.
+_Avoid_: Log rotation, cleanup
+
 **Satellite**:
 A device that connects to Conduit to hold voice conversations through a pipeline. A satellite is identified by device authentication and event attribution, not by speaker identity.
 _Avoid_: Client, endpoint, speaker
