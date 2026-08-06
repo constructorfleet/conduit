@@ -13,6 +13,7 @@
 //! is bound and what the firewall publishes, not a token.
 
 pub mod auth;
+pub mod compare;
 pub mod config;
 pub mod converse;
 pub mod error;
@@ -92,6 +93,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route("/v1/pipelines/{name}/test-turn", post(pipelines::test_turn))
+        .route(
+            "/v1/pipelines/compare",
+            post(compare::compare)
+                // Its own budget, for the same reason enrollment has one: a
+                // comparison may carry a recorded fixture, and the service-wide
+                // limit is sized for JSON.
+                .layer(DefaultBodyLimit::max(compare::COMPARISON_BODY_LIMIT_BYTES)),
+        )
         .route(CONVERSE_ROUTE, get(converse::converse))
         .route(
             "/v1/pipelines/{name}",

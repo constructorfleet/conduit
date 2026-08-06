@@ -471,6 +471,90 @@ export interface PipelineTestResult {{
   reply_audio?: string;
 }}
 
+/// Exactly one of the two: words to hand the pipelines, or a recorded WAV as
+/// base64. A recorded fixture is what makes comparing recognizers meaningful,
+/// because a typed utterance reaches a real recognizer as bytes it was never
+/// trained to read.
+export type ComparisonInput =
+  | {{ utterance: string }}
+  | {{ audio: string }};
+
+export interface ComparisonRequest {{
+  pipelines: string[];
+  input: ComparisonInput;
+  format?: AudioFormat;
+}}
+
+/// Sequential is the only mode: candidates run against real providers, and
+/// running them together would let two contend for the same hardware and report
+/// latencies nobody could reproduce in production.
+export type ComparisonExecution = "sequential";
+
+/// Whether the agreement verdict can be trusted. Two pipelines reasoning with
+/// different cores phrase the same right answer differently, so equality is not
+/// evidence either way — marked rather than refused, because comparing their
+/// latency is still a real question.
+export type ComparisonReliability = "reliable" | "cores_differ";
+
+export type ComparisonNormalization = "case" | "whitespace" | "punctuation";
+
+/// The stage vocabulary from the event bus, which is where these timings come
+/// from — so a comparison and a `Turn Reconstruction` cannot disagree about
+/// which component spent the time.
+export type PipelineStage =
+  | "wake_word"
+  | "capture"
+  | "transcription"
+  | "identity"
+  | "conversation"
+  | "reasoning"
+  | "tools"
+  | "synthesis"
+  | "diagnostics";
+
+export interface ComparisonStageTiming {{
+  stage: PipelineStage;
+  elapsed_ms: number;
+}}
+
+export type ComparisonOutcome =
+  | {{
+      status: "completed";
+      transcript?: string;
+      reply_text?: string;
+      compared_raw: string;
+      normalized: string;
+      audio_bytes: number;
+      reply_audio?: string;
+    }}
+  | {{ status: "failed"; error: string; node?: string }};
+
+export interface ComparisonCandidate {{
+  pipeline: string;
+  conversation?: IdString;
+  outcome: ComparisonOutcome;
+  elapsed_ms?: number;
+  stages: ComparisonStageTiming[];
+}}
+
+/// `identical` beside `agreed` so an operator can tell equivalence from
+/// lenience, and `compared` because a failed candidate is excluded from the
+/// verdict rather than counted as disagreeing.
+export interface ComparisonVerdict {{
+  agreed: boolean;
+  identical: boolean;
+  reliability: ComparisonReliability;
+  compared: number;
+  replies: string[];
+}}
+
+export interface ComparisonReport {{
+  candidates: ComparisonCandidate[];
+  verdict: ComparisonVerdict;
+  normalization: ComparisonNormalization[];
+  execution: ComparisonExecution;
+}}
+
 export type ComponentConfigValueType =
   | "string"
   | "boolean"
@@ -997,6 +1081,7 @@ export interface ConduitApiClient {{
     name: string,
     request?: PipelineTestRequest,
   ) => Promise<PipelineTestResult>;
+  comparePipelines: (request: ComparisonRequest) => Promise<ComparisonReport>;
   listSpeakers: () => Promise<EnrolledSpeaker[]>;
   createSpeaker: (name: string) => Promise<EnrolledSpeaker>;
   renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
@@ -1033,6 +1118,7 @@ export const conduitApiRoutes = {{
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{{name}}",
   pipelineTest: "/v1/pipelines/{{name}}/test-turn",
+  comparePipelines: "/v1/pipelines/compare",
   validatePipeline: "/v1/pipelines/validate",
 }} as const;
 
@@ -1101,6 +1187,11 @@ export function createConduitApiClient(
       requestJson<PipelineTestResult>(request, config, pipelineTestRoute(name), {{
         method: "POST",
         body: JSON.stringify(testRequest),
+      }}),
+    comparePipelines: (comparison) =>
+      requestJson<ComparisonReport>(request, config, conduitApiRoutes.comparePipelines, {{
+        method: "POST",
+        body: JSON.stringify(comparison),
       }}),
     listSpeakers: () =>
       requestJson<EnrolledSpeaker[]>(request, config, conduitApiRoutes.speakers),
