@@ -1,5 +1,7 @@
 //! Wake word detection provider variants.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{default_threshold_percent, WakeEngine};
@@ -154,6 +156,22 @@ pub enum WakeVariant {
         /// these; they are what an operator flashed, for operator screens.
         #[serde(default)]
         phrases: Vec<String>,
+        /// Explicit model manifest URLs, keyed by phrase.
+        ///
+        /// The escape hatch [ADR-0015][adr] chose over Conduit hosting model
+        /// files: a phrase whose model is not in ESPHome's own manifest names
+        /// its `.json` here, and the firmware renderer emits that URL verbatim.
+        /// A phrase absent from both this map and the renderer's table cannot be
+        /// rendered, which is deliberate — a device flashed without the model
+        /// for a phrase the server believes it detects is the failure rendering
+        /// exists to prevent.
+        ///
+        /// A `BTreeMap` so a rendered fragment is byte-identical between runs;
+        /// `HashMap` iteration order would make the output churn.
+        ///
+        /// [adr]: ../../../../../docs/adr/0015-render-the-conduit-part-of-the-firmware.md
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        models: BTreeMap<String, String>,
     },
 }
 
@@ -175,6 +193,19 @@ impl WakeVariant {
             Self::OpenWakeWord { phrases, .. }
             | Self::NanoWakeWord { phrases, .. }
             | Self::MicroWakeWord { phrases, .. } => phrases,
+        }
+    }
+
+    /// The explicit model URL an operator named for `phrase`, if any.
+    ///
+    /// Only microWakeWord has these: it is the only engine with a device
+    /// runtime, and a model URL is a firmware concern. The other two engines
+    /// load models Conduit scores itself, so a URL would have nothing to reach.
+    #[must_use]
+    pub fn model_url(&self, phrase: &str) -> Option<&str> {
+        match self {
+            Self::OpenWakeWord { .. } | Self::NanoWakeWord { .. } => None,
+            Self::MicroWakeWord { models, .. } => models.get(phrase).map(String::as_str),
         }
     }
 
@@ -237,9 +268,12 @@ impl WakeVariant {
                 runtime: WakeRuntime::Wyoming { url, threshold_percent },
                 phrases,
             },
+            // No models: the shape this folds predates them, so a record in it
+            // cannot have named one.
             WakeEngine::MicroWakeWord => Self::MicroWakeWord {
                 runtime: MicroWakeWordRuntime::Wyoming { url, threshold_percent },
                 phrases,
+                models: BTreeMap::new(),
             },
         }
     }
@@ -254,9 +288,11 @@ impl WakeVariant {
     /// the nearest place it can actually run, and says so in the log.
     pub(super) fn from_engine_on_device(engine: WakeEngine, phrases: Vec<String>) -> Self {
         match engine {
-            WakeEngine::MicroWakeWord => {
-                Self::MicroWakeWord { runtime: MicroWakeWordRuntime::Device, phrases }
-            }
+            WakeEngine::MicroWakeWord => Self::MicroWakeWord {
+                runtime: MicroWakeWordRuntime::Device,
+                phrases,
+                models: BTreeMap::new(),
+            },
             WakeEngine::OpenWakeWord | WakeEngine::NanoWakeWord => {
                 tracing::warn!(
                     engine = engine.name(),
@@ -345,6 +381,8 @@ enum WireWakeVariant {
         runtime: MicroWakeWordRuntime,
         #[serde(default)]
         phrases: Vec<String>,
+        #[serde(default)]
+        models: BTreeMap<String, String>,
     },
 }
 
@@ -357,8 +395,8 @@ impl From<WireWakeVariant> for WakeVariant {
             WireWakeVariant::NanoWakeWord { runtime, phrases } => {
                 Self::NanoWakeWord { runtime, phrases }
             }
-            WireWakeVariant::MicroWakeWord { runtime, phrases } => {
-                Self::MicroWakeWord { runtime, phrases }
+            WireWakeVariant::MicroWakeWord { runtime, phrases, models } => {
+                Self::MicroWakeWord { runtime, phrases, models }
             }
         }
     }
@@ -426,6 +464,7 @@ mod tests {
         let on_device = wake(WakeVariant::MicroWakeWord {
             runtime: MicroWakeWordRuntime::Device,
             phrases: vec!["okay nabu".to_owned()],
+            models: BTreeMap::new(),
         });
 
         assert_eq!(remote.capability(), ProviderCapability::Wake);
@@ -523,8 +562,64 @@ mod tests {
             WakeVariant::MicroWakeWord {
                 runtime: MicroWakeWordRuntime::Device,
                 phrases: vec!["okay nabu".to_owned()],
+                models: BTreeMap::new(),
             }
         );
+    }
+
+    #[test]
+    fn a_satellite_definition_that_names_no_models_reads_and_writes_without_the_key() {
+        // The field is additive, so every definition stored before it existed
+        // must still read — and must not grow a `models: {}` on the way back
+        // out, which would rewrite records nobody edited.
+        let variant = parse(serde_json::json!({
+            "type": "microwakeword",
+            "runtime": { "where": "device" },
+            "phrases": ["hey jarvis"],
+        }));
+
+        assert_eq!(variant.model_url("hey jarvis"), None);
+        let written = serde_json::to_value(&variant).expect("serialize");
+        assert!(
+            written.get("models").is_none(),
+            "an empty map is omitted rather than written: {written}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_model_url_survives_a_round_trip() {
+        // The escape hatch is only useful if it is durable: an operator naming
+        // a model for a phrase upstream does not ship has to still have it
+        // after a restart.
+        let url = "https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json";
+        let variant = parse(serde_json::json!({
+            "type": "microwakeword",
+            "runtime": { "where": "device" },
+            "phrases": ["stop"],
+            "models": { "stop": url },
+        }));
+
+        assert_eq!(variant.model_url("stop"), Some(url));
+        assert_eq!(variant.model_url("hey jarvis"), None, "only the phrase named");
+
+        let reread: WakeVariant =
+            serde_json::from_value(serde_json::to_value(&variant).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(reread, variant);
+    }
+
+    #[test]
+    fn an_engine_conduit_scores_itself_has_no_model_urls() {
+        // A model URL is a firmware concern. openWakeWord loads files Conduit
+        // reads from disk, so a URL there would reach nothing — and the
+        // accessor says so rather than leaving a caller to wonder.
+        let variant = parse(serde_json::json!({
+            "type": "openwakeword",
+            "runtime": { "where": "wyoming", "url": "tcp://openwakeword:10400" },
+            "phrases": ["hey jarvis"],
+        }));
+
+        assert_eq!(variant.model_url("hey jarvis"), None);
     }
 
     #[test]

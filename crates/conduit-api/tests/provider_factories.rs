@@ -53,6 +53,7 @@ async fn vendors_coexist_in_one_server_under_distinct_names() {
                 variant: WakeVariant::MicroWakeWord {
                     runtime: MicroWakeWordRuntime::Device,
                     phrases: vec!["okay nabu".to_owned()],
+                    models: std::collections::BTreeMap::new(),
                 },
             },
         ),

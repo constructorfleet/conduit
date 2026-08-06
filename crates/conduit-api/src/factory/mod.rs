@@ -347,6 +347,7 @@ mod tests {
                 variant: WakeVariant::MicroWakeWord {
                     runtime: MicroWakeWordRuntime::Device,
                     phrases: vec!["okay nabu".to_owned()],
+                    models: std::collections::BTreeMap::new(),
                 },
             },
             ProviderDefinitionVariant::Tool {
