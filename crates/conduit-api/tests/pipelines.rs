@@ -3298,3 +3298,525 @@ async fn a_configured_provider_with_no_default_settings_reads_without_the_field(
     assert_eq!(status, StatusCode::OK);
     assert!(body.get("settings").is_none(), "{body}");
 }
+
+// ---- comparison ---------------------------------------------------------
+//
+// The route is the seam: driving comparison through the real router exercises
+// store lookup, provider snapshot resolution, preparation, execution, and the
+// report together. Agreement and normalization are unit-tested beside their
+// implementation, where the many textual cases belong.
+
+/// A recognizer that always hears `text`, whatever it is handed.
+///
+/// Two of these with different scripts is what makes a *disagreement* testable
+/// without a real engine: the comparison cannot tell a scripted recognizer from
+/// a slow one, which is the point of driving it through the route.
+#[derive(Debug, Clone)]
+struct ScriptedStt {
+    name: &'static str,
+    text: &'static str,
+}
+
+impl conduit_provider::Provider for ScriptedStt {
+    fn descriptor(&self) -> &conduit_provider::Descriptor {
+        // Leaked rather than held in a `OnceLock`, because each instance has its
+        // own name and a static would serve whichever constructed first.
+        Box::leak(Box::new(conduit_provider::Descriptor::new(
+            self.name,
+            conduit_provider::Capability::Stt,
+        )))
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::stt::SpeechToText for ScriptedStt {
+    async fn transcribe(
+        &self,
+        mut audio: conduit_provider::ChunkStream<conduit_provider::stt::AudioChunk>,
+        _options: conduit_provider::stt::TranscribeOptions,
+    ) -> Result<conduit_provider::ChunkStream<conduit_provider::stt::Transcript>> {
+        // Drained so the turn's capture stage completes as it would with a real
+        // recognizer; the samples themselves are ignored on purpose.
+        while let Some(chunk) = futures_util::StreamExt::next(&mut audio).await {
+            chunk?;
+        }
+        Ok(Box::pin(futures_util::stream::iter([Ok(
+            conduit_provider::stt::Transcript::final_text(self.text),
+        )])))
+    }
+}
+
+/// A recognizer that fails, for the candidate-isolation cases.
+#[derive(Debug, Clone)]
+struct BrokenStt;
+
+impl conduit_provider::Provider for BrokenStt {
+    fn descriptor(&self) -> &conduit_provider::Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<conduit_provider::Descriptor> =
+            std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            conduit_provider::Descriptor::new("broken-stt", conduit_provider::Capability::Stt)
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl conduit_provider::stt::SpeechToText for BrokenStt {
+    async fn transcribe(
+        &self,
+        _audio: conduit_provider::ChunkStream<conduit_provider::stt::AudioChunk>,
+        _options: conduit_provider::stt::TranscribeOptions,
+    ) -> Result<conduit_provider::ChunkStream<conduit_provider::stt::Transcript>> {
+        Err(conduit_core::Error::Provider {
+            provider: "broken-stt".to_owned(),
+            source: "the model could not be loaded".into(),
+        })
+    }
+}
+
+fn stt_graph(name: &str, stt: &str) -> PipelineGraph {
+    voice_graph(name).stt(stt).core("echo-llm").tts("echo-tts").build()
+}
+
+fn compare_request(body: serde_json::Value) -> Request<Body> {
+    post_json("/v1/pipelines/compare", &body)
+}
+
+/// A one-sample WAV, which is what a real fixture is a longer version of.
+fn wav_fixture() -> String {
+    let upload = conduit_core::wav::package(
+        conduit_core::audio::AudioFormat::DEFAULT,
+        b"turn on the light".to_vec(),
+    )
+    .expect("packages");
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &upload.bytes)
+}
+
+#[tokio::test]
+async fn comparison_reports_agreement_when_both_pipelines_hear_the_same_thing() {
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(ScriptedStt { name: "whisper-ish", text: "turn on the light" })
+            .with_stt(ScriptedStt { name: "sherpa-ish", text: "Turn on the light." })
+            .with_llm(EchoLlm)
+            .with_tts(EchoTts),
+    );
+    for (name, stt) in [("whisper", "whisper-ish"), ("sherpa", "sherpa-ish")] {
+        state.put_pipeline(name, stt_graph(name, stt)).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["whisper", "sherpa"],
+            "input": { "utterance": "turn on the light" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["verdict"]["agreed"], true, "{body}");
+    assert_eq!(body["verdict"]["compared"], 2, "{body}");
+    // The two recognizers differed in case and punctuation only, so agreement
+    // required normalization and the report must say so rather than claiming
+    // the stronger result.
+    assert_eq!(
+        body["verdict"]["identical"], false,
+        "an operator must be able to tell equivalence from lenience: {body}"
+    );
+    assert_eq!(body["execution"], "sequential", "{body}");
+    assert!(
+        body["normalization"].as_array().is_some_and(|rules| !rules.is_empty()),
+        "the rules that produced the verdict are part of it: {body}"
+    );
+}
+
+#[tokio::test]
+async fn comparison_reports_both_readings_when_the_pipelines_disagree() {
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(ScriptedStt { name: "whisper-ish", text: "turn on the light" })
+            .with_stt(ScriptedStt { name: "sherpa-ish", text: "turn on the lights" })
+            .with_llm(EchoLlm)
+            .with_tts(EchoTts),
+    );
+    for (name, stt) in [("whisper", "whisper-ish"), ("sherpa", "sherpa-ish")] {
+        state.put_pipeline(name, stt_graph(name, stt)).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["whisper", "sherpa"],
+            "input": { "utterance": "turn on the light" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["verdict"]["agreed"], false, "{body}");
+    let replies = body["verdict"]["replies"].as_array().expect("replies");
+    assert_eq!(replies.len(), 2, "both readings are what there is to judge: {body}");
+    // And each candidate's own text is present, because deciding which one was
+    // right means reading them.
+    for candidate in body["candidates"].as_array().expect("candidates") {
+        assert!(candidate["outcome"]["reply_text"].as_str().is_some(), "{candidate}");
+    }
+}
+
+#[tokio::test]
+async fn a_candidate_that_fails_is_reported_as_failed_and_left_out_of_the_verdict() {
+    // The tripwire from the spec. A crash counted as a disagreement is what
+    // would make this report actively misleading — an operator would read a
+    // broken provider as a recognition difference and change the wrong thing.
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(ScriptedStt { name: "whisper-ish", text: "turn on the light" })
+            .with_stt(ScriptedStt { name: "sherpa-ish", text: "turn on the light" })
+            .with_stt(BrokenStt)
+            .with_llm(EchoLlm)
+            .with_tts(EchoTts),
+    );
+    for (name, stt) in
+        [("whisper", "whisper-ish"), ("sherpa", "sherpa-ish"), ("broken", "broken-stt")]
+    {
+        state.put_pipeline(name, stt_graph(name, stt)).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["whisper", "sherpa", "broken"],
+            "input": { "utterance": "turn on the light" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "one bad candidate does not fail the request: {body}");
+    assert_eq!(body["verdict"]["agreed"], true, "the two that ran said the same thing: {body}");
+    assert_eq!(body["verdict"]["compared"], 2, "the failure is not a third opinion: {body}");
+
+    let candidates = body["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 3, "every candidate is accounted for: {body}");
+    let broken =
+        candidates.iter().find(|c| c["pipeline"] == "broken").expect("broken candidate");
+    assert_eq!(broken["outcome"]["status"], "failed", "{broken}");
+    assert!(
+        broken["outcome"]["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "an operator must be told why, to fix it and re-run: {broken}"
+    );
+}
+
+#[tokio::test]
+async fn comparison_reports_per_stage_timings_for_every_candidate() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    for name in ["a", "b"] {
+        state.put_pipeline(name, stt_graph(name, "echo-stt")).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "b"],
+            "input": { "utterance": "turn on the light" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    for candidate in body["candidates"].as_array().expect("candidates") {
+        let stages = candidate["stages"].as_array().expect("stages");
+        assert!(
+            !stages.is_empty(),
+            "which component spent the time is the whole question: {candidate}"
+        );
+        for stage in stages {
+            assert!(stage["stage"].as_str().is_some(), "{stage}");
+            assert!(stage["elapsed_ms"].as_u64().is_some(), "{stage}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn comparison_names_each_candidates_conversation() {
+    // The report is a summary; `Turn Reconstruction` is the detail. The id is
+    // what lets an operator cross from one to the other.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    for name in ["a", "b"] {
+        state.put_pipeline(name, stt_graph(name, "echo-stt")).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "b"],
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = body["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|candidate| candidate["conversation"].as_str().expect("conversation"))
+        .collect();
+    assert_eq!(ids.len(), 2, "{body}");
+    assert_ne!(ids[0], ids[1], "two turns are two conversations: {body}");
+}
+
+#[tokio::test]
+async fn comparison_accepts_a_recorded_fixture() {
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(ScriptedStt { name: "whisper-ish", text: "turn on the light" })
+            .with_stt(ScriptedStt { name: "sherpa-ish", text: "turn on the light" })
+            .with_llm(EchoLlm)
+            .with_tts(EchoTts),
+    );
+    for (name, stt) in [("whisper", "whisper-ish"), ("sherpa", "sherpa-ish")] {
+        state.put_pipeline(name, stt_graph(name, stt)).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["whisper", "sherpa"],
+            "input": { "audio": wav_fixture() },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["verdict"]["compared"], 2, "{body}");
+}
+
+#[tokio::test]
+async fn comparison_refuses_a_fixture_that_is_not_readable_audio() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    for name in ["a", "b"] {
+        state.put_pipeline(name, stt_graph(name, "echo-stt")).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "b"],
+            "input": {
+                "audio": base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"not a wav file",
+                ),
+            },
+        })),
+    )
+    .await;
+
+    // Refused once, before any candidate runs: a bad fixture is one error
+    // rather than N identical ones, and no real turn should be spent on it.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body["detail"].as_str().expect("detail").contains("fixture"), "{body}");
+}
+
+#[tokio::test]
+async fn comparison_refuses_fewer_than_two_pipelines() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline("a", stt_graph("a", "echo-stt")).await.expect("stores");
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a"],
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["detail"].as_str().expect("detail").contains("test turn"),
+        "the refusal should point at the thing that does answer this: {body}"
+    );
+}
+
+#[tokio::test]
+async fn comparison_refuses_more_pipelines_than_it_will_run() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    let names: Vec<String> = (0..9).map(|index| format!("p{index}")).collect();
+    for name in &names {
+        state.put_pipeline(name, stt_graph(name, "echo-stt")).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": names,
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
+async fn comparison_refuses_an_unknown_pipeline_before_running_any_turn() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline("a", stt_graph("a", "echo-stt")).await.expect("stores");
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "missing"],
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    // Refused rather than partially reported: a partial report read as a
+    // complete one is the failure worth preventing, and spending a real turn
+    // on `a` first would earn nothing.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(body["detail"].as_str().expect("detail").contains("missing"), "{body}");
+}
+
+#[tokio::test]
+async fn comparison_refuses_to_pretend_when_no_runtime_providers_are_configured() {
+    let state = AppState::new(EventBus::default());
+    for name in ["a", "b"] {
+        state.put_pipeline(name, stt_graph(name, "echo-stt")).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "b"],
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body["detail"].as_str().expect("detail").contains("no providers"), "{body}");
+}
+
+#[tokio::test]
+async fn comparing_pipelines_that_reason_with_different_cores_is_marked_unreliable() {
+    // Not refused: comparing latency across two models is a real question, and
+    // only the agreement verdict is meaningless — two models phrase the same
+    // right answer differently.
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state
+        .put_pipeline(
+            "a",
+            voice_graph("a").stt("echo-stt").core("echo-llm").tts("echo-tts").build(),
+        )
+        .await
+        .expect("stores");
+    state
+        .put_pipeline(
+            "b",
+            voice_graph("b").stt("echo-stt").core("other-llm").tts("echo-tts").build(),
+        )
+        .await
+        .expect("stores");
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["a", "b"],
+            "input": { "utterance": "hello" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["verdict"]["reliability"], "cores_differ", "{body}");
+}
+
+#[tokio::test]
+async fn comparison_compares_a_text_pipeline_with_a_voice_pipeline_on_what_they_said() {
+    let state = AppState::new(EventBus::default()).with_providers(providers());
+    state.put_pipeline("spoken", stt_graph("spoken", "echo-stt")).await.expect("stores");
+    state
+        .put_pipeline(
+            "written",
+            PipelineGraph::new("written")
+                .with_node(Node::source("in", "websocket", Modality::Text))
+                .with_node(Node::core("llm", "echo-llm"))
+                .with_node(Node::sink("out", "websocket", Modality::Text))
+                .with_edge(Edge::new("in", "llm"))
+                .with_edge(Edge::new("llm", "out")),
+        )
+        .await
+        .expect("stores");
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["spoken", "written"],
+            "input": { "utterance": "hello conduit" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Both rendered the same utterance, one as speech and one as writing. The
+    // comparison is on what was said, per ADR-0012's utterance vocabulary.
+    assert_eq!(body["verdict"]["compared"], 2, "{body}");
+    assert_eq!(body["verdict"]["agreed"], true, "{body}");
+}
+
+#[tokio::test]
+async fn voice_pipelines_are_compared_on_what_was_heard_not_on_an_empty_reply() {
+    // The regression this route was first written with. A voice pipeline returns
+    // its reply as samples, so reading only the reply stream saw nothing and
+    // reported two voice pipelines as agreeing on the empty string — vacuous
+    // agreement for the exact case comparison exists to judge. Two recognizers
+    // that heard different things must disagree even though neither wrote a word.
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(ScriptedStt { name: "whisper-ish", text: "turn on the light" })
+            .with_stt(ScriptedStt { name: "sherpa-ish", text: "turn off the light" })
+            .with_llm(EchoLlm)
+            .with_tts(EchoTts),
+    );
+    for (name, stt) in [("whisper", "whisper-ish"), ("sherpa", "sherpa-ish")] {
+        state.put_pipeline(name, stt_graph(name, stt)).await.expect("stores");
+    }
+
+    let (status, body) = call(
+        &state,
+        compare_request(serde_json::json!({
+            "pipelines": ["whisper", "sherpa"],
+            "input": { "utterance": "turn on the light" },
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["verdict"]["agreed"], false,
+        "two recognizers that heard different things must not agree: {body}"
+    );
+    let replies = body["verdict"]["replies"].as_array().expect("replies");
+    assert!(
+        replies.iter().all(|reply| !reply.as_str().expect("text").is_empty()),
+        "an empty comparison subject is the bug, not a reading: {body}"
+    );
+
+    // And what each one heard is reported, because that is the thing being
+    // compared and the operator has to be able to see it.
+    for (pipeline, heard) in
+        [("whisper", "turn on the light"), ("sherpa", "turn off the light")]
+    {
+        let candidate = body["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .find(|candidate| candidate["pipeline"] == pipeline)
+            .expect("candidate");
+        assert_eq!(candidate["outcome"]["transcript"], heard, "{candidate}");
+    }
+}

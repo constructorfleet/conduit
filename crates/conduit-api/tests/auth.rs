@@ -168,6 +168,26 @@ async fn a_device_token_may_not_manage_pipelines() {
 }
 
 #[tokio::test]
+async fn a_device_token_may_not_compare_pipelines() {
+    // Comparison runs real turns against real providers and returns what was
+    // said in them. It is management work, and a satellite's token must not
+    // reach it any more than it reaches pipeline deletion.
+    let state = guarded();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/pipelines/compare")
+        .header("authorization", format!("Bearer {DEVICE_TOKEN}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"pipelines":["kitchen","guest-room"],"input":{"utterance":"hello"}}"#,
+        ))
+        .expect("request");
+    let (status, _, body) = call(&state, request).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
 async fn an_unknown_token_is_refused_exactly_like_a_missing_one() {
     // Anything that told them apart would let someone probe for valid tokens.
     let state = guarded();

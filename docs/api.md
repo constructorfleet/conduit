@@ -8,7 +8,7 @@ is bound and what the network publishes.
 
 | Listener | Default | Routes | Authentication |
 | --- | --- | --- | --- |
-| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/rename`, `/v1/providers/{id}/test`, `/v1/providers/{id}/voices`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
+| Service | `0.0.0.0:8080` | `/v1/status`, `/v1/events`, `/v1/catalog/providers`, `/v1/providers`, `/v1/providers/{id}`, `/v1/providers/{id}/rename`, `/v1/providers/{id}/test`, `/v1/providers/{id}/voices`, `/v1/pipelines`, `/v1/pipelines/{name}`, `/v1/pipelines/validate`, `/v1/pipelines/{name}/test-turn`, `/v1/pipelines/compare`, `/v1/pipelines/{name}/converse` | Bearer token unless anonymous mode is explicitly enabled |
 | Ops | `0.0.0.0:9090` | `/health`, `/ready`, `/metrics` | None |
 
 Service responses use JSON for ordinary API errors:
@@ -850,6 +850,99 @@ Errors:
 - `404` if no pipeline is stored under `name`
 - `422` if no runtime providers are configured or the graph cannot be prepared
 - `503` if the test turn fails while running
+
+### `POST /v1/pipelines/compare`
+
+Runs one input through several stored pipelines and reports where they differed
+and what each cost. The referee is agreement between candidates, not a ground
+truth: nothing here is scored against a reference transcript. See
+[ADR-0018](adr/0018-comparison-judged-by-agreement.md).
+
+Between two and six pipelines may be compared. Candidates run sequentially, so
+one candidate's latency is not measured while another is competing for the same
+CPU or GPU.
+
+Request body, reading an utterance:
+
+```json
+{
+  "pipelines": ["kitchen-whisper", "kitchen-sherpa"],
+  "input": { "utterance": "turn off the porch light" }
+}
+```
+
+Request body, listening to a recorded fixture. `audio` is base64 WAV; a format
+in the file header wins over `format`, which is a fallback for headerless
+audio:
+
+```json
+{
+  "pipelines": ["kitchen-whisper", "kitchen-sherpa"],
+  "input": { "audio": "UklGRi..." },
+  "format": { "sample_rate": 16000, "channels": 1, "bits_per_sample": 16 }
+}
+```
+
+The body limit for this route is 8 MiB rather than the service-wide 1 MiB,
+because a fixture is audio.
+
+Success body:
+
+```json
+{
+  "candidates": [
+    {
+      "pipeline": "kitchen-whisper",
+      "conversation": "00000000-0000-0000-0000-000000000000",
+      "outcome": {
+        "status": "completed",
+        "transcript": "turn off the porch light",
+        "reply_text": "Turning off the porch light.",
+        "compared_raw": "turn off the porch light",
+        "normalized": "turn off the porch light",
+        "audio_bytes": 32000,
+        "reply_audio": null
+      },
+      "elapsed_ms": 812,
+      "stages": [{ "stage": "transcription", "elapsed_ms": 604 }]
+    }
+  ],
+  "verdict": {
+    "agreed": true,
+    "identical": false,
+    "reliability": "reliable",
+    "compared": 2,
+    "replies": ["turn off the porch light"]
+  },
+  "normalization": ["case", "whitespace", "punctuation"],
+  "execution": "sequential"
+}
+```
+
+A candidate that fails reports `{"status": "failed", "error": ..., "node": ...}`
+and is excluded from the verdict; `compared` counts only the candidates that
+reached a comparable output, and `agreed` is false unless at least two did.
+Comparison is judged on what each pipeline produced at the stage under test —
+the transcript when the pipeline listened, the utterance when it read — not on
+the reply, because a voice pipeline's reply is audio and every one of them would
+otherwise compare equal on an empty string.
+
+`identical` reports agreement before normalization; `agreed` reports it after.
+`normalization` names the transformations applied, so the disagreement rate can
+be read together with the policy that produced it.
+
+`reliability` is `cores_differ` when the compared pipelines do not share a
+reasoning core. Agreement is not a valid referee there — two models phrase the
+same correct answer differently — so the report is returned and marked rather
+than presented as a verdict.
+
+Errors:
+
+- `403` if the caller presents a device token rather than a management token
+- `404` if any named pipeline is not stored; every name is resolved before any
+  turn runs, so an unknown name costs no inference
+- `422` if fewer than two or more than six pipelines are named, if no runtime
+  providers are configured, or if the fixture cannot be decoded
 
 ## Event Stream
 

@@ -180,7 +180,7 @@ pub async fn list(
 ///
 /// A name the store refuses is the client's mistake; anything else is the
 /// server's, and the status has to say which.
-fn store_failure(error: conduit_core::Error) -> ApiError {
+pub(crate) fn store_failure(error: conduit_core::Error) -> ApiError {
     match error {
         conduit_core::Error::Config(detail) => ApiError::unprocessable(detail),
         other => ApiError::unavailable(other.to_string()),
