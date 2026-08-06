@@ -768,6 +768,62 @@ Errors:
 - `404` if nobody is on the roster under `id`
 - `503` if the service will not release the voice print
 
+## Device Routes
+
+### `GET /v1/devices/{device}/firmware`
+
+Renders the Conduit part of a satellite's ESPHome configuration: a fragment a
+hand-written board file `!include`s. Conduit does not model hardware, so the
+board file stays the board profile and this endpoint never describes pins,
+buses, or codecs — see
+[ADR-0015](adr/0015-render-the-conduit-part-of-the-firmware.md).
+
+Management-only. A device token is refused even for its own name: a token
+lifted from flashed firmware must not become a way to read configuration.
+
+Responds `200` with `application/yaml; charset=utf-8`. The body is the
+fragment, not JSON wrapping it, because the artifact is a file an operator
+saves beside a board file.
+
+Query parameters name the board's own ids, which only the board file knows:
+
+| Parameter | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `pipeline` | yes | | the pipeline the device converses with |
+| `microphone` | yes | | the board's microphone component id |
+| `speaker` | yes | | the board's speaker component id |
+| `mute_switch` | yes | | the switch that suppresses wake |
+| `gain_factor` | yes | | microphone gain, `1`–`32` |
+| `server` | yes | | `host:port` Conduit is reached at |
+| `scheme` | no | `ws` | `ws` or `wss` |
+| `max_utterance_ms` | no | `8000` | upper bound, `600000` |
+| `debug_udp_host` | no | empty | where to mirror audio, if anywhere |
+| `debug_udp_port` | no | `6056` | port for the above |
+
+There is no default for a board id. A default microphone id would render a
+fragment that compiles cleanly against somebody else's board, which is worse
+than refusing.
+
+Every rendered credential is a `!secret` reference — `conduit_token` and
+`wake_debug_event_url` — so a rendered fragment is safe to commit. Nothing on
+this path reads a stored token in order to render one.
+
+A `micro_wake_word:` block is emitted only when the pipeline's wake stage
+detects on the device (a `microwakeword` definition whose `runtime.where` is
+`device`). A pipeline that wakes on the server, or does not wake at all, still
+renders — there is simply nothing to flash. Phrases become models in the order
+the definition lists them, resolved through the manifest table or the
+definition's `models` map; rendering the same request twice returns the same
+bytes, so a re-render that differs is a change worth flashing.
+
+Errors:
+
+- `403` if the caller presents a device token
+- `404` if `pipeline` is not stored
+- `422` if a parameter is out of range, or would change the document's shape,
+  or if a flashed phrase has no known model — named, so an operator knows
+  which `models` entry to add
+
 ## Pipeline Routes
 
 ### `GET /v1/pipelines`
