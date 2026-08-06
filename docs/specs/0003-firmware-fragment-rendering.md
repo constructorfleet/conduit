@@ -125,8 +125,11 @@ rather than in prose:
 - **An anonymous server** (`CONDUIT_ALLOW_ANONYMOUS`) has one shared device
   identity named `anonymous` and no declared names. Rendering for an arbitrary
   name would be rendering for a device that does not exist.
-  **Recommendation: render for `anonymous` and 404 every other name**, which
-  keeps a development server usable without inventing devices.
+  **Decided: render for any name asked for.** The name becomes a label. That is
+  safe here precisely because the fragment emits `!secret` references rather
+  than credentials, so a rendered fragment is identical for every name on an
+  open server anyway — and it means the device-scoped pipeline check simply has
+  nothing to check when no token file declares scopes.
 - **A device token scoped to pipelines** (`Device::pipelines`) must not render a
   fragment naming a pipeline it may not open. The render request carries a
   pipeline name; if the device is scoped and the pipeline is not in its list,

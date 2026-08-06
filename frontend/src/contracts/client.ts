@@ -696,6 +696,27 @@ export interface EnrolledSpeaker {
   enrolled_at?: DateTimeString;
 }
 
+/// What the board file knows and Conduit does not.
+///
+/// Conduit renders only its own part of a satellite's firmware, so every id
+/// here comes from the hand-written board file that will include the fragment.
+/// None of the required fields has a default: a default microphone id would
+/// render something that compiles against somebody else's board.
+export interface FirmwareRenderRequest {
+  pipeline: string;
+  microphone: string;
+  speaker: string;
+  mute_switch: string;
+  /// Microphone gain, 1 to 32.
+  gain_factor: number;
+  /// `host:port` the device reaches Conduit at.
+  server: string;
+  scheme?: "ws" | "wss";
+  max_utterance_ms?: number;
+  debug_udp_host?: string;
+  debug_udp_port?: number;
+}
+
 export interface ConduitApiClient {
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
@@ -729,6 +750,15 @@ export interface ConduitApiClient {
     request?: PipelineTestRequest,
   ) => Promise<PipelineTestResult>;
   comparePipelines: (request: ComparisonRequest) => Promise<ComparisonReport>;
+  /// The Conduit part of a device's ESPHome configuration, as YAML text.
+  ///
+  /// Text rather than a parsed document: the artifact is a file an operator
+  /// saves beside a board file, and every credential in it is a `!secret`
+  /// reference, so it is safe to display and safe to commit.
+  renderFirmware: (
+    device: string,
+    request: FirmwareRenderRequest,
+  ) => Promise<string>;
   listSpeakers: () => Promise<EnrolledSpeaker[]>;
   createSpeaker: (name: string) => Promise<EnrolledSpeaker>;
   renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
@@ -767,6 +797,7 @@ export const conduitApiRoutes = {
   pipelineTest: "/v1/pipelines/{name}/test-turn",
   comparePipelines: "/v1/pipelines/compare",
   validatePipeline: "/v1/pipelines/validate",
+  deviceFirmware: "/v1/devices/{device}/firmware",
 } as const;
 
 export function createConduitApiClient(
@@ -873,6 +904,21 @@ export function createConduitApiClient(
         method: "DELETE",
       });
     },
+    renderFirmware: async (device, firmware) => {
+      const response = await request(
+        new URL(
+          `${deviceFirmwareRoute(device)}?${firmwareQuery(firmware)}`,
+          config.baseUrl,
+        ),
+        { headers: { accept: "application/yaml", ...config.headers?.() } },
+      );
+
+      if (!response.ok) {
+        throw new Error(await failureMessage(response));
+      }
+
+      return await response.text();
+    },
     listTurns: () => requestJson<TurnList>(request, config, conduitApiRoutes.turns),
     getTurn: (turnId) =>
       requestJson<TurnSnapshot>(request, config, turnRoute(turnId)),
@@ -930,6 +976,25 @@ function pipelineTestRoute(name: string): string {
     "{name}",
     encodeURIComponent(name),
   );
+}
+
+function deviceFirmwareRoute(device: string): string {
+  return conduitApiRoutes.deviceFirmware.replace(
+    "{device}",
+    encodeURIComponent(device),
+  );
+}
+
+/// Every parameter encoded, and the optional ones omitted rather than sent
+/// empty: the endpoint distinguishes "not asked for" from a blank value.
+function firmwareQuery(firmware: FirmwareRenderRequest): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(firmware)) {
+    if (value !== undefined) {
+      query.set(key, String(value));
+    }
+  }
+  return query.toString();
 }
 
 function turnRoute(turnId: string): string {

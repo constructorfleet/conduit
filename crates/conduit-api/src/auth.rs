@@ -179,6 +179,20 @@ impl Tokens {
         self.by_token.get(token)
     }
 
+    /// The declared device called `name`.
+    ///
+    /// A scan rather than a second index: a household has a handful of
+    /// satellites, and a name lookup happens when an operator renders firmware,
+    /// not on every request. A second map would be a second thing to keep
+    /// consistent for no measured gain.
+    #[must_use]
+    pub fn device_named(&self, name: &str) -> Option<Device> {
+        self.by_token.values().find_map(|identity| match identity {
+            Identity::Device(device) if device.name == name => Some(device.clone()),
+            _ => None,
+        })
+    }
+
     /// How many tokens were loaded. For a startup log, never the tokens.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -249,6 +263,27 @@ impl Access {
             tracing::warn!("rejected a request presenting an unrecognised token");
             crate::ApiError::unauthorized()
         })
+    }
+
+    /// The declared device called `name`, for a caller that knows a name rather
+    /// than a token.
+    ///
+    /// Firmware rendering needs this: a rendered fragment is keyed on the name
+    /// from the token file, because that is the one device identifier that
+    /// survives a restart — [`DeviceId`] is minted per process.
+    ///
+    /// On an open server there are no declared names, so the name asked for is
+    /// taken as a label and a device is returned for it. That is safe here
+    /// precisely because rendering emits `!secret` references rather than
+    /// credentials: the fragment is identical whatever it is labelled, so a name
+    /// that names nobody reveals nothing. A server with a token file answers
+    /// only for names it declares.
+    #[must_use]
+    pub fn device_named(&self, name: &str) -> Option<Device> {
+        match self {
+            Self::Anonymous(device) => Some(Device { name: name.to_owned(), ..device.clone() }),
+            Self::Tokens(tokens) => tokens.device_named(name),
+        }
     }
 
     /// The identity an unauthenticated caller conversing on an open server gets.

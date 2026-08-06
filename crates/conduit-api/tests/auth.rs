@@ -168,6 +168,69 @@ async fn a_device_token_may_not_manage_pipelines() {
 }
 
 #[tokio::test]
+async fn a_device_token_may_not_render_its_own_firmware() {
+    // The sharpest case for the audience split, because it is the one that
+    // sounds reasonable: surely a satellite may read its own configuration. It
+    // may not. The fragment describes a pipeline's wake configuration, and a
+    // token extracted from flashed firmware is exactly the credential this
+    // boundary exists to contain.
+    let state = guarded();
+    let (status, _, body) =
+        call(&state, as_bearer(&render_uri("kitchen", "kitchen"), DEVICE_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+/// A firmware render for `device` against `pipeline`, with valid board ids.
+fn render_uri(device: &str, pipeline: &str) -> String {
+    format!(
+        "/v1/devices/{device}/firmware?pipeline={pipeline}&microphone=mics&speaker=spk\
+         &mute_switch=mute&gain_factor=6&server=host:8080"
+    )
+}
+
+#[tokio::test]
+async fn a_device_is_not_rendered_a_pipeline_it_may_not_open() {
+    // `guest` is scoped to `guest-room`. Rendering it a fragment naming
+    // `kitchen` would flash a device that gets refused when it dials in, which
+    // is a worse failure than this one because it happens after a reflash.
+    let state = guarded();
+    let (status, _, body) =
+        call(&state, as_bearer(&render_uri("guest", "kitchen"), MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
+async fn a_device_no_token_file_declares_is_a_404() {
+    let state = guarded();
+    let (status, _, body) =
+        call(&state, as_bearer(&render_uri("garage", "kitchen"), MANAGEMENT_TOKEN)).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn no_rendered_fragment_contains_a_token_value() {
+    // The security property of the whole feature, asserted against the real
+    // token file rather than one field: a fragment is committed to a repository,
+    // so a credential reaching it reaches everyone who can read that repository.
+    let state = guarded();
+    state.put_pipeline("kitchen", valid_graph()).await.expect("stores");
+
+    let request = as_bearer(&render_uri("kitchen", "kitchen"), MANAGEMENT_TOKEN);
+    let response = router(state.clone()).oneshot(request).await.expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.expect("body").to_bytes();
+    let yaml = String::from_utf8(bytes.to_vec()).expect("utf-8");
+
+    for token in [DEVICE_TOKEN, RESTRICTED_TOKEN, MANAGEMENT_TOKEN] {
+        assert!(!yaml.contains(token), "a credential reached the fragment:\n{yaml}");
+    }
+    assert!(yaml.contains("token: !secret conduit_token"), "{yaml}");
+}
+
+#[tokio::test]
 async fn a_device_token_may_not_compare_pipelines() {
     // Comparison runs real turns against real providers and returns what was
     // said in them. It is management work, and a satellite's token must not
