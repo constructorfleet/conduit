@@ -423,6 +423,32 @@ them be chosen independently could describe a detector that does not exist:
 `phrases` names what to listen for; an empty list asks for whatever was loaded.
 `threshold_percent` is the confidence a detection must reach.
 
+A `microwakeword` definition may also carry `models`, mapping a phrase to the
+URL of its model manifest:
+
+```jsonc
+{ "type": "wake", "variant": {
+    "type": "microwakeword",
+    "runtime": { "where": "device" },
+    "phrases": ["hey jarvis", "okay nabu"],
+    "models": { "okay nabu": "https://example.invalid/okay_nabu.json" } } }
+```
+
+This exists for firmware rendering, per
+[ADR-0015](adr/0015-render-the-conduit-part-of-the-firmware.md): a satellite has
+to flash a model, and microWakeWord's own manifest resolves only the phrases it
+ships — `alexa`, `hey_jarvis`, `hey_mycroft`, `okay_nabu`, `stop`. A phrase
+outside that set names its manifest URL here, and a phrase in neither place
+cannot be rendered, which is deliberate: a device flashed without the model for a
+phrase the server believes it detects is the silent disagreement rendering exists
+to prevent. A URL named here wins over the built-in table, so a household serving
+its own build of a stock phrase gets its build. The key is matched
+case-insensitively with spaces and hyphens read as underscores, so `hey jarvis`
+and `hey_jarvis` are the same phrase.
+
+`models` is optional and omitted when empty, so definitions stored before it
+existed read and rewrite unchanged.
+
 Definitions written before the engine became the variant — a `wyoming_wake` or
 `device_wake` type, or a `wake` variant of `wyoming` or `device` naming an
 `engine` — are still read, and are rewritten into the shape above the next time

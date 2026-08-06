@@ -825,6 +825,12 @@ export type WakeVariant =
       type: "microwakeword";
       runtime: MicroWakeWordRuntime;
       phrases: string[];
+      /// Explicit model manifest URLs, keyed by phrase.
+      ///
+      /// The escape hatch for a phrase microWakeWord's own manifest does not
+      /// ship, so the firmware renderer has a URL to emit. Absent when the
+      /// definition names none, which is the common case.
+      models?: Record<string, string>;
     }};
 
 export type SpeakerIdVariant =
