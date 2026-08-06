@@ -1,13 +1,6 @@
 substitutions:
   name: conduit-sat1
   friendly_name: Conduit Satellite1
-  conduit_server: 10.0.12.72:8080
-  conduit_pipeline: default
-  conduit_scheme: ws
-  conduit_max_utterance_ms: "8000"
-  wake_debug_assistant_id: ${conduit_pipeline}
-  wake_debug_udp_host: "10.0.12.11"
-  wake_debug_udp_port: "6056"
   # Official board firmware source: https://github.com/futureproofhomes/satellite1-esphome
   satellite1_ref: 592a9687206709046f475b5464941702beacb093
 
@@ -245,45 +238,16 @@ binary_sensor:
                       - conduit_voice.start:
                           id: conduit
 
-micro_wake_word:
-  id: mww
-  models:
-    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
-      id: hey_jarvis
-    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
-      id: okay_nabu
-    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json
-      id: stop
-      internal: true
-  vad:
-  microphone:
-    microphone: sat1_mics
-    channels: 1
-    gain_factor: 6
-  stop_after_detection: false
-  on_wake_word_detected:
-    - if:
-        condition:
-          switch.is_off: master_mute_switch
-        then:
-          - conduit_voice.wake_debug_event:
-              id: conduit
-          - conduit_voice.start:
-              id: conduit
-
-conduit_voice:
-  id: conduit
-  server: ${conduit_server}
-  scheme: ${conduit_scheme}
-  pipeline: ${conduit_pipeline}
-  # From secrets.yaml, not a substitution: substitutions are committed.
-  token: !secret conduit_token
-  max_utterance_ms: ${conduit_max_utterance_ms}
-  debug_assistant_id: ${wake_debug_assistant_id}
-  debug_udp_host: ${wake_debug_udp_host}
-  debug_udp_port: ${wake_debug_udp_port}
-  # From secrets.yaml, not a substitution: the URL carries a webhook token,
-  # and substitutions are committed.
-  debug_wake_event_url: !secret wake_debug_event_url
-  microphone: sat1_mics
-  speaker: announcement_resampling_speaker
+# The Conduit half of this configuration — the `conduit_voice:` and
+# `micro_wake_word:` blocks — rendered by `GET /v1/devices/{device}/firmware`
+# and merged in as a package.
+#
+# Not hand-edited: `cargo test -p conduit-api --test firmware_fragments`
+# regenerates it and fails when the two differ. Re-render it when the pipeline
+# or the flashed phrases change. Everything above is this board — what its XMOS
+# chip, PD negotiation and DAC proxy are — which Conduit does not model.
+#
+# The fragment names only ids declared above: `sat1_mics`,
+# `announcement_resampling_speaker`, and `master_mute_switch`.
+packages:
+  conduit: !include conduit-sat1.conduit.yaml

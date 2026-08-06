@@ -1,0 +1,49 @@
+# Rendered by Conduit. Edits are lost on the next render.
+#
+# Included by a hand-written board file, which owns everything about what
+# the board is made of. See docs/adr/0015-render-the-conduit-part-of-the-firmware.md
+#
+# Credentials are `!secret` references, never values, so this file is safe
+# to commit. Define them in your ESPHome `secrets.yaml`.
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: sat1_mics
+    channels: 1
+    gain_factor: 6
+  stop_after_detection: false
+  vad:
+  models:
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/hey_jarvis.json
+      id: hey_jarvis
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/okay_nabu.json
+      id: okay_nabu
+    - model: https://fph-firmware-assets.s3.us-east-1.amazonaws.com/wake-word/stop.json
+      id: stop
+      internal: true
+  on_wake_word_detected:
+    - if:
+        condition:
+          switch.is_off: master_mute_switch
+        then:
+          - conduit_voice.wake_debug_event:
+              id: conduit
+          - conduit_voice.start:
+              id: conduit
+
+conduit_voice:
+  id: conduit
+  server: 10.0.12.72:8080
+  scheme: ws
+  pipeline: default
+  # A reference, never a value: this file is committed.
+  token: !secret conduit_token
+  max_utterance_ms: 8000
+  debug_assistant_id: default
+  debug_udp_host: "10.0.12.11"
+  debug_udp_port: 6056
+  # A reference, never a value: the URL carries a webhook token.
+  debug_wake_event_url: !secret wake_debug_event_url
+  microphone: sat1_mics
+  speaker: announcement_resampling_speaker
