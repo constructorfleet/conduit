@@ -32,14 +32,15 @@ implementation.
   the PD-negotiation script, `gain_factor` as anything but a parameter.
   Rejected in ADR-0015 decision one.
 - Storing board profiles server-side. The board file is the board profile.
-- Delivering a rendered fragment to a device. ADR-0015 answers question 4 with
-  "not yet, and on purpose": Conduit has no relationship with an ESPHome
-  instance, and OTA delivery carries its own trust questions. The operator
-  saves the response and runs their own ESPHome build.
 - Hosting wake models. The phrase-to-model table is a mapping, not a registry.
-- Compiling or validating the fragment against a real ESPHome installation.
-  The renderer validates its own inputs; ESPHome remains the authority on YAML
-  it accepts.
+- **Compiling firmware, or serving a compiled image.** ADR-0019 delegates both
+  to an ESPHome instance the operator already runs, because a compiled `.bin`
+  has the device token substituted into it and serving one would invert
+  ADR-0015's secrets posture. Conduit's artifact stays text.
+- Validating the fragment against a real ESPHome installation. The renderer
+  validates its own inputs; ESPHome remains the authority on YAML it accepts.
+- First adoption of a device with no firmware. ESPHome's own install flow owns
+  that; track E links to it.
 
 ---
 
@@ -53,6 +54,7 @@ Four tracks. Each builds, passes the gates, and is worth committing alone.
 | B | The renderer and its endpoint | `GET /v1/devices/{device}/firmware` |
 | C | Board files include the fragment | The duplication is gone for real |
 | D | Console affordance | An operator can fetch a fragment without curl |
+| E | Hand-off to an ESPHome instance | The fragment reaches a device, per ADR-0019 |
 
 Track A first because it is the only part with a decision left in it and it is
 pure library code. Track C is deliberately last: until B renders output that
@@ -206,9 +208,48 @@ same mechanism `protocol_parity.rs` already uses for `notices.fixture`.
 ## Track D — Console affordance
 
 A device's page offers its fragment for download, with the board IDs as fields.
-The contract addition is typed in `frontend/src/contracts/`, per ADR-0006. Last
-because the endpoint is useful to an operator with an ESPHome dashboard before a
-console button exists.
+The contract addition is typed in `frontend/src/contracts/`, per ADR-0006. After
+B because the endpoint is useful to an operator with an ESPHome dashboard before
+a console button exists.
+
+**This download stays after track E ships.** ADR-0019 makes it the fallback: when
+the configured ESPHome instance is unreachable or its API has moved, the page
+degrades to "here is your fragment, apply it yourself" rather than to a dead
+button.
+
+## Track E — Hand-off to an ESPHome instance
+
+Implements [ADR-0019](../adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md).
+Conduit uploads the fragment to an ESPHome dashboard the operator already runs
+and links to that dashboard's install and OTA affordances. Conduit does not
+compile, does not store an image, and does not serve a binary.
+
+**Configuration.** One new setting: the ESPHome dashboard base URL, and whatever
+credential that instance requires. Read from the environment like every other
+config, per the existing `config.rs` pattern.
+
+**The base URL is an SSRF surface** — an operator-supplied address the server
+dials — and gets the treatment that needs: scheme restricted to `http`/`https`,
+parsed rather than string-concatenated, and a failure to connect reported as a
+failure rather than retried in a way that scans. The credential for that
+instance is a secret Conduit holds, so it is never logged and never returned in
+a response, the same rule `auth.rs` already follows for tokens.
+
+**What is uploaded is only the fragment.** The board file is uploaded once by
+hand or already lives in the ESPHome config directory; reconfiguring a device
+rewrites one small file. This is why ADR-0015's fragment decision is load-bearing
+for flashing rather than merely compatible with it.
+
+**What the console shows.** Upload, then a link out to the ESPHome instance for
+the build and install. Not an embedded `<esp-web-install-button>`: ESP Web Tools
+flashes a compiled `.bin` over WebSerial, which is the artifact ADR-0019 declines
+to produce. The device's own dashboard page already has that button, correctly,
+because that instance did the compile.
+
+Tests: an unreachable instance surfaces an actionable error and the download
+fallback still works; a rejected scheme is refused before any request is made;
+the configured credential appears in no response body and no log line; the
+upload sends the fragment and not the board file.
 
 ---
 
@@ -235,8 +276,10 @@ this feature is meant to make un-disagreeable.
   seam.** ADR-0015 decision five accepts this deliberately: an operator cannot
   pin an old `conduit_voice` and take a new server. Worth a line in the firmware
   README so it is discovered before a flash rather than after.
-- **A rendered fragment nobody applies.** The endpoint's value depends on an
-  operator with an ESPHome dashboard. Question 4 is answered "not yet" on
-  purpose, but if nobody applies the output, tracks A–C bought only the
-  phrase/model consistency check — which is still the motivating case, and is
-  why track A is severable.
+- **A rendered fragment nobody applies.** Tracks A–D depend on an operator with
+  an ESPHome dashboard applying the output by hand. Track E closes that, but
+  until it lands those tracks buy only the phrase/model consistency check —
+  which is still the motivating case, and is why track A is severable.
+- **ESPHome's dashboard API is not a versioned third-party contract** and can
+  change between releases. Weaker coupling than ADR-0015 decision five, but real;
+  the track D fallback is what keeps a broken upload from being a dead page.

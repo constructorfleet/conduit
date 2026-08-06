@@ -193,6 +193,11 @@ fit together, and the firmware suite greps it for exactly those facts.
   that emits a correct fragment is useful to an operator with an ESPHome dashboard
   today, and OTA delivery is a separate decision with its own trust questions.
   Question 4 is answered "not yet, and on purpose".
+  **Since superseded by [ADR-0019](0019-flashing-through-an-esphome-instance-conduit-does-not-own.md)**,
+  which answers question 4 by delegating compilation and flashing to an ESPHome
+  instance the operator already runs. It does not disturb the fragment decision
+  below — it depends on it, because a fragment is what keeps the upload to one
+  small file.
 - The `micro_wake_word` `gain_factor` differs per board (6 on sat1, 4 on voicepe)
   and is a microphone property, not a pipeline property, so it is a render
   parameter rather than something read from a definition.
