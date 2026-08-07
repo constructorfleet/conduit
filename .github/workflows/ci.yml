@@ -324,8 +324,16 @@ jobs:
           fi
 
   # The published image is built from this Dockerfile, so a change that breaks
-  # it must fail on the pull request rather than after merge. Building without
-  # pushing needs no registry credentials.
+  # it must fail before the image is published. Building without pushing needs
+  # no registry credentials.
+  #
+  # The build itself does not run on pull requests: it is the slowest job here
+  # by several minutes, and Publish calls this workflow on the merge, so the
+  # Dockerfile is still built before anything reaches a registry. The job stays
+  # rather than being skipped outright, because `docker` is a required status
+  # check — a skipped job never reports one, and the pull request would wait on
+  # it forever. What it keeps on a pull request is the toolchain-pin
+  # comparison, which is a file read and costs nothing.
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -345,11 +353,13 @@ jobs:
           fi
           echo "both pin Rust ${pinned}"
       - uses: docker/setup-buildx-action@v4
+        if: github.event_name != 'pull_request'
       # Deliberately uncached. A `type=gha,mode=max` cache of a Rust release
       # build runs to gigabytes and would evict the `check` job's rust-cache
       # entries from the same 10 GB repository budget, making the far more
       # frequent job slower to speed up this one.
       - uses: docker/build-push-action@v7
+        if: github.event_name != 'pull_request'
         with:
           context: .
           push: false
