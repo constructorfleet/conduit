@@ -281,6 +281,38 @@ fallback still works; a rejected scheme is refused before any request is made;
 the configured credential appears in no response body and no log line; the
 upload sends the fragment and not the board file.
 
+**What converting actually surfaced.**
+
+*One renderer, not two.* `POST /v1/devices/{device}/firmware/flash` takes exactly
+the query parameters the render route takes and shares its renderer, so the
+uploaded bytes are the downloadable bytes — asserted directly, because two
+renderers would be two chances to disagree about what a device is configured to
+do, and the download is this route's own fallback.
+
+*"No dashboard configured" is a 501, not a 404 or a 422.* The route exists and the
+request is fine; the server has nothing to carry it out with. The detail names
+`CONDUIT_ESPHOME_URL` and points at downloading the fragment, because that is the
+operator's next move either way. Unset means no flashing rather than a default
+pointing at localhost: dialing an address nobody named is how a convenience
+becomes a scan.
+
+*A bad base URL is a startup failure.* The URL is parsed in `EsphomeDashboard::new`
+when config is read, so a typo fails at boot rather than the first time somebody
+clicks flash. A trailing slash is appended there too — without it `Url::join`
+replaces the last segment, and a dashboard behind a reverse proxy at `/esphome`
+would silently receive uploads at `/edit`.
+
+*The device name becomes a file name on somebody else's filesystem.* Non-alphanumerics
+collapse to hyphens, so no `/` or `.` survives to walk out of the ESPHome config
+directory. Tested with an encoded `../../etc/passwd`.
+
+*`Debug` for `EsphomeDashboard` is hand-written.* The type is reachable from
+`AppState`, which derives `Debug`, so a derive here would put a dashboard
+credential one `tracing::debug!` from a log file.
+
+*No retry.* An unreachable operator-supplied address retried in a loop is a scan,
+and the fallback is already on the page.
+
 ---
 
 ## Resolved Decisions

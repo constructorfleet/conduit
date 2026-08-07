@@ -1,6 +1,7 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
   EnrolledSpeaker,
+  FirmwareFlashResult,
   FirmwareRenderRequest,
   PipelineGraph,
   PipelineTestRequest,
@@ -91,6 +92,11 @@ export interface SnapshotClient {
     device: string,
     request: FirmwareRenderRequest,
   ) => Promise<string>;
+  /// Uploads that same fragment to the configured ESPHome dashboard.
+  flashFirmware: (
+    device: string,
+    request: FirmwareRenderRequest,
+  ) => Promise<FirmwareFlashResult>;
 }
 
 export function createSnapshotClient(
@@ -168,6 +174,7 @@ export function createSnapshotClient(
     loadProviderVoices: (id) => client.listProviderVoices(id),
     loadProviderPhrases: (id) => client.listProviderPhrases(id),
     renderFirmware: (device, request) => client.renderFirmware(device, request),
+    flashFirmware: (device, request) => client.flashFirmware(device, request),
   };
 }
 
@@ -283,6 +290,13 @@ function createMockSnapshotClient(
         `# mock data for ${device}`,
         "",
       ].join("\n"),
+    // The mock console has no dashboard to reach, and saying so is the honest
+    // answer rather than pretending an upload succeeded.
+    flashFirmware: async () => {
+      throw new Error(
+        "no ESPHome dashboard is configured; set CONDUIT_ESPHOME_URL, or download the fragment and apply it to your instance by hand",
+      );
+    },
   };
 }
 

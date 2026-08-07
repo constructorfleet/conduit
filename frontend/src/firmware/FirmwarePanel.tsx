@@ -12,18 +12,33 @@
 /// configured ESPHome instance is unreachable, the page degrades to "here is
 /// your fragment, apply it yourself" rather than to a dead button.
 ///
+/// Track E adds the hand-off to that instance: upload, then a link out to it for
+/// the build and install. Deliberately not an embedded `<esp-web-install-button>`
+/// — Conduit does not compile, does not hold an image, and has nothing to serve
+/// one from, because an ESPHome build bakes `secrets.yaml` into the binary.
+///
 /// [adr]: ../../../docs/adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md
 
-import { Download, FileCode2 } from "lucide-react";
+import { Download, FileCode2, UploadCloud } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
-import type { FirmwareRenderRequest } from "../contracts/client";
+import type {
+  FirmwareFlashResult,
+  FirmwareRenderRequest,
+} from "../contracts/client";
 
 /// Renders a fragment, or rejects with what the server said about why not.
 export type FirmwareRenderer = (
   device: string,
   request: FirmwareRenderRequest,
 ) => Promise<string>;
+
+/// Uploads a fragment to the configured ESPHome dashboard, or rejects saying
+/// why — including that no dashboard is configured, which is a normal answer.
+export type FirmwareFlasher = (
+  device: string,
+  request: FirmwareRenderRequest,
+) => Promise<FirmwareFlashResult>;
 
 /// The board ids and dial settings an operator types.
 ///
@@ -134,16 +149,21 @@ function messageOf(caught: unknown, fallback: string): string {
 export function FirmwarePanel({
   pipelineNames,
   onRender,
+  onFlash,
 }: {
   /// The stored pipelines, offered as a list because a fragment naming a
   /// pipeline that does not exist renders a device that cannot connect.
   pipelineNames: readonly string[];
   onRender: FirmwareRenderer;
+  onFlash: FirmwareFlasher;
 }) {
   const [form, setForm] = useState<FirmwareFormState>(emptyFirmwareForm);
   const [fragment, setFragment] = useState<string | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [flashed, setFlashed] = useState<FirmwareFlashResult | null>(null);
+  const [flashError, setFlashError] = useState<string | null>(null);
+  const [flashing, setFlashing] = useState(false);
 
   function update(field: keyof FirmwareFormState, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -151,6 +171,10 @@ export function FirmwarePanel({
     // Keeping it beside changed fields would invite saving one set of ids
     // having read another.
     setFragment(null);
+    // And an upload confirmation describes a file that no longer matches the
+    // form, which reads as "this device is configured" when it is not.
+    setFlashed(null);
+    setFlashError(null);
   }
 
   async function render(event: FormEvent<HTMLFormElement>) {
@@ -190,6 +214,24 @@ export function FirmwarePanel({
     link.download = fragmentFileName(form.device);
     link.click();
     URL.revokeObjectURL(href);
+  }
+
+  /// Hands the fragment to the configured ESPHome dashboard.
+  ///
+  /// A failure leaves the fragment and its save button exactly where they were:
+  /// per ADR-0019 the download is the fallback, so an unreachable dashboard has
+  /// to leave an operator somewhere other than a dead end.
+  async function flash() {
+    setFlashing(true);
+    setFlashError(null);
+    setFlashed(null);
+    try {
+      setFlashed(await onFlash(form.device.trim(), firmwareRequestFrom(form)));
+    } catch (caught) {
+      setFlashError(messageOf(caught, "Unable to upload the fragment"));
+    } finally {
+      setFlashing(false);
+    }
   }
 
   return (
@@ -329,14 +371,52 @@ export function FirmwarePanel({
               <p className="eyebrow">{fragmentFileName(form.device)}</p>
               <h2 id="fragment-title">Rendered fragment</h2>
             </div>
-            <button className="primary-action" type="button" onClick={save}>
-              <Download size={17} aria-hidden="true" />
-              Save fragment
-            </button>
+            <div className="section-actions">
+              <button className="primary-action" type="button" onClick={save}>
+                <Download size={17} aria-hidden="true" />
+                Save fragment
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={flash}
+                disabled={flashing}
+              >
+                <UploadCloud size={17} aria-hidden="true" />
+                {flashing ? "Uploading…" : "Send to ESPHome"}
+              </button>
+            </div>
           </div>
           <pre className="fragment-preview" aria-label="Fragment YAML">
             {fragment}
           </pre>
+
+          {flashed ? (
+            <p className="panel-note" role="status">
+              Uploaded as <code>{flashed.configuration}</code>. Build and
+              install it from{" "}
+              <a
+                href={flashed.dashboard_url}
+                target="_blank"
+                // Conduit's own page is what the dashboard would otherwise be
+                // able to reach through `window.opener`, and the dashboard is an
+                // address an operator typed rather than one Conduit vouches for.
+                rel="noreferrer noopener"
+              >
+                your ESPHome dashboard
+              </a>
+              . Conduit does not compile firmware — an ESPHome build bakes your{" "}
+              <code>secrets.yaml</code> into the binary, so the toolchain that
+              already holds those secrets is the one that uses them.
+            </p>
+          ) : null}
+
+          {flashError ? (
+            <p className="form-error" role="alert">
+              {flashError} The fragment above is unchanged — save it and apply
+              it to your ESPHome instance by hand.
+            </p>
+          ) : null}
         </section>
       ) : null}
     </div>

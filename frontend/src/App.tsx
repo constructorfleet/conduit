@@ -105,7 +105,11 @@ import type {
 type VoiceLoader = (providerId: string) => Promise<VoiceCatalog>;
 /// The phrases a wake detector has models for, empty when it cannot enumerate.
 type PhraseLoader = (providerId: string) => Promise<string[]>;
-import { FirmwarePanel, type FirmwareRenderer } from "./firmware/FirmwarePanel";
+import {
+  FirmwarePanel,
+  type FirmwareFlasher,
+  type FirmwareRenderer,
+} from "./firmware/FirmwarePanel";
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -576,6 +580,11 @@ function OperatorWorkspace({
   const renderFirmware: FirmwareRenderer = (device, request) =>
     snapshotClient.renderFirmware(device, request);
 
+  /// Hands a rendered fragment to the operator's ESPHome dashboard, if they
+  /// configured one. Unmemoized for the same reason as `renderFirmware`.
+  const flashFirmware: FirmwareFlasher = (device, request) =>
+    snapshotClient.flashFirmware(device, request);
+
   async function refreshSnapshotFromApi(): Promise<OperatorStatusSnapshot> {
     const loadedSnapshot = await snapshotClient.loadSnapshot();
     setSnapshot(loadedSnapshot);
@@ -834,6 +843,7 @@ function OperatorWorkspace({
           section={activeSection}
           speakers={speakerApi}
           onFirmwareRender={renderFirmware}
+          onFirmwareFlash={flashFirmware}
           events={initialEvents ?? eventEnvelopeFixtures}
           turnSnapshot={turnSnapshot}
           componentCatalog={componentCatalog}
@@ -873,6 +883,7 @@ function SectionPanel({
   section,
   speakers,
   onFirmwareRender,
+  onFirmwareFlash,
   events,
   turnSnapshot,
   componentCatalog,
@@ -896,6 +907,7 @@ function SectionPanel({
   section: SectionId;
   speakers: SpeakerApi;
   onFirmwareRender: FirmwareRenderer;
+  onFirmwareFlash: FirmwareFlasher;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
   componentCatalog: ProviderComponentCatalog;
@@ -975,6 +987,7 @@ function SectionPanel({
       <FirmwarePanel
         pipelineNames={pipelineViews.map((view) => view.graph.name)}
         onRender={onFirmwareRender}
+        onFlash={onFirmwareFlash}
       />
     );
   }

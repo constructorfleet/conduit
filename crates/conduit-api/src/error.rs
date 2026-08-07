@@ -37,6 +37,31 @@ impl ApiError {
         }
     }
 
+    /// The route exists but this deployment has not configured what it needs.
+    ///
+    /// Not 404, which would say the route is wrong, and not 422, which would
+    /// blame the request: the request is fine and the server has nothing to
+    /// carry it out with until an operator configures one.
+    #[must_use]
+    pub fn not_implemented(detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_IMPLEMENTED,
+            kind: "not_configured",
+            detail: detail.into(),
+        }
+    }
+
+    /// A service Conduit does not own could not be reached, or refused.
+    ///
+    /// Distinct from [`ApiError::unavailable`], which says *this* server cannot
+    /// answer. 502 says Conduit is fine and something it was asked to talk to is
+    /// not, which is a different next move for the operator: check that service,
+    /// not this one.
+    #[must_use]
+    pub fn bad_gateway(detail: impl Into<String>) -> Self {
+        Self { status: StatusCode::BAD_GATEWAY, kind: "bad_gateway", detail: detail.into() }
+    }
+
     /// The request cannot be applied to the resource as it currently stands.
     ///
     /// Distinct from [`ApiError::unprocessable`]: the request is one the API

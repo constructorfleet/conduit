@@ -17,6 +17,7 @@ pub mod compare;
 pub mod config;
 pub mod converse;
 pub mod error;
+pub mod esphome;
 pub mod events;
 pub mod factory;
 pub mod firmware;
@@ -92,6 +93,7 @@ pub fn router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(speakers::ENROLLMENT_BODY_LIMIT_BYTES)),
         )
         .route("/v1/devices/{device}/firmware", get(firmware::render))
+        .route("/v1/devices/{device}/firmware/flash", post(firmware::flash))
         .route("/v1/pipelines", get(pipelines::list))
         .route("/v1/pipelines/validate", post(pipelines::validate))
         .route("/v1/pipelines/{name}/test-turn", post(pipelines::test_turn))

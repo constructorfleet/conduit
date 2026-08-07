@@ -38,6 +38,9 @@ axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
+# Only for the ESPHome dashboard hand-off: `Url` for parsing an
+# operator-supplied base URL, and the client that posts one small file to it.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
