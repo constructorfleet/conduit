@@ -313,6 +313,16 @@ credential one `tracing::debug!` from a log file.
 *No retry.* An unreachable operator-supplied address retried in a loop is a scan,
 and the fallback is already on the page.
 
+*"No log line" needed its own test binary.* The response-body half of the
+credential rule is an ordinary assertion, but reading back what a subscriber
+actually wrote requires installing that subscriber *globally* — `tracing` caches
+each callsite's interest the first time it is hit, so a thread-local subscriber
+alongside sibling tests loses a race and the events never arrive. Same
+constraint `token_logging.rs` already records, so
+`esphome_credential_logging.rs` follows it: its own binary, both the accepted and
+the refused upload paths, and a `tracing::debug!` of the dashboard itself, which
+is how a credential would reach a log by accident.
+
 ---
 
 ## Resolved Decisions
