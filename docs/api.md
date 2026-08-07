@@ -824,6 +824,50 @@ Errors:
   or if a flashed phrase has no known model — named, so an operator knows
   which `models` entry to add
 
+### `POST /v1/devices/{device}/firmware/flash`
+
+Renders the same fragment and writes it to the ESPHome dashboard the operator
+configured, under the name a board file `!include`s. Conduit does not compile,
+does not store an image, and does not serve a binary — see
+[ADR-0019](adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md):
+an ESPHome build substitutes `secrets.yaml` into generated C++, so a `.bin`
+carries a working device token. Building and installing happen on that
+dashboard, which already holds those secrets.
+
+Only the fragment is uploaded. The board file is placed in the ESPHome config
+directory once, by hand.
+
+Management-only, and takes exactly the query parameters
+`GET /v1/devices/{device}/firmware` takes. The uploaded bytes are that
+endpoint's bytes: one renderer serves both, so a fragment applied by hand after
+a failed upload is the same file.
+
+Configure the dashboard with `CONDUIT_ESPHOME_URL` and, if the instance
+requires one, `CONDUIT_ESPHOME_CREDENTIAL` — see
+[configuration](configuration.md). The credential is sent to that instance and
+appears in no response body and no log line.
+
+Success body:
+
+```json
+{
+  "configuration": "conduit-kitchen.conduit.yaml",
+  "dashboard_url": "http://homelab:6052/"
+}
+```
+
+Errors:
+
+- `403` if the caller presents a device token
+- `404` if `pipeline` is not stored
+- `422` as for the render route
+- `501` if no dashboard is configured. The route exists and the request is
+  fine; there is nothing to carry it out with. The detail names
+  `CONDUIT_ESPHOME_URL` and points at downloading the fragment instead.
+- `502` if the dashboard cannot be reached or refuses the write, quoting what
+  it said. The download route is unaffected, and applying the fragment by hand
+  is the documented fallback rather than a workaround.
+
 ## Pipeline Routes
 
 ### `GET /v1/pipelines`

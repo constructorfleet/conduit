@@ -212,6 +212,8 @@ npm run format
 | `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60` | How long a turn may publish nothing before it is abandoned; `0` removes the bound |
 | `CONDUIT_TURN_HISTORY_MAX_TURNS` | `500` | Completed reconstructed turns retained in memory; `0` removes the count bound |
 | `CONDUIT_TURN_HISTORY_RETENTION_SECS` | `86400` | Completed reconstructed turn age retained in memory; `0` removes the age bound |
+| `CONDUIT_ESPHOME_URL` | — | ESPHome dashboard to hand rendered firmware fragments to; unset means no flashing, not a localhost guess |
+| `CONDUIT_ESPHOME_CREDENTIAL` | — | `Authorization` header value for the above, if it needs one |
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for local Conduit data |
 | `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory to keep pipelines in; `:memory:` makes them disposable |

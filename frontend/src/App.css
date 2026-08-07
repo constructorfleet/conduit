@@ -1503,6 +1503,14 @@ label.icon-action {
   line-height: 1.5;
 }
 
+/* Two buttons where a heading has one. Wraps, because "Send to ESPHome" beside
+ * "Save fragment" is wider than a narrow card's heading row. */
+.section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* A rendered fragment, shown to be read before it is saved. Scrolls rather
  * than wraps: YAML indentation is meaning, and a soft-wrapped model URL reads
  * as a structural break that is not there. */

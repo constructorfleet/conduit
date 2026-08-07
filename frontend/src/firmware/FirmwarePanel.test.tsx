@@ -39,6 +39,28 @@ async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
   }
 }
 
+/// A dashboard that accepted the upload.
+function accepted() {
+  return {
+    configuration: "conduit-kitchen.conduit.yaml",
+    dashboard_url: "http://homelab:6052/",
+  };
+}
+
+/// Panels take a flasher too; most tests do not exercise it.
+function panel(overrides: {
+  onRender: () => Promise<string>;
+  onFlash?: () => Promise<ReturnType<typeof accepted>>;
+}) {
+  return (
+    <FirmwarePanel
+      pipelineNames={["default"]}
+      onRender={overrides.onRender}
+      onFlash={overrides.onFlash ?? (async () => accepted())}
+    />
+  );
+}
+
 const FRAGMENT = [
   "# Rendered by Conduit. Edits are lost on the next render.",
   "conduit_voice:",
@@ -93,7 +115,7 @@ describe("Firmware panel", () => {
     // first. There is nothing to save until there is something to read.
     const user = userEvent.setup();
     const onRender = vi.fn(async () => FRAGMENT);
-    render(<FirmwarePanel pipelineNames={["default"]} onRender={onRender} />);
+    render(panel({ onRender }));
 
     expect(
       screen.queryByRole("button", { name: "Save fragment" }),
@@ -123,7 +145,7 @@ describe("Firmware panel", () => {
     // would get the same refusal a round trip later and less specifically.
     const user = userEvent.setup();
     const onRender = vi.fn(async () => FRAGMENT);
-    render(<FirmwarePanel pipelineNames={[]} onRender={onRender} />);
+    render(panel({ onRender }));
 
     await user.type(screen.getByLabelText("Device name"), "kitchen");
     await user.click(screen.getByRole("button", { name: "Render fragment" }));
@@ -139,7 +161,7 @@ describe("Firmware panel", () => {
     const onRender = vi.fn(async () => {
       throw new Error("no microWakeWord model is known for the phrase `stop`");
     });
-    render(<FirmwarePanel pipelineNames={["default"]} onRender={onRender} />);
+    render(panel({ onRender }));
 
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "Render fragment" }));
@@ -157,7 +179,7 @@ describe("Firmware panel", () => {
     // and flashes a fragment naming the id they just replaced.
     const user = userEvent.setup();
     const onRender = vi.fn(async () => FRAGMENT);
-    render(<FirmwarePanel pipelineNames={["default"]} onRender={onRender} />);
+    render(panel({ onRender }));
 
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "Render fragment" }));
@@ -166,5 +188,75 @@ describe("Firmware panel", () => {
     await user.type(screen.getByLabelText("Microphone id"), "-2");
 
     expect(screen.queryByLabelText("Fragment YAML")).not.toBeInTheDocument();
+  });
+});
+
+describe("handing a fragment to ESPHome", () => {
+  it("uploads what is on screen and links out for the build", async () => {
+    // ADR-0019: Conduit uploads and then gets out of the way. There is no
+    // embedded installer, because Conduit never holds a compiled image.
+    const user = userEvent.setup();
+    const onFlash = vi.fn(async () => accepted());
+    render(panel({ onRender: async () => FRAGMENT, onFlash }));
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: "Render fragment" }));
+    await user.click(screen.getByRole("button", { name: "Send to ESPHome" }));
+
+    expect(onFlash).toHaveBeenCalledWith("kitchen", {
+      pipeline: "default",
+      microphone: "sat1_mics",
+      speaker: "announcement_resampling_speaker",
+      mute_switch: "master_mute_switch",
+      gain_factor: 6,
+      server: "192.168.1.10:8080",
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "conduit-kitchen.conduit.yaml",
+    );
+    expect(
+      screen.getByRole("link", { name: "your ESPHome dashboard" }),
+    ).toHaveAttribute("href", "http://homelab:6052/");
+  });
+
+  it("leaves the fragment and its save button when the upload fails", async () => {
+    // The whole point of ADR-0019's degradation rule: a broken hand-off ends at
+    // "here is your fragment, apply it yourself", not at a dead button.
+    const user = userEvent.setup();
+    const onFlash = vi.fn(async () => {
+      throw new Error(
+        "cannot reach the ESPHome dashboard at http://homelab:6052/",
+      );
+    });
+    render(panel({ onRender: async () => FRAGMENT, onFlash }));
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: "Render fragment" }));
+    await user.click(screen.getByRole("button", { name: "Send to ESPHome" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "cannot reach the ESPHome dashboard",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("by hand");
+    expect(screen.getByLabelText("Fragment YAML")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save fragment" }),
+    ).toBeInTheDocument();
+  });
+
+  it("clears an upload confirmation when a field changes under it", async () => {
+    // A confirmation naming a file that no longer matches the form reads as
+    // "this device is configured" when it is not.
+    const user = userEvent.setup();
+    render(panel({ onRender: async () => FRAGMENT }));
+
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: "Render fragment" }));
+    await user.click(screen.getByRole("button", { name: "Send to ESPHome" }));
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Server"), "1");
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

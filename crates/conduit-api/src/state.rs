@@ -18,6 +18,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
 
 use crate::auth::Access;
+use crate::esphome::EsphomeDashboard;
 use crate::factory::Factories;
 use crate::status::RuntimeStatus;
 use crate::turns::{TurnHistory, TurnHistoryRetention};
@@ -48,6 +49,8 @@ pub struct AppState {
     turn_idle_timeout: Option<Duration>,
     /// What turns stored provider definitions into running providers.
     factories: Arc<Factories>,
+    /// Where rendered firmware fragments are handed off, if anywhere.
+    esphome: Option<Arc<EsphomeDashboard>>,
 }
 
 impl AppState {
@@ -85,6 +88,7 @@ impl AppState {
             access: Arc::new(Access::anonymous()),
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
             factories: Arc::new(Factories::builtin()),
+            esphome: None,
         }
     }
 
@@ -191,6 +195,23 @@ impl AppState {
     #[must_use]
     pub fn access(&self) -> &Access {
         &self.access
+    }
+
+    /// Hands rendered fragments to `dashboard`.
+    #[must_use]
+    pub fn with_esphome(mut self, dashboard: EsphomeDashboard) -> Self {
+        self.esphome = Some(Arc::new(dashboard));
+        self
+    }
+
+    /// The ESPHome dashboard fragments are handed to, if one is configured.
+    ///
+    /// `None` is the ordinary state rather than a misconfiguration: the console
+    /// still renders and downloads fragments, which per ADR-0019 is the path
+    /// this one degrades to anyway.
+    #[must_use]
+    pub fn esphome(&self) -> Option<Arc<EsphomeDashboard>> {
+        self.esphome.clone()
     }
 
     /// The metrics this server exposes.

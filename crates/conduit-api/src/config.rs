@@ -17,6 +17,7 @@ use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
 
 use crate::auth::{Access, Tokens, ALLOW_ANONYMOUS, TOKENS_FILE};
+use crate::esphome::EsphomeDashboard;
 use crate::turns::TurnHistoryRetention;
 
 /// Base URL of an OpenAI-compatible server.
@@ -45,6 +46,13 @@ const TURN_HISTORY_MAX_TURNS: &str = "CONDUIT_TURN_HISTORY_MAX_TURNS";
 /// Maximum age for completed reconstructed turns, in seconds. `0` removes the bound.
 const TURN_HISTORY_RETENTION: &str = "CONDUIT_TURN_HISTORY_RETENTION_SECS";
 
+/// Base URL of an ESPHome dashboard to hand rendered fragments to. Unset means
+/// no flash integration, which is the default: flashing is an opt-in
+/// relationship with a service Conduit does not own.
+const ESPHOME_URL: &str = "CONDUIT_ESPHOME_URL";
+/// The `Authorization` header value that dashboard requires, if it requires one.
+const ESPHOME_CREDENTIAL: &str = "CONDUIT_ESPHOME_CREDENTIAL";
+
 /// Base directory for Conduit-managed local data.
 const DATA_DIR: &str = "CONDUIT_DATA_DIR";
 /// Directory to keep pipeline definitions in. Unset means the default data directory.
@@ -61,6 +69,33 @@ const VAD_MODEL_PATH: &str = "the definition's `model_path`";
 const MEMORY_PIPELINE_DIR: &str = ":memory:";
 /// PostgreSQL connection URL. Takes precedence over a directory.
 const DATABASE_URL: &str = "CONDUIT_DATABASE_URL";
+
+/// The ESPHome dashboard rendered fragments are handed to, if one is configured.
+///
+/// Absent by default. A deployment that configured nothing has no ESPHome
+/// integration rather than one pointing hopefully at localhost, because dialing
+/// an address nobody named is how a convenience becomes a scan.
+///
+/// The URL is validated here, at startup, rather than at upload time: a typo an
+/// operator finds when the server refuses to start is better than one they find
+/// the first time they click flash.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if the URL does not parse, names no host, or uses a
+/// scheme other than `http` or `https`.
+pub fn esphome_from_env() -> Result<Option<EsphomeDashboard>> {
+    let Some(url) = std::env::var(ESPHOME_URL).ok().filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    EsphomeDashboard::new(&url, std::env::var(ESPHOME_CREDENTIAL).ok())
+        .map(Some)
+        // Names the variable rather than only what was wrong with the value,
+        // and never echoes the credential — only the URL was ever at issue.
+        .map_err(|invalid| Error::Config(format!("{ESPHOME_URL}: {invalid}")))
+}
 
 /// Decides who may call the service API.
 ///

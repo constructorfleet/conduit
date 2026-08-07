@@ -134,8 +134,101 @@ pub async fn render(
     Path(device): Path<String>,
     Query(request): Query<RenderRequest>,
 ) -> Result<([(axum::http::header::HeaderName, &'static str); 1], String), ApiError> {
+    let fragment = fragment_for(&state, &device, request).await?;
+
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/yaml; charset=utf-8")], fragment))
+}
+
+/// `POST /v1/devices/{device}/firmware/flash` — hand the fragment to ESPHome.
+///
+/// Renders exactly what [`render`] would and uploads it to the configured
+/// dashboard, so the flashed configuration is the one an operator could have
+/// read. Conduit does not compile and does not trigger a build: what comes back
+/// is a link to the instance that does, per
+/// [ADR-0019](../../../docs/adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md).
+///
+/// # Errors
+///
+/// Every error [`render`] returns, plus 501 when no dashboard is configured and
+/// 502 when the configured one cannot be reached or refuses the write. A failure
+/// here leaves the download path untouched, which is the fallback by design.
+pub async fn flash(
+    _caller: ManagementCaller,
+    State(state): State<AppState>,
+    Path(device): Path<String>,
+    Query(request): Query<RenderRequest>,
+) -> Result<axum::Json<FlashResult>, ApiError> {
+    // Before rendering: an operator who configured no dashboard should not have
+    // to read past a validation error to find out that is what is wrong.
+    let dashboard = state.esphome().ok_or_else(|| {
+        ApiError::not_implemented(
+            "no ESPHome dashboard is configured; set CONDUIT_ESPHOME_URL, or download the              fragment and apply it to your instance by hand",
+        )
+    })?;
+
+    let file_name = fragment_file_name(&device);
+    let fragment = fragment_for(&state, &device, request).await?;
+    dashboard.upload(&file_name, &fragment).await?;
+
+    Ok(axum::Json(FlashResult {
+        configuration: file_name,
+        dashboard_url: dashboard.base_url().to_owned(),
+    }))
+}
+
+/// What the console needs after a successful hand-off.
+///
+/// A link rather than a build: ESPHome asks for its own confirmation before it
+/// touches a device, and ADR-0019 keeps that where it is. Carries no credential
+/// — the operator's browser authenticates to that dashboard however it already
+/// does.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FlashResult {
+    /// The file written on the dashboard, which the board file `!include`s.
+    pub configuration: String,
+    /// The dashboard to open to build and install.
+    pub dashboard_url: String,
+}
+
+/// The file name a device's fragment is written under.
+///
+/// Matches what the checked-in board files include — `conduit-sat1.yaml` includes
+/// `conduit-sat1.conduit.yaml` — so an upload overwrites the file the board
+/// already names rather than landing beside it. Non-alphanumerics collapse to
+/// hyphens, which also keeps a device name from walking out of the config
+/// directory: no `/` or `.` survives.
+fn fragment_file_name(device: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_hyphen = false;
+    for character in device.trim().to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            if pending_hyphen && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_hyphen = false;
+            slug.push(character);
+        } else {
+            pending_hyphen = true;
+        }
+    }
+    if slug.is_empty() {
+        slug.push_str("device");
+    }
+    format!("conduit-{slug}.conduit.yaml")
+}
+
+/// Renders a device's fragment: the whole path both routes share.
+///
+/// Shared rather than reimplemented so a flashed fragment is byte-identical to a
+/// downloaded one. Two renderers would be two chances to disagree about what a
+/// device is configured to do.
+async fn fragment_for(
+    state: &AppState,
+    device: &str,
+    request: RenderRequest,
+) -> Result<String, ApiError> {
     let request = request.validated()?;
-    let device = resolve_device(state.access(), &device)?;
+    let device = resolve_device(state.access(), device)?;
 
     if !device.may_use(&request.pipeline) {
         // Rendering a fragment naming a pipeline this device will be refused
@@ -152,10 +245,9 @@ pub async fn render(
             ApiError::not_found(format!("no pipeline `{}`", request.pipeline))
         })?;
 
-    let models = wake_models(&state, &graph).await?;
-    let fragment = render_fragment(&request, &models);
+    let models = wake_models(state, &graph).await?;
 
-    Ok(([(axum::http::header::CONTENT_TYPE, "application/yaml; charset=utf-8")], fragment))
+    Ok(render_fragment(&request, &models))
 }
 
 /// The device this fragment is for.

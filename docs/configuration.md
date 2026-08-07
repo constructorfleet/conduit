@@ -54,6 +54,31 @@ Rules enforced at startup:
 `pipelines` is optional for device tokens. Omit it to allow any pipeline; use an
 empty list to allow none.
 
+## Firmware Flashing
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CONDUIT_ESPHOME_URL` | unset | Base URL of an ESPHome dashboard to upload rendered fragments to, for example `http://homelab:6052`. Must be `http` or `https`. |
+| `CONDUIT_ESPHOME_CREDENTIAL` | unset | Full `Authorization` header value for that dashboard, if it requires one — for example `Bearer …`. |
+
+Unset means this deployment has no flashing, not a default one pointing at
+localhost: dialing an address nobody named is how a convenience becomes a scan.
+`POST /v1/devices/{device}/firmware/flash` answers `501` until one is
+configured, and the console still offers the fragment for download.
+
+A bad URL is a startup failure rather than a surprise the first time an operator
+clicks flash. A scheme that is not `http` or `https` is refused before anything
+is dialed — without that check, an operator-supplied `file://` would turn a
+flash button into a local-filesystem read.
+
+The credential is a secret Conduit holds. It is sent to that dashboard and
+nowhere else: never logged, never in a response body, never in a link's query
+string. Per
+[ADR-0019](adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md),
+Conduit uploads only the fragment and never compiles, stores, or serves a
+firmware image — an ESPHome build substitutes `secrets.yaml` into generated
+C++, so a `.bin` carries a working device token.
+
 ## Pipeline Storage
 
 | Variable | Default | Description |

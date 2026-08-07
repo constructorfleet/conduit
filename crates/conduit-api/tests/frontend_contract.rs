@@ -1076,6 +1076,17 @@ export interface FirmwareRenderRequest {{
   debug_udp_port?: number;
 }}
 
+/// Where a fragment landed, so the console can link an operator to the build.
+///
+/// Names no credential: `dashboard_url` is a link a browser follows, and the
+/// credential Conduit authenticates with never leaves the server.
+export interface FirmwareFlashResult {{
+  /// The file the dashboard now holds, which a board file `!include`s.
+  configuration: string;
+  /// The dashboard to open in order to build and install it.
+  dashboard_url: string;
+}}
+
 export interface ConduitApiClient {{
   readonly routes: typeof conduitApiRoutes;
   status: () => Promise<OperatorStatusSnapshot>;
@@ -1118,6 +1129,15 @@ export interface ConduitApiClient {{
     device: string,
     request: FirmwareRenderRequest,
   ) => Promise<string>;
+  /// Writes the same fragment to the ESPHome dashboard the operator configured.
+  ///
+  /// Rejects with the server's own words when no dashboard is configured or the
+  /// dashboard refuses, because the next move is to download the fragment and
+  /// apply it by hand — which stays available either way.
+  flashFirmware: (
+    device: string,
+    request: FirmwareRenderRequest,
+  ) => Promise<FirmwareFlashResult>;
   listSpeakers: () => Promise<EnrolledSpeaker[]>;
   createSpeaker: (name: string) => Promise<EnrolledSpeaker>;
   renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
@@ -1157,6 +1177,7 @@ export const conduitApiRoutes = {{
   comparePipelines: "/v1/pipelines/compare",
   validatePipeline: "/v1/pipelines/validate",
   deviceFirmware: "/v1/devices/{{device}}/firmware",
+  deviceFirmwareFlash: "/v1/devices/{{device}}/firmware/flash",
 }} as const;
 
 export function createConduitApiClient(
@@ -1278,6 +1299,13 @@ export function createConduitApiClient(
 
       return await response.text();
     }},
+    flashFirmware: (device, firmware) =>
+      requestJson<FirmwareFlashResult>(
+        request,
+        config,
+        `${{deviceFirmwareFlashRoute(device)}}?${{firmwareQuery(firmware)}}`,
+        {{ method: "POST" }},
+      ),
     listTurns: () => requestJson<TurnList>(request, config, conduitApiRoutes.turns),
     getTurn: (turnId) =>
       requestJson<TurnSnapshot>(request, config, turnRoute(turnId)),
@@ -1334,6 +1362,13 @@ function pipelineTestRoute(name: string): string {{
   return conduitApiRoutes.pipelineTest.replace(
     "{{name}}",
     encodeURIComponent(name),
+  );
+}}
+
+function deviceFirmwareFlashRoute(device: string): string {{
+  return conduitApiRoutes.deviceFirmwareFlash.replace(
+    "{{device}}",
+    encodeURIComponent(device),
   );
 }}
 

@@ -22,6 +22,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read before anything else is built: a server that cannot say who may call
     // it should fail now, not after opening a port.
     let access = conduit_api::config::access_from_env().await?;
+    // Also before the port: a malformed dashboard URL should stop the server
+    // rather than wait to surprise whoever first clicks flash.
+    let esphome = conduit_api::config::esphome_from_env()?;
 
     let (providers, registered) = conduit_api::config::from_env()?;
     let turn_history_retention =
@@ -38,6 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_access(access)
         .with_turn_idle_timeout(registered.turn_idle_timeout)
         .with_turn_history_retention(turn_history_retention);
+    if let Some(dashboard) = esphome {
+        tracing::info!(dashboard = %dashboard.base_url(), "ESPHome hand-off configured");
+        state = state.with_esphome(dashboard);
+    }
     if !registered.is_empty() {
         state = state.with_providers(providers);
     }
