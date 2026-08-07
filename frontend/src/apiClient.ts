@@ -1,6 +1,7 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
 import type {
   EnrolledSpeaker,
+  FirmwareRenderRequest,
   PipelineGraph,
   PipelineTestRequest,
   PipelineTestResult,
@@ -85,6 +86,11 @@ export interface SnapshotClient {
   testProviderDefinition: (id: string) => Promise<ProviderStatus>;
   loadProviderVoices: (id: string) => Promise<ProviderVoices>;
   loadProviderPhrases: (id: string) => Promise<ProviderPhrases>;
+  /// Renders a device's ESPHome fragment, as YAML text rather than JSON.
+  renderFirmware: (
+    device: string,
+    request: FirmwareRenderRequest,
+  ) => Promise<string>;
 }
 
 export function createSnapshotClient(
@@ -161,6 +167,7 @@ export function createSnapshotClient(
     testProviderDefinition: (id) => client.testProviderDefinition(id),
     loadProviderVoices: (id) => client.listProviderVoices(id),
     loadProviderPhrases: (id) => client.listProviderPhrases(id),
+    renderFirmware: (device, request) => client.renderFirmware(device, request),
   };
 }
 
@@ -259,6 +266,23 @@ function createMockSnapshotClient(
     }),
     loadProviderVoices: async (id) => ({ provider: id, voices: [] }),
     loadProviderPhrases: async (id) => ({ provider: id, phrases: [] }),
+    // Shaped like a fragment rather than empty, so the mock console shows what
+    // the panel is for. Not the renderer's output: only the server knows that.
+    renderFirmware: async (device, request) =>
+      [
+        "# Rendered by Conduit. Edits are lost on the next render.",
+        "",
+        "conduit_voice:",
+        "  id: conduit",
+        `  server: ${request.server}`,
+        `  scheme: ${request.scheme ?? "ws"}`,
+        `  pipeline: ${request.pipeline}`,
+        "  token: !secret conduit_token",
+        `  microphone: ${request.microphone}`,
+        `  speaker: ${request.speaker}`,
+        `# mock data for ${device}`,
+        "",
+      ].join("\n"),
   };
 }
 

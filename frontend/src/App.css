@@ -1493,6 +1493,33 @@ label.icon-action {
   gap: 14px;
 }
 
+/* Prose above a card's fields, for the cases where what the fields do needs a
+ * sentence rather than eleven labels each carrying a clause. */
+.panel-note {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* A rendered fragment, shown to be read before it is saved. Scrolls rather
+ * than wraps: YAML indentation is meaning, and a soft-wrapped model URL reads
+ * as a structural break that is not there. */
+.fragment-preview {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .toggle-row {
   justify-content: space-between;
   gap: 16px;

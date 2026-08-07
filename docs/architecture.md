@@ -30,7 +30,7 @@ runtime progress is published as events.
 | `conduit-memory` | What the assistant remembers: an in-process BM25 store that needs nothing, and PostgreSQL with `pgvector` behind the `postgres` feature. |
 | `conduit-metrics` | Prometheus metrics derived by subscribing to the event bus. |
 | `conduit-api` | HTTP service and ops routers, authentication, pipeline CRUD, event streaming, and the conversation WebSocket. |
-| `frontend` | React Operator Console app with token-based Operator Access, snapshot-plus-events client boundaries, and top-level Overview, Pipelines, Providers, Speakers, Events, and Settings sections. |
+| `frontend` | React Operator Console app with token-based Operator Access, snapshot-plus-events client boundaries, and top-level Overview, Pipelines, Providers, Speakers, Firmware, Events, and Settings sections. |
 
 ## Runtime Flow
 
