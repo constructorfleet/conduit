@@ -3,6 +3,7 @@ import {
   Bell,
   Boxes,
   ChevronRight,
+  CircuitBoard,
   CircleAlert,
   CircleCheck,
   KeyRound,
@@ -104,6 +105,7 @@ import type {
 type VoiceLoader = (providerId: string) => Promise<VoiceCatalog>;
 /// The phrases a wake detector has models for, empty when it cannot enumerate.
 type PhraseLoader = (providerId: string) => Promise<string[]>;
+import { FirmwarePanel, type FirmwareRenderer } from "./firmware/FirmwarePanel";
 import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
@@ -122,6 +124,7 @@ const sections = [
   { id: "pipelines", label: "Pipelines", icon: Workflow },
   { id: "providers", label: "Providers", icon: Boxes },
   { id: "speakers", label: "Speakers", icon: Users },
+  { id: "firmware", label: "Firmware", icon: CircuitBoard },
   { id: "events", label: "Events", icon: Radio },
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
@@ -566,6 +569,13 @@ function OperatorWorkspace({
     [snapshotClient],
   );
 
+  /// Renders a device's fragment, bound to whichever client this workspace has.
+  ///
+  /// Not memoized like `speakerApi`: the firmware panel renders on a click
+  /// rather than on mount, so a new identity between renders costs nothing.
+  const renderFirmware: FirmwareRenderer = (device, request) =>
+    snapshotClient.renderFirmware(device, request);
+
   async function refreshSnapshotFromApi(): Promise<OperatorStatusSnapshot> {
     const loadedSnapshot = await snapshotClient.loadSnapshot();
     setSnapshot(loadedSnapshot);
@@ -823,6 +833,7 @@ function OperatorWorkspace({
         <SectionPanel
           section={activeSection}
           speakers={speakerApi}
+          onFirmwareRender={renderFirmware}
           events={initialEvents ?? eventEnvelopeFixtures}
           turnSnapshot={turnSnapshot}
           componentCatalog={componentCatalog}
@@ -861,6 +872,7 @@ function defaultDataMode(): OperatorDataMode {
 function SectionPanel({
   section,
   speakers,
+  onFirmwareRender,
   events,
   turnSnapshot,
   componentCatalog,
@@ -883,6 +895,7 @@ function SectionPanel({
 }: {
   section: SectionId;
   speakers: SpeakerApi;
+  onFirmwareRender: FirmwareRenderer;
   events: readonly EventEnvelope[];
   turnSnapshot: TurnSnapshot | null;
   componentCatalog: ProviderComponentCatalog;
@@ -955,6 +968,15 @@ function SectionPanel({
 
   if (section === "speakers") {
     return <SpeakersPanel speakers={speakers} />;
+  }
+
+  if (section === "firmware") {
+    return (
+      <FirmwarePanel
+        pipelineNames={pipelineViews.map((view) => view.graph.name)}
+        onRender={onFirmwareRender}
+      />
+    );
   }
 
   if (section === "providers") {

@@ -232,6 +232,21 @@ the configured ESPHome instance is unreachable or its API has moved, the page
 degrades to "here is your fragment, apply it yourself" rather than to a dead
 button.
 
+**Shipped as a Firmware section, not a device page.** There is no device page to
+put this on and no endpoint that lists devices: a device name is operator-chosen,
+the renderer answers for any name asked for, and inventing a device registry to
+host one button is a larger decision than this track. The section takes the
+device name as a field alongside the board ids, which is the same affordance
+without that registry.
+
+**The fragment is shown before it is saved.** Applying one means reflashing a
+device, and a rendered fragment is short enough to read, so the panel renders to
+the screen and offers to save what is on it. Changing any field clears it —
+otherwise an operator edits a board id, saves what is still displayed, and
+flashes a fragment naming the id they just replaced. The console also refuses a
+blank board id itself rather than spending a round trip to be told the same
+thing less specifically.
+
 ## Track E — Hand-off to an ESPHome instance
 
 Implements [ADR-0019](../adr/0019-flashing-through-an-esphome-instance-conduit-does-not-own.md).

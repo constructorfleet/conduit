@@ -119,8 +119,10 @@ Per [ADR-0015](../docs/adr/0015-render-the-conduit-part-of-the-firmware.md), the
 board file is the board profile and is never generated; the fragment names only
 ids the board file declares, and nothing about what the board is made of.
 
-Re-render the fragment when the pipeline, the server address, or the flashed
-phrases change:
+The console's **Firmware** section does this with the board ids as fields: fill
+them in, read the rendered YAML, and save it under the name the board file
+includes. Re-render whenever the pipeline, the server address, or the flashed
+phrases change. By hand, that is:
 
 ```sh
 curl -H "Authorization: Bearer $CONDUIT_MANAGEMENT_TOKEN" \

@@ -81,6 +81,7 @@ describe("Operator Console shell", () => {
       "Pipelines",
       "Providers",
       "Speakers",
+      "Firmware",
       "Events",
       "Settings",
     ]) {
