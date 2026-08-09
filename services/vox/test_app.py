@@ -658,6 +658,16 @@ def test_the_embedded_ui_exposes_the_link_flow(client: TestClient) -> None:
     assert 'api("/link", { method: "DELETE" })' in response.text
 
 
+def test_the_embedded_ui_uses_a_base_path_for_embedded_proxy_routes(
+    client: TestClient,
+) -> None:
+    response = client.get("/ui/")
+
+    assert response.status_code == 200
+    assert "const apiBasePath = window.location.pathname.replace(/\\/ui\\/?$/, \"\");" in response.text
+    assert "const route = `${apiBasePath}${path}`;" in response.text
+
+
 def test_the_embedded_ui_exposes_engine_reload(client: TestClient) -> None:
     response = client.get("/ui/")
 

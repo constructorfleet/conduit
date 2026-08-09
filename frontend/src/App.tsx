@@ -1103,7 +1103,7 @@ interface ProviderCardView {
 function VoxPanel() {
   return (
     <section className="vox-panel surface" aria-label="Conduit Vox">
-      <iframe className="vox-frame" src="/vox/ui" title="Conduit Vox" />
+      <iframe className="vox-frame" src="/vox/ui/" title="Conduit Vox" />
     </section>
   );
 }

@@ -1,754 +1,989 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Conduit Vox</title>
-<style>
-  :root {
-    color-scheme: light dark;
-    --bg: #f7f7f8;
-    --panel: #ffffff;
-    --border: #e0e0e5;
-    --text: #101014;
-    --muted: #5c5c66;
-    --accent: #3d6cff;
-    --accent-text: #ffffff;
-    --danger: #c62828;
-    --ok: #1e8a3c;
-    --warn: #b8860b;
-    --tone: #0e1116;
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0e1116;
-      --panel: #171b22;
-      --border: #262b34;
-      --text: #f0f2f5;
-      --muted: #8b93a1;
-      --accent: #6c8fff;
-      --danger: #ff6b6b;
-      --ok: #5adf7f;
-      --warn: #f0c46b;
-      --tone: #f0f2f5;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-  header {
-    padding: 20px 24px 8px;
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
-  header .tag {
-    font-size: 12px;
-    color: var(--muted);
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-  }
-  main {
-    padding: 8px 24px 40px;
-    display: grid;
-    gap: 16px;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-  section {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-  }
-  section > h2 {
-    margin: 0 0 12px;
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-  .full { grid-column: 1 / -1; }
-  dl.kv {
-    margin: 0;
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 6px 12px;
-  }
-  dl.kv dt { color: var(--muted); }
-  dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
-  button {
-    font: inherit;
-    border: 1px solid var(--border);
-    background: var(--panel);
-    color: var(--text);
-    padding: 6px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: 0.55; cursor: not-allowed; }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button.danger { color: var(--danger); }
-  input[type="text"], input[type="url"], input[type="password"] {
-    font: inherit;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    width: 100%;
-  }
-  input:focus, button:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-  table.speakers { width: 100%; border-collapse: collapse; }
-  table.speakers th, table.speakers td {
-    text-align: left;
-    padding: 8px 6px;
-    border-bottom: 1px solid var(--border);
-    font-variant-numeric: tabular-nums;
-    vertical-align: middle;
-  }
-  table.speakers th {
-    font-weight: 500;
-    color: var(--muted);
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  table.speakers td.uuid { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
-  table.speakers td .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
-  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .row > * { flex: 0 0 auto; }
-  .row > .grow { flex: 1 1 auto; }
-  .meter {
-    height: 6px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
-    width: 100%;
-  }
-  .meter > span {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    width: 0%;
-    transition: width 60ms linear;
-  }
-  .status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--muted);
-    margin-right: 6px;
-    vertical-align: middle;
-  }
-  .status-dot.ok { background: var(--ok); }
-  .status-dot.warn { background: var(--warn); }
-  .status-dot.err { background: var(--danger); }
-  .notice {
-    padding: 8px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg);
-    margin-top: 10px;
-    font-size: 13px;
-  }
-  .notice.err { border-color: var(--danger); color: var(--danger); }
-  .notice.ok { border-color: var(--ok); color: var(--ok); }
-  .rec-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 4ch; text-align: right; }
-  details summary { cursor: pointer; color: var(--muted); }
-</style>
-</head>
-<body>
-<header>
-  <h1>Conduit Vox</h1>
-  <span class="tag" id="header-engine">…</span>
-</header>
-<main>
-  <section id="health-panel">
-    <h2>Health</h2>
-    <dl class="kv" id="health-body"><dt>Loading…</dt><dd></dd></dl>
-    <div class="row" style="margin-top:12px">
-      <input type="text" id="reload-model" placeholder="Model name" class="grow" />
-      <button id="reload-engine" class="primary">Reload</button>
-      <button id="refresh-health">Refresh</button>
-    </div>
-    <div id="health-notice"></div>
-  </section>
-
-  <section id="identify-panel">
-    <h2>Test identification</h2>
-    <p class="note">Record a clip to see who Vox thinks it is, at what confidence. Uses the same encoder Conduit does.</p>
-    <div class="row">
-      <button id="identify-record" class="primary">Record</button>
-      <button id="identify-stop" disabled>Stop</button>
-      <span class="rec-time" id="identify-time">0.0s</span>
-      <div class="meter grow"><span id="identify-meter"></span></div>
-    </div>
-    <div id="identify-result"></div>
-  </section>
-
-  <section id="link-panel">
-    <h2>Link</h2>
-    <dl class="kv" id="link-body"><dt>Loading…</dt><dd></dd></dl>
-    <div style="margin-top:12px;display:grid;gap:8px">
-      <input type="url" id="link-conduit-url" placeholder="Conduit URL" autocomplete="off" />
-      <input type="password" id="link-token" placeholder="Operator token" autocomplete="off" />
-      <input type="text" id="link-peer-name" placeholder="Peer name" value="Conduit Vox" />
-      <div class="row">
-        <button id="link-connect" class="primary">Link</button>
-        <button id="link-unlink" class="danger">Unlink</button>
-      </div>
-    </div>
-    <div id="link-notice"></div>
-  </section>
-
-  <section id="enroll-panel" class="full">
-    <h2>Enroll a voice</h2>
-    <div class="row" style="gap:12px">
-      <label class="grow">
-        Speaker id
-        <div class="row" style="margin-top:4px">
-          <input type="text" id="enroll-uuid" placeholder="new UUID (auto-generated)" class="grow" />
-          <button id="enroll-new">New UUID</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Conduit Vox</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f7f8;
+        --panel: #ffffff;
+        --border: #e0e0e5;
+        --text: #101014;
+        --muted: #5c5c66;
+        --accent: #3d6cff;
+        --accent-text: #ffffff;
+        --danger: #c62828;
+        --ok: #1e8a3c;
+        --warn: #b8860b;
+        --tone: #0e1116;
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e1116;
+          --panel: #171b22;
+          --border: #262b34;
+          --text: #f0f2f5;
+          --muted: #8b93a1;
+          --accent: #6c8fff;
+          --danger: #ff6b6b;
+          --ok: #5adf7f;
+          --warn: #f0c46b;
+          --tone: #f0f2f5;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        padding: 20px 24px 8px;
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: -0.01em;
+      }
+      header .tag {
+        font-size: 12px;
+        color: var(--muted);
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+      }
+      main {
+        padding: 8px 24px 40px;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+      section > h2 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      .full {
+        grid-column: 1 / -1;
+      }
+      dl.kv {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 6px 12px;
+      }
+      dl.kv dt {
+        color: var(--muted);
+      }
+      dl.kv dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+        word-break: break-all;
+      }
+      button {
+        font: inherit;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      button.primary {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      button.danger {
+        color: var(--danger);
+      }
+      input[type="text"],
+      input[type="url"],
+      input[type="password"] {
+        font: inherit;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        width: 100%;
+      }
+      input:focus,
+      button:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      table.speakers {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      table.speakers th,
+      table.speakers td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--border);
+        font-variant-numeric: tabular-nums;
+        vertical-align: middle;
+      }
+      table.speakers th {
+        font-weight: 500;
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      table.speakers td.uuid {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      table.speakers td .row-actions {
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+      .empty {
+        color: var(--muted);
+        font-style: italic;
+        padding: 12px 0;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .row > * {
+        flex: 0 0 auto;
+      }
+      .row > .grow {
+        flex: 1 1 auto;
+      }
+      .meter {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+        width: 100%;
+      }
+      .meter > span {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        width: 0%;
+        transition: width 60ms linear;
+      }
+      .status-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .status-dot.ok {
+        background: var(--ok);
+      }
+      .status-dot.warn {
+        background: var(--warn);
+      }
+      .status-dot.err {
+        background: var(--danger);
+      }
+      .notice {
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        margin-top: 10px;
+        font-size: 13px;
+      }
+      .notice.err {
+        border-color: var(--danger);
+        color: var(--danger);
+      }
+      .notice.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+      .rec-time {
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        font-size: 12px;
+        min-width: 4ch;
+        text-align: right;
+      }
+      details summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Conduit Vox</h1>
+      <span class="tag" id="header-engine">…</span>
+    </header>
+    <main>
+      <section id="health-panel">
+        <h2>Health</h2>
+        <dl class="kv" id="health-body">
+          <dt>Loading…</dt>
+          <dd></dd>
+        </dl>
+        <div class="row" style="margin-top: 12px">
+          <input
+            type="text"
+            id="reload-model"
+            placeholder="Model name"
+            class="grow"
+          />
+          <button id="reload-engine" class="primary">Reload</button>
+          <button id="refresh-health">Refresh</button>
         </div>
-      </label>
-      <label>
-        Label (optional)
-        <input type="text" id="enroll-label" placeholder="e.g. Alice" maxlength="100" />
-      </label>
-    </div>
-    <div class="row" style="margin-top:12px">
-      <button id="enroll-record" class="primary">Record</button>
-      <button id="enroll-stop" disabled>Stop &amp; enroll</button>
-      <span class="rec-time" id="enroll-time">0.0s</span>
-      <div class="meter grow"><span id="enroll-meter"></span></div>
-    </div>
-    <p class="note">Or upload a clip: <input type="file" id="enroll-file" accept="audio/*" style="width:auto;display:inline" /></p>
-    <div id="enroll-notice"></div>
-  </section>
+        <div id="health-notice"></div>
+      </section>
 
-  <section id="speakers-panel" class="full">
-    <h2>Enrolled speakers</h2>
-    <table class="speakers" id="speakers-table">
-      <thead>
-        <tr>
-          <th>Label</th>
-          <th>UUID</th>
-          <th style="text-align:right">Samples</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="speakers-body">
-        <tr><td colspan="4" class="empty">Loading…</td></tr>
-      </tbody>
-    </table>
-    <div id="speakers-notice"></div>
-  </section>
-</main>
+      <section id="identify-panel">
+        <h2>Test identification</h2>
+        <p class="note">
+          Record a clip to see who Vox thinks it is, at what confidence. Uses
+          the same encoder Conduit does.
+        </p>
+        <div class="row">
+          <button id="identify-record" class="primary">Record</button>
+          <button id="identify-stop" disabled>Stop</button>
+          <span class="rec-time" id="identify-time">0.0s</span>
+          <div class="meter grow"><span id="identify-meter"></span></div>
+        </div>
+        <div id="identify-result"></div>
+      </section>
 
-<script>
-"use strict";
+      <section id="link-panel">
+        <h2>Link</h2>
+        <dl class="kv" id="link-body">
+          <dt>Loading…</dt>
+          <dd></dd>
+        </dl>
+        <div style="margin-top: 12px; display: grid; gap: 8px">
+          <input
+            type="url"
+            id="link-conduit-url"
+            placeholder="Conduit URL"
+            autocomplete="off"
+          />
+          <input
+            type="password"
+            id="link-token"
+            placeholder="Operator token"
+            autocomplete="off"
+          />
+          <input
+            type="text"
+            id="link-peer-name"
+            placeholder="Peer name"
+            value="Conduit Vox"
+          />
+          <div class="row">
+            <button id="link-connect" class="primary">Link</button>
+            <button id="link-unlink" class="danger">Unlink</button>
+          </div>
+        </div>
+        <div id="link-notice"></div>
+      </section>
 
-// The api key is only ever set by the Link flow (step 5) or the operator
-// pasting it into a query string. Kept in memory for the tab's lifetime; not
-// persisted, because a page that stored a bearer token in localStorage would
-// hand it to any other page on this origin — including a malicious one Conduit's
-// reverse proxy happens to also serve.
-let activeApiKey = new URLSearchParams(location.search).get("api_key") || null;
-function headers(base) {
-  const h = new Headers(base || {});
-  if (activeApiKey) h.set("authorization", "Bearer " + activeApiKey);
-  return h;
-}
+      <section id="enroll-panel" class="full">
+        <h2>Enroll a voice</h2>
+        <div class="row" style="gap: 12px">
+          <label class="grow">
+            Speaker id
+            <div class="row" style="margin-top: 4px">
+              <input
+                type="text"
+                id="enroll-uuid"
+                placeholder="new UUID (auto-generated)"
+                class="grow"
+              />
+              <button id="enroll-new">New UUID</button>
+            </div>
+          </label>
+          <label>
+            Label (optional)
+            <input
+              type="text"
+              id="enroll-label"
+              placeholder="e.g. Alice"
+              maxlength="100"
+            />
+          </label>
+        </div>
+        <div class="row" style="margin-top: 12px">
+          <button id="enroll-record" class="primary">Record</button>
+          <button id="enroll-stop" disabled>Stop &amp; enroll</button>
+          <span class="rec-time" id="enroll-time">0.0s</span>
+          <div class="meter grow"><span id="enroll-meter"></span></div>
+        </div>
+        <p class="note">
+          Or upload a clip:
+          <input
+            type="file"
+            id="enroll-file"
+            accept="audio/*"
+            style="width: auto; display: inline"
+          />
+        </p>
+        <div id="enroll-notice"></div>
+      </section>
 
-// Errors bubble here so a failure paints the notice slot instead of a silent
-// console entry a user has no way to see.
-function paint(id, kind, text) {
-  const target = document.getElementById(id);
-  if (!text) { target.innerHTML = ""; return; }
-  target.innerHTML = `<div class="notice ${kind}"></div>`;
-  target.firstChild.textContent = text;
-}
+      <section id="speakers-panel" class="full">
+        <h2>Enrolled speakers</h2>
+        <table class="speakers" id="speakers-table">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>UUID</th>
+              <th style="text-align: right">Samples</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="speakers-body">
+            <tr>
+              <td colspan="4" class="empty">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+        <div id="speakers-notice"></div>
+      </section>
+    </main>
 
-async function json(response) {
-  const body = await response.text();
-  try { return body ? JSON.parse(body) : {}; }
-  catch { return { detail: body }; }
-}
+    <script>
+      "use strict";
 
-async function api(path, init) {
-  const response = await fetch(path, { ...init, headers: headers(init && init.headers) });
-  if (!response.ok) {
-    const body = await json(response);
-    throw new Error(body.detail || `${response.status} ${response.statusText}`);
-  }
-  return json(response);
-}
+      // The api key is only ever set by the Link flow (step 5) or the operator
+      // pasting it into a query string. Kept in memory for the tab's lifetime; not
+      // persisted, because a page that stored a bearer token in localStorage would
+      // hand it to any other page on this origin — including a malicious one Conduit's
+      // reverse proxy happens to also serve.
+      let activeApiKey =
+        new URLSearchParams(location.search).get("api_key") || null;
+      function headers(base) {
+        const h = new Headers(base || {});
+        if (activeApiKey) h.set("authorization", "Bearer " + activeApiKey);
+        return h;
+      }
 
-// ---------- Health ----------
+      // Errors bubble here so a failure paints the notice slot instead of a silent
+      // console entry a user has no way to see.
+      function paint(id, kind, text) {
+        const target = document.getElementById(id);
+        if (!text) {
+          target.innerHTML = "";
+          return;
+        }
+        target.innerHTML = `<div class="notice ${kind}"></div>`;
+        target.firstChild.textContent = text;
+      }
 
-async function loadHealth() {
-  const dl = document.getElementById("health-body");
-  paint("health-notice", "", "");
-  try {
-    const body = await api("/health");
-    document.getElementById("reload-model").value = body.model || "";
-    document.getElementById("header-engine").textContent =
-      `${body.engine} · ${body.model || "default"} · ${body.device}`;
-    const rows = [
-      ["Engine", body.engine],
-      ["Model", body.model || "(default)"],
-      ["Device", body.device],
-      ["Embedding width", body.embedding_width ?? "unknown"],
-      ["Enrolled", body.enrolled],
-      ["Model loaded", body.model_loaded ? "yes" : "not yet — first request will load it"],
-    ];
-    dl.innerHTML = "";
-    for (const [label, value] of rows) {
-      const dt = document.createElement("dt");
-      dt.textContent = label;
-      const dd = document.createElement("dd");
-      dd.textContent = String(value);
-      dl.append(dt, dd);
-    }
-  } catch (error) {
-    paint("health-notice", "err", `Could not load health: ${error.message}`);
-  }
-}
+      async function json(response) {
+        const body = await response.text();
+        try {
+          return body ? JSON.parse(body) : {};
+        } catch {
+          return { detail: body };
+        }
+      }
 
-async function reloadEngine() {
-  const button = document.getElementById("reload-engine");
-  const model = document.getElementById("reload-model").value.trim();
-  if (!model) {
-    paint("health-notice", "err", "Model name is required.");
-    return;
-  }
-  button.disabled = true;
-  paint("health-notice", "", "");
-  try {
-    await api("/engine/reload", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model }),
-    });
-    paint("health-notice", "ok", `Reloaded ${model}.`);
-    await loadHealth();
-  } catch (error) {
-    paint("health-notice", "err", `Reload failed: ${error.message}`);
-  } finally {
-    button.disabled = false;
-  }
-}
+      const apiBasePath = window.location.pathname.replace(/\/ui\/?$/, "");
 
-// ---------- Link ----------
+      async function api(path, init) {
+        const route = `${apiBasePath}${path}`;
+        const response = await fetch(route, {
+          ...init,
+          headers: headers(init && init.headers),
+        });
+        if (!response.ok) {
+          const body = await json(response);
+          throw new Error(
+            body.detail || `${response.status} ${response.statusText}`,
+          );
+        }
+        return json(response);
+      }
 
-async function loadLink() {
-  const dl = document.getElementById("link-body");
-  paint("link-notice", "", "");
-  try {
-    const body = await api("/link");
-    const rows = [["Status", body.status]];
-    if (body.status === "linked") {
-      rows.push(
-        ["Conduit", body.conduit_url],
-        ["Peer", body.peer_name],
-        ["Peer id", body.peer_id],
-        ["Provider", body.provider_definition_id],
-        ["Linked at", body.linked_at],
+      // ---------- Health ----------
+
+      async function loadHealth() {
+        const dl = document.getElementById("health-body");
+        paint("health-notice", "", "");
+        try {
+          const body = await api("/health");
+          document.getElementById("reload-model").value = body.model || "";
+          document.getElementById("header-engine").textContent =
+            `${body.engine} · ${body.model || "default"} · ${body.device}`;
+          const rows = [
+            ["Engine", body.engine],
+            ["Model", body.model || "(default)"],
+            ["Device", body.device],
+            ["Embedding width", body.embedding_width ?? "unknown"],
+            ["Enrolled", body.enrolled],
+            [
+              "Model loaded",
+              body.model_loaded
+                ? "yes"
+                : "not yet — first request will load it",
+            ],
+          ];
+          dl.innerHTML = "";
+          for (const [label, value] of rows) {
+            const dt = document.createElement("dt");
+            dt.textContent = label;
+            const dd = document.createElement("dd");
+            dd.textContent = String(value);
+            dl.append(dt, dd);
+          }
+        } catch (error) {
+          paint(
+            "health-notice",
+            "err",
+            `Could not load health: ${error.message}`,
+          );
+        }
+      }
+
+      async function reloadEngine() {
+        const button = document.getElementById("reload-engine");
+        const model = document.getElementById("reload-model").value.trim();
+        if (!model) {
+          paint("health-notice", "err", "Model name is required.");
+          return;
+        }
+        button.disabled = true;
+        paint("health-notice", "", "");
+        try {
+          await api("/engine/reload", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model }),
+          });
+          paint("health-notice", "ok", `Reloaded ${model}.`);
+          await loadHealth();
+        } catch (error) {
+          paint("health-notice", "err", `Reload failed: ${error.message}`);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      // ---------- Link ----------
+
+      async function loadLink() {
+        const dl = document.getElementById("link-body");
+        paint("link-notice", "", "");
+        try {
+          const body = await api("/link");
+          const rows = [["Status", body.status]];
+          if (body.status === "linked") {
+            rows.push(
+              ["Conduit", body.conduit_url],
+              ["Peer", body.peer_name],
+              ["Peer id", body.peer_id],
+              ["Provider", body.provider_definition_id],
+              ["Linked at", body.linked_at],
+            );
+            document.getElementById("link-conduit-url").value =
+              body.conduit_url || "";
+            document.getElementById("link-peer-name").value =
+              body.peer_name || "Conduit Vox";
+          }
+          dl.innerHTML = "";
+          for (const [label, value] of rows) {
+            const dt = document.createElement("dt");
+            dt.textContent = label;
+            const dd = document.createElement("dd");
+            dd.textContent = String(value);
+            dl.append(dt, dd);
+          }
+          document.getElementById("link-unlink").disabled =
+            body.status !== "linked";
+        } catch (error) {
+          dl.innerHTML = "<dt>Status</dt><dd>error</dd>";
+          paint(
+            "link-notice",
+            "err",
+            `Could not load link status: ${error.message}`,
+          );
+        }
+      }
+
+      async function connectLink() {
+        const conduitUrl = document
+          .getElementById("link-conduit-url")
+          .value.trim();
+        const operatorToken = document
+          .getElementById("link-token")
+          .value.trim();
+        const peerName =
+          document.getElementById("link-peer-name").value.trim() ||
+          "Conduit Vox";
+        paint("link-notice", "", "");
+        try {
+          const linked = await api("/link", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              conduit_url: conduitUrl,
+              operator_token: operatorToken,
+              peer_name: peerName,
+            }),
+          });
+          if (linked.local_api_key) activeApiKey = linked.local_api_key;
+          document.getElementById("link-token").value = "";
+          paint("link-notice", "ok", "Linked.");
+          await loadLink();
+          await loadSpeakers();
+          await loadHealth();
+        } catch (error) {
+          paint("link-notice", "err", `Link failed: ${error.message}`);
+        }
+      }
+
+      async function disconnectLink() {
+        if (!confirm("Unlink this Vox peer from Conduit?")) return;
+        try {
+          await api("/link", { method: "DELETE" });
+          paint("link-notice", "ok", "Unlinked.");
+          await loadLink();
+        } catch (error) {
+          paint("link-notice", "err", `Unlink failed: ${error.message}`);
+        }
+      }
+
+      // ---------- Speakers ----------
+
+      async function loadSpeakers() {
+        const body = document.getElementById("speakers-body");
+        try {
+          const { speakers } = await api("/speakers");
+          if (!speakers.length) {
+            body.innerHTML = `<tr><td colspan="4" class="empty">No voices enrolled yet.</td></tr>`;
+            return;
+          }
+          body.innerHTML = "";
+          for (const entry of speakers) {
+            const tr = document.createElement("tr");
+            tr.dataset.uuid = entry.uuid;
+
+            const label = document.createElement("td");
+            const labelInput = document.createElement("input");
+            labelInput.type = "text";
+            labelInput.value = entry.label || "";
+            labelInput.placeholder = "(unnamed)";
+            labelInput.maxLength = 100;
+            labelInput.addEventListener("change", () =>
+              saveLabel(entry.uuid, labelInput),
+            );
+            labelInput.addEventListener("keydown", (event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                labelInput.blur();
+              }
+            });
+            label.appendChild(labelInput);
+
+            const uuid = document.createElement("td");
+            uuid.className = "uuid";
+            uuid.textContent = entry.uuid;
+
+            const samples = document.createElement("td");
+            samples.style.textAlign = "right";
+            samples.textContent = entry.samples;
+
+            const actions = document.createElement("td");
+            const actionsWrap = document.createElement("div");
+            actionsWrap.className = "row-actions";
+            const del = document.createElement("button");
+            del.className = "danger";
+            del.textContent = "Forget";
+            del.title = "Remove this voice print";
+            del.addEventListener("click", () =>
+              forgetSpeaker(entry.uuid, entry.label || entry.uuid),
+            );
+            actionsWrap.append(del);
+            actions.append(actionsWrap);
+
+            tr.append(label, uuid, samples, actions);
+            body.append(tr);
+          }
+        } catch (error) {
+          body.innerHTML = `<tr><td colspan="4" class="empty">Could not load: ${error.message}</td></tr>`;
+        }
+      }
+
+      async function saveLabel(uuid, input) {
+        const value = input.value.trim() || null;
+        try {
+          await api(`/speakers/${uuid}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ label: value }),
+          });
+          paint(
+            "speakers-notice",
+            "ok",
+            value
+              ? `Labeled ${uuid} as "${value}".`
+              : `Cleared label for ${uuid}.`,
+          );
+        } catch (error) {
+          paint("speakers-notice", "err", `Rename failed: ${error.message}`);
+        }
+      }
+
+      async function forgetSpeaker(uuid, name) {
+        // Confirmation is inline rather than a browser prompt because the button is
+        // the destructive one and a modal would break the recording panels above.
+        if (
+          !confirm(`Forget the voice print for ${name}? This cannot be undone.`)
+        )
+          return;
+        try {
+          await api(`/speakers/${uuid}`, { method: "DELETE" });
+          paint("speakers-notice", "ok", `Forgot ${name}.`);
+          await loadSpeakers();
+          await loadHealth();
+        } catch (error) {
+          paint("speakers-notice", "err", `Delete failed: ${error.message}`);
+        }
+      }
+
+      // ---------- Recording (WAV, mono, 16 kHz) ----------
+
+      // MediaRecorder gives us webm/opus, which Vox's decoder (libsndfile) does not
+      // read. Decoding it back to PCM through AudioContext and then writing a WAV
+      // container ourselves keeps Vox's decoder simple, and matches the format
+      // Conduit sends over the wire.
+      async function encodeWav(blob) {
+        const buffer = await blob.arrayBuffer();
+        const context = new (
+          window.AudioContext || window.webkitAudioContext
+        )();
+        const decoded = await context.decodeAudioData(buffer);
+        const channels = decoded.numberOfChannels;
+        const length = decoded.length;
+        const rate = decoded.sampleRate;
+        // Averaged rather than left-channel-only so a stereo capture with one silent
+        // microphone still enrols a voice rather than a channel of silence.
+        const mono = new Float32Array(length);
+        for (let c = 0; c < channels; c++) {
+          const data = decoded.getChannelData(c);
+          for (let i = 0; i < length; i++) mono[i] += data[i] / channels;
+        }
+        await context.close();
+        return wavBytes(mono, rate);
+      }
+
+      function wavBytes(samples, rate) {
+        const dataBytes = samples.length * 2;
+        const out = new ArrayBuffer(44 + dataBytes);
+        const view = new DataView(out);
+        const writeString = (offset, string) => {
+          for (let i = 0; i < string.length; i++)
+            view.setUint8(offset + i, string.charCodeAt(i));
+        };
+        writeString(0, "RIFF");
+        view.setUint32(4, 36 + dataBytes, true);
+        writeString(8, "WAVE");
+        writeString(12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, 1, true); // mono
+        view.setUint32(24, rate, true);
+        view.setUint32(28, rate * 2, true); // byte rate
+        view.setUint16(32, 2, true); // block align
+        view.setUint16(34, 16, true); // bits per sample
+        writeString(36, "data");
+        view.setUint32(40, dataBytes, true);
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+          let s = Math.max(-1, Math.min(1, samples[i]));
+          view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+          offset += 2;
+        }
+        return new Blob([out], { type: "audio/wav" });
+      }
+
+      class Recorder {
+        constructor(meterEl, timeEl) {
+          this.meterEl = meterEl;
+          this.timeEl = timeEl;
+          this.recorder = null;
+          this.chunks = [];
+          this.stream = null;
+          this.context = null;
+          this.analyser = null;
+          this.raf = null;
+          this.startedAt = 0;
+        }
+        async start() {
+          if (this.recorder) return;
+          this.stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          this.context = new (
+            window.AudioContext || window.webkitAudioContext
+          )();
+          const source = this.context.createMediaStreamSource(this.stream);
+          this.analyser = this.context.createAnalyser();
+          this.analyser.fftSize = 512;
+          source.connect(this.analyser);
+          this.recorder = new MediaRecorder(this.stream);
+          this.chunks = [];
+          this.recorder.ondataavailable = (event) => {
+            if (event.data && event.data.size) this.chunks.push(event.data);
+          };
+          this.recorder.start();
+          this.startedAt = performance.now();
+          this._tick();
+        }
+        _tick() {
+          if (!this.analyser) return;
+          const data = new Uint8Array(this.analyser.fftSize);
+          this.analyser.getByteTimeDomainData(data);
+          let peak = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = Math.abs(data[i] - 128) / 128;
+            if (v > peak) peak = v;
+          }
+          this.meterEl.style.width =
+            Math.min(100, Math.round(peak * 140)) + "%";
+          const seconds = (performance.now() - this.startedAt) / 1000;
+          this.timeEl.textContent = seconds.toFixed(1) + "s";
+          this.raf = requestAnimationFrame(() => this._tick());
+        }
+        async stop() {
+          if (!this.recorder) return null;
+          const finished = new Promise((resolve) => {
+            this.recorder.onstop = () =>
+              resolve(new Blob(this.chunks, { type: this.recorder.mimeType }));
+          });
+          this.recorder.stop();
+          const captured = await finished;
+          for (const track of this.stream.getTracks()) track.stop();
+          if (this.raf) cancelAnimationFrame(this.raf);
+          await this.context.close();
+          this.recorder = null;
+          this.stream = null;
+          this.context = null;
+          this.analyser = null;
+          this.meterEl.style.width = "0%";
+          return encodeWav(captured);
+        }
+      }
+
+      // ---------- Enroll ----------
+
+      const enrollRecorder = new Recorder(
+        document.getElementById("enroll-meter"),
+        document.getElementById("enroll-time"),
       );
-      document.getElementById("link-conduit-url").value = body.conduit_url || "";
-      document.getElementById("link-peer-name").value = body.peer_name || "Conduit Vox";
-    }
-    dl.innerHTML = "";
-    for (const [label, value] of rows) {
-      const dt = document.createElement("dt");
-      dt.textContent = label;
-      const dd = document.createElement("dd");
-      dd.textContent = String(value);
-      dl.append(dt, dd);
-    }
-    document.getElementById("link-unlink").disabled = body.status !== "linked";
-  } catch (error) {
-    dl.innerHTML = "<dt>Status</dt><dd>error</dd>";
-    paint("link-notice", "err", `Could not load link status: ${error.message}`);
-  }
-}
 
-async function connectLink() {
-  const conduitUrl = document.getElementById("link-conduit-url").value.trim();
-  const operatorToken = document.getElementById("link-token").value.trim();
-  const peerName = document.getElementById("link-peer-name").value.trim() || "Conduit Vox";
-  paint("link-notice", "", "");
-  try {
-    const linked = await api("/link", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        conduit_url: conduitUrl,
-        operator_token: operatorToken,
-        peer_name: peerName,
-      }),
-    });
-    if (linked.local_api_key) activeApiKey = linked.local_api_key;
-    document.getElementById("link-token").value = "";
-    paint("link-notice", "ok", "Linked.");
-    await loadLink();
-    await loadSpeakers();
-    await loadHealth();
-  } catch (error) {
-    paint("link-notice", "err", `Link failed: ${error.message}`);
-  }
-}
+      function ensureUuid() {
+        const field = document.getElementById("enroll-uuid");
+        let value = field.value.trim();
+        if (!value) {
+          value = crypto.randomUUID();
+          field.value = value;
+        }
+        return value;
+      }
 
-async function disconnectLink() {
-  if (!confirm("Unlink this Vox peer from Conduit?")) return;
-  try {
-    await api("/link", { method: "DELETE" });
-    paint("link-notice", "ok", "Unlinked.");
-    await loadLink();
-  } catch (error) {
-    paint("link-notice", "err", `Unlink failed: ${error.message}`);
-  }
-}
-
-// ---------- Speakers ----------
-
-async function loadSpeakers() {
-  const body = document.getElementById("speakers-body");
-  try {
-    const { speakers } = await api("/speakers");
-    if (!speakers.length) {
-      body.innerHTML = `<tr><td colspan="4" class="empty">No voices enrolled yet.</td></tr>`;
-      return;
-    }
-    body.innerHTML = "";
-    for (const entry of speakers) {
-      const tr = document.createElement("tr");
-      tr.dataset.uuid = entry.uuid;
-
-      const label = document.createElement("td");
-      const labelInput = document.createElement("input");
-      labelInput.type = "text";
-      labelInput.value = entry.label || "";
-      labelInput.placeholder = "(unnamed)";
-      labelInput.maxLength = 100;
-      labelInput.addEventListener("change", () => saveLabel(entry.uuid, labelInput));
-      labelInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") { event.preventDefault(); labelInput.blur(); }
+      document.getElementById("enroll-new").addEventListener("click", () => {
+        document.getElementById("enroll-uuid").value = crypto.randomUUID();
       });
-      label.appendChild(labelInput);
 
-      const uuid = document.createElement("td");
-      uuid.className = "uuid";
-      uuid.textContent = entry.uuid;
+      async function submitEnrollment(blob) {
+        const uuid = ensureUuid();
+        const label = document.getElementById("enroll-label").value.trim();
+        paint("enroll-notice", "", "");
+        try {
+          const body = await api(`/speakers/${uuid}/enroll`, {
+            method: "POST",
+            headers: { "content-type": "audio/wav" },
+            body: blob,
+          });
+          if (label) {
+            await api(`/speakers/${uuid}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ label }),
+            });
+          }
+          paint(
+            "enroll-notice",
+            "ok",
+            `Enrolled ${label || uuid} — ${body.samples} sample${body.samples === 1 ? "" : "s"} on file.`,
+          );
+          await loadSpeakers();
+          await loadHealth();
+        } catch (error) {
+          paint("enroll-notice", "err", `Enrolment failed: ${error.message}`);
+        }
+      }
 
-      const samples = document.createElement("td");
-      samples.style.textAlign = "right";
-      samples.textContent = entry.samples;
+      document
+        .getElementById("enroll-record")
+        .addEventListener("click", async () => {
+          try {
+            await enrollRecorder.start();
+            document.getElementById("enroll-record").disabled = true;
+            document.getElementById("enroll-stop").disabled = false;
+          } catch (error) {
+            paint(
+              "enroll-notice",
+              "err",
+              `Microphone unavailable: ${error.message}`,
+            );
+          }
+        });
+      document
+        .getElementById("enroll-stop")
+        .addEventListener("click", async () => {
+          document.getElementById("enroll-stop").disabled = true;
+          const blob = await enrollRecorder.stop();
+          document.getElementById("enroll-record").disabled = false;
+          if (blob) await submitEnrollment(blob);
+        });
+      document
+        .getElementById("enroll-file")
+        .addEventListener("change", async (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          await submitEnrollment(file);
+          event.target.value = "";
+        });
 
-      const actions = document.createElement("td");
-      const actionsWrap = document.createElement("div");
-      actionsWrap.className = "row-actions";
-      const del = document.createElement("button");
-      del.className = "danger";
-      del.textContent = "Forget";
-      del.title = "Remove this voice print";
-      del.addEventListener("click", () => forgetSpeaker(entry.uuid, entry.label || entry.uuid));
-      actionsWrap.append(del);
-      actions.append(actionsWrap);
+      // ---------- Test identify ----------
 
-      tr.append(label, uuid, samples, actions);
-      body.append(tr);
-    }
-  } catch (error) {
-    body.innerHTML = `<tr><td colspan="4" class="empty">Could not load: ${error.message}</td></tr>`;
-  }
-}
+      const identifyRecorder = new Recorder(
+        document.getElementById("identify-meter"),
+        document.getElementById("identify-time"),
+      );
 
-async function saveLabel(uuid, input) {
-  const value = input.value.trim() || null;
-  try {
-    await api(`/speakers/${uuid}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ label: value }),
-    });
-    paint("speakers-notice", "ok", value ? `Labeled ${uuid} as "${value}".` : `Cleared label for ${uuid}.`);
-  } catch (error) {
-    paint("speakers-notice", "err", `Rename failed: ${error.message}`);
-  }
-}
+      async function runIdentify(blob) {
+        paint("identify-result", "", "");
+        try {
+          const body = await api("/identify", {
+            method: "POST",
+            headers: { "content-type": "audio/wav" },
+            body: blob,
+          });
+          if (!body.speaker) {
+            paint(
+              "identify-result",
+              "warn",
+              `No match. Closest confidence ${(body.confidence * 100).toFixed(1)}%.`,
+            );
+            return;
+          }
+          // Look up the label so the result names a person rather than a UUID.
+          let label = body.speaker;
+          try {
+            const roster = await api("/speakers");
+            const entry = roster.speakers.find((s) => s.uuid === body.speaker);
+            if (entry && entry.label)
+              label = `${entry.label} (${body.speaker})`;
+          } catch {
+            /* fall through with UUID only */
+          }
+          paint(
+            "identify-result",
+            "ok",
+            `Matched ${label} at ${(body.confidence * 100).toFixed(1)}% confidence.`,
+          );
+        } catch (error) {
+          paint("identify-result", "err", `Identify failed: ${error.message}`);
+        }
+      }
 
-async function forgetSpeaker(uuid, name) {
-  // Confirmation is inline rather than a browser prompt because the button is
-  // the destructive one and a modal would break the recording panels above.
-  if (!confirm(`Forget the voice print for ${name}? This cannot be undone.`)) return;
-  try {
-    await api(`/speakers/${uuid}`, { method: "DELETE" });
-    paint("speakers-notice", "ok", `Forgot ${name}.`);
-    await loadSpeakers();
-    await loadHealth();
-  } catch (error) {
-    paint("speakers-notice", "err", `Delete failed: ${error.message}`);
-  }
-}
+      document
+        .getElementById("identify-record")
+        .addEventListener("click", async () => {
+          try {
+            await identifyRecorder.start();
+            document.getElementById("identify-record").disabled = true;
+            document.getElementById("identify-stop").disabled = false;
+          } catch (error) {
+            paint(
+              "identify-result",
+              "err",
+              `Microphone unavailable: ${error.message}`,
+            );
+          }
+        });
+      document
+        .getElementById("identify-stop")
+        .addEventListener("click", async () => {
+          document.getElementById("identify-stop").disabled = true;
+          const blob = await identifyRecorder.stop();
+          document.getElementById("identify-record").disabled = false;
+          if (blob) await runIdentify(blob);
+        });
 
-// ---------- Recording (WAV, mono, 16 kHz) ----------
+      // ---------- Init ----------
 
-// MediaRecorder gives us webm/opus, which Vox's decoder (libsndfile) does not
-// read. Decoding it back to PCM through AudioContext and then writing a WAV
-// container ourselves keeps Vox's decoder simple, and matches the format
-// Conduit sends over the wire.
-async function encodeWav(blob) {
-  const buffer = await blob.arrayBuffer();
-  const context = new (window.AudioContext || window.webkitAudioContext)();
-  const decoded = await context.decodeAudioData(buffer);
-  const channels = decoded.numberOfChannels;
-  const length = decoded.length;
-  const rate = decoded.sampleRate;
-  // Averaged rather than left-channel-only so a stereo capture with one silent
-  // microphone still enrols a voice rather than a channel of silence.
-  const mono = new Float32Array(length);
-  for (let c = 0; c < channels; c++) {
-    const data = decoded.getChannelData(c);
-    for (let i = 0; i < length; i++) mono[i] += data[i] / channels;
-  }
-  await context.close();
-  return wavBytes(mono, rate);
-}
-
-function wavBytes(samples, rate) {
-  const dataBytes = samples.length * 2;
-  const out = new ArrayBuffer(44 + dataBytes);
-  const view = new DataView(out);
-  const writeString = (offset, string) => {
-    for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
-  };
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + dataBytes, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);        // PCM
-  view.setUint16(22, 1, true);        // mono
-  view.setUint32(24, rate, true);
-  view.setUint32(28, rate * 2, true); // byte rate
-  view.setUint16(32, 2, true);        // block align
-  view.setUint16(34, 16, true);       // bits per sample
-  writeString(36, "data");
-  view.setUint32(40, dataBytes, true);
-  let offset = 44;
-  for (let i = 0; i < samples.length; i++) {
-    let s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    offset += 2;
-  }
-  return new Blob([out], { type: "audio/wav" });
-}
-
-class Recorder {
-  constructor(meterEl, timeEl) {
-    this.meterEl = meterEl;
-    this.timeEl = timeEl;
-    this.recorder = null;
-    this.chunks = [];
-    this.stream = null;
-    this.context = null;
-    this.analyser = null;
-    this.raf = null;
-    this.startedAt = 0;
-  }
-  async start() {
-    if (this.recorder) return;
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    this.context = new (window.AudioContext || window.webkitAudioContext)();
-    const source = this.context.createMediaStreamSource(this.stream);
-    this.analyser = this.context.createAnalyser();
-    this.analyser.fftSize = 512;
-    source.connect(this.analyser);
-    this.recorder = new MediaRecorder(this.stream);
-    this.chunks = [];
-    this.recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size) this.chunks.push(event.data);
-    };
-    this.recorder.start();
-    this.startedAt = performance.now();
-    this._tick();
-  }
-  _tick() {
-    if (!this.analyser) return;
-    const data = new Uint8Array(this.analyser.fftSize);
-    this.analyser.getByteTimeDomainData(data);
-    let peak = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = Math.abs(data[i] - 128) / 128;
-      if (v > peak) peak = v;
-    }
-    this.meterEl.style.width = Math.min(100, Math.round(peak * 140)) + "%";
-    const seconds = (performance.now() - this.startedAt) / 1000;
-    this.timeEl.textContent = seconds.toFixed(1) + "s";
-    this.raf = requestAnimationFrame(() => this._tick());
-  }
-  async stop() {
-    if (!this.recorder) return null;
-    const finished = new Promise((resolve) => {
-      this.recorder.onstop = () => resolve(new Blob(this.chunks, { type: this.recorder.mimeType }));
-    });
-    this.recorder.stop();
-    const captured = await finished;
-    for (const track of this.stream.getTracks()) track.stop();
-    if (this.raf) cancelAnimationFrame(this.raf);
-    await this.context.close();
-    this.recorder = null;
-    this.stream = null;
-    this.context = null;
-    this.analyser = null;
-    this.meterEl.style.width = "0%";
-    return encodeWav(captured);
-  }
-}
-
-// ---------- Enroll ----------
-
-const enrollRecorder = new Recorder(
-  document.getElementById("enroll-meter"),
-  document.getElementById("enroll-time"),
-);
-
-function ensureUuid() {
-  const field = document.getElementById("enroll-uuid");
-  let value = field.value.trim();
-  if (!value) {
-    value = crypto.randomUUID();
-    field.value = value;
-  }
-  return value;
-}
-
-document.getElementById("enroll-new").addEventListener("click", () => {
-  document.getElementById("enroll-uuid").value = crypto.randomUUID();
-});
-
-async function submitEnrollment(blob) {
-  const uuid = ensureUuid();
-  const label = document.getElementById("enroll-label").value.trim();
-  paint("enroll-notice", "", "");
-  try {
-    const body = await api(`/speakers/${uuid}/enroll`, {
-      method: "POST",
-      headers: { "content-type": "audio/wav" },
-      body: blob,
-    });
-    if (label) {
-      await api(`/speakers/${uuid}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ label }),
-      });
-    }
-    paint("enroll-notice", "ok",
-      `Enrolled ${label || uuid} — ${body.samples} sample${body.samples === 1 ? "" : "s"} on file.`);
-    await loadSpeakers();
-    await loadHealth();
-  } catch (error) {
-    paint("enroll-notice", "err", `Enrolment failed: ${error.message}`);
-  }
-}
-
-document.getElementById("enroll-record").addEventListener("click", async () => {
-  try {
-    await enrollRecorder.start();
-    document.getElementById("enroll-record").disabled = true;
-    document.getElementById("enroll-stop").disabled = false;
-  } catch (error) {
-    paint("enroll-notice", "err", `Microphone unavailable: ${error.message}`);
-  }
-});
-document.getElementById("enroll-stop").addEventListener("click", async () => {
-  document.getElementById("enroll-stop").disabled = true;
-  const blob = await enrollRecorder.stop();
-  document.getElementById("enroll-record").disabled = false;
-  if (blob) await submitEnrollment(blob);
-});
-document.getElementById("enroll-file").addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-  await submitEnrollment(file);
-  event.target.value = "";
-});
-
-// ---------- Test identify ----------
-
-const identifyRecorder = new Recorder(
-  document.getElementById("identify-meter"),
-  document.getElementById("identify-time"),
-);
-
-async function runIdentify(blob) {
-  paint("identify-result", "", "");
-  try {
-    const body = await api("/identify", {
-      method: "POST",
-      headers: { "content-type": "audio/wav" },
-      body: blob,
-    });
-    if (!body.speaker) {
-      paint("identify-result", "warn",
-        `No match. Closest confidence ${(body.confidence * 100).toFixed(1)}%.`);
-      return;
-    }
-    // Look up the label so the result names a person rather than a UUID.
-    let label = body.speaker;
-    try {
-      const roster = await api("/speakers");
-      const entry = roster.speakers.find((s) => s.uuid === body.speaker);
-      if (entry && entry.label) label = `${entry.label} (${body.speaker})`;
-    } catch { /* fall through with UUID only */ }
-    paint("identify-result", "ok",
-      `Matched ${label} at ${(body.confidence * 100).toFixed(1)}% confidence.`);
-  } catch (error) {
-    paint("identify-result", "err", `Identify failed: ${error.message}`);
-  }
-}
-
-document.getElementById("identify-record").addEventListener("click", async () => {
-  try {
-    await identifyRecorder.start();
-    document.getElementById("identify-record").disabled = true;
-    document.getElementById("identify-stop").disabled = false;
-  } catch (error) {
-    paint("identify-result", "err", `Microphone unavailable: ${error.message}`);
-  }
-});
-document.getElementById("identify-stop").addEventListener("click", async () => {
-  document.getElementById("identify-stop").disabled = true;
-  const blob = await identifyRecorder.stop();
-  document.getElementById("identify-record").disabled = false;
-  if (blob) await runIdentify(blob);
-});
-
-// ---------- Init ----------
-
-document.getElementById("refresh-health").addEventListener("click", loadHealth);
-document.getElementById("reload-engine").addEventListener("click", reloadEngine);
-document.getElementById("link-connect").addEventListener("click", connectLink);
-document.getElementById("link-unlink").addEventListener("click", disconnectLink);
-loadHealth();
-loadLink();
-loadSpeakers();
-</script>
-</body>
+      document
+        .getElementById("refresh-health")
+        .addEventListener("click", loadHealth);
+      document
+        .getElementById("reload-engine")
+        .addEventListener("click", reloadEngine);
+      document
+        .getElementById("link-connect")
+        .addEventListener("click", connectLink);
+      document
+        .getElementById("link-unlink")
+        .addEventListener("click", disconnectLink);
+      loadHealth();
+      loadLink();
+      loadSpeakers();
+    </script>
+  </body>
 </html>

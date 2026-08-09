@@ -6,19 +6,19 @@ Provider Definitions through the management API.
 
 ## Server
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONDUIT_BIND` | `0.0.0.0:8080` | Service API listen address. |
-| `CONDUIT_OPS_BIND` | `0.0.0.0:9090` | Ops API listen address for `/health`, `/ready`, and `/metrics`. |
-| `CONDUIT_LOG` | `info` | `tracing_subscriber` filter used for structured JSON logs. |
-| `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60` | How long a turn may publish no progress events before cancellation as `idle_timeout`. `0` removes the bound. |
+| Variable                         | Default        | Description                                                                                                  |
+| -------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `CONDUIT_BIND`                   | `0.0.0.0:8080` | Service API listen address.                                                                                  |
+| `CONDUIT_OPS_BIND`               | `0.0.0.0:9090` | Ops API listen address for `/health`, `/ready`, and `/metrics`.                                              |
+| `CONDUIT_LOG`                    | `info`         | `tracing_subscriber` filter used for structured JSON logs.                                                   |
+| `CONDUIT_TURN_IDLE_TIMEOUT_SECS` | `60`           | How long a turn may publish no progress events before cancellation as `idle_timeout`. `0` removes the bound. |
 
 ## Authentication
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONDUIT_TOKENS` | unset | Path to a JSON token file. Required unless `CONDUIT_ALLOW_ANONYMOUS` is set. |
-| `CONDUIT_ALLOW_ANONYMOUS` | unset | Set to `1`, `true`, or `yes` to serve the service API without tokens. Cannot be combined with `CONDUIT_TOKENS`. |
+| Variable                  | Default | Description                                                                                                     |
+| ------------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `CONDUIT_TOKENS`          | unset   | Path to a JSON token file. Required unless `CONDUIT_ALLOW_ANONYMOUS` is set.                                    |
+| `CONDUIT_ALLOW_ANONYMOUS` | unset   | Set to `1`, `true`, or `yes` to serve the service API without tokens. Cannot be combined with `CONDUIT_TOKENS`. |
 
 There is no open default. A server with neither variable set refuses to start.
 
@@ -56,10 +56,10 @@ empty list to allow none.
 
 ## Firmware Flashing
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONDUIT_ESPHOME_URL` | unset | Base URL of an ESPHome dashboard to upload rendered fragments to, for example `http://homelab:6052`. Must be `http` or `https`. |
-| `CONDUIT_ESPHOME_CREDENTIAL` | unset | Full `Authorization` header value for that dashboard, if it requires one — for example `Bearer …`. |
+| Variable                     | Default | Description                                                                                                                     |
+| ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `CONDUIT_ESPHOME_URL`        | unset   | Base URL of an ESPHome dashboard to upload rendered fragments to, for example `http://homelab:6052`. Must be `http` or `https`. |
+| `CONDUIT_ESPHOME_CREDENTIAL` | unset   | Full `Authorization` header value for that dashboard, if it requires one — for example `Bearer …`.                              |
 
 Unset means this deployment has no flashing, not a default one pointing at
 localhost: dialing an address nobody named is how a convenience becomes a scan.
@@ -81,14 +81,14 @@ C++, so a `.bin` carries a working device token.
 
 ## Pipeline Storage
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONDUIT_DATABASE_URL` | unset | PostgreSQL URL for shared storage. Takes precedence over pipeline, speaker roster, and Vox link directories when the `postgres` feature is enabled. |
-| `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data. |
-| `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage. |
-| `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers` | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage. |
-| `CONDUIT_SPEAKER_DIR` | `$CONDUIT_DATA_DIR/speakers` | Directory for the speaker roster. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage. |
-| `CONDUIT_VOX_LINK_DIR` | `$CONDUIT_DATA_DIR/vox-links` | Directory for Conduit Vox link records. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage. |
+| Variable               | Default                                                  | Description                                                                                                                                                                     |
+| ---------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONDUIT_DATABASE_URL` | unset                                                    | PostgreSQL URL for shared storage. Takes precedence over pipeline, speaker roster, and Vox link directories when the `postgres` feature is enabled.                             |
+| `CONDUIT_DATA_DIR`     | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for Conduit-managed local data.                                                                                                                                  |
+| `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines`                            | Directory for JSON pipeline files. Used when no database URL is configured. Set to `:memory:` only for disposable development storage.                                          |
+| `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers`                            | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage.                                                                        |
+| `CONDUIT_SPEAKER_DIR`  | `$CONDUIT_DATA_DIR/speakers`                             | Directory for the speaker roster. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage.       |
+| `CONDUIT_VOX_LINK_DIR` | `$CONDUIT_DATA_DIR/vox-links`                            | Directory for Conduit Vox link records. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage. |
 
 If neither database nor pipeline directory is set, pipelines are stored as JSON
 files in the default local data directory and survive API restarts. The server
@@ -132,26 +132,26 @@ development seam.
 Each provider definition variant is two-level: an outer `type` names the
 capability and an inner `variant.type` names the vendor.
 
-| Capability (`type`) | Vendor (`variant.type`) | Runtime provider | Endpoint |
-| --- | --- | --- | --- |
-| `llm` / `stt` / `tts` | `openai` | `conduit-openai` | `base_url`, `http` or `https` |
-| `llm` | `anthropic` | `conduit-anthropic` | `base_url`, defaulting to the public API |
-| `llm` | `bedrock` | `conduit-bedrock` | `region`: the AWS region is the endpoint |
-| `stt` / `tts` | `wyoming` | `conduit-wyoming` | `url`, `tcp://host:port` |
-| `stt` / `tts` | `elevenlabs` | `conduit-elevenlabs` | none: there is one ElevenLabs |
-| `tts` | `deepgram` | `conduit-deepgram` | none: there is one Deepgram |
-| `tts` | `polly` | `conduit-polly` | `region`: the AWS region is the endpoint |
-| `stt` / `tts` | `google` | `conduit-google` | none: the Cloud Speech APIs |
-| `tts` | `marytts` | `conduit-marytts` | `url`, `http` or `https` |
-| `transform` | `builtin` | `conduit-transform` | none: the rules run in process |
-| `transform` | `script` | `conduit-script` | none: the interpreter runs in process |
-| `tool` | `mcp` | `conduit-mcp` | stdio, streamable HTTP, or SSE transport |
-| `wake` | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`) |
-| `wake` | `microwakeword` | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint) |
-| `vad` | `silero` | `conduit-vad`, in process | none: the model is a file on disk |
-| `speaker_id` | `http` / `diarization_server` | `conduit-speaker` | `base_url`, `http` or `https` |
-| `memory` | `builtin` | `conduit-memory` | none: the records are in this process |
-| `memory` | `pgvector` | `conduit-memory` | `url`, `postgres://…`, plus an embedding `embedding_base_url` |
+| Capability (`type`)   | Vendor (`variant.type`)         | Runtime provider                    | Endpoint                                                      |
+| --------------------- | ------------------------------- | ----------------------------------- | ------------------------------------------------------------- |
+| `llm` / `stt` / `tts` | `openai`                        | `conduit-openai`                    | `base_url`, `http` or `https`                                 |
+| `llm`                 | `anthropic`                     | `conduit-anthropic`                 | `base_url`, defaulting to the public API                      |
+| `llm`                 | `bedrock`                       | `conduit-bedrock`                   | `region`: the AWS region is the endpoint                      |
+| `stt` / `tts`         | `wyoming`                       | `conduit-wyoming`                   | `url`, `tcp://host:port`                                      |
+| `stt` / `tts`         | `elevenlabs`                    | `conduit-elevenlabs`                | none: there is one ElevenLabs                                 |
+| `tts`                 | `deepgram`                      | `conduit-deepgram`                  | none: there is one Deepgram                                   |
+| `tts`                 | `polly`                         | `conduit-polly`                     | `region`: the AWS region is the endpoint                      |
+| `stt` / `tts`         | `google`                        | `conduit-google`                    | none: the Cloud Speech APIs                                   |
+| `tts`                 | `marytts`                       | `conduit-marytts`                   | `url`, `http` or `https`                                      |
+| `transform`           | `builtin`                       | `conduit-transform`                 | none: the rules run in process                                |
+| `transform`           | `script`                        | `conduit-script`                    | none: the interpreter runs in process                         |
+| `tool`                | `mcp`                           | `conduit-mcp`                       | stdio, streamable HTTP, or SSE transport                      |
+| `wake`                | `openwakeword` / `nanowakeword` | `conduit-wyoming`, or in process    | `runtime.where`: `wyoming` (`url`) or `local` (`models_dir`)  |
+| `wake`                | `microwakeword`                 | `conduit-wyoming`, or the satellite | `runtime.where`: `wyoming` (`url`) or `device` (no endpoint)  |
+| `vad`                 | `silero`                        | `conduit-vad`, in process           | none: the model is a file on disk                             |
+| `speaker_id`          | `http` / `diarization_server`   | `conduit-speaker`                   | `base_url`, `http` or `https`                                 |
+| `memory`              | `builtin`                       | `conduit-memory`                    | none: the records are in this process                         |
+| `memory`              | `pgvector`                      | `conduit-memory`                    | `url`, `postgres://…`, plus an embedding `embedding_base_url` |
 
 Every variant registers under its definition id, so a graph node naming the id
 resolves to the provider that definition describes.
@@ -305,11 +305,11 @@ comply.
 }
 ```
 
-| Rule | What it does |
-| --- | --- |
-| `markdown_to_speech` | Headings, emphasis, lists, tables, links and code spans become the words they wrap. A link reads as its text and not its address. |
-| `strip_emoji` | Removes pictographs and respaces what is left, so the sentence reads as though the emoji was never written. Currency, arithmetic and degree signs stay: a voice reads those aloud and is meant to. |
-| `collapse_whitespace` | Runs of whitespace, including line breaks, become single spaces. |
+| Rule                  | What it does                                                                                                                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `markdown_to_speech`  | Headings, emphasis, lists, tables, links and code spans become the words they wrap. A link reads as its text and not its address.                                                                  |
+| `strip_emoji`         | Removes pictographs and respaces what is left, so the sentence reads as though the emoji was never written. Currency, arithmetic and degree signs stay: a voice reads those aloud and is meant to. |
+| `collapse_whitespace` | Runs of whitespace, including line breaks, become single spaces.                                                                                                                                   |
 
 Rules run in the order they are listed, and the order matters: flattening
 markdown before stripping emoji means an emoji inside a link's text is seen as
@@ -361,7 +361,7 @@ finishing a sentence and a synthesizer starting to speak it, so a script that
 never returns would end every turn on that pipeline rather than one sentence. It
 defaults to 50 ms and `conduit-script` refuses anything outside 1 ms..=5 s. The
 management API refuses an out-of-range deadline, and a script that does not
-compile, when the definition is *saved* — by asking `conduit-script` rather than
+compile, when the definition is _saved_ — by asking `conduit-script` rather than
 keeping a second copy of the rules — so a typo is caught while the script is
 still on screen instead of becoming a jammed pipeline discovered by whoever
 speaks to it next.
@@ -412,11 +412,15 @@ the model is one file under two megabytes, and running a service beside Conduit
 to answer a yes-or-no question about audio Conduit already holds buys nothing.
 
 ```json
-{ "type": "vad", "variant": {
+{
+  "type": "vad",
+  "variant": {
     "type": "silero",
     "model_path": "/var/lib/conduit/vad-models/silero_vad.onnx",
     "threshold_percent": 50,
-    "silence_ms": 700 } }
+    "silence_ms": 700
+  }
+}
 ```
 
 Nothing is required. A definition that names no `model_path` reads
@@ -431,7 +435,7 @@ ending.
 Silero was trained at 8 kHz and 16 kHz and scores a fixed number of samples at
 a time, so a rate outside those two is **refused rather than resampled**. A
 wrong rate does not degrade the detector — it makes each window the wrong
-*length of sound*, and the model then reports confidently about audio it never
+_length of sound_, and the model then reports confidently about audio it never
 heard. Refusing says so while an operator is still looking at the pipeline.
 
 A detector that fails mid-utterance does **not** end the turn. The stage
@@ -443,7 +447,7 @@ one to forward. The samples themselves are never rewritten, only dropped or
 passed through, so a recognizer downstream hears exactly the bytes the
 microphone produced.
 
-An MCP definition describes a *server*, which may advertise several tools. Each
+An MCP definition describes a _server_, which may advertise several tools. Each
 advertised tool is registered as `<definition id>.<tool name>`, so a core can
 bind one of them by name.
 
@@ -467,7 +471,7 @@ populated.
 
 A `memory` definition names where the assistant keeps what it should remember,
 and a core binds it the way it binds a tool. The two variants are two
-*retrievals* rather than two places to put the same records: `builtin` ranks by
+_retrievals_ rather than two places to put the same records: `builtin` ranks by
 keyword, so a question phrased in words the stored record never used misses,
 and `pgvector` ranks by embedding distance, so it does not.
 
@@ -510,36 +514,37 @@ the definition does not.
 
 ## OpenTelemetry
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Enables OTLP/HTTP span export. |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset | Trace-specific OTLP/HTTP endpoint. Takes precedence for spans. |
+| Variable                             | Default | Description                                                    |
+| ------------------------------------ | ------- | -------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`        | unset   | Enables OTLP/HTTP span export.                                 |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset   | Trace-specific OTLP/HTTP endpoint. Takes precedence for spans. |
 
 When neither is set, Conduit still writes structured JSON logs and does not try
 to connect to an OTLP collector.
 
 ## Local Development
 
-`scripts/dev.sh` runs the API and the Operator Console as one pair and sets the
-variables below from its flags, so a development loop does not need a `.env` or
-an exported environment. It reads neither: a shell that already exported
+`scripts/dev.sh` runs the API, Conduit Vox, and the Operator Console as one
+trio and sets the variables below from its flags, so a development loop does
+not need a `.env` or an exported environment. It reads neither: a shell that already exported
 `CONDUIT_TOKENS` while the script was asked for anonymous mode would hand the
 server both variables at once, which it refuses to start on. Every other
 `CONDUIT_*` variable passes through untouched.
 
-| Flag | Default | Sets |
-| --- | --- | --- |
-| `--anonymous` | on | `CONDUIT_ALLOW_ANONYMOUS=1`, and clears `CONDUIT_TOKENS`. |
-| `--tokens FILE` | — | `CONDUIT_TOKENS=FILE`, and clears `CONDUIT_ALLOW_ANONYMOUS`. Refused if the file does not exist. |
-| `--echo` | off | Builds with `--features dev-providers`. Also spelled `--dev-providers`. |
-| `--api-port PORT` | `8080` | `CONDUIT_BIND` and `VITE_CONDUIT_API_TARGET`. |
-| `--ops-port PORT` | `9090` | `CONDUIT_OPS_BIND`. |
-| `--ui-port PORT` | `5173` | The Vite dev server port. |
-| `--dry-run` | off | Prints the resolved configuration and starts nothing. |
+| Flag              | Default | Sets                                                                                             |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------ |
+| `--anonymous`     | on      | `CONDUIT_ALLOW_ANONYMOUS=1`, and clears `CONDUIT_TOKENS`.                                        |
+| `--tokens FILE`   | —       | `CONDUIT_TOKENS=FILE`, and clears `CONDUIT_ALLOW_ANONYMOUS`. Refused if the file does not exist. |
+| `--echo`          | off     | Builds with `--features dev-providers`. Also spelled `--dev-providers`.                          |
+| `--api-port PORT` | `8080`  | `CONDUIT_BIND` and `VITE_CONDUIT_API_TARGET`.                                                    |
+| `--ops-port PORT` | `9090`  | `CONDUIT_OPS_BIND`.                                                                              |
+| `--vox-port PORT` | `8091`  | `VITE_CONDUIT_VOX_TARGET`.                                                                       |
+| `--ui-port PORT`  | `5173`  | The Vite dev server port.                                                                        |
+| `--dry-run`       | off     | Prints the resolved configuration and starts nothing.                                            |
 
-Both listeners bind `127.0.0.1` rather than the server's own `0.0.0.0` default,
-so starting a development script does not publish an anonymous API to the
-network. Ctrl-C stops both processes and everything they spawned.
+All three listeners bind `127.0.0.1` rather than the server's own `0.0.0.0`
+default, so starting a development script does not publish an anonymous API to
+the network. Ctrl-C stops every process and everything it spawned.
 
 Providers are the same as in any other deployment: real ones come from saved
 Provider Definitions, and `--echo` is the opt-in for the in-memory providers
@@ -547,7 +552,7 @@ that treat audio as UTF-8 text, which cannot hear speech.
 
 ## Test-Only Variables
 
-| Variable | Used by | Description |
-| --- | --- | --- |
-| `CONDUIT_TEST_POSTGRES_URL` | `conduit-store` tests | PostgreSQL database URL for store conformance tests. Tests that need it skip themselves when unset. |
-| `CONDUIT_REGENERATE_FIXTURES` | firmware protocol parity tests | Regenerates checked-in firmware protocol fixtures when intentionally updating the wire contract. |
+| Variable                      | Used by                        | Description                                                                                         |
+| ----------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `CONDUIT_TEST_POSTGRES_URL`   | `conduit-store` tests          | PostgreSQL database URL for store conformance tests. Tests that need it skip themselves when unset. |
+| `CONDUIT_REGENERATE_FIXTURES` | firmware protocol parity tests | Regenerates checked-in firmware protocol fixtures when intentionally updating the wire contract.    |

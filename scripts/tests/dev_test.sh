@@ -81,8 +81,12 @@ emits "the default binds the API to loopback" "CONDUIT_BIND=127.0.0.1:8080"
 emits "the default binds ops to loopback" "CONDUIT_OPS_BIND=127.0.0.1:9090"
 emits "the default points the console proxy at the API" \
     "VITE_CONDUIT_API_TARGET=http://127.0.0.1:8080"
+emits "the default points the Vox proxy at the local Vox service" \
+    "VITE_CONDUIT_VOX_TARGET=http://127.0.0.1:8091"
 emits "the default serves the console on Vite's port" \
     "npm run dev -- --port 5173 --strictPort --host 127.0.0.1"
+emits "the default starts Vox on its own loopback port" \
+    ".venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8091"
 
 # --- Authentication ----------------------------------------------------------
 
@@ -121,6 +125,8 @@ emits "--api-port follows through to the console proxy" \
     "VITE_CONDUIT_API_TARGET=http://127.0.0.1:8081" --api-port 8081
 emits "--ops-port moves the ops listener" "CONDUIT_OPS_BIND=127.0.0.1:9191" --ops-port 9191
 emits "--ui-port moves the console" "npm run dev -- --port 5174 --strictPort --host 127.0.0.1" --ui-port 5174
+emits "--vox-port moves the Vox listener" \
+    "VITE_CONDUIT_VOX_TARGET=http://127.0.0.1:8191" --vox-port 8191
 
 refuses "a non-numeric port is refused" "--api-port" --api-port http://8080
 refuses "port zero is refused" "--ui-port" --ui-port 0
@@ -128,6 +134,7 @@ refuses "a port above the range is refused" "--ops-port" --ops-port 70000
 # Otherwise one listener wins the bind and the other dies naming an address
 # rather than the flags that collided.
 refuses "colliding ports are refused" "must differ" --api-port 9090
+refuses "vox port collisions are refused" "must differ" --vox-port 8080
 refuses "a flag consumed as a value is refused" "needs a value" --api-port
 
 # --- Ports already in use ----------------------------------------------------

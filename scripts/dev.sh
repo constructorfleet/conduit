@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs the API server and the Operator Console together for local development.
+# Runs the API server, Conduit Vox, and the Operator Console together for local
+# development.
 #
 # Two processes is the honest shape of the stack, but starting them by hand
 # means remembering which port the Vite proxy expects and which authentication
@@ -11,7 +12,7 @@
 # whatever Provider Definitions are saved — because that is the loop worth
 # making frictionless. Everything else is a flag.
 #
-#   scripts/dev.sh                          # anonymous API, real providers
+#   scripts/dev.sh                          # anonymous API, Vox, real providers
 #   scripts/dev.sh --tokens secrets/tokens.json
 #   scripts/dev.sh --echo                   # no speech engine or model server
 #   scripts/dev.sh --api-port 8081 --ui-port 5174
@@ -33,6 +34,7 @@ readonly ROOT
 # assume, so overriding one port must not mean overriding both by hand.
 api_port=8080
 ops_port=9090
+vox_port=8091
 ui_port=5173
 # Empty means anonymous; a path means authenticate against that token file.
 tokens=""
@@ -43,7 +45,7 @@ dry_run=0
 
 usage() {
     cat <<USAGE
-${SELF} — run the Conduit API and Operator Console together
+${SELF} — run the Conduit API, Vox, and Operator Console together
 
 Usage: scripts/dev.sh [options]
 
@@ -56,11 +58,12 @@ Options:
                        providers come from saved Provider Definitions.
   --api-port PORT      Service API port (default ${api_port}).
   --ops-port PORT      Ops API port for /health, /ready, /metrics (default ${ops_port}).
+  --vox-port PORT      Conduit Vox port (default ${vox_port}).
   --ui-port PORT       Operator Console port (default ${ui_port}).
   --dry-run            Print what would run, start nothing.
   -h, --help           Show this help.
 
-Both processes bind loopback only. Ctrl-C stops the pair.
+All three processes bind loopback only. Ctrl-C stops the trio.
 USAGE
 }
 
@@ -122,6 +125,12 @@ while [[ $# -gt 0 ]]; do
             ui_port="$2"
             shift 2
             ;;
+        --vox-port)
+            require_value "$@"
+            require_port --vox-port "$2"
+            vox_port="$2"
+            shift 2
+            ;;
         --dry-run)
             dry_run=1
             shift
@@ -140,8 +149,8 @@ done
 
 # Distinct ports, or one listener wins and the other dies on bind with an error
 # that names an address rather than the flag that collided.
-if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${ui_port}" ]]; then
-    die "--api-port, --ops-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${ui_port})"
+if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${vox_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${vox_port}" || "${ops_port}" == "${ui_port}" || "${vox_port}" == "${ui_port}" ]]; then
+    die "--api-port, --ops-port, --vox-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${vox_port}, ${ui_port})"
 fi
 
 # Checked here rather than left to the server: a missing token file after a
@@ -179,11 +188,16 @@ export CONDUIT_BIND="127.0.0.1:${api_port}"
 export CONDUIT_OPS_BIND="127.0.0.1:${ops_port}"
 # What the Vite proxy forwards /v1 to, so the browser bundle needs no API origin.
 export VITE_CONDUIT_API_TARGET="http://127.0.0.1:${api_port}"
+# What the Vite proxy forwards /vox to during local development. The production
+# bundle still talks to Conduit at the same path; only Vite learns the direct
+# upstream so the embedded UI works before a link exists.
+export VITE_CONDUIT_VOX_TARGET="http://127.0.0.1:${vox_port}"
 
 cat <<SUMMARY
 conduit dev
   api            http://127.0.0.1:${api_port}
   ops            http://127.0.0.1:${ops_port}
+  vox            http://127.0.0.1:${vox_port}
   console        http://127.0.0.1:${ui_port}
   access         ${auth_summary}
   providers      ${provider_summary}
@@ -198,7 +212,9 @@ if [[ "${dry_run}" -eq 1 ]]; then
   CONDUIT_TOKENS=${CONDUIT_TOKENS}
   CONDUIT_ALLOW_ANONYMOUS=${CONDUIT_ALLOW_ANONYMOUS}
   VITE_CONDUIT_API_TARGET=${VITE_CONDUIT_API_TARGET}
+  VITE_CONDUIT_VOX_TARGET=${VITE_CONDUIT_VOX_TARGET}
   cargo run ${cargo_args[*]}
+  .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
   npm run dev -- --port ${ui_port} --strictPort --host 127.0.0.1
 RESOLVED
     exit 0
@@ -210,13 +226,16 @@ fi
 if ! command -v npm >/dev/null 2>&1; then
     die "npm is not on PATH"
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 is not on PATH"
+fi
 
 # Checked before the compile for the same reason the token file is: a bare
 # `AddrInUse` after a three-minute build names an address rather than what is
 # already holding it, and on a developer machine the answer is usually a tunnel
 # or a previous run. Skipped when `lsof` is missing rather than treated as free.
 if command -v lsof >/dev/null 2>&1; then
-    for port_pair in "api:${api_port}" "ops:${ops_port}" "console:${ui_port}"; do
+    for port_pair in "api:${api_port}" "ops:${ops_port}" "vox:${vox_port}" "console:${ui_port}"; do
         label="${port_pair%%:*}"
         port="${port_pair##*:}"
         if holder=$(lsof -nP -sTCP:LISTEN -iTCP:"${port}" 2>/dev/null | awk 'NR == 2 {print $1 " (pid " $2 ")"}') \
@@ -234,12 +253,31 @@ if [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
     (cd "${ROOT}/frontend" && npm ci)
 fi
 
+vox_dir="${ROOT}/services/vox"
+readonly vox_dir
+vox_venv="${vox_dir}/.venv"
+readonly vox_venv
+vox_python="${vox_venv}/bin/python"
+readonly vox_python
+
+# Vox's UI and health routes only need the base requirements, so the default
+# development script installs those rather than every engine's model stack.
+if [[ ! -x "${vox_python}" ]]; then
+    printf '\ncreating the Vox virtualenv\n'
+    (cd "${vox_dir}" && python3 -m venv .venv)
+fi
+if ! "${vox_python}" -c "import fastapi, httpx, numpy, soundfile, uvicorn" >/dev/null 2>&1; then
+    printf '\ninstalling Vox dependencies\n'
+    (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -r requirements.txt)
+fi
+
 # Compiled before either process starts, so a compile error is a compile error
 # and not a console proxying to a port nothing ever opened.
 printf '\nbuilding conduit-api\n'
 (cd "${ROOT}" && cargo build "${cargo_args[@]}")
 
 api_pid=""
+vox_pid=""
 ui_pid=""
 
 # `cargo run` and `npm run dev` are wrappers: the processes that actually hold
@@ -263,7 +301,7 @@ descendants() {
 stop() {
     trap - EXIT INT TERM
     local pid victim
-    for pid in "${ui_pid}" "${api_pid}"; do
+    for pid in "${ui_pid}" "${vox_pid}" "${api_pid}"; do
         [[ -n "${pid}" ]] || continue
         for victim in $(descendants "${pid}"); do
             kill "${victim}" 2>/dev/null || true
@@ -277,6 +315,10 @@ printf '\nstarting conduit-api\n'
 (cd "${ROOT}" && exec cargo run "${cargo_args[@]}") &
 api_pid=$!
 
+printf 'starting Conduit Vox\n'
+(cd "${vox_dir}" && exec "${vox_python}" -m uvicorn app:app --host 127.0.0.1 --port "${vox_port}") &
+vox_pid=$!
+
 # `--host 127.0.0.1` because Vite otherwise resolves `localhost` to IPv6 only on
 # macOS, and the console would refuse the loopback address this script prints.
 printf 'starting the operator console\n\n'
@@ -287,13 +329,15 @@ ui_pid=$!
 # Polled rather than `wait -n`, which needs bash 4.3 and so is absent from the
 # bash macOS ships. Either process exiting takes the other down: a console
 # proxying to a dead server is a worse debugging experience than a clean stop.
-while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
+while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${vox_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
     sleep 1
 done
 
-if kill -0 "${api_pid}" 2>/dev/null; then
-    printf '\n%s: the operator console exited; stopping conduit-api\n' "${SELF}" >&2
+if ! kill -0 "${api_pid}" 2>/dev/null; then
+    printf '\n%s: conduit-api exited; stopping Vox and the operator console\n' "${SELF}" >&2
+elif ! kill -0 "${vox_pid}" 2>/dev/null; then
+    printf '\n%s: Conduit Vox exited; stopping conduit-api and the operator console\n' "${SELF}" >&2
 else
-    printf '\n%s: conduit-api exited; stopping the operator console\n' "${SELF}" >&2
+    printf '\n%s: the operator console exited; stopping conduit-api and Vox\n' "${SELF}" >&2
 fi
 exit 1

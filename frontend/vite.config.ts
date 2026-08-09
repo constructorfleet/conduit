@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 
 export const conduitApiTarget =
   process.env.VITE_CONDUIT_API_TARGET ?? "http://127.0.0.1:8080";
+export const conduitVoxTarget =
+  process.env.VITE_CONDUIT_VOX_TARGET ?? conduitApiTarget;
+const voxNeedsRewrite = conduitVoxTarget !== conduitApiTarget;
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -14,6 +17,15 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         ws: true,
+      },
+      "/vox": {
+        target: conduitVoxTarget,
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        rewrite: voxNeedsRewrite
+          ? (path) => path.replace(/^\/vox/, "")
+          : undefined,
       },
     },
   },

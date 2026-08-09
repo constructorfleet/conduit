@@ -29,14 +29,16 @@ Set `VITE_CONDUIT_DATA_SOURCE=mock` to run the console against generated
 contract fixtures instead of live HTTP while developing the UI without a
 backend.
 In live mode, Vite proxies `/v1/*` requests to
-`VITE_CONDUIT_API_TARGET` or `http://127.0.0.1:8080` by default, so
-`npm run dev` can talk to a local `conduit-api` service without hardcoding an
-API origin into the browser bundle.
+`VITE_CONDUIT_API_TARGET` or `http://127.0.0.1:8080` by default, and `/vox/*`
+requests to `VITE_CONDUIT_VOX_TARGET` or that same Conduit target. When the
+Vox target differs, Vite strips the `/vox` prefix so the embedded Vox UI still
+reaches its own `/health`, `/link`, and speaker routes without hardcoding a dev
+origin into the browser bundle.
 
 To start that service and this console together, run `scripts/dev.sh` from the
-repository root. It sets `VITE_CONDUIT_API_TARGET` to match the API port it
-chose, so moving one listener does not mean setting the proxy by hand. See
-`scripts/dev.sh --help`.
+repository root. It sets `VITE_CONDUIT_API_TARGET` and
+`VITE_CONDUIT_VOX_TARGET` to match the API and Vox ports it chose, so moving a
+listener does not mean setting the proxy by hand. See `scripts/dev.sh --help`.
 
 The Overview section is the Operations Workspace landing surface when a usable
 pipeline exists. It renders current exceptions before baseline status, keeps

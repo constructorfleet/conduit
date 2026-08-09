@@ -3488,7 +3488,7 @@ describe("Vox workspace", () => {
 
     expect(await screen.findByTitle("Conduit Vox")).toHaveAttribute(
       "src",
-      "/vox/ui",
+      "/vox/ui/",
     );
   });
 
