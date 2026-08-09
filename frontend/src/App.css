@@ -430,7 +430,8 @@ button {
   overflow: hidden;
 }
 
-.vox-frame {
+.vox-frame,
+.memoria-frame {
   width: 100%;
   min-height: calc(100svh - 180px);
   border: 0;
