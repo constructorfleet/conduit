@@ -79,7 +79,6 @@ describe("Operator Console shell", () => {
       "Overview",
       "Pipelines",
       "Providers",
-      "Vox",
       "Firmware",
       "Events",
       "Settings",
@@ -3480,21 +3479,47 @@ async function enterPipelinesSection(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("Vox workspace", () => {
-  it("mounts the Vox UI under a Conduit-owned iframe", async () => {
+  it("mounts the Vox UI with the shared embedded service shell", async () => {
     const user = userEvent.setup();
+    mockOperatorApi({
+      linkedServices: [
+        {
+          service_kind: "vox",
+          peer_id: "kitchen",
+          peer_name: "Kitchen Vox",
+          peer_base_url: "http://vox.internal:8081",
+          panel: { id: "vox", label: "Vox", icon: "users", path: "/ui/" },
+          granted_by: "Operator Console",
+          granted_at: "2026-08-09T12:00:00Z",
+        },
+      ],
+    });
     render(<App />);
 
     await enterVoxSection(user);
 
-    expect(await screen.findByTitle("Conduit Vox")).toHaveAttribute(
-      "src",
-      "/vox/ui/",
-    );
+    const panel = screen.getByLabelText("Conduit Vox");
+    const frame = await within(panel).findByTitle("Conduit Vox");
+
+    expect(panel).toHaveClass("embedded-service-panel");
+    expect(frame).toHaveClass("embedded-service-frame");
+    expect(frame).toHaveAttribute("src", "/vox/ui/");
   });
 
   it("lists linked Vox services in Providers and can revoke one", async () => {
     const user = userEvent.setup();
     const api = mockOperatorApi({
+      linkedServices: [
+        {
+          service_kind: "vox",
+          peer_id: "kitchen",
+          peer_name: "Kitchen Vox",
+          peer_base_url: "http://vox.internal:8081",
+          panel: { id: "vox", label: "Vox", icon: "users", path: "/ui/" },
+          granted_by: "Operator Console",
+          granted_at: "2026-08-09T12:00:00Z",
+        },
+      ],
       voxLinks: [
         {
           peer_id: "kitchen",
@@ -4088,6 +4113,7 @@ function mockOperatorApi({
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
   providerDefinitions = [],
+  linkedServices = [],
   voxLinks = [],
   updateSnapshotOnPipelineSave = true,
 }: {
@@ -4096,6 +4122,16 @@ function mockOperatorApi({
   pipelineViews?: PipelineView[];
   componentCatalog?: ProviderComponentCatalog;
   providerDefinitions?: ProviderDefinitionView[];
+  linkedServices?: {
+    service_kind: "vox" | "memoria" | "instrumenta" | "excita" | "generic";
+    peer_id: string;
+    peer_name: string;
+    peer_base_url: string;
+    panel: { id: string; label: string; icon: string; path: string };
+    granted_by: string;
+    granted_at: string;
+    last_seen?: string | null;
+  }[];
   voxLinks?: {
     peer_id: string;
     peer_name: string;
@@ -4117,6 +4153,9 @@ function mockOperatorApi({
       (definition) => [definition.id, definition] as const,
     ),
   );
+  const storedLinkedServices = new Map(
+    linkedServices.map((service) => [service.peer_id, service]),
+  );
   const storedVoxLinks = new Map(voxLinks.map((link) => [link.peer_id, link]));
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4131,6 +4170,10 @@ function mockOperatorApi({
 
       if (route === "/v1/vox/links" && method === "GET") {
         return jsonResponse([...storedVoxLinks.values()]);
+      }
+
+      if (route === "/v1/linked-services" && method === "GET") {
+        return jsonResponse([...storedLinkedServices.values()]);
       }
 
       if (route.startsWith("/v1/vox/links/") && method === "DELETE") {

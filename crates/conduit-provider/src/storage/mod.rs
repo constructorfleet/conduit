@@ -31,7 +31,7 @@ pub use tool::{McpTransport, ToolVariant};
 pub use transform::{Rule, ScriptEngine, TransformVariant};
 pub use tts::TtsVariant;
 pub use vad::{default_silence_ms, VadVariant};
-pub use vox_link::{VoxLink, VoxLinkStore};
+pub use vox_link::{LinkedServiceKind, LinkedServicePanel, VoxLink, VoxLinkStore};
 pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 
 /// The longest a pipeline name may be.

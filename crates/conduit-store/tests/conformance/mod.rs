@@ -12,9 +12,10 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::id::SpeakerId;
 use conduit_core::testing::voice_graph;
 use conduit_provider::storage::{
-    validate_name, EnrolledSpeaker, LlmVariant, McpTransport, PipelineStore,
-    ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant, ProviderSecret,
-    SpeakerRosterStore, ToolVariant, VoxLink, VoxLinkStore,
+    validate_name, EnrolledSpeaker, LinkedServiceKind, LinkedServicePanel, LlmVariant,
+    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
+    ProviderDefinitionVariant, ProviderSecret, SpeakerRosterStore, ToolVariant, VoxLink,
+    VoxLinkStore,
 };
 
 /// A small but complete pipeline, named `name`.
@@ -362,11 +363,18 @@ async fn a_mismatched_speaker_id_is_refused(store: &Arc<dyn SpeakerRosterStore>)
 /// A link row with fixed timestamps, so every backend can round-trip it exactly.
 pub fn vox_link(peer_id: &str, peer_name: &str) -> VoxLink {
     VoxLink {
+        service_kind: LinkedServiceKind::Vox,
         peer_id: peer_id.to_owned(),
         peer_name: peer_name.to_owned(),
         peer_base_url: format!("http://{peer_id}.vox.internal:8081"),
         sync_token_hash: format!("{peer_id}-sync-token-hash"),
         provider_definition_id: format!("vox-{peer_id}"),
+        panel: Some(LinkedServicePanel {
+            id: "vox".to_owned(),
+            label: "Vox".to_owned(),
+            icon: "users".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
         granted_by: "operator".to_owned(),
         granted_at: chrono::DateTime::parse_from_rfc3339("2026-08-09T12:00:00Z")
             .expect("fixed timestamp")

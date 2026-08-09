@@ -424,14 +424,13 @@ button {
   gap: 14px;
 }
 
-.vox-panel {
+.embedded-service-panel {
   min-height: calc(100svh - 180px);
   padding: 0;
   overflow: hidden;
 }
 
-.vox-frame,
-.memoria-frame {
+.embedded-service-frame {
   width: 100%;
   min-height: calc(100svh - 180px);
   border: 0;

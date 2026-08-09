@@ -173,6 +173,7 @@ class LinkStatus(BaseModel):
     peer_id: str | None = None
     peer_name: str | None = None
     conduit_url: str | None = None
+    sync_token: str | None = Field(default=None, exclude=True)
 
 
 class HealthResponse(BaseModel):
@@ -373,20 +374,23 @@ async def create_link(request: LinkRequest) -> LinkStatus:
     global link_status, conduit_client, sync_task
 
     async with sync_lock:
-        # Generate local API key if not set
-        local_api_key = api_key or secrets.token_urlsafe(32)
-
-        # Exchange operator token for sync token with Conduit
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{request.conduit_url}/v1/links/memoria",
+                    f"{request.conduit_url.rstrip('/')}/v1/linked-services",
                     json={
-                        "operator_token": request.operator_token,
+                        "service_kind": "memoria",
                         "peer_name": request.peer_name,
-                        "local_api_key": local_api_key,
-                        "local_base_url": os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+                        "peer_id": request.peer_name.strip().lower().replace(" ", "-"),
+                        "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+                        "panel": {
+                            "id": "memoria",
+                            "label": "Memoria",
+                            "icon": "brain",
+                            "path": "/ui/",
+                        },
                     },
+                    headers={"authorization": f"Bearer {request.operator_token}"},
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -398,9 +402,10 @@ async def create_link(request: LinkRequest) -> LinkStatus:
         # Store link status
         link_status = LinkStatus(
             status="linked",
-            peer_id=data["peer_id"],
+            peer_id=request.peer_name.strip().lower().replace(" ", "-"),
             peer_name=request.peer_name,
-            conduit_url=request.conduit_url,
+            conduit_url=request.conduit_url.rstrip("/"),
+            sync_token=data["sync_token"],
         )
         if link_file_path:
             save_link_status(link_file_path, link_status)
@@ -421,8 +426,11 @@ async def delete_link() -> Response:
         if link_status and link_status.status == "linked":
             # Revoke link in Conduit
             try:
-                if conduit_client and link_status.peer_id:
-                    await conduit_client.delete(f"{link_status.conduit_url}/v1/links/{link_status.peer_id}")
+                if conduit_client and link_status.peer_id and link_status.sync_token:
+                    await conduit_client.post(
+                        f"{link_status.conduit_url}/v1/linked-services/{link_status.peer_id}/revoke",
+                        headers={"authorization": f"Bearer {link_status.sync_token}"},
+                    )
             except Exception as e:
                 LOG.warning(f"Failed to revoke link in Conduit: {e}")
 

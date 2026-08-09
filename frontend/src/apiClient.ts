@@ -14,6 +14,7 @@ import type {
   ProviderRenameResult,
   ProviderVoices,
   RawTurnEvents,
+  LinkedServiceView,
   TurnList,
   TurnSnapshot,
   VoxLinkView,
@@ -67,6 +68,7 @@ export interface SnapshotClient {
   renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
   enrollSpeaker: (id: string, audio: Blob) => Promise<EnrolledSpeaker>;
   deleteSpeaker: (id: string) => Promise<void>;
+  loadLinkedServices: () => Promise<LinkedServiceView[]>;
   loadVoxLinks: () => Promise<VoxLinkView[]>;
   deleteVoxLink: (peerId: string) => Promise<void>;
   loadTurns: () => Promise<TurnList>;
@@ -162,6 +164,7 @@ export function createSnapshotClient(
     renameSpeaker: (id, name) => client.renameSpeaker(id, name),
     enrollSpeaker: (id, audio) => client.enrollSpeaker(id, audio),
     deleteSpeaker: (id) => client.deleteSpeaker(id),
+    loadLinkedServices: () => client.listLinkedServices(),
     loadVoxLinks: () => client.listVoxLinks(),
     deleteVoxLink: (peerId) => client.deleteVoxLink(peerId),
     loadTurns: () => client.listTurns(),
@@ -226,6 +229,7 @@ function createMockSnapshotClient(
       enrolled_at: "2025-01-01T00:00:00Z",
     }),
     deleteSpeaker: async () => {},
+    loadLinkedServices: async () => [],
     loadVoxLinks: async () => [],
     deleteVoxLink: async () => {},
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),

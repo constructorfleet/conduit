@@ -18,8 +18,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
 use conduit_provider::storage::{
-    ProviderDefinition, ProviderDefinitionVariant, ProviderSecret, SpeakerEngine,
-    SpeakerIdVariant, VoxLink,
+    LinkedServiceKind, LinkedServicePanel, ProviderDefinition, ProviderDefinitionVariant,
+    ProviderSecret, SpeakerEngine, SpeakerIdVariant, VoxLink,
 };
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -123,11 +123,18 @@ pub async fn create(
     let sync_token_hash = hash_token(&sync_token);
 
     let link = VoxLink {
+        service_kind: LinkedServiceKind::Vox,
         peer_id: peer_id.clone(),
         peer_name: peer_name.to_owned(),
         peer_base_url: vox_base_url.to_owned(),
         sync_token_hash,
         provider_definition_id: provider_definition_id.clone(),
+        panel: Some(LinkedServicePanel {
+            id: "vox".to_owned(),
+            label: "Vox".to_owned(),
+            icon: "users".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
         granted_by: caller.name.clone(),
         granted_at: Utc::now(),
         last_seen: None,

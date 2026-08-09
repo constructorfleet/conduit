@@ -11,9 +11,56 @@ use chrono::{DateTime, Utc};
 use conduit_core::Result;
 use serde::{Deserialize, Serialize};
 
+/// What sort of linked service this row represents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkedServiceKind {
+    Vox,
+    Memoria,
+    Instrumenta,
+    Excita,
+    Generic,
+}
+
+impl LinkedServiceKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Vox => "vox",
+            Self::Memoria => "memoria",
+            Self::Instrumenta => "instrumenta",
+            Self::Excita => "excita",
+            Self::Generic => "generic",
+        }
+    }
+}
+
+fn default_service_kind() -> LinkedServiceKind {
+    LinkedServiceKind::Vox
+}
+
+/// An operator panel a linked service wants Conduit to surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedServicePanel {
+    /// Stable identifier for the panel within this service.
+    pub id: String,
+    /// Operator-visible tab label.
+    pub label: String,
+    /// Icon name the console should render for this panel.
+    pub icon: String,
+    /// Upstream path, rooted at the peer base URL.
+    pub path: String,
+}
+
 /// One linked Vox peer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoxLink {
+    /// What kind of service this row represents.
+    ///
+    /// Defaults to `vox` so existing stored rows continue to deserialize as the
+    /// only kind Conduit knew about when they were written.
+    #[serde(default = "default_service_kind")]
+    pub service_kind: LinkedServiceKind,
     /// Stable identifier the Vox peer chose for itself.
     ///
     /// Used as the row key so a peer that reboots and re-links replaces its
@@ -31,6 +78,9 @@ pub struct VoxLink {
     /// Recorded so an operator screen can point at the auto-provisioned
     /// `http_speaker_id` definition, and so a revoke can name it in warnings.
     pub provider_definition_id: String,
+    /// Panel the service asked Conduit to surface, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<LinkedServicePanel>,
     /// Name of the operator credential that authorised the link, for logs.
     pub granted_by: String,
     /// When the link was established.

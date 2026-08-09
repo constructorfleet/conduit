@@ -5,7 +5,10 @@ export const conduitApiTarget =
   process.env.VITE_CONDUIT_API_TARGET ?? "http://127.0.0.1:8080";
 export const conduitVoxTarget =
   process.env.VITE_CONDUIT_VOX_TARGET ?? conduitApiTarget;
+export const conduitMemoriaTarget =
+  process.env.VITE_CONDUIT_MEMORIA_TARGET ?? conduitApiTarget;
 const voxNeedsRewrite = conduitVoxTarget !== conduitApiTarget;
+const memoriaNeedsRewrite = conduitMemoriaTarget !== conduitApiTarget;
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -18,6 +21,12 @@ export default defineConfig({
         secure: false,
         ws: true,
       },
+      "/linked-services": {
+        target: conduitApiTarget,
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+      },
       "/vox": {
         target: conduitVoxTarget,
         changeOrigin: true,
@@ -25,6 +34,15 @@ export default defineConfig({
         ws: true,
         rewrite: voxNeedsRewrite
           ? (path) => path.replace(/^\/vox/, "")
+          : undefined,
+      },
+      "/memoria": {
+        target: conduitMemoriaTarget,
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        rewrite: memoriaNeedsRewrite
+          ? (path) => path.replace(/^\/memoria/, "")
           : undefined,
       },
     },

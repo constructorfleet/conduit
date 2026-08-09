@@ -16,8 +16,8 @@ use axum::Router;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_provider::storage::{
-    ProviderDefinition, ProviderDefinitionVariant, ProviderSecret, SpeakerEngine,
-    SpeakerIdVariant, VoxLink,
+    LinkedServiceKind, LinkedServicePanel, ProviderDefinition, ProviderDefinitionVariant,
+    ProviderSecret, SpeakerEngine, SpeakerIdVariant, VoxLink,
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -64,11 +64,18 @@ async fn proxy_forwards_the_request_with_the_stored_vox_api_key() {
     install_link_provider(&state, &upstream.base_url).await;
     state
         .put_vox_link(VoxLink {
+            service_kind: LinkedServiceKind::Vox,
             peer_id: "kitchen".to_owned(),
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
             provider_definition_id: "vox-kitchen".to_owned(),
+            panel: Some(LinkedServicePanel {
+                id: "vox".to_owned(),
+                label: "Vox".to_owned(),
+                icon: "users".to_owned(),
+                path: "/ui/".to_owned(),
+            }),
             granted_by: "operator".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
@@ -102,11 +109,18 @@ async fn proxy_rewrites_redirect_locations_back_under_conduit() {
     install_link_provider(&state, &upstream.base_url).await;
     state
         .put_vox_link(VoxLink {
+            service_kind: LinkedServiceKind::Vox,
             peer_id: "kitchen".to_owned(),
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
             provider_definition_id: "vox-kitchen".to_owned(),
+            panel: Some(LinkedServicePanel {
+                id: "vox".to_owned(),
+                label: "Vox".to_owned(),
+                icon: "users".to_owned(),
+                path: "/ui/".to_owned(),
+            }),
             granted_by: "operator".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,

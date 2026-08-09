@@ -707,6 +707,31 @@ export interface VoxLinkView {
   last_seen?: DateTimeString;
 }
 
+export type LinkedServiceKind =
+  | "vox"
+  | "memoria"
+  | "instrumenta"
+  | "excita"
+  | "generic";
+
+export interface LinkedServicePanel {
+  id: string;
+  label: string;
+  icon: string;
+  path: string;
+}
+
+export interface LinkedServiceView {
+  service_kind: LinkedServiceKind;
+  peer_id: string;
+  peer_name: string;
+  peer_base_url: string;
+  panel: LinkedServicePanel;
+  granted_by: string;
+  granted_at: DateTimeString;
+  last_seen?: DateTimeString;
+}
+
 /// What the board file knows and Conduit does not.
 ///
 /// Conduit renders only its own part of a satellite's firmware, so every id
@@ -801,6 +826,7 @@ export interface ConduitApiClient {
     provider?: string,
   ) => Promise<EnrolledSpeaker>;
   deleteSpeaker: (id: string) => Promise<void>;
+  listLinkedServices: () => Promise<LinkedServiceView[]>;
   listVoxLinks: () => Promise<VoxLinkView[]>;
   deleteVoxLink: (peerId: string) => Promise<void>;
   listTurns: () => Promise<TurnList>;
@@ -825,6 +851,8 @@ export const conduitApiRoutes = {
   speakers: "/v1/speakers",
   speaker: "/v1/speakers/{id}",
   speakerEnroll: "/v1/speakers/{id}/enroll",
+  linkedServices: "/v1/linked-services",
+  linkedService: "/v1/linked-services/{peer_id}",
   voxLinks: "/v1/vox/links",
   voxLink: "/v1/vox/links/{peer_id}",
   pipelines: "/v1/pipelines",
@@ -940,6 +968,12 @@ export function createConduitApiClient(
         method: "DELETE",
       });
     },
+    listLinkedServices: () =>
+      requestJson<LinkedServiceView[]>(
+        request,
+        config,
+        conduitApiRoutes.linkedServices,
+      ),
     listVoxLinks: () =>
       requestJson<VoxLinkView[]>(request, config, conduitApiRoutes.voxLinks),
     deleteVoxLink: async (peerId) => {

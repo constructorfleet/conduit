@@ -58,6 +58,7 @@ import type {
   SpeakerEngine,
   TurnSnapshot,
   TransformRule,
+  LinkedServiceView,
   VoxLinkView,
   WakeRuntime,
 } from "./contracts/client";
@@ -126,15 +127,24 @@ const sections = [
   { id: "pipelines", label: "Pipelines", icon: Workflow },
   { id: "providers", label: "Providers", icon: Boxes },
   { id: "forma", label: "Forma", icon: Code },
-  { id: "vox", label: "Vox", icon: Users },
-  { id: "memoria", label: "Memoria", icon: Brain },
   { id: "firmware", label: "Firmware", icon: CircuitBoard },
   { id: "events", label: "Events", icon: Radio },
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 
+const linkedServiceIcons = {
+  brain: Brain,
+  users: Users,
+  radio: Radio,
+  activity: Activity,
+  circuit_board: CircuitBoard,
+  code: Code,
+  boxes: Boxes,
+  workflow: Workflow,
+} as const;
+
 /// Defaults the graph model applies when a core omits them.
-type SectionId = (typeof sections)[number]["id"];
+type SectionId = (typeof sections)[number]["id"] | `linked:${string}`;
 
 type ProviderTester = (providerId: string) => Promise<string>;
 
@@ -402,6 +412,9 @@ function OperatorWorkspace({
       initialProviderDefinitions ?? [],
     ),
   );
+  const [linkedServices, setLinkedServices] = useState<
+    readonly LinkedServiceView[]
+  >([]);
   const [voxLinks, setVoxLinks] = useState<readonly VoxLinkView[]>([]);
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const eventPlan = useMemo(() => {
@@ -624,6 +637,7 @@ function OperatorWorkspace({
           loadedPipelineViews,
           loadedComponentCatalog,
           loadedProviderDefinitionViews,
+          loadedLinkedServices,
           loadedVoxLinks,
           loadedTurns,
         ] = await Promise.all([
@@ -640,6 +654,7 @@ function OperatorWorkspace({
           initialProviderDefinitions
             ? Promise.resolve([...initialProviderDefinitions])
             : snapshotClient.loadProviderDefinitions(),
+          snapshotClient.loadLinkedServices(),
           snapshotClient.loadVoxLinks(),
           initialEvents
             ? Promise.resolve({ turns: [] })
@@ -710,6 +725,7 @@ function OperatorWorkspace({
         setSnapshot(nextSnapshot);
         setPipelineViews(nextPipelineViews);
         setComponentCatalog(baseComponentCatalog);
+        setLinkedServices(loadedLinkedServices);
         setVoxLinks(loadedVoxLinks);
         setProviderDefinitions((current) =>
           mergeProviderDefinitions(loadedProviderDefinitions, current),
@@ -724,6 +740,7 @@ function OperatorWorkspace({
         setSnapshot(null);
         setPipelineViews(initialPipelineViews ?? []);
         setComponentCatalog(initialComponentCatalog ?? { components: [] });
+        setLinkedServices([]);
         setVoxLinks([]);
         setSnapshotState("error");
         setLoadError(
@@ -808,6 +825,28 @@ function OperatorWorkspace({
               </button>
             );
           })}
+          {linkedServices.map((service) => {
+            const sectionId = `linked:${service.peer_id}` as const;
+            const Icon =
+              linkedServiceIcons[
+                service.panel.icon as keyof typeof linkedServiceIcons
+              ] ?? Boxes;
+            const selected = activeSection === sectionId;
+            return (
+              <button
+                key={sectionId}
+                type="button"
+                role="tab"
+                aria-label={service.panel.label}
+                aria-selected={selected}
+                className={selected ? "section-tab selected" : "section-tab"}
+                onClick={() => onSectionChange(sectionId)}
+              >
+                <Icon size={17} aria-hidden="true" />
+                <span>{service.panel.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         <button className="sign-out" type="button" onClick={onClearAccess}>
@@ -823,7 +862,10 @@ function OperatorWorkspace({
               {firstRun
                 ? "First-Run Setup"
                 : sections.find((section) => section.id === activeSection)
-                    ?.label}
+                    ?.label ??
+                  linkedServices.find(
+                    (service) => `linked:${service.peer_id}` === activeSection,
+                  )?.panel.label}
             </h1>
           </div>
           <div className="runtime-strip">
@@ -844,6 +886,7 @@ function OperatorWorkspace({
 
         <SectionPanel
           section={activeSection}
+          linkedServices={linkedServices}
           voxLinks={voxLinks}
           onFirmwareRender={renderFirmware}
           onFirmwareFlash={flashFirmware}
@@ -886,6 +929,7 @@ function defaultDataMode(): OperatorDataMode {
 
 function SectionPanel({
   section,
+  linkedServices,
   voxLinks,
   onFirmwareRender,
   onFirmwareFlash,
@@ -912,6 +956,7 @@ function SectionPanel({
   onVoxLinkDelete,
 }: {
   section: SectionId;
+  linkedServices: readonly LinkedServiceView[];
   voxLinks: readonly VoxLinkView[];
   onFirmwareRender: FirmwareRenderer;
   onFirmwareFlash: FirmwareFlasher;
@@ -992,12 +1037,23 @@ function SectionPanel({
     return <FormaPanel />;
   }
 
-  if (section === "vox") {
-    return <VoxPanel />;
-  }
-
-  if (section === "memoria") {
-    return <MemoriaPanel />;
+  if (section.startsWith("linked:")) {
+    const peerId = section.slice("linked:".length);
+    const service = linkedServices.find((entry) => entry.peer_id === peerId);
+    if (!service) {
+      return (
+        <div className="overview-empty" role="alert">
+          <CircleAlert size={18} aria-hidden="true" />
+          <span>Linked service {peerId} is no longer available.</span>
+        </div>
+      );
+    }
+    return (
+      <EmbeddedServicePanel
+        title={service.panel.label}
+        src={`/linked-services/${service.peer_id}${service.panel.path}`}
+      />
+    );
   }
 
   if (section === "firmware") {
@@ -1113,18 +1169,16 @@ interface ProviderCardView {
   status: ProviderStatus | null;
 }
 
-function VoxPanel() {
+function EmbeddedServicePanel({
+  title,
+  src,
+}: {
+  title: string;
+  src: string;
+}) {
   return (
-    <section className="vox-panel surface" aria-label="Conduit Vox">
-      <iframe className="vox-frame" src="/vox/ui/" title="Conduit Vox" />
-    </section>
-  );
-}
-
-function MemoriaPanel() {
-  return (
-    <section className="memoria-panel surface" aria-label="Conduit Memoria">
-      <iframe className="memoria-frame" src="/memoria/ui/" title="Conduit Memoria" />
+    <section className="embedded-service-panel surface" aria-label={title}>
+      <iframe className="embedded-service-frame" src={src} title={title} />
     </section>
   );
 }

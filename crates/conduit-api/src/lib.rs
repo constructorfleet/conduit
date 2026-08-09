@@ -21,6 +21,7 @@ pub mod esphome;
 pub mod events;
 pub mod factory;
 pub mod firmware;
+pub mod linked_services;
 pub mod pipelines;
 pub mod providers;
 pub mod speakers;
@@ -80,6 +81,18 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers/{id}/voices", get(providers::voices))
         .route("/v1/providers/{id}/phrases", get(providers::phrases))
         .route("/v1/providers/{id}/test", post(providers::test))
+        .route(
+            "/v1/linked-services",
+            get(linked_services::list).post(linked_services::create),
+        )
+        .route(
+            "/v1/linked-services/{peer_id}",
+            axum::routing::delete(linked_services::delete),
+        )
+        .route(
+            "/v1/linked-services/{peer_id}/revoke",
+            post(linked_services::revoke),
+        )
         .route("/v1/speakers", get(speakers::list).post(speakers::create))
         .route(
             "/v1/speakers/{id}",
@@ -97,6 +110,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vox/links/{peer_id}", axum::routing::delete(vox::delete))
         .route("/vox", any(vox::proxy))
         .route("/vox/{*path}", any(vox::proxy))
+        .route("/linked-services/{peer_id}", any(linked_services::proxy))
+        .route(
+            "/linked-services/{peer_id}/{*path}",
+            any(linked_services::proxy),
+        )
         .route("/v1/devices/{device}/firmware", get(firmware::render))
         .route("/v1/devices/{device}/firmware/flash", post(firmware::flash))
         .route("/v1/pipelines", get(pipelines::list))
