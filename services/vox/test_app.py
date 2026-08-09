@@ -37,6 +37,7 @@ from app import (
     Syncer,
     SpeechBrainEncoder,
     VoicePrints,
+    WidthMismatchError,
     build_encoder,
     check_width,
     cosine,
@@ -387,6 +388,56 @@ def test_a_model_of_the_wrong_width_for_its_engine_is_refused_at_load() -> None:
     assert "192" in str(refused.value)
 
 
+def test_reloading_the_engine_swaps_to_the_requested_model(
+    monkeypatch, tmp_path: Path
+) -> None:
+    built: list[str] = []
+
+    def fake_build_encoder(engine: str, model: str, cache: Path, device: str) -> ToneEncoder:
+        assert engine == "speechbrain"
+        assert cache == tmp_path / "models"
+        assert device == "cpu"
+        built.append(model)
+        return ToneEncoder(width=EMBEDDING_WIDTHS["speechbrain"])
+
+    monkeypatch.setenv("SPEAKER_ID_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr("app.build_encoder", fake_build_encoder)
+    client = TestClient(create_app(prints=VoicePrints(tmp_path)))
+
+    response = client.post("/engine/reload", json={"model": "speechbrain/custom-vox"})
+
+    assert response.status_code == 200
+    assert built == ["speechbrain/custom-vox"]
+    assert response.json()["model"] == "speechbrain/custom-vox"
+    assert response.json()["model_loaded"] is True
+    assert client.get("/health").json()["model"] == "speechbrain/custom-vox"
+
+
+def test_reloading_refuses_a_width_mismatch_when_prints_exist(
+    monkeypatch, tmp_path: Path
+) -> None:
+    prints = VoicePrints(tmp_path)
+    speaker = uuid.uuid4()
+    prints.add(speaker, np.zeros(EMBEDDING_WIDTHS["speechbrain"], dtype=np.float32))
+
+    def mismatched_build_encoder(
+        engine: str, model: str, cache: Path, device: str
+    ) -> ToneEncoder:
+        raise WidthMismatchError(
+            "engine `speechbrain` produces 192-dimension embeddings but the loaded "
+            "model produces 256"
+        )
+
+    monkeypatch.setattr("app.build_encoder", mismatched_build_encoder)
+    client = TestClient(create_app(prints=prints))
+
+    response = client.post("/engine/reload", json={"model": "speechbrain/wide"})
+
+    assert response.status_code == 409
+    assert "192" in response.json()["detail"]
+    assert client.get("/health").json()["model"] == DEFAULT_MODELS["speechbrain"]
+
+
 def test_a_gated_pyannote_model_without_a_token_says_which_terms_to_accept(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -605,6 +656,15 @@ def test_the_embedded_ui_exposes_the_link_flow(client: TestClient) -> None:
     assert 'id="link-panel"' in response.text
     assert 'api("/link"' in response.text
     assert 'api("/link", { method: "DELETE" })' in response.text
+
+
+def test_the_embedded_ui_exposes_engine_reload(client: TestClient) -> None:
+    response = client.get("/ui/")
+
+    assert response.status_code == 200
+    assert 'id="reload-model"' in response.text
+    assert 'id="reload-engine"' in response.text
+    assert 'api("/engine/reload"' in response.text
 
 
 def test_the_embedded_ui_stays_open_when_an_api_key_is_required(

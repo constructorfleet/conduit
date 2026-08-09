@@ -36,6 +36,7 @@ import logging
 import os
 import secrets
 import tempfile
+import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
@@ -454,7 +455,7 @@ def check_width(engine: str, produced: int) -> None:
     """
     expected = EMBEDDING_WIDTHS.get(engine)
     if expected is not None and produced != expected:
-        raise RuntimeError(
+        raise WidthMismatchError(
             f"engine `{engine}` produces {expected}-dimension embeddings but the "
             f"loaded model produces {produced}; voice prints enrolled against "
             f"this engine elsewhere will not compare — set SPEAKER_ID_ENGINE to "
@@ -716,6 +717,10 @@ class LinkStoreSecurityError(RuntimeError):
     """Raised when link.json is readable by anyone except the service user."""
 
 
+class WidthMismatchError(RuntimeError):
+    """Raised when a model's embedding width cannot coexist with saved prints."""
+
+
 class LinkStore:
     """The persisted relationship with one Conduit instance."""
 
@@ -797,6 +802,10 @@ class LinkRequest(BaseModel):
     operator_token: str
     peer_name: str
     force: bool = False
+
+
+class ReloadRequest(BaseModel):
+    model: str
 
 
 class ConduitLinkClient(Protocol):
@@ -1040,6 +1049,8 @@ def create_app(
     sync_backoff = sync_max_backoff_seconds or float(
         os.environ.get("SPEAKER_ID_SYNC_MAX_BACKOFF_SECONDS", "900")
     )
+    runtime = {"model": model_name}
+    encoder_lock = threading.Lock()
 
     loaded: dict[str, Encoder] = {}
     if encoder is not None:
@@ -1077,13 +1088,17 @@ def create_app(
         # answers /health, and reports a model that will not load as an error
         # on a request rather than as a crash loop nobody can query.
         if "encoder" not in loaded:
-            try:
-                loaded["encoder"] = build_encoder(engine, model_name, model_cache, device)
-            except Exception as error:  # noqa: BLE001 - torch and hub raise broadly
-                LOG.exception("could not load the encoder")
-                raise HTTPException(
-                    status_code=503, detail=f"encoder unavailable: {error}"
-                ) from error
+            with encoder_lock:
+                if "encoder" not in loaded:
+                    try:
+                        loaded["encoder"] = build_encoder(
+                            engine, runtime["model"], model_cache, device
+                        )
+                    except Exception as error:  # noqa: BLE001 - torch and hub raise broadly
+                        LOG.exception("could not load the encoder")
+                        raise HTTPException(
+                            status_code=503, detail=f"encoder unavailable: {error}"
+                        ) from error
         return loaded["encoder"]
 
     bearer = HTTPBearer(auto_error=False)
@@ -1131,7 +1146,7 @@ def create_app(
         return {
             "status": "ok",
             "engine": engine,
-            "model": model_name,
+            "model": runtime["model"],
             "device": device,
             # Reported so an operator can tell, before they mount an existing
             # /data volume, whether the prints in it can be compared at all.
@@ -1143,6 +1158,25 @@ def create_app(
             # somebody restarts because they think it is wedged.
             "model_loaded": "encoder" in loaded,
         }
+
+    @app.post("/engine/reload")
+    def reload_engine(
+        body: ReloadRequest, _: None = Depends(authorize)
+    ) -> dict[str, object]:
+        model = _trimmed_field(body.model, "model")
+        with encoder_lock:
+            try:
+                loaded["encoder"] = build_encoder(engine, model, model_cache, device)
+            except WidthMismatchError as error:
+                status = 409 if store.count() > 0 else 422
+                raise HTTPException(status_code=status, detail=str(error)) from error
+            except Exception as error:  # noqa: BLE001 - torch and hub raise broadly
+                raise HTTPException(
+                    status_code=503, detail=f"encoder unavailable: {error}"
+                ) from error
+            runtime["model"] = model
+        LOG.info("reloaded Vox encoder: engine=%s model=%s", engine, model)
+        return health()
 
     @app.get("/link")
     def link_status() -> dict[str, str]:
