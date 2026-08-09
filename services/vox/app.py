@@ -43,7 +43,9 @@ from typing import Protocol
 import numpy as np
 import soundfile as sf
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 LOG = logging.getLogger("vox")
@@ -834,6 +836,19 @@ def create_app(
             return Response(status_code=404)
         LOG.info("forgot %s", identity)
         return Response(status_code=204)
+
+    # The embedded UI: one file, no build step. Mounted last so its catch-all
+    # does not shadow the JSON routes above.
+    ui_directory = Path(__file__).parent / "static"
+    if ui_directory.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(ui_directory), html=True), name="ui")
+
+        @app.get("/", include_in_schema=False)
+        def root() -> RedirectResponse:
+            # The root is the UI rather than an empty 404, because an operator
+            # who opened the service in a browser is looking for the UI, not
+            # the OpenAPI schema at /docs.
+            return RedirectResponse(url="/ui/")
 
     return app
 

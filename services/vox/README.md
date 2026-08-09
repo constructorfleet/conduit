@@ -28,6 +28,29 @@ Then either:
 - create a `http_speaker_id` Provider Definition whose `base_url` is
   `http://vox:8080` by hand, and add a Speaker ID stage to a pipeline.
 
+## The UI
+
+Vox ships a small management UI at `/ui` (with `/` redirecting there). It is
+a single self-contained HTML file — no build step, no external assets, one
+`<script>` — so the container serves it as static content and there is
+nothing extra to install on the operator's machine. Features:
+
+- **Health** — engine, model, device, embedding width, roster count, and
+  whether the encoder has been loaded yet.
+- **Enrolled speakers** — inline rename via `PATCH /speakers/{uuid}`, and a
+  Forget button.
+- **Enroll** — browser microphone (WebAudio → WAV, mono, matching Vox's
+  decoder) with a level meter and a running duration, or a file upload for
+  clips captured elsewhere. Optional label saved in the same click.
+- **Test identification** — records a clip and shows the closest match, its
+  confidence, and the operator-set label if any.
+
+The UI is served without authentication so an operator with the key in their
+head can load the page and paste it in; every route it calls carries the
+bearer token. The token, if any, is taken from `?api_key=` on load and held
+only in memory for the tab's lifetime — never persisted, because a page that
+put a bearer in localStorage would hand it to every other page on the origin.
+
 ## The API
 
 | Request | Body | Response |

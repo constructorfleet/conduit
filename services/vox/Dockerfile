@@ -60,6 +60,7 @@ COPY requirements-speechbrain.txt requirements-pyannote.txt requirements-nemo.tx
 RUN pip install --no-cache-dir -r "requirements-${ENGINE}.txt"
 
 COPY app.py ./
+COPY static ./static
 
 # Written to at runtime, so they exist and are owned before the drop to a
 # non-root user. Both are mount points in the compose file.

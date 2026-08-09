@@ -531,6 +531,33 @@ def test_a_print_without_a_manifest_entry_is_rebuilt_on_read(tmp_path: Path) -> 
     assert entries[0]["samples"] == 1
 
 
+def test_the_root_redirects_to_the_embedded_ui(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code in (302, 307)
+    assert response.headers["location"].startswith("/ui")
+
+
+def test_the_embedded_ui_names_the_service(client: TestClient) -> None:
+    response = client.get("/ui/")
+
+    assert response.status_code == 200
+    assert "Conduit Vox" in response.text
+
+
+def test_the_embedded_ui_stays_open_when_an_api_key_is_required(
+    monkeypatch, store
+) -> None:
+    # Loading the page has to work without a bearer, or an operator with the
+    # key in their head cannot get to the form they would paste it into. The
+    # routes the page calls still carry the key.
+    monkeypatch.setenv("SPEAKER_ID_API_KEY", "secret-key")
+    client = TestClient(create_app(encoder=ToneEncoder(), prints=store))
+
+    assert client.get("/ui/").status_code == 200
+    assert client.get("/", follow_redirects=False).status_code in (302, 307)
+
+
 def test_health_reports_the_roster_count(client: TestClient) -> None:
     client.post(f"/speakers/{uuid.uuid4()}/enroll", content=tone(440))
     client.post(f"/speakers/{uuid.uuid4()}/enroll", content=tone(440))
