@@ -6,9 +6,11 @@
 
 import { Plus, Trash2 } from "lucide-react";
 
+import { useEffect } from "react";
+
 import type { ConfirmPolicy, MemoryMode } from "../contracts/client";
 import { DEFAULT_MEMORY_LIMIT, nodeProvider, outputModality } from "./graph";
-import { graphFromForm } from "./form";
+import { derivedSinkModality, graphFromForm } from "./form";
 import type { PipelineForm, StageField } from "./form";
 
 /// The single store the console binds memory to. Memory is not a provider
@@ -69,6 +71,17 @@ export function PipelineFormEditor({
   function updateCore(patch: Partial<PipelineForm["core"]>) {
     onChange({ ...form, core: { ...form.core, ...patch } });
   }
+
+  /// What the sink's modality must be so its incoming edge validates. The
+  /// operator does not pick it: an audio stream cannot be rendered as text and
+  /// a text stream cannot be rendered as speech, so what feeds the sink is
+  /// what the sink says it accepts.
+  const sinkModality = derivedSinkModality(form);
+  useEffect(() => {
+    if (form.sink.modality !== sinkModality) {
+      onChange({ ...form, sink: { ...form.sink, modality: sinkModality } });
+    }
+  }, [form, sinkModality, onChange]);
 
   /// A row for a stage the pipeline may or may not run.
   ///
@@ -616,20 +629,15 @@ export function PipelineFormEditor({
           >
             <option value="websocket">websocket</option>
           </select>
+          {/* Derived from what feeds the sink rather than picked: a mismatch
+              refuses the pipeline on save, and there is exactly one right
+              answer per upstream shape. Rendered as a disabled select so the
+              value stays visible beside the source's modality picker. */}
           <select
             className="compact"
             aria-label="Sink modality"
-            value={form.sink.modality}
-            disabled={readOnly}
-            onChange={(event) =>
-              update({
-                sink: {
-                  ...form.sink,
-                  modality: event.target
-                    .value as PipelineForm["sink"]["modality"],
-                },
-              })
-            }
+            value={sinkModality}
+            disabled
           >
             <option value="audio">audio</option>
             <option value="text">text</option>
