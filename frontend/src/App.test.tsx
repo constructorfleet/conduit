@@ -2994,6 +2994,45 @@ describe("Providers workspace", () => {
     );
   });
 
+  it("still shows the provider's configuration when the component catalog did not load", async () => {
+    // With an empty catalog, the draft provider names a component the console
+    // cannot find, so `componentForProviderDefinition` answers with null. The
+    // editor used to treat that as "no component chosen" and reject the save,
+    // blanking the fields for a provider that was in fact valid. The stored
+    // configuration is what the operator has to see to know it is still
+    // there — otherwise the missing catalog looks like missing data.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          api_key: "sk-test",
+          model: "gpt-5",
+          streaming: true,
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={{ components: [] }}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "openai");
+
+    expect(screen.queryByText("Choose a provider component")).toBeNull();
+    // The stored configuration is still shown so the operator can see the
+    // provider is defined even without the catalog to render its schema.
+    expect(screen.getByText(/base_url/)).toBeInTheDocument();
+    expect(screen.getByText(/gpt-5/)).toBeInTheDocument();
+  });
+
   it("deletes configured provider cards", async () => {
     const user = userEvent.setup();
     const providerDefinitions = [
@@ -3062,9 +3101,7 @@ describe("Providers workspace", () => {
     expect(
       screen.queryByText("Provider openai deleted"),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("row", { name: /openai/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /openai/ })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Confirm delete openai" }),
     ).toBeInTheDocument();

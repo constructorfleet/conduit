@@ -1241,13 +1241,25 @@ function ProvidersPanel({
   const selectedDraftComponent = draftProvider
     ? componentForProviderDefinition(componentCatalog, draftProvider)
     : null;
-  const draftProviderValidation =
+  /// A draft that names a component the catalog does not list is not "no
+  /// component chosen" — it is a provider the console cannot describe because
+  /// the catalog is unavailable, and the two states have to read differently
+  /// or the fix ("reload the catalog") looks like the wrong one ("pick a
+  /// component from an empty menu").
+  const draftHasComponentName =
+    !!draftProvider && draftProvider.component.trim().length > 0;
+  const draftProviderValidation: PipelineValidationResult =
     draftProvider && selectedDraftComponent
       ? validateProviderDefinitionConfig(draftProvider, selectedDraftComponent)
-      : ({
-          ok: false,
-          message: "Choose a provider component",
-        } satisfies PipelineValidationResult);
+      : draftHasComponentName
+        ? {
+            ok: false,
+            message: `Component catalog unavailable — cannot validate ${draftProvider!.component}`,
+          }
+        : {
+            ok: false,
+            message: "Choose a provider component",
+          };
   const selectedKindCapability = selectedProviderKind
     ? capabilityForProviderKind(selectedProviderKind)
     : null;
@@ -1976,10 +1988,54 @@ function ProviderEditorFields({
           suggestions={suggestions}
           onChange={onConfigChange}
         />
+      ) : draftProvider.component ? (
+        // The catalog does not describe this component, so the console has no
+        // schema to render editable fields against. The stored configuration
+        // is still shown as a read-only summary rather than hidden, because
+        // an operator needs to see that the provider is defined before they
+        // can decide whether to reload the catalog or reconfigure it.
+        <ProviderConfigSummary config={draftProvider.config} />
       ) : null}
       {!validation.ok ? (
         <p className="form-error">{validation.message}</p>
       ) : null}
+    </div>
+  );
+}
+
+/// A read-only key/value view of a stored provider config.
+///
+/// Rendered when the console has no component schema to lay out an editable
+/// form against — typically because the component catalog failed to load, or
+/// the component was removed from a deployment the pipeline was configured
+/// on. Not editable on purpose: without a schema, the console cannot tell a
+/// well-typed value from a broken one.
+function ProviderConfigSummary({
+  config,
+}: {
+  config: Record<string, unknown>;
+}) {
+  const entries = Object.entries(config).filter(
+    ([, value]) => value !== undefined && value !== "",
+  );
+  return (
+    <div className="provider-config-summary">
+      <p className="hint">
+        Component catalog unavailable. The stored configuration is shown
+        read-only; reload the console to fetch the catalog again before editing.
+      </p>
+      {entries.length === 0 ? (
+        <p className="muted">No stored configuration.</p>
+      ) : (
+        <dl>
+          {entries.map(([field, value]) => (
+            <div className="provider-config-summary-row" key={field}>
+              <dt>{field}</dt>
+              <dd>{String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }
