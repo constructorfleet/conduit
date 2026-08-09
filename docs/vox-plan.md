@@ -144,7 +144,7 @@ New `Syncer` task in `app.py`, started at app startup if a link exists:
 - Failure logged with useful context, exponential backoff up to a ceiling
   (max 15 min between retries). Never fatal.
 
-### 7. Within-engine model swap
+### 7. [x] Within-engine model swap
 
 - `POST /engine/reload` — body `{model}`. Rebuilds the encoder using the
   current `engine` and the new `model`. `check_width` still enforces the

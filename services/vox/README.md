@@ -36,7 +36,8 @@ a single self-contained HTML file — no build step, no external assets, one
 nothing extra to install on the operator's machine. Features:
 
 - **Health** — engine, model, device, embedding width, roster count, and
-  whether the encoder has been loaded yet.
+  whether the encoder has been loaded yet, plus a within-engine model reload
+  form.
 - **Enrolled speakers** — inline rename via `PATCH /speakers/{uuid}`, and a
   Forget button.
 - **Enroll** — browser microphone (WebAudio → WAV, mono, matching Vox's
@@ -65,6 +66,7 @@ put a bearer in localStorage would hand it to every other page on the origin.
 | `GET /link` | — | Link status, redacted: `linked`, `unlinked`, or `config-managed` |
 | `POST /link` | `{"conduit_url", "operator_token", "peer_name", "force"?}` | Link status. If Vox generated a local API key, it is returned once for the current UI tab. The Conduit sync token and operator token are never returned. |
 | `DELETE /link` | — | `204` after best-effort Conduit revocation and local link removal |
+| `POST /engine/reload` | `{"model": "<model name>"}` | Reloads the current engine with a new model and returns the same shape as `GET /health`. If prints already exist and the new model's embedding width would not compare, returns `409`. |
 | `GET /health` | — | `{"status": "ok", …}` |
 
 Conduit owns the identifier and this service stores it as an opaque file name,
@@ -176,6 +178,9 @@ nothing in this service will tell you that you did not.
 
 The model downloads on the first request rather than at startup, so the
 container becomes healthy immediately and a first identification is slow.
+`POST /engine/reload` is the exception: it loads immediately so the operator
+finds out whether the named model actually works before the next enrollment or
+identification request pays for the mistake.
 
 ## Images
 
