@@ -24,9 +24,9 @@ export const DEFAULT_MEMORY_LIMIT = 8;
 export const LINEAR_STAGE_ORDER: NodeKind[] = [
   "source",
   "wake_word",
+  "speaker_id",
   "vad",
   "stt",
-  "speaker_id",
   "core",
   "transform",
   "tts",

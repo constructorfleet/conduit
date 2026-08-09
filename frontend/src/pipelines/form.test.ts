@@ -205,12 +205,26 @@ describe("graphFromForm", () => {
     expect(graph.nodes.map((node) => node.id)).toEqual([
       "mic",
       "wake",
-      "stt",
       "who",
+      "stt",
       "core",
       "tts",
       "speaker",
     ]);
+  });
+
+  it("puts speaker identification on the audio path before transcription", () => {
+    // A speaker identifier consumes audio and produces audio. Putting it after
+    // transcription makes the next edge `speaker_id -> core`, which is the
+    // exact validation error the editor must not manufacture.
+    const form = formFromGraph(voiceLoop());
+    form.speakerId = { id: "who", provider: "resemblyzer" };
+
+    const graph = graphFromForm(form);
+
+    expect(graph.edges).toContainEqual({ from: "mic", to: "who" });
+    expect(graph.edges).toContainEqual({ from: "who", to: "stt" });
+    expect(graph.edges).toContainEqual({ from: "stt", to: "core" });
   });
 
   it("gives the sink an audio modality when synthesis feeds it", () => {
