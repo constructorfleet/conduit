@@ -12,6 +12,7 @@ use conduit_metrics::Metrics;
 use conduit_provider::storage::{
     EnrolledSpeaker, McpTransport, PipelineStore, ProviderCapability, ProviderDefinition,
     ProviderDefinitionStore, ProviderDefinitionVariant, SpeakerRosterStore, ToolVariant,
+    VoxLink, VoxLinkStore,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
@@ -32,6 +33,8 @@ pub struct AppState {
     provider_definitions: Arc<dyn ProviderDefinitionStore>,
     /// Who the deployment has named and enrolled.
     speakers: Arc<dyn SpeakerRosterStore>,
+    /// Conduit Vox peers this deployment is linked to.
+    vox_links: Arc<dyn VoxLinkStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
@@ -80,6 +83,7 @@ impl AppState {
             pipelines,
             provider_definitions,
             speakers: Arc::new(MemoryStore::new()),
+            vox_links: Arc::new(MemoryStore::new()),
             providers: Arc::new(RwLock::new(None)),
             provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
@@ -101,6 +105,50 @@ impl AppState {
     pub fn with_speaker_roster(mut self, speakers: Arc<dyn SpeakerRosterStore>) -> Self {
         self.speakers = speakers;
         self
+    }
+
+    /// Keeps Vox link records in `store` rather than in memory.
+    #[must_use]
+    pub fn with_vox_link_store(mut self, store: Arc<dyn VoxLinkStore>) -> Self {
+        self.vox_links = store;
+        self
+    }
+
+    /// Peer ids of every linked Vox instance, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn vox_link_ids(&self) -> Result<Vec<String>> {
+        self.vox_links.list().await
+    }
+
+    /// Fetches one Vox link.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable or the entry cannot be read.
+    pub async fn vox_link(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+        self.vox_links.get(peer_id).await
+    }
+
+    /// Stores a Vox link, returning `true` if it replaced one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the id is unusable or the write fails.
+    pub async fn put_vox_link(&self, link: VoxLink) -> Result<bool> {
+        let peer_id = link.peer_id.clone();
+        self.vox_links.put(&peer_id, link).await
+    }
+
+    /// Removes a Vox link, returning `true` if it existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is unavailable.
+    pub async fn remove_vox_link(&self, peer_id: &str) -> Result<bool> {
+        self.vox_links.remove(peer_id).await
     }
 
     /// Speaker ids in the roster, in order.

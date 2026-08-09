@@ -18,6 +18,7 @@ pub mod tool;
 pub mod transform;
 pub mod tts;
 pub mod vad;
+pub mod vox_link;
 pub mod wake;
 pub mod wake_models;
 
@@ -30,6 +31,7 @@ pub use tool::{McpTransport, ToolVariant};
 pub use transform::{Rule, ScriptEngine, TransformVariant};
 pub use tts::TtsVariant;
 pub use vad::{default_silence_ms, VadVariant};
+pub use vox_link::{VoxLink, VoxLinkStore};
 pub use wake::{MicroWakeWordRuntime, WakeRuntime, WakeVariant};
 
 /// The longest a pipeline name may be.
