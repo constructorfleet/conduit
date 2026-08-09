@@ -1,6 +1,5 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 httpx==0.25.0
-pydantic==2.5.0
+pydantic==2.13.4
 numpy>=2.0.0
-qdrant-client==1.7.0
