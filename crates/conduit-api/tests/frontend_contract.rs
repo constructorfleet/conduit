@@ -1055,6 +1055,17 @@ export interface EnrolledSpeaker {{
   enrolled_at?: DateTimeString;
 }}
 
+/// A linked Vox peer as rendered by the management API.
+export interface VoxLinkView {{
+  peer_id: string;
+  peer_name: string;
+  peer_base_url: string;
+  provider_definition_id: string;
+  granted_by: string;
+  granted_at: DateTimeString;
+  last_seen?: DateTimeString;
+}}
+
 /// What the board file knows and Conduit does not.
 ///
 /// Conduit renders only its own part of a satellite's firmware, so every id
@@ -1149,6 +1160,8 @@ export interface ConduitApiClient {{
     provider?: string,
   ) => Promise<EnrolledSpeaker>;
   deleteSpeaker: (id: string) => Promise<void>;
+  listVoxLinks: () => Promise<VoxLinkView[]>;
+  deleteVoxLink: (peerId: string) => Promise<void>;
   listTurns: () => Promise<TurnList>;
   getTurn: (turnId: string) => Promise<TurnSnapshot>;
   getTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -1171,6 +1184,8 @@ export const conduitApiRoutes = {{
   speakers: "/v1/speakers",
   speaker: "/v1/speakers/{{id}}",
   speakerEnroll: "/v1/speakers/{{id}}/enroll",
+  voxLinks: "/v1/vox/links",
+  voxLink: "/v1/vox/links/{{peer_id}}",
   pipelines: "/v1/pipelines",
   pipeline: "/v1/pipelines/{{name}}",
   pipelineTest: "/v1/pipelines/{{name}}/test-turn",
@@ -1284,6 +1299,13 @@ export function createConduitApiClient(
         method: "DELETE",
       }});
     }},
+    listVoxLinks: () =>
+      requestJson<VoxLinkView[]>(request, config, conduitApiRoutes.voxLinks),
+    deleteVoxLink: async (peerId) => {{
+      await requestJson<void>(request, config, voxLinkRoute(peerId), {{
+        method: "DELETE",
+      }});
+    }},
     renderFirmware: async (device, firmware) => {{
       const response = await request(
         new URL(
@@ -1320,6 +1342,13 @@ function speakerRoute(id: string): string {{
 
 function speakerEnrollRoute(id: string): string {{
   return conduitApiRoutes.speakerEnroll.replace("{{id}}", encodeURIComponent(id));
+}}
+
+function voxLinkRoute(peerId: string): string {{
+  return conduitApiRoutes.voxLink.replace(
+    "{{peer_id}}",
+    encodeURIComponent(peerId),
+  );
 }}
 
 function pipelineRoute(name: string): string {{

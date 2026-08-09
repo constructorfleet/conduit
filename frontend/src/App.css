@@ -424,6 +424,19 @@ button {
   gap: 14px;
 }
 
+.vox-panel {
+  min-height: calc(100svh - 180px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.vox-frame {
+  width: 100%;
+  min-height: calc(100svh - 180px);
+  border: 0;
+  background: var(--surface-sunken);
+}
+
 .events-tabs {
   display: inline-flex;
   width: fit-content;
@@ -1044,6 +1057,12 @@ button {
   color: var(--strong);
   font-size: 13px;
   font-weight: 750;
+}
+
+.panel-caption {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* Naming somebody is one field and one button, so it sits on one line. */

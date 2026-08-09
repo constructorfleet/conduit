@@ -34,7 +34,7 @@ use std::time::Duration;
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Router;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
@@ -95,6 +95,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/vox/links", get(vox::list).post(vox::create))
         .route("/v1/vox/links/{peer_id}", axum::routing::delete(vox::delete))
+        .route("/vox", any(vox::proxy))
+        .route("/vox/{*path}", any(vox::proxy))
         .route("/v1/devices/{device}/firmware", get(firmware::render))
         .route("/v1/devices/{device}/firmware/flash", post(firmware::flash))
         .route("/v1/pipelines", get(pipelines::list))

@@ -153,7 +153,7 @@ New `Syncer` task in `app.py`, started at app startup if a link exists:
 - UI: form under Health showing current engine + model; "Reload" button
   disables while the encoder is loading.
 
-### 8. Conduit reverse proxy `/vox/*`
+### 8. [x] Conduit reverse proxy `/vox/*`
 
 - `crates/conduit-api/src/vox.rs` gains a `proxy` handler.
 - Looks up the single linked peer (multi-peer is an explicit non-goal for
@@ -163,7 +163,7 @@ New `Syncer` task in `app.py`, started at app startup if a link exists:
   every other console-facing route.
 - If no peer is linked, 404 with a body pointing at the Link flow.
 
-### 9. Replace Console SpeakersPanel with Vox iframe
+### 9. [x] Replace Console SpeakersPanel with Vox iframe
 
 - In `frontend/src/App.tsx`: sidebar label "Speakers" → "Vox". Replace the
   `SpeakersPanel` (~340 lines) plus its tests with an `<iframe
