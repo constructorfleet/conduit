@@ -44,6 +44,8 @@ nothing extra to install on the operator's machine. Features:
   clips captured elsewhere. Optional label saved in the same click.
 - **Test identification** — records a clip and shows the closest match, its
   confidence, and the operator-set label if any.
+- **Link** — posts a one-time operator token to Conduit, receives a scoped
+  sync token and provider definition id, and persists the link locally.
 
 The UI is served without authentication so an operator with the key in their
 head can load the page and paste it in; every route it calls carries the
@@ -60,6 +62,9 @@ put a bearer in localStorage would hand it to every other page on the origin.
 | `GET /speakers` | — | `{"speakers": [{"uuid", "label", "samples", "created_at", "updated_at"}, …]}` |
 | `PATCH /speakers/{uuid}` | `{"label": "<name>" \| null}` | The updated entry; `404` if nobody was enrolled |
 | `DELETE /speakers/{uuid}` | — | `204`, or `404` if nobody was enrolled |
+| `GET /link` | — | Link status, redacted: `linked`, `unlinked`, or `config-managed` |
+| `POST /link` | `{"conduit_url", "operator_token", "peer_name", "force"?}` | Link status. If Vox generated a local API key, it is returned once for the current UI tab. The Conduit sync token and operator token are never returned. |
+| `DELETE /link` | — | `204` after best-effort Conduit revocation and local link removal |
 | `GET /health` | — | `{"status": "ok", …}` |
 
 Conduit owns the identifier and this service stores it as an opaque file name,
@@ -77,6 +82,15 @@ The roster is persisted as `roster.json` alongside the `.npy` files. Missing
 or corrupt manifests are rebuilt from the prints themselves on the next read,
 so an in-place upgrade from a version that only wrote prints keeps every
 enrolled voice — just without labels until an operator supplies them.
+
+The Conduit link is persisted as `link.json` beside the prints with mode
+`0600`. Vox refuses to read it if group or world permissions are present,
+because it contains the sync token and the local API key Conduit will use.
+When `SPEAKER_ID_API_KEY` is unset, linking generates that local API key and
+Vox accepts it on protected routes. The generated key is returned only from the
+successful `POST /link` response so the embedded UI can keep working in that
+tab; `GET /link` stays redacted. When `SPEAKER_ID_API_KEY` is set, that
+configured key is sent to Conduit instead and remains the only accepted key.
 
 Enrolling the same speaker again adds a sample rather than replacing one;
 identification compares against the mean of everything they enrolled. Three or
@@ -148,6 +162,7 @@ nothing in this service will tell you that you did not.
 | `SPEAKER_ID_DATA_DIR` | `/data` | Voice prints, one `.npy` per speaker. |
 | `SPEAKER_ID_MODEL_DIR` | `/models` | Model cache, so a restart does not re-download it. |
 | `SPEAKER_ID_API_KEY` | unset | When set, every route except `/health` needs `Authorization: Bearer …`. |
+| `SPEAKER_ID_BASE_URL` | request base URL | Base URL Conduit should store for reaching Vox when linked. In Docker Compose this should be `http://vox:8080`, not the operator's browser URL. |
 
 The model downloads on the first request rather than at startup, so the
 container becomes healthy immediately and a first identification is slow.

@@ -113,7 +113,7 @@ granted_by, granted_at, last_seen). Routes:
 
 Migrations: SQLite + Postgres, per the dual-schema policy.
 
-### 5. Vox link flow
+### 5. [x] Vox link flow
 
 New module in `app.py` for link state:
 

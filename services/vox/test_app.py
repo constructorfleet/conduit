@@ -9,11 +9,15 @@ download standing between a developer and a test run.
 from __future__ import annotations
 
 import io
+import json
+import os
 import tempfile
 import uuid
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +28,7 @@ from app import (
     ENGINE_CLASSES,
     MAX_LABEL_LENGTH,
     MODEL_SAMPLE_RATE,
+    LinkStore,
     NeMoEncoder,
     PyannoteEncoder,
     Roster,
@@ -36,6 +41,36 @@ from app import (
     hugging_face_token,
     resample,
 )
+
+
+@dataclass
+class RecordedConduitRequest:
+    url: str
+    bearer: str
+    body: dict[str, str]
+
+
+class FakeConduitClient:
+    def __init__(self) -> None:
+        self.create_requests: list[RecordedConduitRequest] = []
+        self.delete_requests: list[tuple[str, str, str]] = []
+
+    def create_link(
+        self,
+        conduit_url: str,
+        operator_token: str,
+        body: dict[str, str],
+    ) -> dict[str, str]:
+        self.create_requests.append(
+            RecordedConduitRequest(conduit_url, operator_token, body)
+        )
+        return {
+            "sync_token": "sync-token-from-conduit",
+            "provider_definition_id": "vox-kitchen-vox-01",
+        }
+
+    def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
+        self.delete_requests.append((conduit_url, peer_id, sync_token))
 
 
 class ToneEncoder:
@@ -545,6 +580,15 @@ def test_the_embedded_ui_names_the_service(client: TestClient) -> None:
     assert "Conduit Vox" in response.text
 
 
+def test_the_embedded_ui_exposes_the_link_flow(client: TestClient) -> None:
+    response = client.get("/ui/")
+
+    assert response.status_code == 200
+    assert 'id="link-panel"' in response.text
+    assert 'api("/link"' in response.text
+    assert 'api("/link", { method: "DELETE" })' in response.text
+
+
 def test_the_embedded_ui_stays_open_when_an_api_key_is_required(
     monkeypatch, store
 ) -> None:
@@ -571,3 +615,289 @@ def test_a_voice_pointing_away_scores_nothing_rather_than_half() -> None:
     assert cosine(np.array([1.0, 0.0]), np.array([-1.0, 0.0])) == 0.0
     assert cosine(np.array([1.0, 0.0]), np.array([1.0, 0.0])) == pytest.approx(1.0)
     assert cosine(np.zeros(2), np.ones(2)) == 0.0
+
+
+def test_link_status_is_unlinked_without_a_saved_link(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path))
+    )
+
+    response = client.get("/link")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unlinked"}
+
+
+def test_linking_posts_to_conduit_and_persists_redacted_status(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SPEAKER_ID_BASE_URL", "http://vox.internal:8081/")
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+
+    response = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080/",
+            "operator_token": "operator-secret",
+            "peer_name": "Kitchen Vox",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    public = {
+        "status": "linked",
+        "conduit_url": "http://conduit.internal:8080",
+        "peer_id": body["peer_id"],
+        "peer_name": "Kitchen Vox",
+        "provider_definition_id": "vox-kitchen-vox-01",
+        "linked_at": body["linked_at"],
+    }
+    assert body == {**public, "local_api_key": body["local_api_key"]}
+    assert uuid.UUID(body["peer_id"])
+    assert len(conduit.create_requests) == 1
+    request = conduit.create_requests[0]
+    assert request.url == "http://conduit.internal:8080"
+    assert request.bearer == "operator-secret"
+    assert request.body["peer_name"] == "Kitchen Vox"
+    assert request.body["peer_id"] == body["peer_id"]
+    assert request.body["vox_base_url"] == "http://vox.internal:8081"
+    assert request.body["vox_api_key"] == body["local_api_key"]
+    assert len(body["local_api_key"]) >= 32
+
+    persisted = client.get("/link")
+    assert persisted.status_code == 200
+    assert persisted.json() == public
+    assert "sync_token" not in persisted.text
+    assert "operator-secret" not in persisted.text
+    assert "vox_api_key" not in persisted.text
+    assert "local_api_key" not in persisted.text
+
+    mode = (tmp_path / LinkStore.FILENAME).stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_link_generated_api_key_authorizes_vox_routes(tmp_path: Path) -> None:
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+    client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080",
+            "operator_token": "operator-secret",
+            "peer_name": "Kitchen Vox",
+        },
+    )
+    generated_key = conduit.create_requests[0].body["vox_api_key"]
+
+    assert client.post("/identify", content=tone(440)).status_code == 401
+    assert (
+        client.post(
+            "/identify",
+            content=tone(440),
+            headers={"authorization": f"Bearer {generated_key}"},
+        ).status_code
+        == 200
+    )
+
+
+def test_configured_api_key_is_sent_to_conduit_and_keeps_env_precedence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SPEAKER_ID_API_KEY", "configured-key")
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+
+    response = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080",
+            "operator_token": "operator-secret",
+            "peer_name": "Kitchen Vox",
+        },
+    )
+
+    assert response.status_code == 200
+    assert conduit.create_requests[0].body["vox_api_key"] == "configured-key"
+    assert client.post("/identify", content=tone(440)).status_code == 401
+    assert (
+        client.post(
+            "/identify",
+            content=tone(440),
+            headers={"authorization": "Bearer configured-key"},
+        ).status_code
+        == 200
+    )
+
+
+def test_linking_again_is_refused_without_force(tmp_path: Path) -> None:
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+    payload = {
+        "conduit_url": "http://conduit.internal:8080",
+        "operator_token": "operator-secret",
+        "peer_name": "Kitchen Vox",
+    }
+    assert client.post("/link", json=payload).status_code == 200
+
+    refused = client.post("/link", json=payload)
+
+    assert refused.status_code == 409
+    assert len(conduit.create_requests) == 1
+
+
+def test_force_link_replaces_the_saved_link(tmp_path: Path) -> None:
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+    first = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080",
+            "operator_token": "operator-secret",
+            "peer_name": "Kitchen Vox",
+        },
+    ).json()
+
+    second = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080",
+            "operator_token": "operator-secret",
+            "peer_name": "Office Vox",
+            "force": True,
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.json()["peer_name"] == "Office Vox"
+    assert second.json()["peer_id"] == first["peer_id"]
+    assert len(conduit.create_requests) == 2
+
+
+def test_unlink_best_effort_revokes_conduit_then_removes_local_state(
+    tmp_path: Path,
+) -> None:
+    conduit = FakeConduitClient()
+    client = TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=VoicePrints(tmp_path),
+            conduit_client=conduit,
+        )
+    )
+    linked = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.internal:8080",
+            "operator_token": "operator-secret",
+            "peer_name": "Kitchen Vox",
+        },
+    ).json()
+
+    response = client.delete("/link")
+
+    assert response.status_code == 204
+    assert conduit.delete_requests == [
+        ("http://conduit.internal:8080", linked["peer_id"], "sync-token-from-conduit")
+    ]
+    assert not (tmp_path / LinkStore.FILENAME).exists()
+    assert client.get("/link").json() == {"status": "unlinked"}
+
+
+def test_a_saved_link_with_group_or_world_permissions_is_refused(tmp_path: Path) -> None:
+    store = LinkStore(tmp_path)
+    store.save(
+        conduit_url="http://conduit.internal:8080",
+        sync_token="sync-token",
+        peer_id="peer-1",
+        peer_name="Kitchen Vox",
+        provider_definition_id="vox-peer-1",
+        local_api_key="local-key",
+    )
+    os.chmod(tmp_path / LinkStore.FILENAME, 0o644)
+    client = TestClient(
+        create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path))
+    )
+
+    status = client.get("/link")
+    protected = client.post(
+        "/identify",
+        content=tone(440),
+        headers={"authorization": "Bearer local-key"},
+    )
+
+    assert status.status_code == 500
+    assert "permissions" in status.json()["detail"]
+    assert protected.status_code == 500
+
+
+def test_http_conduit_client_sends_the_expected_link_request() -> None:
+    from app import HttpConduitClient
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers["authorization"]
+        seen["body"] = json_body = json.loads(request.content)
+        assert json_body["vox_api_key"] == "local-key"
+        return httpx.Response(
+            201,
+            json={
+                "sync_token": "sync-token",
+                "provider_definition_id": "vox-peer-1",
+            },
+        )
+
+    client = HttpConduitClient(transport=httpx.MockTransport(handler))
+
+    response = client.create_link(
+        "http://conduit.internal:8080/",
+        "operator-secret",
+        {
+            "peer_name": "Kitchen Vox",
+            "peer_id": "peer-1",
+            "vox_base_url": "http://vox.internal:8081",
+            "vox_api_key": "local-key",
+        },
+    )
+
+    assert response == {
+        "sync_token": "sync-token",
+        "provider_definition_id": "vox-peer-1",
+    }
+    assert seen["method"] == "POST"
+    assert seen["url"] == "http://conduit.internal:8080/v1/vox/links"
+    assert seen["authorization"] == "Bearer operator-secret"

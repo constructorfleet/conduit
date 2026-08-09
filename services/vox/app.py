@@ -33,6 +33,7 @@ import io
 import json
 import logging
 import os
+import secrets
 import tempfile
 import uuid
 from dataclasses import dataclass, replace
@@ -40,6 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+import httpx
 import numpy as np
 import soundfile as sf
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -661,10 +663,199 @@ class LabelUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=MAX_LABEL_LENGTH)
 
 
+@dataclass(frozen=True)
+class LinkState:
+    conduit_url: str
+    sync_token: str
+    peer_id: str
+    peer_name: str
+    provider_definition_id: str
+    local_api_key: str
+    linked_at: str
+
+    def public(self) -> dict[str, str]:
+        return {
+            "status": "linked",
+            "conduit_url": self.conduit_url,
+            "peer_id": self.peer_id,
+            "peer_name": self.peer_name,
+            "provider_definition_id": self.provider_definition_id,
+            "linked_at": self.linked_at,
+        }
+
+
+class LinkStoreSecurityError(RuntimeError):
+    """Raised when link.json is readable by anyone except the service user."""
+
+
+class LinkStore:
+    """The persisted relationship with one Conduit instance."""
+
+    FILENAME = "link.json"
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self._path = directory / self.FILENAME
+
+    def load(self) -> LinkState | None:
+        if not self._path.exists():
+            return None
+        self._refuse_loose_permissions()
+        data = json.loads(self._path.read_text())
+        return LinkState(
+            conduit_url=str(data["conduit_url"]),
+            sync_token=str(data["sync_token"]),
+            peer_id=str(data["peer_id"]),
+            peer_name=str(data.get("peer_name") or data["peer_id"]),
+            provider_definition_id=str(data["provider_definition_id"]),
+            local_api_key=str(data["local_api_key"]),
+            linked_at=str(data["linked_at"]),
+        )
+
+    def save(
+        self,
+        *,
+        conduit_url: str,
+        sync_token: str,
+        peer_id: str,
+        peer_name: str,
+        provider_definition_id: str,
+        local_api_key: str,
+    ) -> LinkState:
+        linked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        state = LinkState(
+            conduit_url=conduit_url,
+            sync_token=sync_token,
+            peer_id=peer_id,
+            peer_name=peer_name,
+            provider_definition_id=provider_definition_id,
+            local_api_key=local_api_key,
+            linked_at=linked_at,
+        )
+        payload = {
+            "conduit_url": state.conduit_url,
+            "sync_token": state.sync_token,
+            "peer_id": state.peer_id,
+            "peer_name": state.peer_name,
+            "provider_definition_id": state.provider_definition_id,
+            "local_api_key": state.local_api_key,
+            "linked_at": state.linked_at,
+        }
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temporary = self._path.with_suffix(".json.tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        with os.fdopen(os.open(temporary, flags, 0o600), "w") as file:
+            json.dump(payload, file, indent=2)
+        os.chmod(temporary, 0o600)
+        temporary.replace(self._path)
+        os.chmod(self._path, 0o600)
+        return state
+
+    def remove(self) -> None:
+        if self._path.exists():
+            self._refuse_loose_permissions()
+            self._path.unlink()
+
+    def _refuse_loose_permissions(self) -> None:
+        mode = self._path.stat().st_mode & 0o777
+        if mode & 0o077:
+            raise LinkStoreSecurityError(
+                f"{self.FILENAME} permissions must be 0600; found {mode:03o}"
+            )
+
+
+class LinkRequest(BaseModel):
+    conduit_url: str
+    operator_token: str
+    peer_name: str
+    force: bool = False
+
+
+class ConduitLinkClient(Protocol):
+    def create_link(
+        self,
+        conduit_url: str,
+        operator_token: str,
+        body: dict[str, str],
+    ) -> dict[str, str]: ...
+
+    def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None: ...
+
+
+class HttpConduitClient:
+    """HTTP client for Conduit's `/v1/vox/links` API."""
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 10.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._timeout = timeout
+        self._transport = transport
+
+    def create_link(
+        self,
+        conduit_url: str,
+        operator_token: str,
+        body: dict[str, str],
+    ) -> dict[str, str]:
+        url = f"{conduit_url.rstrip('/')}/v1/vox/links"
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            response = client.post(
+                url,
+                json=body,
+                headers={"authorization": f"Bearer {operator_token}"},
+            )
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Conduit refused the Vox link with HTTP {response.status_code}",
+            )
+        payload = response.json()
+        return {
+            "sync_token": str(payload["sync_token"]),
+            "provider_definition_id": str(payload["provider_definition_id"]),
+        }
+
+    def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
+        url = f"{conduit_url.rstrip('/')}/v1/vox/links/{peer_id}"
+        try:
+            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+                response = client.delete(
+                    url,
+                    headers={"authorization": f"Bearer {sync_token}"},
+                )
+            if response.status_code >= 400:
+                LOG.warning(
+                    "Conduit refused best-effort Vox unlink: status=%d peer=%s",
+                    response.status_code,
+                    peer_id,
+                )
+        except httpx.HTTPError as error:
+            LOG.warning("best-effort Vox unlink failed: peer=%s error=%s", peer_id, error)
+
+
+def _trimmed_url(value: str, name: str) -> str:
+    trimmed = value.strip().rstrip("/")
+    if not trimmed:
+        raise HTTPException(status_code=422, detail=f"{name} cannot be empty")
+    return trimmed
+
+
+def _trimmed_field(value: str, name: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise HTTPException(status_code=422, detail=f"{name} cannot be empty")
+    return trimmed
+
+
 def create_app(
     encoder: Encoder | None = None,
     prints: VoicePrints | None = None,
     roster: Roster | None = None,
+    link_store: LinkStore | None = None,
+    conduit_client: ConduitLinkClient | None = None,
 ) -> FastAPI:
     """Builds the service.
 
@@ -680,6 +871,8 @@ def create_app(
     # both; there is no split between "the voices" and "the names for them"
     # that a deployment would sensibly want to configure separately.
     names = roster or Roster(store.directory)
+    links = link_store or LinkStore(store.directory)
+    conduit = conduit_client or HttpConduitClient()
     engine = os.environ.get("SPEAKER_ID_ENGINE", "speechbrain")
     model_name = os.environ.get("SPEAKER_ID_MODEL") or DEFAULT_MODELS.get(engine, "")
     model_cache = Path(os.environ.get("SPEAKER_ID_MODEL_DIR", "/models"))
@@ -714,9 +907,16 @@ def create_app(
         because it is meant to sit on an internal network beside Conduit. The
         compose file does not publish its port for the same reason.
         """
-        if api_key is None:
+        accepted = api_key
+        if accepted is None:
+            try:
+                state = links.load()
+            except LinkStoreSecurityError as error:
+                raise HTTPException(status_code=500, detail=str(error)) from error
+            accepted = state.local_api_key if state is not None else None
+        if accepted is None:
             return
-        if credentials is None or credentials.credentials != api_key:
+        if credentials is None or credentials.credentials != accepted:
             raise HTTPException(status_code=401, detail="invalid or missing API key")
 
     def speaker_id(speaker: str) -> uuid.UUID:
@@ -753,6 +953,89 @@ def create_app(
             # somebody restarts because they think it is wedged.
             "model_loaded": "encoder" in loaded,
         }
+
+    @app.get("/link")
+    def link_status() -> dict[str, str]:
+        try:
+            state = links.load()
+        except LinkStoreSecurityError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        if state is None:
+            if api_key is not None:
+                return {"status": "config-managed"}
+            return {"status": "unlinked"}
+        return state.public()
+
+    @app.post("/link")
+    def link(request: Request, body: LinkRequest) -> dict[str, str]:
+        try:
+            existing = links.load()
+        except LinkStoreSecurityError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        if existing is not None and not body.force:
+            raise HTTPException(
+                status_code=409,
+                detail="Vox is already linked; unlink first or pass force=true",
+            )
+
+        conduit_url = _trimmed_url(body.conduit_url, "conduit_url")
+        peer_name = _trimmed_field(body.peer_name, "peer_name")
+        operator_token = _trimmed_field(body.operator_token, "operator_token")
+        peer_id = existing.peer_id if existing is not None else str(uuid.uuid4())
+        local_api_key = api_key or (
+            existing.local_api_key if existing is not None else secrets.token_urlsafe(32)
+        )
+        vox_base_url = _trimmed_url(
+            os.environ.get("SPEAKER_ID_BASE_URL") or str(request.base_url),
+            "SPEAKER_ID_BASE_URL",
+        )
+
+        try:
+            created = conduit.create_link(
+                conduit_url,
+                operator_token,
+                {
+                    "peer_name": peer_name,
+                    "peer_id": peer_id,
+                    "vox_base_url": vox_base_url,
+                    "vox_api_key": local_api_key,
+                },
+            )
+        except httpx.HTTPError as error:
+            raise HTTPException(
+                status_code=502, detail=f"could not reach Conduit: {error}"
+            ) from error
+
+        state = links.save(
+            conduit_url=conduit_url,
+            sync_token=created["sync_token"],
+            peer_id=peer_id,
+            peer_name=peer_name,
+            provider_definition_id=created["provider_definition_id"],
+            local_api_key=local_api_key,
+        )
+        LOG.info(
+            "linked Vox to Conduit peer=%s provider=%s",
+            peer_id,
+            state.provider_definition_id,
+        )
+        response = state.public()
+        if api_key is None:
+            response["local_api_key"] = local_api_key
+        return response
+
+    @app.delete("/link")
+    def unlink() -> Response:
+        try:
+            state = links.load()
+        except LinkStoreSecurityError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        if state is None:
+            return Response(status_code=204)
+        conduit.delete_link(state.conduit_url, state.peer_id, state.sync_token)
+        links.remove()
+        LOG.info("unlinked Vox from Conduit peer=%s", state.peer_id)
+        return Response(status_code=204)
 
     @app.get("/speakers")
     def list_speakers(_: None = Depends(authorize)) -> dict[str, object]:

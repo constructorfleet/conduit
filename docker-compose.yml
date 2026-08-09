@@ -80,6 +80,9 @@ services:
       # generates one and persists it, so this variable is only for headless
       # deployments that provision auth up front.
       SPEAKER_ID_API_KEY: ${SPEAKER_ID_API_KEY:-}
+      # Address Conduit should store when Vox is linked from the embedded UI.
+      # This is the Docker-network name, not an operator browser URL.
+      SPEAKER_ID_BASE_URL: ${SPEAKER_ID_BASE_URL:-http://vox:8080}
     networks:
       default:
         # Kept so an existing provider definition pointing at
