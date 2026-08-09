@@ -377,6 +377,26 @@ function OperatorWorkspace({
     });
   }
 
+  /// Removes a stored, readable pipeline from the operator's store.
+  ///
+  /// The same path `discardPipeline` takes for a name whose graph will not
+  /// parse, but reached by name from the editor toolbar so an operator can
+  /// throw out a pipeline they built and no longer want.
+  async function deletePipeline(name: string) {
+    setPipelineViews((current) =>
+      current.filter((view) => view.graph.name !== name),
+    );
+    onPipelineDeleted?.(name);
+    try {
+      await snapshotClient.deletePipeline(name);
+      await refreshSnapshotFromApi();
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : `could not delete ${name}`,
+      );
+    }
+  }
+
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
@@ -869,6 +889,7 @@ function OperatorWorkspace({
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
+          onPipelineDelete={deletePipeline}
         />
       </section>
     </main>
@@ -896,6 +917,7 @@ function SectionPanel({
   onSectionChange,
   onPipelineStored,
   onPipelineDiscarded,
+  onPipelineDelete,
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
@@ -915,6 +937,7 @@ function SectionPanel({
   pipelineViews: readonly PipelineView[];
   unreadablePipelines: readonly UnreadablePipeline[];
   onPipelineDiscarded: (name: string) => void;
+  onPipelineDelete: (name: string) => Promise<void>;
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
   loadError: string | null;
@@ -971,6 +994,7 @@ function SectionPanel({
         unreadablePipelines={unreadablePipelines}
         onPipelineStored={onPipelineStored}
         onPipelineDiscarded={onPipelineDiscarded}
+        onPipelineDelete={onPipelineDelete}
         onPipelineValidate={onPipelineValidate}
         onPipelineTest={onPipelineTest}
         onProviderVoices={onProviderVoices}
@@ -2841,6 +2865,7 @@ function PipelinesPanel({
   unreadablePipelines,
   onPipelineStored,
   onPipelineDiscarded,
+  onPipelineDelete,
   onPipelineValidate,
   onPipelineTest,
   onProviderVoices,
@@ -2849,6 +2874,7 @@ function PipelinesPanel({
   pipelineViews: readonly PipelineView[];
   unreadablePipelines: readonly UnreadablePipeline[];
   onPipelineDiscarded: (name: string) => void;
+  onPipelineDelete: (name: string) => Promise<void>;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
@@ -2856,6 +2882,12 @@ function PipelinesPanel({
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
+  );
+  /// The pipeline whose delete button has been armed. Two-click gate mirrors
+  /// the provider delete: throwing a stored pipeline away is not undoable, so
+  /// a stray click on a dense toolbar should ask before it acts.
+  const [confirmingDeleteFor, setConfirmingDeleteFor] = useState<string | null>(
+    null,
   );
   const selectedView =
     pipelineViews.find((view) => view.graph.name === selectedName) ??
@@ -3228,6 +3260,30 @@ function PipelinesPanel({
     await saveCurrentDraft();
   }
 
+  /// Deletes the currently selected pipeline, after a second click on the
+  /// same armed button. Local draft state for the removed pipeline is
+  /// dropped so switching to a new pipeline does not surface stale edits.
+  async function deleteSelectedPipeline() {
+    if (!draft) {
+      return;
+    }
+
+    if (confirmingDeleteFor !== draft.name) {
+      setConfirmingDeleteFor(draft.name);
+      return;
+    }
+
+    const name = draft.name;
+    setConfirmingDeleteFor(null);
+    setDraftsByPipeline((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    setSelectedName((current) => (current === name ? "" : current));
+    await onPipelineDelete(name);
+  }
+
   async function runTestTurn() {
     if (!draft) {
       return;
@@ -3441,6 +3497,32 @@ function PipelinesPanel({
             >
               <Save size={16} aria-hidden="true" />
               Save
+            </button>
+            {/* Deletion of the currently selected pipeline. Two-click gate
+                mirrors the provider delete: the first click arms the button
+                and the label changes to say what a second click would do,
+                so a stray click does not throw a pipeline away. */}
+            <button
+              className={
+                confirmingDeleteFor === draft.name
+                  ? "danger-action compact-action armed"
+                  : "danger-action compact-action"
+              }
+              type="button"
+              aria-label={
+                confirmingDeleteFor === draft.name
+                  ? `Confirm delete pipeline ${draft.name}`
+                  : `Delete pipeline ${draft.name}`
+              }
+              onClick={() => void deleteSelectedPipeline()}
+              onBlur={() => {
+                if (confirmingDeleteFor === draft.name) {
+                  setConfirmingDeleteFor(null);
+                }
+              }}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              {confirmingDeleteFor === draft.name ? "Confirm delete" : "Delete"}
             </button>
           </div>
         </div>

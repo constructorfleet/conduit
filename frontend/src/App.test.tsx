@@ -1772,6 +1772,40 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
   });
 
+  it("deletes a readable pipeline from its editor toolbar", async () => {
+    // The delete affordance existed for unreadable pipelines only, so the
+    // regular pipelines the operator actually works with had no way out
+    // without editing the store by hand. The button lives in the editor
+    // toolbar for the currently selected pipeline, gated by a second click
+    // for the same reason the provider delete is: it is not undoable.
+    const user = userEvent.setup();
+    const deleted: string[] = [];
+    mockOperatorApi({ pipelineViews: [pipelineView()] });
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineDeleted={(name) => deleted.push(name)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(
+      screen.getByRole("button", { name: "Delete pipeline kitchen" }),
+    );
+
+    // Not deleted on the first click: the label changes to say what a second
+    // click would do.
+    expect(deleted).toEqual([]);
+    await user.click(
+      screen.getByRole("button", { name: "Confirm delete pipeline kitchen" }),
+    );
+
+    expect(deleted).toEqual(["kitchen"]);
+    // Once the last stored pipeline is gone, the section falls back to its
+    // empty state — the same one an operator sees after deleting an unreadable.
+    expect(await screen.findByText("No stored pipelines")).toBeInTheDocument();
+  });
+
   it("shows a pipeline the server cannot read, and offers to delete it", async () => {
     // Stored graphs are not migrated across schema changes, so a name whose
     // graph will not parse is a state an operator can land in. Before this,
@@ -4361,6 +4395,11 @@ function mockOperatorApi({
             );
           }
           return jsonResponse(view);
+        }
+
+        if (method === "DELETE") {
+          pipelines.delete(name);
+          return new Response(null, { status: 204 });
         }
 
         const view = pipelines.get(name);
