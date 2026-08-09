@@ -1,0 +1,275 @@
+.forma-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.forma-layout {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.forma-sidebar {
+  width: 280px;
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rule-sets-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.rule-set-item {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rule-set-item:hover {
+  border-color: var(--border-default);
+  background: var(--bg-hover);
+}
+
+.rule-set-item.selected {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+.rule-set-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.rule-set-info strong {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.rule-set-info span {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.forma-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.test-area {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-surface);
+}
+
+.test-area textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  resize: vertical;
+}
+
+.test-results {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 1rem;
+}
+
+.rules-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem;
+}
+
+.rule-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--bg-surface);
+  transition: all 0.2s;
+}
+
+.rule-item:hover {
+  border-color: var(--border-default);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.rule-item.disabled {
+  opacity: 0.6;
+}
+
+.rule-item.editing {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
+}
+
+.rule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.rule-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+}
+
+.rule-info strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rule-type {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.rule-priority {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.rule-description {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.rule-details {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+}
+
+.rule-condition,
+.rule-action {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.detail-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.detail-value code {
+  font-family: var(--font-mono);
+  background: var(--bg-subtle);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rule-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.rule-editor {
+  width: 90%;
+  max-width: 600px;
+  max-height: 90vh;
+  background: var(--bg-surface);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rule-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rule-editor-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rule-editor-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.rule-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: 1rem;
+}

@@ -1,0 +1,19 @@
+[package]
+name = "conduit-forma"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conduit-core = { workspace = true }
+conduit-provider = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+regex = "1.11"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
