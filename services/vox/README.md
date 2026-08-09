@@ -92,6 +92,14 @@ successful `POST /link` response so the embedded UI can keep working in that
 tab; `GET /link` stays redacted. When `SPEAKER_ID_API_KEY` is set, that
 configured key is sent to Conduit instead and remains the only accepted key.
 
+When a link exists, Vox starts a background sync task on startup. It fetches
+Conduit's `/v1/speakers` roster immediately and then every
+`SPEAKER_ID_SYNC_INTERVAL_SECONDS` thereafter, writing Conduit's labels into
+the local roster while leaving local-only Vox entries alone. Failures are
+logged with the peer and Conduit URL and retried with exponential backoff up
+to `SPEAKER_ID_SYNC_MAX_BACKOFF_SECONDS`; the service stays up even if Conduit
+is gone or sulking.
+
 Enrolling the same speaker again adds a sample rather than replacing one;
 identification compares against the mean of everything they enrolled. Three or
 four utterances from different sittings makes a better print than one long one.
@@ -163,6 +171,8 @@ nothing in this service will tell you that you did not.
 | `SPEAKER_ID_MODEL_DIR` | `/models` | Model cache, so a restart does not re-download it. |
 | `SPEAKER_ID_API_KEY` | unset | When set, every route except `/health` needs `Authorization: Bearer …`. |
 | `SPEAKER_ID_BASE_URL` | request base URL | Base URL Conduit should store for reaching Vox when linked. In Docker Compose this should be `http://vox:8080`, not the operator's browser URL. |
+| `SPEAKER_ID_SYNC_INTERVAL_SECONDS` | `300` | How often Vox refreshes labels from Conduit after a successful link. |
+| `SPEAKER_ID_SYNC_MAX_BACKOFF_SECONDS` | `900` | Ceiling for retry delay when the Conduit roster sync keeps failing. |
 
 The model downloads on the first request rather than at startup, so the
 container becomes healthy immediately and a first identification is slow.
