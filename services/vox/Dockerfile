@@ -1,17 +1,17 @@
-# Conduit's speaker identification service.
+# Conduit Vox — the reference speaker identification service.
 #
 # One file builds every published tag, because a Dockerfile per engine drifts
 # and only one of them gets tested. Two arguments vary: ENGINE picks the
 # embedding backend, and BASE_IMAGE/TORCH_INDEX/DEVICE pick CPU or GPU.
 #
-#   CPU: docker build -t conduit-speaker-id:speechbrain services/speaker-id
-#   GPU: docker build -t conduit-speaker-id:speechbrain-gpu \
+#   CPU: docker build -t conduit-vox:speechbrain services/vox
+#   GPU: docker build -t conduit-vox:speechbrain-gpu \
 #          --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
 #          --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
-#          --build-arg DEVICE=cuda services/speaker-id
+#          --build-arg DEVICE=cuda services/vox
 #
-#   pyannote: --build-arg ENGINE=pyannote  -t conduit-speaker-id:pyannote
-#   NeMo:     --build-arg ENGINE=nemo      -t conduit-speaker-id:nemo
+#   pyannote: --build-arg ENGINE=pyannote  -t conduit-vox:pyannote
+#   NeMo:     --build-arg ENGINE=nemo      -t conduit-vox:nemo
 #
 # No image ships weights. pyannote's are gated behind a Hugging Face access
 # agreement, so an image containing them could not legally be pulled by someone
@@ -63,9 +63,9 @@ COPY app.py ./
 
 # Written to at runtime, so they exist and are owned before the drop to a
 # non-root user. Both are mount points in the compose file.
-RUN useradd --create-home --shell /usr/sbin/nologin speaker \
+RUN useradd --create-home --shell /usr/sbin/nologin vox \
     && mkdir -p /data /models \
-    && chown speaker:speaker /data /models
+    && chown vox:vox /data /models
 
 # The engine the image was built for is also the engine it defaults to, so an
 # operator cannot select one whose dependency this image does not contain by
@@ -80,6 +80,6 @@ ENV SPEAKER_ID_ENGINE=${ENGINE} \
     HF_HOME=/models/huggingface \
     NEMO_CACHE_DIR=/models/nemo
 
-USER speaker
+USER vox
 EXPOSE 8080
 ENTRYPOINT ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

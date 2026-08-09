@@ -1,20 +1,32 @@
-# Conduit speaker identification
+# Conduit Vox
 
-Conduit does not recognize voices itself. It packages an utterance and asks a
-service over the contract documented on the [`conduit-speaker`](../../crates/conduit-speaker)
-crate, and this is that contract implemented over a swappable embedding model:
+Conduit Vox is the reference speaker identification service. Conduit does not
+recognize voices itself: it packages an utterance and asks a service over the
+contract documented on the [`conduit-speaker`](../../crates/conduit-speaker)
+crate, and Vox is that contract implemented over a swappable embedding model —
 SpeechBrain's ECAPA-TDNN, pyannote's x-vectors, or NVIDIA NeMo's TitaNet.
 
-It identifies and it does not diarize. "Who is speaking, out of the people I
+Vox identifies; it does not diarize. "Who is speaking, out of the people I
 know" and "how many people are in this recording and when did each talk" are
 different questions, and only the first one has a stage in a Conduit pipeline.
 
+The name is new, the capability is not: this used to be `services/vox`
+and shipped as `conduit-speaker-id`. The `--profile speaker-id`, the
+`http://speaker-id:8080` DNS name, and the `CONDUIT_SPEAKER_ID_IMAGE` variable
+are all still honoured so an in-place upgrade keeps working; new deployments
+should prefer the `vox` names.
+
 ```
-docker compose --profile speaker-id up
+docker compose --profile vox up
 ```
 
-Then create a `http_speaker_id` Provider Definition whose `base_url` is
-`http://speaker-id:8080`, and add a Speaker ID stage to a pipeline.
+Then either:
+
+- open Vox's UI at `http://vox:8080/ui` (or through the Conduit Console's
+  **Vox** section) and click **Link to Conduit** — the two exchange keys and
+  the provider definition is created for you; **or**
+- create a `http_speaker_id` Provider Definition whose `base_url` is
+  `http://vox:8080` by hand, and add a Speaker ID stage to a pipeline.
 
 ## The API
 
@@ -111,16 +123,16 @@ CPU/GPU triple that was already there.
 
 ```
 # CPU
-docker build -t conduit-speaker-id:speechbrain services/speaker-id
-docker build -t conduit-speaker-id:pyannote --build-arg ENGINE=pyannote services/speaker-id
-docker build -t conduit-speaker-id:nemo     --build-arg ENGINE=nemo     services/speaker-id
+docker build -t conduit-vox:speechbrain services/vox
+docker build -t conduit-vox:pyannote --build-arg ENGINE=pyannote services/vox
+docker build -t conduit-vox:nemo     --build-arg ENGINE=nemo     services/vox
 
 # GPU — the same three, plus the CUDA triple
-docker build -t conduit-speaker-id:speechbrain-gpu \
+docker build -t conduit-vox:speechbrain-gpu \
   --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
   --build-arg DEVICE=cuda \
-  services/speaker-id
+  services/vox
 ```
 
 The CPU images pull CPU torch wheels from torch's own index, which is what keeps

@@ -1,9 +1,15 @@
-"""Conduit's reference speaker identification service.
+"""Conduit Vox — the reference speaker identification service.
 
 Conduit does not recognize voices itself. It packages an utterance and asks a
 service over the three-request contract documented on the `conduit-speaker`
 crate, and this is that contract implemented once, over a swappable embedding
 model.
+
+The product name is Conduit Vox; the capability name — the term Conduit itself
+uses for pipeline stages, provider variants, and environment variables — is
+still "speaker identification", because that is what a `speaker_id` stage
+does. So the `SPEAKER_ID_*` environment variables stay: they describe the
+capability, not the product.
 
 The routes are the stable part. The encoder is not: `SPEAKER_ID_ENGINE`
 chooses it, and adding pyannote or NeMo means adding a class here rather than
@@ -37,7 +43,7 @@ import soundfile as sf
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-LOG = logging.getLogger("speaker-id")
+LOG = logging.getLogger("vox")
 
 # The embedding models each engine uses when the deployment names none.
 DEFAULT_MODELS = {
@@ -451,7 +457,7 @@ def create_app(
     `encoder` and `prints` are injected by the tests, which have no use for a
     model download to check that a 404 is a 404.
     """
-    app = FastAPI(title="Conduit speaker identification", version="1")
+    app = FastAPI(title="Conduit Vox", version="1")
     api_key = os.environ.get("SPEAKER_ID_API_KEY") or None
     store = prints or VoicePrints(
         Path(os.environ.get("SPEAKER_ID_DATA_DIR", "/data"))

@@ -245,20 +245,21 @@ jobs:
       - name: Test scripts/dev.sh
         run: scripts/tests/dev_test.sh
 
-  # The reference speaker identification service ships in this repository and is
-  # published as an image, so its tests and its build are gates like any other.
-  speaker-id:
+  # Conduit Vox — the reference speaker identification service — ships in this
+  # repository and is published as an image, so its tests and its build are
+  # gates like any other.
+  vox:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/speaker-id
+        working-directory: services/vox
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: services/speaker-id/requirements-dev.txt
+          cache-dependency-path: services/vox/requirements-dev.txt
       # requirements-dev deliberately excludes torch: the tests inject their own
       # encoder, so a CI run neither downloads a model nor installs a deep
       # learning framework to check that a 404 is a 404.
@@ -272,7 +273,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
-          context: services/speaker-id
+          context: services/vox
           push: false
 
   # The reference Wyoming ASR service ships in this repository, so its tests are
@@ -297,7 +298,7 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest -q
-      # No image build here, unlike the speaker-id job. NeMo plus a torch wheel
+      # No image build here, unlike the vox job. NeMo plus a torch wheel
       # is tens of gigabytes to resolve and install, which is beyond what a
       # pull-request runner should spend on every commit; the Dockerfile is
       # checked by the compose job resolving its build context, and the image is
@@ -313,6 +314,8 @@ jobs:
       - name: Check the compose file resolves
         run: |
           docker compose config --quiet
+          docker compose --profile vox config --quiet
+          # The legacy profile name is kept for one release cycle; verify it too.
           docker compose --profile speaker-id config --quiet
           docker compose --profile wyoming-asr config --quiet
           # The default `up` must not need the optional profile, or the

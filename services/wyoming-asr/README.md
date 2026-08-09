@@ -165,7 +165,7 @@ produced.
 | `ASR_LOG` | `INFO` | Log level. |
 
 The model loads **at startup**, before the listener opens, unlike
-`services/speaker-id/`'s lazy encoder. There is no health route here to report
+`services/vox/`'s lazy encoder. There is no health route here to report
 "the model failed" on, so a process that accepted a connection it cannot serve
 would fail as a hung turn rather than as a startup error somebody can read.
 Expect the first start of a fresh volume to take a while.

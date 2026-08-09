@@ -22,7 +22,7 @@ runtime progress is published as events.
 | `conduit-google` | Speech recognition and synthesis over Google Cloud's Speech APIs, authenticated with Application Default Credentials rather than a typed key. Behind the `google` feature, on by default. |
 | `conduit-marytts` | Synthesis over a self-hosted MaryTTS server, which has no authentication and no fixed voice set. |
 | `conduit-speaker` | Speaker identification over HTTP: Conduit's own contract, and a client for an existing Diarization_Server. |
-| `services/speaker-id` | The reference implementation of that contract, published as `conduit-speaker-id` with CPU and GPU tags. |
+| `services/vox` | Conduit Vox — the reference implementation of that contract, published as `conduit-vox` with CPU and GPU tags. |
 | `conduit-transform` | The rewrites that ship with Conduit — flatten markdown, strip emoji, collapse whitespace — applied to what a model said on its way to being spoken. |
 | `conduit-script` | The same job, written by the operator: an utterance transform running an operator-supplied script on a sandboxed Rhai interpreter. Separate from `conduit-transform` so a deployment wanting only the fixed rules never compiles an interpreter. |
 | `conduit-mcp` | Model Context Protocol client and tool providers over stdio, streamable HTTP, and SSE. |
