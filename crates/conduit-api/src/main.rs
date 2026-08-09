@@ -36,8 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pipeline_store = conduit_api::config::store_from_env().await?;
     let provider_store = conduit_api::config::provider_definition_store_from_env().await?;
     let speaker_store = conduit_api::config::speaker_roster_store_from_env().await?;
+    let vox_link_store = conduit_api::config::vox_link_store_from_env().await?;
     let mut state = AppState::with_stores(EventBus::default(), pipeline_store, provider_store)
         .with_speaker_roster(speaker_store)
+        .with_vox_link_store(vox_link_store)
         .with_access(access)
         .with_turn_idle_timeout(registered.turn_idle_timeout)
         .with_turn_history_retention(turn_history_retention);

@@ -10,7 +10,7 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{
     validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    SpeakerRosterStore,
+    SpeakerRosterStore, VoxLink, VoxLinkStore,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
@@ -277,6 +277,71 @@ impl SpeakerRosterStore for PostgresStore {
         validate_name(id)?;
         let result = sqlx::query("DELETE FROM speakers WHERE id = $1")
             .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait::async_trait]
+impl VoxLinkStore for PostgresStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT peer_id FROM vox_links ORDER BY peer_id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+        Ok(rows
+            .iter()
+            .map(|row| row.get::<String, _>("peer_id"))
+            .filter(|id| is_listable(id))
+            .collect())
+    }
+
+    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+        validate_name(peer_id)?;
+        let row = sqlx::query("SELECT link FROM vox_links WHERE peer_id = $1")
+            .bind(peer_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Self::failure)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let link: serde_json::Value = row.try_get("link").map_err(Self::failure)?;
+        serde_json::from_value(link).map(Some).map_err(|error| {
+            Error::Config(format!("the stored vox link `{peer_id}` is not valid: {error}"))
+        })
+    }
+
+    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool> {
+        validate_name(peer_id)?;
+        if link.peer_id != peer_id {
+            return Err(Error::Config(format!(
+                "vox link peer id `{}` does not match route id `{peer_id}`",
+                link.peer_id
+            )));
+        }
+        let json = serde_json::to_value(&link)
+            .map_err(|error| Error::Config(format!("cannot encode the vox link: {error}")))?;
+
+        let row = sqlx::query(
+            "INSERT INTO vox_links (peer_id, link) VALUES ($1, $2)
+             ON CONFLICT (peer_id) DO UPDATE SET link = EXCLUDED.link, updated_at = now()
+             RETURNING (xmax <> 0) AS replaced",
+        )
+        .bind(peer_id)
+        .bind(json)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Self::failure)?;
+
+        row.try_get("replaced").map_err(Self::failure)
+    }
+
+    async fn remove(&self, peer_id: &str) -> Result<bool> {
+        validate_name(peer_id)?;
+        let result = sqlx::query("DELETE FROM vox_links WHERE peer_id = $1")
+            .bind(peer_id)
             .execute(&self.pool)
             .await
             .map_err(Self::failure)?;

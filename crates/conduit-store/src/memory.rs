@@ -10,7 +10,7 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_provider::storage::{
     validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    SpeakerRosterStore,
+    SpeakerRosterStore, VoxLink, VoxLinkStore,
 };
 
 use crate::is_listable;
@@ -21,6 +21,7 @@ pub struct MemoryStore {
     pipelines: Mutex<BTreeMap<String, PipelineGraph>>,
     providers: Mutex<BTreeMap<String, ProviderDefinition>>,
     speakers: Mutex<BTreeMap<String, EnrolledSpeaker>>,
+    vox_links: Mutex<BTreeMap<String, VoxLink>>,
 }
 
 impl MemoryStore {
@@ -47,6 +48,10 @@ impl MemoryStore {
 
     fn lock_speakers(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, EnrolledSpeaker>> {
         self.speakers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_vox_links(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, VoxLink>> {
+        self.vox_links.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -131,5 +136,33 @@ impl SpeakerRosterStore for MemoryStore {
     async fn remove(&self, id: &str) -> Result<bool> {
         validate_name(id)?;
         Ok(self.lock_speakers().remove(id).is_some())
+    }
+}
+
+#[async_trait::async_trait]
+impl VoxLinkStore for MemoryStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        Ok(self.lock_vox_links().keys().filter(|id| is_listable(id)).cloned().collect())
+    }
+
+    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+        validate_name(peer_id)?;
+        Ok(self.lock_vox_links().get(peer_id).cloned())
+    }
+
+    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool> {
+        validate_name(peer_id)?;
+        if link.peer_id != peer_id {
+            return Err(conduit_core::Error::Config(format!(
+                "vox link peer id `{}` does not match route id `{peer_id}`",
+                link.peer_id
+            )));
+        }
+        Ok(self.lock_vox_links().insert(peer_id.to_owned(), link).is_some())
+    }
+
+    async fn remove(&self, peer_id: &str) -> Result<bool> {
+        validate_name(peer_id)?;
+        Ok(self.lock_vox_links().remove(peer_id).is_some())
     }
 }

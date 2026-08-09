@@ -22,7 +22,8 @@ use sqlx::AssertSqlSafe;
 
 use conformance::{
     a_roster_behaves_like_a_store, behaves_like_a_store, graph, provider_definition,
-    provider_definitions_behave_like_a_store, UNUSABLE_NAMES,
+    provider_definitions_behave_like_a_store, vox_link, vox_links_behave_like_a_store,
+    UNUSABLE_NAMES,
 };
 
 /// The database to test against, if one was named.
@@ -101,6 +102,13 @@ async fn it_behaves_like_a_roster() {
     let store: Arc<dyn conduit_provider::storage::SpeakerRosterStore> =
         Arc::new(store_or_skip!("roster_contract"));
     a_roster_behaves_like_a_store(store).await;
+}
+
+#[tokio::test]
+async fn it_behaves_like_a_vox_link_store() {
+    let store: Arc<dyn conduit_provider::storage::VoxLinkStore> =
+        Arc::new(store_or_skip!("vox_link_contract"));
+    vox_links_behave_like_a_store(store).await;
 }
 
 #[tokio::test]
@@ -257,6 +265,26 @@ async fn the_provider_definition_is_stored_as_queryable_json() {
     .await
     .expect("queries inside the document");
     assert_eq!(row.0, "llm/openai");
+}
+
+#[tokio::test]
+async fn the_vox_link_is_stored_as_queryable_json() {
+    let store = store_or_skip!("vox_link_queryable");
+    conduit_provider::storage::VoxLinkStore::put(
+        &store,
+        "kitchen",
+        vox_link("kitchen", "Kitchen Vox"),
+    )
+    .await
+    .expect("stores");
+
+    let row: (String,) = sqlx::query_as(
+        "SELECT link->>'provider_definition_id' FROM vox_links WHERE peer_id = 'kitchen'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("queries inside the document");
+    assert_eq!(row.0, "vox-kitchen");
 }
 
 #[tokio::test]

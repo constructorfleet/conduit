@@ -1,12 +1,15 @@
 //! Storage backends for Conduit pipeline and provider definitions.
 //!
 //! All backends implement [`PipelineStore`], and the memory, file, and
-//! PostgreSQL backends also implement [`ProviderDefinitionStore`]. Shared
-//! conformance tests (`tests/conformance/mod.rs`) keep backend choice as
-//! configuration rather than product behavior.
+//! PostgreSQL backends also implement [`ProviderDefinitionStore`],
+//! [`SpeakerRosterStore`], and [`VoxLinkStore`]. Shared conformance tests
+//! (`tests/conformance/mod.rs`) keep backend choice as configuration rather
+//! than product behavior.
 //!
 //! [`PipelineStore`]: conduit_provider::storage::PipelineStore
 //! [`ProviderDefinitionStore`]: conduit_provider::storage::ProviderDefinitionStore
+//! [`SpeakerRosterStore`]: conduit_provider::storage::SpeakerRosterStore
+//! [`VoxLinkStore`]: conduit_provider::storage::VoxLinkStore
 
 pub mod file;
 pub mod memory;

@@ -95,7 +95,7 @@ step. Sections:
 FastAPI mounts it: `app.mount("/ui", StaticFiles(directory=..., html=True))`.
 No auth on `/ui` itself; the routes it calls carry the api_key.
 
-### 4. Conduit-side `/v1/vox/links`
+### 4. [x] Conduit-side `/v1/vox/links`
 
 New module `crates/conduit-api/src/vox.rs`. New table `vox_links` (peer_id
 PK, peer_name, peer_base_url, sync_token_hash, provider_definition_id,

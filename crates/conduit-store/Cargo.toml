@@ -31,6 +31,7 @@ default = []
 postgres = ["dep:sqlx"]
 
 [dev-dependencies]
+chrono.workspace = true
 conduit-core = { workspace = true, features = ["testing"] }
 uuid.workspace = true
 conduit-store = { workspace = true, features = ["postgres"] }

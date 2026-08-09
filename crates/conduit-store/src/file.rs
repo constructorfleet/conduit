@@ -10,7 +10,7 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{
     validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    SpeakerRosterStore,
+    SpeakerRosterStore, VoxLink, VoxLinkStore,
 };
 
 use crate::is_listable;
@@ -192,6 +192,32 @@ impl ProviderDefinitionStore for FileStore {
 
     async fn remove(&self, id: &str) -> Result<bool> {
         self.delete(id).await
+    }
+}
+
+#[async_trait::async_trait]
+impl VoxLinkStore for FileStore {
+    async fn list(&self) -> Result<Vec<String>> {
+        self.names().await
+    }
+
+    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+        self.read(peer_id, "vox link").await
+    }
+
+    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool> {
+        validate_name(peer_id)?;
+        if link.peer_id != peer_id {
+            return Err(Error::Config(format!(
+                "vox link peer id `{}` does not match route id `{peer_id}`",
+                link.peer_id
+            )));
+        }
+        self.write(peer_id, &link, "vox link").await
+    }
+
+    async fn remove(&self, peer_id: &str) -> Result<bool> {
+        self.delete(peer_id).await
     }
 }
 

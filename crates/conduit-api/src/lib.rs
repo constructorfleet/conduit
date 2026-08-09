@@ -27,6 +27,7 @@ pub mod speakers;
 pub mod state;
 pub mod status;
 pub mod turns;
+pub mod vox;
 
 use std::time::Duration;
 
@@ -92,6 +93,8 @@ pub fn router(state: AppState) -> Router {
                 // recording short.
                 .layer(DefaultBodyLimit::max(speakers::ENROLLMENT_BODY_LIMIT_BYTES)),
         )
+        .route("/v1/vox/links", get(vox::list).post(vox::create))
+        .route("/v1/vox/links/{peer_id}", axum::routing::delete(vox::delete))
         .route("/v1/devices/{device}/firmware", get(firmware::render))
         .route("/v1/devices/{device}/firmware/flash", post(firmware::flash))
         .route("/v1/pipelines", get(pipelines::list))

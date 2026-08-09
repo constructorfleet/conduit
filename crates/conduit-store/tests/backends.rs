@@ -16,7 +16,8 @@ use conduit_store::{FileStore, MemoryStore};
 
 use conformance::{
     a_roster_behaves_like_a_store, behaves_like_a_store, graph, provider_definition,
-    provider_definitions_behave_like_a_store, speaker, UNUSABLE_NAMES,
+    provider_definitions_behave_like_a_store, speaker, vox_link, vox_links_behave_like_a_store,
+    UNUSABLE_NAMES,
 };
 
 /// A directory that cleans itself up.
@@ -82,6 +83,18 @@ async fn the_file_store_behaves_like_a_roster() {
 }
 
 #[tokio::test]
+async fn the_memory_store_behaves_like_a_vox_link_store() {
+    vox_links_behave_like_a_store(Arc::new(MemoryStore::new())).await;
+}
+
+#[tokio::test]
+async fn the_file_store_behaves_like_a_vox_link_store() {
+    let directory = TempDir::new("vox-link-contract");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    vox_links_behave_like_a_store(Arc::new(store)).await;
+}
+
+#[tokio::test]
 async fn the_roster_survives_a_restart() {
     // Who is who must outlive the process, or every restart turns the house
     // back into a room full of strangers.
@@ -141,6 +154,27 @@ async fn provider_definitions_survive_a_restart() {
 }
 
 #[tokio::test]
+async fn vox_links_survive_a_restart() {
+    let directory = TempDir::new("vox-link-restart");
+
+    let before = FileStore::open(directory.path()).await.expect("opens");
+    conduit_provider::storage::VoxLinkStore::put(
+        &before,
+        "kitchen",
+        vox_link("kitchen", "Kitchen Vox"),
+    )
+    .await
+    .expect("stores");
+    drop(before);
+
+    let after = FileStore::open(directory.path()).await.expect("reopens");
+    assert_eq!(
+        conduit_provider::storage::VoxLinkStore::get(&after, "kitchen").await.expect("gets"),
+        Some(vox_link("kitchen", "Kitchen Vox"))
+    );
+}
+
+#[tokio::test]
 async fn opening_creates_the_directory() {
     let directory = TempDir::new("create");
     let nested = directory.path().join("a").join("b");
@@ -184,6 +218,26 @@ async fn stored_provider_definition_files_are_readable_json() {
 }
 
 #[tokio::test]
+async fn stored_vox_link_files_are_readable_json() {
+    let directory = TempDir::new("vox-link-readable");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    conduit_provider::storage::VoxLinkStore::put(
+        &store,
+        "kitchen",
+        vox_link("kitchen", "Kitchen Vox"),
+    )
+    .await
+    .expect("stores");
+
+    let text =
+        tokio::fs::read_to_string(directory.path().join("kitchen.json")).await.expect("reads");
+    assert!(text.contains("\n  \"peer_id\""), "expected pretty JSON: {text}");
+    let parsed: conduit_provider::storage::VoxLink =
+        serde_json::from_str(&text).expect("valid JSON");
+    assert_eq!(parsed, vox_link("kitchen", "Kitchen Vox"));
+}
+
+#[tokio::test]
 async fn unrelated_files_are_ignored() {
     let directory = TempDir::new("unrelated");
     let store = FileStore::open(directory.path()).await.expect("opens");
@@ -219,6 +273,23 @@ async fn a_corrupt_provider_definition_file_is_reported_rather_than_treated_as_m
     assert!(error.to_string().contains("broken.json"), "{error}");
     assert_eq!(
         conduit_provider::storage::ProviderDefinitionStore::list(&store).await.expect("lists"),
+        ["broken"],
+        "it is still listed"
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_vox_link_file_is_reported_rather_than_treated_as_missing() {
+    let directory = TempDir::new("vox-link-corrupt");
+    let store = FileStore::open(directory.path()).await.expect("opens");
+    tokio::fs::write(directory.path().join("broken.json"), "{not json").await.expect("writes");
+
+    let error = conduit_provider::storage::VoxLinkStore::get(&store, "broken")
+        .await
+        .expect_err("unreadable");
+    assert!(error.to_string().contains("broken.json"), "{error}");
+    assert_eq!(
+        conduit_provider::storage::VoxLinkStore::list(&store).await.expect("lists"),
         ["broken"],
         "it is still listed"
     );

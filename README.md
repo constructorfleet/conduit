@@ -220,8 +220,11 @@ npm run format
 | `CONDUIT_ESPHOME_URL` | — | ESPHome dashboard to hand rendered firmware fragments to; unset means no flashing, not a localhost guess |
 | `CONDUIT_ESPHOME_CREDENTIAL` | — | `Authorization` header value for the above, if it needs one |
 | `CONDUIT_DATA_DIR` | `$XDG_DATA_HOME/conduit` or `$HOME/.local/share/conduit` | Base directory for local Conduit data |
-| `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines; wins over a directory |
+| `CONDUIT_DATABASE_URL` | — | PostgreSQL for pipelines, speaker roster, and Vox links; wins over directories |
 | `CONDUIT_PIPELINE_DIR` | `$CONDUIT_DATA_DIR/pipelines` | Directory to keep pipelines in; `:memory:` makes them disposable |
+| `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers` | Directory to keep Provider Definitions in; `:memory:` makes them disposable |
+| `CONDUIT_SPEAKER_DIR` | `$CONDUIT_DATA_DIR/speakers` | Directory to keep the speaker roster in; `:memory:` makes it disposable |
+| `CONDUIT_VOX_LINK_DIR` | `$CONDUIT_DATA_DIR/vox-links` | Directory to keep Conduit Vox link records in; `:memory:` makes them disposable |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Enables OTLP/HTTP span export to a collector |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | Trace-specific OTLP/HTTP endpoint; takes precedence for spans |
 
@@ -459,8 +462,8 @@ Three backends, chosen by configuration:
 | Backend | When | Set |
 | --- | --- | --- |
 | PostgreSQL | More than one API replica, or you already run one | `CONDUIT_DATABASE_URL` |
-| Files | A single node; one readable JSON file per pipeline | default, or `CONDUIT_PIPELINE_DIR` |
-| Memory | Development; the server warns a restart will lose them | `CONDUIT_PIPELINE_DIR=:memory:` |
+| Files | A single node; readable JSON files under the configured directories | default, or `CONDUIT_PIPELINE_DIR` / `CONDUIT_PROVIDER_DIR` / `CONDUIT_SPEAKER_DIR` / `CONDUIT_VOX_LINK_DIR` |
+| Memory | Development; the server warns a restart will lose them | Set the relevant directory variable to `:memory:` |
 
 A database wins over a directory, because shared state is what more than one
 replica needs and a directory only this process can see. Migrations are
@@ -478,11 +481,11 @@ PostgreSQL support is on by default; `--no-default-features` drops it, and a
 build without it refuses to start when `CONDUIT_DATABASE_URL` is set rather
 than silently keeping pipelines in memory.
 
-All three implement the same [`PipelineStore`](crates/conduit-provider/src/storage.rs)
-trait and are held to the same expectations, so which one a deployment uses is
-configuration rather than behaviour. File writes go to a temporary file and are
-renamed, so a crash mid-write leaves the previous definition intact rather than
-a truncated one.
+All three implement the same storage traits for pipelines, Provider
+Definitions, speaker rosters, and Vox links, and are held to the same
+expectations, so which one a deployment uses is configuration rather than
+behaviour. File writes go to a temporary file and are renamed, so a crash
+mid-write leaves the previous definition intact rather than a truncated one.
 
 Pipeline names are validated before they reach a backend: a name arrives from a
 URL path and becomes a file name, so `../../etc/passwd` is refused with a 422
