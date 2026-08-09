@@ -192,6 +192,12 @@ export VITE_CONDUIT_API_TARGET="http://127.0.0.1:${api_port}"
 # bundle still talks to Conduit at the same path; only Vite learns the direct
 # upstream so the embedded UI works before a link exists.
 export VITE_CONDUIT_VOX_TARGET="http://127.0.0.1:${vox_port}"
+vox_dev_root="${ROOT}/output/dev/vox"
+readonly vox_dev_root
+# Vox defaults to container paths. On a host shell those are a great way to
+# find out which directories do not exist, or worse, do and are unwritable.
+export SPEAKER_ID_DATA_DIR="${SPEAKER_ID_DATA_DIR:-${vox_dev_root}/data}"
+export SPEAKER_ID_MODEL_DIR="${SPEAKER_ID_MODEL_DIR:-${vox_dev_root}/models}"
 
 cat <<SUMMARY
 conduit dev
@@ -213,6 +219,8 @@ if [[ "${dry_run}" -eq 1 ]]; then
   CONDUIT_ALLOW_ANONYMOUS=${CONDUIT_ALLOW_ANONYMOUS}
   VITE_CONDUIT_API_TARGET=${VITE_CONDUIT_API_TARGET}
   VITE_CONDUIT_VOX_TARGET=${VITE_CONDUIT_VOX_TARGET}
+  SPEAKER_ID_DATA_DIR=${SPEAKER_ID_DATA_DIR}
+  SPEAKER_ID_MODEL_DIR=${SPEAKER_ID_MODEL_DIR}
   cargo run ${cargo_args[*]}
   .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
   npm run dev -- --port ${ui_port} --strictPort --host 127.0.0.1
@@ -270,6 +278,8 @@ if ! "${vox_python}" -c "import fastapi, httpx, numpy, soundfile, uvicorn" >/dev
     printf '\ninstalling Vox dependencies\n'
     (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -r requirements.txt)
 fi
+
+mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}"
 
 # Compiled before either process starts, so a compile error is a compile error
 # and not a console proxying to a port nothing ever opened.

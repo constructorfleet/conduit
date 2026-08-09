@@ -83,6 +83,10 @@ emits "the default points the console proxy at the API" \
     "VITE_CONDUIT_API_TARGET=http://127.0.0.1:8080"
 emits "the default points the Vox proxy at the local Vox service" \
     "VITE_CONDUIT_VOX_TARGET=http://127.0.0.1:8091"
+emits "the default stores Vox prints in a writable local directory" \
+    "SPEAKER_ID_DATA_DIR=${root}/output/dev/vox/data"
+emits "the default stores Vox models in a writable local directory" \
+    "SPEAKER_ID_MODEL_DIR=${root}/output/dev/vox/models"
 emits "the default serves the console on Vite's port" \
     "npm run dev -- --port 5173 --strictPort --host 127.0.0.1"
 emits "the default starts Vox on its own loopback port" \
