@@ -1132,6 +1132,12 @@ function ProvidersPanel({
   const [providerNotices, setProviderNotices] = useState<
     Record<string, string>
   >({});
+  /// The provider whose delete button has been armed. A single click cannot
+  /// delete a provider because deletion is not undoable and the button is
+  /// small; a second click on the armed button is what actually removes it.
+  const [confirmingDeleteFor, setConfirmingDeleteFor] = useState<string | null>(
+    null,
+  );
   /// Phrases the detector being edited reports having models for.
   ///
   /// Only a saved definition has a registered detector to ask, so a brand new
@@ -1379,10 +1385,22 @@ function ProvidersPanel({
         ...current,
         [provider.id]: `Provider ${provider.id} is used by pipeline ${affectedPipelines.join(", ")}; remove it from those pipeline graphs before deleting it.`,
       }));
+      setConfirmingDeleteFor(null);
+      return;
+    }
+
+    // Two-click gate: the first click arms the button so the label changes to
+    // "Confirm delete ${id}", the second one on that same armed button runs
+    // the deletion. Deleting a provider is not undoable and the button lives
+    // in a dense row of icon actions, so an accidental click should not lose
+    // configuration.
+    if (confirmingDeleteFor !== provider.id) {
+      setConfirmingDeleteFor(provider.id);
       return;
     }
 
     const providerId = provider.id;
+    setConfirmingDeleteFor(null);
     try {
       await onProviderDefinitionDelete(providerId);
       if (editingProviderId === providerId) {
@@ -1619,10 +1637,23 @@ function ProvidersPanel({
                         ) : null}
                         {provider.definition?.source === "local" ? (
                           <button
-                            className="icon-action danger"
+                            className={
+                              confirmingDeleteFor === provider.id
+                                ? "icon-action danger armed"
+                                : "icon-action danger"
+                            }
                             type="button"
-                            aria-label={`Delete ${provider.id}`}
+                            aria-label={
+                              confirmingDeleteFor === provider.id
+                                ? `Confirm delete ${provider.id}`
+                                : `Delete ${provider.id}`
+                            }
                             onClick={() => deleteProviderDefinition(provider)}
+                            onBlur={() => {
+                              if (confirmingDeleteFor === provider.id) {
+                                setConfirmingDeleteFor(null);
+                              }
+                            }}
                           >
                             <Trash2 size={17} aria-hidden="true" />
                           </button>

@@ -2983,6 +2983,9 @@ describe("Providers workspace", () => {
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Delete openai" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm delete openai" }),
+    );
 
     expect(screen.getByText("Provider openai deleted")).toBeInTheDocument();
     const openAiRow = screen.getByRole("row", { name: /openai/ });
@@ -2991,6 +2994,46 @@ describe("Providers workspace", () => {
         name: "Delete openai",
       }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not delete a provider on a single click of its delete button", async () => {
+    // The button lives in a dense row of icon actions, and deleting a
+    // provider is not undoable: a stray click should arm the button rather
+    // than throw the configuration away.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "openai",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Delete openai" }));
+
+    // Still there, and its label has changed to say what a second click would
+    // do rather than repeat what the first one did.
+    expect(
+      screen.queryByText("Provider openai deleted"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: /openai/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirm delete openai" }),
+    ).toBeInTheDocument();
   });
 
   it("renders provider status from the snapshot grouped by stage", async () => {
@@ -3214,6 +3257,11 @@ describe("Providers workspace", () => {
     await user.click(
       within(llmRow).getByRole("button", {
         name: "Delete llm",
+      }),
+    );
+    await user.click(
+      within(llmRow).getByRole("button", {
+        name: "Confirm delete llm",
       }),
     );
 
