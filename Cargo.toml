@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-deepgram", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-polly", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-vad", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api"]
+members = ["crates/conduit-anthropic", "crates/conduit-bedrock", "crates/conduit-core", "crates/conduit-deepgram", "crates/conduit-elevenlabs", "crates/conduit-mcp", "crates/conduit-provider", "crates/conduit-runtime", "crates/conduit-memory", "crates/conduit-metrics", "crates/conduit-store", "crates/conduit-http", "crates/conduit-openai", "crates/conduit-polly", "crates/conduit-google", "crates/conduit-marytts", "crates/conduit-script", "crates/conduit-speaker", "crates/conduit-transform", "crates/conduit-vad", "crates/conduit-wake", "crates/conduit-wyoming", "crates/conduit-api", "crates/conduit-forma"]
 
 [workspace.package]
 version = "0.1.0"
@@ -41,6 +41,7 @@ conduit-store = { path = "crates/conduit-store", version = "0.1.0" }
 conduit-transform = { path = "crates/conduit-transform", version = "0.1.0" }
 conduit-wyoming = { path = "crates/conduit-wyoming", version = "0.1.0" }
 conduit-runtime = { path = "crates/conduit-runtime", version = "0.1.0" }
+conduit-forma = { path = "crates/conduit-forma", version = "0.1.0" }
 
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

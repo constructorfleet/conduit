@@ -901,6 +901,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit-forma"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "conduit-core",
+ "conduit-provider",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "conduit-google"
 version = "0.1.0"
 dependencies = [

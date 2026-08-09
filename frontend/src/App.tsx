@@ -22,6 +22,7 @@ import {
   Users,
   Workflow,
   X,
+  Code,
 } from "lucide-react";
 import {
   Fragment,
@@ -118,11 +119,13 @@ import {
   saveAnonymousAccess,
   saveBearerAccess,
 } from "./operatorAccess";
+import { FormaPanel } from "./forma";
 
 const sections = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "pipelines", label: "Pipelines", icon: Workflow },
   { id: "providers", label: "Providers", icon: Boxes },
+  { id: "forma", label: "Forma", icon: Code },
   { id: "vox", label: "Vox", icon: Users },
   { id: "memoria", label: "Memoria", icon: Brain },
   { id: "firmware", label: "Firmware", icon: CircuitBoard },
@@ -983,6 +986,10 @@ function SectionPanel({
         onProviderVoices={onProviderVoices}
       />
     );
+  }
+
+  if (section === "forma") {
+    return <FormaPanel />;
   }
 
   if (section === "vox") {
