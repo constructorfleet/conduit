@@ -268,7 +268,7 @@ variant's `streaming`, turning this on asks for nothing and reports nothing.
 
 The server that fronts the weights ships with Conduit:
 [`services/wyoming-asr/`](../services/wyoming-asr/README.md), a Python service in
-the shape of `services/speaker-id/` rather than a provider crate. Bring it up with
+the shape of `services/vox/` rather than a provider crate. Bring it up with
 `docker compose --profile wyoming-asr up` and point a `wyoming` definition at
 `tcp://wyoming-asr:10300`. `ASR_ENGINE` picks the backend, so adding Qwen or
 Granite is a class in that service and nothing Conduit has to learn. It is the

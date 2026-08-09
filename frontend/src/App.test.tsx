@@ -1772,6 +1772,40 @@ describe("Pipelines graph editor", () => {
     ).toBeInTheDocument();
   });
 
+  it("deletes a readable pipeline from its editor toolbar", async () => {
+    // The delete affordance existed for unreadable pipelines only, so the
+    // regular pipelines the operator actually works with had no way out
+    // without editing the store by hand. The button lives in the editor
+    // toolbar for the currently selected pipeline, gated by a second click
+    // for the same reason the provider delete is: it is not undoable.
+    const user = userEvent.setup();
+    const deleted: string[] = [];
+    mockOperatorApi({ pipelineViews: [pipelineView()] });
+    render(
+      <App
+        initialPipelineViews={[pipelineView()]}
+        onPipelineDeleted={(name) => deleted.push(name)}
+      />,
+    );
+
+    await enterPipelinesSection(user);
+    await user.click(
+      screen.getByRole("button", { name: "Delete pipeline kitchen" }),
+    );
+
+    // Not deleted on the first click: the label changes to say what a second
+    // click would do.
+    expect(deleted).toEqual([]);
+    await user.click(
+      screen.getByRole("button", { name: "Confirm delete pipeline kitchen" }),
+    );
+
+    expect(deleted).toEqual(["kitchen"]);
+    // Once the last stored pipeline is gone, the section falls back to its
+    // empty state — the same one an operator sees after deleting an unreadable.
+    expect(await screen.findByText("No stored pipelines")).toBeInTheDocument();
+  });
+
   it("shows a pipeline the server cannot read, and offers to delete it", async () => {
     // Stored graphs are not migrated across schema changes, so a name whose
     // graph will not parse is a state an operator can land in. Before this,
@@ -2960,6 +2994,45 @@ describe("Providers workspace", () => {
     );
   });
 
+  it("still shows the provider's configuration when the component catalog did not load", async () => {
+    // With an empty catalog, the draft provider names a component the console
+    // cannot find, so `componentForProviderDefinition` answers with null. The
+    // editor used to treat that as "no component chosen" and reject the save,
+    // blanking the fields for a provider that was in fact valid. The stored
+    // configuration is what the operator has to see to know it is still
+    // there — otherwise the missing catalog looks like missing data.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "OpenAI Primary",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          api_key: "sk-test",
+          model: "gpt-5",
+          streaming: true,
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={{ components: [] }}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await expandProviderRow(user, "openai");
+
+    expect(screen.queryByText("Choose a provider component")).toBeNull();
+    // The stored configuration is still shown so the operator can see the
+    // provider is defined even without the catalog to render its schema.
+    expect(screen.getByText(/base_url/)).toBeInTheDocument();
+    expect(screen.getByText(/gpt-5/)).toBeInTheDocument();
+  });
+
   it("deletes configured provider cards", async () => {
     const user = userEvent.setup();
     const providerDefinitions = [
@@ -2983,6 +3056,9 @@ describe("Providers workspace", () => {
 
     await enterProvidersSection(user);
     await user.click(screen.getByRole("button", { name: "Delete openai" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm delete openai" }),
+    );
 
     expect(screen.getByText("Provider openai deleted")).toBeInTheDocument();
     const openAiRow = screen.getByRole("row", { name: /openai/ });
@@ -2991,6 +3067,44 @@ describe("Providers workspace", () => {
         name: "Delete openai",
       }),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not delete a provider on a single click of its delete button", async () => {
+    // The button lives in a dense row of icon actions, and deleting a
+    // provider is not undoable: a stray click should arm the button rather
+    // than throw the configuration away.
+    const user = userEvent.setup();
+    const providerDefinitions = [
+      providerDefinitionFixture({
+        id: "openai",
+        label: "openai",
+        component: "openai.responses",
+        config: {
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-5",
+        },
+      }),
+    ];
+    mockOperatorApi({ providerDefinitions });
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        initialProviderDefinitions={providerDefinitions}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Delete openai" }));
+
+    // Still there, and its label has changed to say what a second click would
+    // do rather than repeat what the first one did.
+    expect(
+      screen.queryByText("Provider openai deleted"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /openai/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirm delete openai" }),
+    ).toBeInTheDocument();
   });
 
   it("renders provider status from the snapshot grouped by stage", async () => {
@@ -3214,6 +3328,11 @@ describe("Providers workspace", () => {
     await user.click(
       within(llmRow).getByRole("button", {
         name: "Delete llm",
+      }),
+    );
+    await user.click(
+      within(llmRow).getByRole("button", {
+        name: "Confirm delete llm",
       }),
     );
 
@@ -4313,6 +4432,11 @@ function mockOperatorApi({
             );
           }
           return jsonResponse(view);
+        }
+
+        if (method === "DELETE") {
+          pipelines.delete(name);
+          return new Response(null, { status: 204 });
         }
 
         const view = pipelines.get(name);

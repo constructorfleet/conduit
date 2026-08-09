@@ -377,6 +377,26 @@ function OperatorWorkspace({
     });
   }
 
+  /// Removes a stored, readable pipeline from the operator's store.
+  ///
+  /// The same path `discardPipeline` takes for a name whose graph will not
+  /// parse, but reached by name from the editor toolbar so an operator can
+  /// throw out a pipeline they built and no longer want.
+  async function deletePipeline(name: string) {
+    setPipelineViews((current) =>
+      current.filter((view) => view.graph.name !== name),
+    );
+    onPipelineDeleted?.(name);
+    try {
+      await snapshotClient.deletePipeline(name);
+      await refreshSnapshotFromApi();
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : `could not delete ${name}`,
+      );
+    }
+  }
+
   const [pipelineViews, setPipelineViews] = useState<readonly PipelineView[]>(
     () => initialPipelineViews ?? defaultPipelineViews(snapshotClient.snapshot),
   );
@@ -869,6 +889,7 @@ function OperatorWorkspace({
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
           onPipelineStored={storePipelineGraph}
+          onPipelineDelete={deletePipeline}
         />
       </section>
     </main>
@@ -896,6 +917,7 @@ function SectionPanel({
   onSectionChange,
   onPipelineStored,
   onPipelineDiscarded,
+  onPipelineDelete,
   onPipelineValidate,
   onPipelineTest,
   onProviderTest,
@@ -915,6 +937,7 @@ function SectionPanel({
   pipelineViews: readonly PipelineView[];
   unreadablePipelines: readonly UnreadablePipeline[];
   onPipelineDiscarded: (name: string) => void;
+  onPipelineDelete: (name: string) => Promise<void>;
   snapshot: OperatorStatusSnapshot | null;
   eventPosture: EventStreamPosture;
   loadError: string | null;
@@ -971,6 +994,7 @@ function SectionPanel({
         unreadablePipelines={unreadablePipelines}
         onPipelineStored={onPipelineStored}
         onPipelineDiscarded={onPipelineDiscarded}
+        onPipelineDelete={onPipelineDelete}
         onPipelineValidate={onPipelineValidate}
         onPipelineTest={onPipelineTest}
         onProviderVoices={onProviderVoices}
@@ -1132,6 +1156,12 @@ function ProvidersPanel({
   const [providerNotices, setProviderNotices] = useState<
     Record<string, string>
   >({});
+  /// The provider whose delete button has been armed. A single click cannot
+  /// delete a provider because deletion is not undoable and the button is
+  /// small; a second click on the armed button is what actually removes it.
+  const [confirmingDeleteFor, setConfirmingDeleteFor] = useState<string | null>(
+    null,
+  );
   /// Phrases the detector being edited reports having models for.
   ///
   /// Only a saved definition has a registered detector to ask, so a brand new
@@ -1211,13 +1241,25 @@ function ProvidersPanel({
   const selectedDraftComponent = draftProvider
     ? componentForProviderDefinition(componentCatalog, draftProvider)
     : null;
-  const draftProviderValidation =
+  /// A draft that names a component the catalog does not list is not "no
+  /// component chosen" — it is a provider the console cannot describe because
+  /// the catalog is unavailable, and the two states have to read differently
+  /// or the fix ("reload the catalog") looks like the wrong one ("pick a
+  /// component from an empty menu").
+  const draftHasComponentName =
+    !!draftProvider && draftProvider.component.trim().length > 0;
+  const draftProviderValidation: PipelineValidationResult =
     draftProvider && selectedDraftComponent
       ? validateProviderDefinitionConfig(draftProvider, selectedDraftComponent)
-      : ({
-          ok: false,
-          message: "Choose a provider component",
-        } satisfies PipelineValidationResult);
+      : draftHasComponentName
+        ? {
+            ok: false,
+            message: `Component catalog unavailable — cannot validate ${draftProvider!.component}`,
+          }
+        : {
+            ok: false,
+            message: "Choose a provider component",
+          };
   const selectedKindCapability = selectedProviderKind
     ? capabilityForProviderKind(selectedProviderKind)
     : null;
@@ -1379,10 +1421,22 @@ function ProvidersPanel({
         ...current,
         [provider.id]: `Provider ${provider.id} is used by pipeline ${affectedPipelines.join(", ")}; remove it from those pipeline graphs before deleting it.`,
       }));
+      setConfirmingDeleteFor(null);
+      return;
+    }
+
+    // Two-click gate: the first click arms the button so the label changes to
+    // "Confirm delete ${id}", the second one on that same armed button runs
+    // the deletion. Deleting a provider is not undoable and the button lives
+    // in a dense row of icon actions, so an accidental click should not lose
+    // configuration.
+    if (confirmingDeleteFor !== provider.id) {
+      setConfirmingDeleteFor(provider.id);
       return;
     }
 
     const providerId = provider.id;
+    setConfirmingDeleteFor(null);
     try {
       await onProviderDefinitionDelete(providerId);
       if (editingProviderId === providerId) {
@@ -1619,10 +1673,23 @@ function ProvidersPanel({
                         ) : null}
                         {provider.definition?.source === "local" ? (
                           <button
-                            className="icon-action danger"
+                            className={
+                              confirmingDeleteFor === provider.id
+                                ? "icon-action danger armed"
+                                : "icon-action danger"
+                            }
                             type="button"
-                            aria-label={`Delete ${provider.id}`}
+                            aria-label={
+                              confirmingDeleteFor === provider.id
+                                ? `Confirm delete ${provider.id}`
+                                : `Delete ${provider.id}`
+                            }
                             onClick={() => deleteProviderDefinition(provider)}
+                            onBlur={() => {
+                              if (confirmingDeleteFor === provider.id) {
+                                setConfirmingDeleteFor(null);
+                              }
+                            }}
                           >
                             <Trash2 size={17} aria-hidden="true" />
                           </button>
@@ -1921,10 +1988,54 @@ function ProviderEditorFields({
           suggestions={suggestions}
           onChange={onConfigChange}
         />
+      ) : draftProvider.component ? (
+        // The catalog does not describe this component, so the console has no
+        // schema to render editable fields against. The stored configuration
+        // is still shown as a read-only summary rather than hidden, because
+        // an operator needs to see that the provider is defined before they
+        // can decide whether to reload the catalog or reconfigure it.
+        <ProviderConfigSummary config={draftProvider.config} />
       ) : null}
       {!validation.ok ? (
         <p className="form-error">{validation.message}</p>
       ) : null}
+    </div>
+  );
+}
+
+/// A read-only key/value view of a stored provider config.
+///
+/// Rendered when the console has no component schema to lay out an editable
+/// form against — typically because the component catalog failed to load, or
+/// the component was removed from a deployment the pipeline was configured
+/// on. Not editable on purpose: without a schema, the console cannot tell a
+/// well-typed value from a broken one.
+function ProviderConfigSummary({
+  config,
+}: {
+  config: Record<string, unknown>;
+}) {
+  const entries = Object.entries(config).filter(
+    ([, value]) => value !== undefined && value !== "",
+  );
+  return (
+    <div className="provider-config-summary">
+      <p className="hint">
+        Component catalog unavailable. The stored configuration is shown
+        read-only; reload the console to fetch the catalog again before editing.
+      </p>
+      {entries.length === 0 ? (
+        <p className="muted">No stored configuration.</p>
+      ) : (
+        <dl>
+          {entries.map(([field, value]) => (
+            <div className="provider-config-summary-row" key={field}>
+              <dt>{field}</dt>
+              <dd>{String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }
@@ -2810,6 +2921,7 @@ function PipelinesPanel({
   unreadablePipelines,
   onPipelineStored,
   onPipelineDiscarded,
+  onPipelineDelete,
   onPipelineValidate,
   onPipelineTest,
   onProviderVoices,
@@ -2818,6 +2930,7 @@ function PipelinesPanel({
   pipelineViews: readonly PipelineView[];
   unreadablePipelines: readonly UnreadablePipeline[];
   onPipelineDiscarded: (name: string) => void;
+  onPipelineDelete: (name: string) => Promise<void>;
   onPipelineStored: (graph: PipelineGraph, order: string[]) => void;
   onPipelineValidate: PipelineValidator;
   onPipelineTest: PipelineTester;
@@ -2825,6 +2938,12 @@ function PipelinesPanel({
 }) {
   const [selectedName, setSelectedName] = useState(
     pipelineViews[0]?.graph.name ?? "",
+  );
+  /// The pipeline whose delete button has been armed. Two-click gate mirrors
+  /// the provider delete: throwing a stored pipeline away is not undoable, so
+  /// a stray click on a dense toolbar should ask before it acts.
+  const [confirmingDeleteFor, setConfirmingDeleteFor] = useState<string | null>(
+    null,
   );
   const selectedView =
     pipelineViews.find((view) => view.graph.name === selectedName) ??
@@ -3197,6 +3316,30 @@ function PipelinesPanel({
     await saveCurrentDraft();
   }
 
+  /// Deletes the currently selected pipeline, after a second click on the
+  /// same armed button. Local draft state for the removed pipeline is
+  /// dropped so switching to a new pipeline does not surface stale edits.
+  async function deleteSelectedPipeline() {
+    if (!draft) {
+      return;
+    }
+
+    if (confirmingDeleteFor !== draft.name) {
+      setConfirmingDeleteFor(draft.name);
+      return;
+    }
+
+    const name = draft.name;
+    setConfirmingDeleteFor(null);
+    setDraftsByPipeline((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    setSelectedName((current) => (current === name ? "" : current));
+    await onPipelineDelete(name);
+  }
+
   async function runTestTurn() {
     if (!draft) {
       return;
@@ -3410,6 +3553,32 @@ function PipelinesPanel({
             >
               <Save size={16} aria-hidden="true" />
               Save
+            </button>
+            {/* Deletion of the currently selected pipeline. Two-click gate
+                mirrors the provider delete: the first click arms the button
+                and the label changes to say what a second click would do,
+                so a stray click does not throw a pipeline away. */}
+            <button
+              className={
+                confirmingDeleteFor === draft.name
+                  ? "danger-action compact-action armed"
+                  : "danger-action compact-action"
+              }
+              type="button"
+              aria-label={
+                confirmingDeleteFor === draft.name
+                  ? `Confirm delete pipeline ${draft.name}`
+                  : `Delete pipeline ${draft.name}`
+              }
+              onClick={() => void deleteSelectedPipeline()}
+              onBlur={() => {
+                if (confirmingDeleteFor === draft.name) {
+                  setConfirmingDeleteFor(null);
+                }
+              }}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              {confirmingDeleteFor === draft.name ? "Confirm delete" : "Delete"}
             </button>
           </div>
         </div>

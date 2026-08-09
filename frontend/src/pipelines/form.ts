@@ -18,7 +18,11 @@ import type {
   PipelineNode,
   ToolBinding,
 } from "../contracts/client";
-import { DEFAULT_MAX_ROUNDS, normalizePipelineGraph } from "./graph";
+import {
+  DEFAULT_MAX_ROUNDS,
+  normalizePipelineGraph,
+  outputModality,
+} from "./graph";
 
 /// A stage the operator can add or remove, identified by the node id it keeps
 /// across edits so a round-trip does not churn ids.
@@ -127,6 +131,7 @@ export function formFromGraph(graph: PipelineGraph): PipelineForm {
 /// the result is connected by construction: there is no way to express a
 /// dangling edge or an orphaned node through a form.
 export function graphFromForm(form: PipelineForm): PipelineGraph {
+  const sinkModality = derivedSinkModality(form);
   const nodes: PipelineNode[] = [
     {
       id: form.source.id,
@@ -206,11 +211,59 @@ export function graphFromForm(form: PipelineForm): PipelineGraph {
       id: form.sink.id,
       kind: "sink",
       provider: form.sink.provider,
-      ...(form.sink.modality === "audio"
-        ? {}
-        : { modality: form.sink.modality }),
+      ...(sinkModality === "audio" ? {} : { modality: sinkModality }),
     },
   ];
 
   return normalizePipelineGraph({ name: form.name, nodes, edges: [] });
+}
+
+/// The modality a sink must declare so its incoming edge validates.
+///
+/// The backend refuses an edge whose payload the receiver cannot consume, so
+/// a sink whose modality contradicts what the last stage produces is a saved
+/// pipeline that will not run. Derived rather than picked because there is
+/// exactly one correct answer per upstream shape, and asking the operator to
+/// keep them in sync manually is what leaves pipelines broken.
+///
+/// Mirrors `Node::accepted_modalities` for a sink in `conduit-core`:
+///   - audio in  → audio (a text sink cannot render speech)
+///   - text in   → text  (a text sink can hold text)
+///   - utterance → text  (a text sink accepts utterances too, and it is the
+///                        broader option than an utterance-only sink)
+export function derivedSinkModality(form: PipelineForm): Modality {
+  const previous = previousMainNode(form);
+  const produced = outputModality(previous);
+  if (produced === "audio") {
+    return "audio";
+  }
+  return "text";
+}
+
+/// The last stage before the sink, as a node, so callers can ask what it
+/// puts on its outgoing edge without rebuilding the graph.
+function previousMainNode(form: PipelineForm): PipelineNode | undefined {
+  if (form.tts) {
+    return {
+      id: form.tts.id,
+      kind: "tts",
+      provider: form.tts.provider,
+      ...(form.tts.voice === undefined ? {} : { voice: form.tts.voice }),
+    };
+  }
+  if (form.transform) {
+    return {
+      id: form.transform.id,
+      kind: "transform",
+      provider: form.transform.provider,
+    };
+  }
+  return {
+    id: form.core.id,
+    kind: "core",
+    core: {
+      model: form.core.model,
+      max_rounds: form.core.maxRounds,
+    },
+  };
 }

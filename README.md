@@ -35,7 +35,7 @@ echoes described under [Running](#running).
 | [`conduit-wake`](crates/conduit-wake) | In-process wake word detection, scoring openWakeWord models with no service to run |
 | [`conduit-vad`](crates/conduit-vad) | In-process voice activity detection, scoring the Silero ONNX model with no service to run |
 | [`conduit-speaker`](crates/conduit-speaker) | Speaker identification over HTTP, and a client for an existing Diarization_Server |
-| [`services/speaker-id`](services/speaker-id) | The reference identification service, published as `conduit-speaker-id` |
+| [`services/vox`](services/vox) | Conduit Vox — the reference identification service, published as `conduit-vox` |
 | [`conduit-transform`](crates/conduit-transform) | The rewrites that ship with Conduit: flatten markdown, strip emoji, collapse whitespace |
 | [`conduit-script`](crates/conduit-script) | The same job written by the operator: utterance transforms on a sandboxed Rhai interpreter |
 | [`conduit-mcp`](crates/conduit-mcp) | Model Context Protocol tools over stdio, streamable HTTP, and SSE |
@@ -162,17 +162,22 @@ Optional services sit behind compose profiles, so the default is the smallest
 thing that runs:
 
 ```sh
-docker compose --profile speaker-id up
+docker compose --profile vox up
 ```
 
-That adds [`services/speaker-id`](services/speaker-id), the reference
+That adds [`services/vox`](services/vox), **Conduit Vox** — the reference
 implementation of Conduit's speaker identification contract, reachable from
-Conduit at `http://speaker-id:8080`. It is published as
-`ghcr.io/constructorfleet/conduit-speaker-id` with `latest-speechbrain` and
-`latest-speechbrain-gpu` tags; set `CONDUIT_SPEAKER_ID_IMAGE` to pin one rather
-than building locally. Its port is deliberately not published: Conduit reaches
-it over the compose network, and a mapping would put an unauthenticated model
+Conduit at `http://vox:8080` (the legacy `http://speaker-id:8080` still
+resolves, via a network alias). It is published as
+`ghcr.io/constructorfleet/conduit-vox` with `latest-speechbrain` and
+`latest-speechbrain-gpu` tags; set `CONDUIT_VOX_IMAGE` to pin one rather than
+building locally. Its port is deliberately not published: Conduit reaches it
+over the compose network, and a mapping would put an unauthenticated model
 server on your LAN.
+
+Vox ships its own management UI (speaker enrolment, labels, engine info,
+test identification) served at `/ui` on the service, and reachable from the
+Conduit Console under the **Vox** section.
 
 The published container image is `ghcr.io/constructorfleet/conduit:latest`. Every
 `main` build also tags it `sha-<commit>`, so whatever `latest` currently points

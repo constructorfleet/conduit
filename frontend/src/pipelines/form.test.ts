@@ -212,4 +212,36 @@ describe("graphFromForm", () => {
       "speaker",
     ]);
   });
+
+  it("gives the sink an audio modality when synthesis feeds it", () => {
+    // The sink's modality is what the backend checks the incoming edge
+    // against, so a text sink behind a synthesizer refuses a saved pipeline
+    // with "carries audio, but ... accepts text or utterance". An operator
+    // picking the wrong value here has no way to know that ahead of time —
+    // the value is derived from what feeds the sink, so the form emits it.
+    const form = formFromGraph(voiceLoop());
+    form.wakeWord = { id: "wake", provider: "microwakeword" };
+    form.sink = { ...form.sink, modality: "text" };
+
+    const sink = graphFromForm(form).nodes.find((node) => node.kind === "sink");
+
+    expect(sink?.kind === "sink" ? (sink.modality ?? "audio") : null).toBe(
+      "audio",
+    );
+  });
+
+  it("gives the sink a text modality when a text source feeds a core", () => {
+    // The other end of the same rule: with only a core between the endpoints,
+    // what leaves it is an utterance, which a text sink can render.
+    const form = formFromGraph(
+      buildMinimalTextLoopGraph({ name: "desk", llmProvider: "openai" }),
+    );
+    form.sink = { ...form.sink, modality: "audio" };
+
+    const sink = graphFromForm(form).nodes.find((node) => node.kind === "sink");
+
+    expect(sink?.kind === "sink" ? (sink.modality ?? "audio") : null).toBe(
+      "text",
+    );
+  });
 });

@@ -1,7 +1,7 @@
 # Conduit, and the optional services a pipeline can point at.
 #
 #   docker compose up                          # just Conduit
-#   docker compose --profile speaker-id up     # and speaker identification
+#   docker compose --profile vox up            # and Conduit Vox (speaker identification)
 #   docker compose --profile wyoming-asr up    # and local speech recognition
 #   docker compose --profile openwakeword up   # and a wake word server
 #
@@ -57,27 +57,39 @@ services:
       - ./secrets:/run/secrets:ro
     restart: unless-stopped
 
-  # Speaker identification, reached at http://speaker-id:8080 from Conduit.
+  # Conduit Vox — the reference speaker identification service, reached at
+  # http://vox:8080 (or the legacy http://speaker-id:8080) from Conduit.
   #
   # Create a provider definition of type `http_speaker_id` whose `base_url` is
-  # that address, then add a Speaker ID stage to a pipeline.
+  # that address, then add a Speaker ID stage to a pipeline. Or link the two
+  # from Vox's own UI (`/ui`) and Conduit will provision the definition for you.
   #
-  # Set CONDUIT_SPEAKER_ID_IMAGE to pin a published tag, or leave it unset to
-  # build from this repository. The GPU tag is the same image with a CUDA base:
-  # see services/speaker-id/README.md.
-  speaker-id:
-    profiles: ["speaker-id"]
-    image: ${CONDUIT_SPEAKER_ID_IMAGE:-conduit-speaker-id:speechbrain}
+  # Set CONDUIT_VOX_IMAGE to pin a published tag, or leave it unset to build
+  # from this repository. The GPU tag is the same image with a CUDA base: see
+  # services/vox/README.md. The legacy CONDUIT_SPEAKER_ID_IMAGE is still
+  # honoured for one release cycle.
+  vox:
+    profiles: ["vox", "speaker-id"]
+    image: ${CONDUIT_VOX_IMAGE:-${CONDUIT_SPEAKER_ID_IMAGE:-conduit-vox:speechbrain}}
     build:
-      context: ./services/speaker-id
+      context: ./services/vox
     environment:
       # Optional. When set, Conduit's provider definition needs the same value
       # as its api_key. Unset means the service is open, which is only
-      # reasonable because its port is not published.
+      # reasonable because its port is not published. Linking through the UI
+      # generates one and persists it, so this variable is only for headless
+      # deployments that provision auth up front.
       SPEAKER_ID_API_KEY: ${SPEAKER_ID_API_KEY:-}
+    networks:
+      default:
+        # Kept so an existing provider definition pointing at
+        # http://speaker-id:8080 still resolves after the rename.
+        aliases:
+          - speaker-id
     volumes:
       # Voice prints outlive the container, or every household member is a
-      # stranger again after an update.
+      # stranger again after an update. Volume name is unchanged so an upgrade
+      # does not orphan the existing prints.
       - speaker-id-data:/data
       # The model, so a restart does not re-download several hundred megabytes.
       - speaker-id-models:/models
@@ -119,7 +131,7 @@ services:
   # Create a definition whose runtime is `wyoming` and whose `url` is that
   # address, then add a Wake word stage to a pipeline.
   #
-  # The images are yours to choose, for the same reason the speaker-id one is,
+  # The images are yours to choose, for the same reason the vox one is,
   # so they come from .env. Activating a profile without setting its variable
   # fails with "neither an image nor a build context" — that is the variable
   # that is missing.

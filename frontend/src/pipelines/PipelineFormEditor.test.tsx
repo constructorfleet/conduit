@@ -277,4 +277,31 @@ describe("PipelineFormEditor", () => {
 
     expect(screen.getByLabelText("Voice")).toHaveValue("en_US-retired");
   });
+
+  it("shows the sink modality derived from what feeds it", () => {
+    // The dropdown was picked independently, so a text sink behind a
+    // synthesizer became a stored graph the backend refused on validation.
+    // With synthesis feeding the sink, the sink's modality has to be audio.
+    const form = voiceForm();
+    form.sink = { ...form.sink, modality: "text" };
+
+    renderEditor(form);
+
+    const modality = screen.getByLabelText("Sink modality");
+    expect(modality).toHaveValue("audio");
+    expect(modality).toBeDisabled();
+  });
+
+  it("corrects a stored sink modality that contradicts the upstream stage", () => {
+    // A pipeline whose stored modality no longer matches the shape it now
+    // runs — because the operator added or removed a stage — should be
+    // rewritten before it can be saved back with the old value.
+    const form = voiceForm();
+    form.sink = { ...form.sink, modality: "text" };
+    const onChange = renderEditor(form);
+
+    expect(onChange).toHaveBeenCalled();
+    const next = onChange.mock.calls[0]?.[0] as PipelineForm;
+    expect(next.sink.modality).toBe("audio");
+  });
 });

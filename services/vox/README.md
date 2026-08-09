@@ -1,20 +1,55 @@
-# Conduit speaker identification
+# Conduit Vox
 
-Conduit does not recognize voices itself. It packages an utterance and asks a
-service over the contract documented on the [`conduit-speaker`](../../crates/conduit-speaker)
-crate, and this is that contract implemented over a swappable embedding model:
+Conduit Vox is the reference speaker identification service. Conduit does not
+recognize voices itself: it packages an utterance and asks a service over the
+contract documented on the [`conduit-speaker`](../../crates/conduit-speaker)
+crate, and Vox is that contract implemented over a swappable embedding model —
 SpeechBrain's ECAPA-TDNN, pyannote's x-vectors, or NVIDIA NeMo's TitaNet.
 
-It identifies and it does not diarize. "Who is speaking, out of the people I
+Vox identifies; it does not diarize. "Who is speaking, out of the people I
 know" and "how many people are in this recording and when did each talk" are
 different questions, and only the first one has a stage in a Conduit pipeline.
 
+The name is new, the capability is not: this used to be `services/vox`
+and shipped as `conduit-speaker-id`. The `--profile speaker-id`, the
+`http://speaker-id:8080` DNS name, and the `CONDUIT_SPEAKER_ID_IMAGE` variable
+are all still honoured so an in-place upgrade keeps working; new deployments
+should prefer the `vox` names.
+
 ```
-docker compose --profile speaker-id up
+docker compose --profile vox up
 ```
 
-Then create a `http_speaker_id` Provider Definition whose `base_url` is
-`http://speaker-id:8080`, and add a Speaker ID stage to a pipeline.
+Then either:
+
+- open Vox's UI at `http://vox:8080/ui` (or through the Conduit Console's
+  **Vox** section) and click **Link to Conduit** — the two exchange keys and
+  the provider definition is created for you; **or**
+- create a `http_speaker_id` Provider Definition whose `base_url` is
+  `http://vox:8080` by hand, and add a Speaker ID stage to a pipeline.
+
+## The UI
+
+Vox ships a small management UI at `/ui` (with `/` redirecting there). It is
+a single self-contained HTML file — no build step, no external assets, one
+`<script>` — so the container serves it as static content and there is
+nothing extra to install on the operator's machine. Features:
+
+- **Health** — engine, model, device, embedding width, roster count, and
+  whether the encoder has been loaded yet.
+- **Enrolled speakers** — inline rename via `PATCH /speakers/{uuid}`, and a
+  Forget button.
+- **Enroll** — browser microphone (WebAudio → WAV, mono, matching Vox's
+  decoder) with a level meter and a running duration, or a file upload for
+  clips captured elsewhere. Optional label saved in the same click.
+- **Test identification** — records a clip and shows the closest match, its
+  confidence, and the operator-set label if any.
+
+The UI is served without authentication so an operator with the key in their
+head can load the page and paste it in; every route it calls carries the
+bearer token. The token, if any, is taken from `?api_key=` on load and held
+only in memory for the tab's lifetime — never persisted, because a page that
+put a bearer in localStorage would hand it to every other page on the origin.
 
 ## The API
 
@@ -22,12 +57,26 @@ Then create a `http_speaker_id` Provider Definition whose `base_url` is
 | --- | --- | --- |
 | `POST /identify` | `audio/wav` or `audio/flac` | `{"speaker": "<uuid>" \| null, "confidence": 0.0–1.0}` |
 | `POST /speakers/{uuid}/enroll` | `audio/wav` or `audio/flac` | `{"speaker": "<uuid>", "samples": n}` |
+| `GET /speakers` | — | `{"speakers": [{"uuid", "label", "samples", "created_at", "updated_at"}, …]}` |
+| `PATCH /speakers/{uuid}` | `{"label": "<name>" \| null}` | The updated entry; `404` if nobody was enrolled |
 | `DELETE /speakers/{uuid}` | — | `204`, or `404` if nobody was enrolled |
 | `GET /health` | — | `{"status": "ok", …}` |
 
 Conduit owns the identifier and this service stores it as an opaque file name,
 so a deployment can change embedding models without every speaker becoming a
 stranger to the tools that check who is asking.
+
+Vox holds an optional **label** for each speaker alongside the print. Conduit
+remains the source of truth for the roster; Vox's label is a convenience for
+its own UI so an operator sees "Alice" rather than a UUID. Setting a label is
+`PATCH /speakers/{uuid}` with `{"label": "…"}`; clearing one is the same
+request with `{"label": null}`. Labels are capped at 100 characters and never
+enter Conduit unless a sync (below) writes them there.
+
+The roster is persisted as `roster.json` alongside the `.npy` files. Missing
+or corrupt manifests are rebuilt from the prints themselves on the next read,
+so an in-place upgrade from a version that only wrote prints keeps every
+enrolled voice — just without labels until an operator supplies them.
 
 Enrolling the same speaker again adds a sample rather than replacing one;
 identification compares against the mean of everything they enrolled. Three or
@@ -111,16 +160,16 @@ CPU/GPU triple that was already there.
 
 ```
 # CPU
-docker build -t conduit-speaker-id:speechbrain services/speaker-id
-docker build -t conduit-speaker-id:pyannote --build-arg ENGINE=pyannote services/speaker-id
-docker build -t conduit-speaker-id:nemo     --build-arg ENGINE=nemo     services/speaker-id
+docker build -t conduit-vox:speechbrain services/vox
+docker build -t conduit-vox:pyannote --build-arg ENGINE=pyannote services/vox
+docker build -t conduit-vox:nemo     --build-arg ENGINE=nemo     services/vox
 
 # GPU — the same three, plus the CUDA triple
-docker build -t conduit-speaker-id:speechbrain-gpu \
+docker build -t conduit-vox:speechbrain-gpu \
   --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
   --build-arg DEVICE=cuda \
-  services/speaker-id
+  services/vox
 ```
 
 The CPU images pull CPU torch wheels from torch's own index, which is what keeps
