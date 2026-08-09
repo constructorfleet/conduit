@@ -47,11 +47,8 @@ export type FirmwareFlasher = (
 /// rather than `0` is what keeps a blank field from rendering a gain of nothing.
 export interface FirmwareFormState {
   device: string;
+  base_device: "" | "sat1" | "voicepe";
   pipeline: string;
-  microphone: string;
-  speaker: string;
-  mute_switch: string;
-  gain_factor: string;
   server: string;
   scheme: "ws" | "wss";
   max_utterance_ms: string;
@@ -66,11 +63,8 @@ export interface FirmwareFormState {
 /// else's board. The console does not paper over that with a placeholder.
 export const emptyFirmwareForm: FirmwareFormState = {
   device: "",
+  base_device: "",
   pipeline: "",
-  microphone: "",
-  speaker: "",
-  mute_switch: "",
-  gain_factor: "",
   server: "",
   scheme: "ws",
   max_utterance_ms: "",
@@ -78,14 +72,38 @@ export const emptyFirmwareForm: FirmwareFormState = {
   debug_udp_port: "",
 };
 
-/// The fields the endpoint has no default for.
+interface BaseDeviceProfile {
+  label: string;
+  microphone: string;
+  speaker: string;
+  mute_switch: string;
+  gain_factor: number;
+}
+
+type BaseDevice = Exclude<FirmwareFormState["base_device"], "">;
+
+const BASE_DEVICE_PROFILES = {
+  sat1: {
+    label: "Sat1",
+    microphone: "sat1_mics",
+    speaker: "announcement_resampling_speaker",
+    mute_switch: "master_mute_switch",
+    gain_factor: 6,
+  },
+  voicepe: {
+    label: "VoicePE",
+    microphone: "i2s_mics",
+    speaker: "announcement_resampling_speaker",
+    mute_switch: "master_mute_switch",
+    gain_factor: 4,
+  },
+} satisfies Record<BaseDevice, BaseDeviceProfile>;
+
+/// The fields the endpoint has no default for in the console itself.
 const REQUIRED: readonly (keyof FirmwareFormState)[] = [
   "device",
+  "base_device",
   "pipeline",
-  "microphone",
-  "speaker",
-  "mute_switch",
-  "gain_factor",
   "server",
 ];
 
@@ -97,12 +115,15 @@ const REQUIRED: readonly (keyof FirmwareFormState)[] = [
 export function firmwareRequestFrom(
   form: FirmwareFormState,
 ): FirmwareRenderRequest {
+  const baseDevice = form.base_device
+    ? BASE_DEVICE_PROFILES[form.base_device]
+    : null;
   const request: FirmwareRenderRequest = {
     pipeline: form.pipeline.trim(),
-    microphone: form.microphone.trim(),
-    speaker: form.speaker.trim(),
-    mute_switch: form.mute_switch.trim(),
-    gain_factor: Number(form.gain_factor),
+    microphone: baseDevice?.microphone ?? "",
+    speaker: baseDevice?.speaker ?? "",
+    mute_switch: baseDevice?.mute_switch ?? "",
+    gain_factor: baseDevice?.gain_factor ?? Number.NaN,
     server: form.server.trim(),
   };
 
@@ -138,8 +159,20 @@ export function fragmentFileName(device: string): string {
 }
 
 /// Which required fields are still blank.
-function missingFields(form: FirmwareFormState): string[] {
-  return REQUIRED.filter((field) => !form[field].trim());
+function missingFields(form: FirmwareFormState): (keyof FirmwareFormState)[] {
+  return REQUIRED.flatMap((field) => {
+    const value = form[field];
+    return typeof value === "string" && value.trim() ? [] : [field];
+  });
+}
+
+function labelFor(field: keyof FirmwareFormState): string {
+  switch (field) {
+    case "base_device":
+      return "base device";
+    default:
+      return field.replaceAll("_", " ");
+  }
 }
 
 function messageOf(caught: unknown, fallback: string): string {
@@ -182,7 +215,7 @@ export function FirmwarePanel({
     const missing = missingFields(form);
     if (missing.length > 0) {
       setRenderError(
-        `Fill in ${missing.join(", ")} — the renderer has no default for a board id.`,
+        `Fill in ${missing.map((field) => labelFor(field)).join(", ")} — the renderer has no default for a board choice or device name.`,
       );
       return;
     }
@@ -278,35 +311,23 @@ export function FirmwarePanel({
             </datalist>
           </label>
           <label className="field">
-            <span>Microphone id</span>
-            <input
-              value={form.microphone}
-              onChange={(event) => update("microphone", event.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Speaker id</span>
-            <input
-              value={form.speaker}
-              onChange={(event) => update("speaker", event.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Mute switch id</span>
-            <input
-              value={form.mute_switch}
-              onChange={(event) => update("mute_switch", event.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Gain factor</span>
-            <input
-              type="number"
-              min={1}
-              max={32}
-              value={form.gain_factor}
-              onChange={(event) => update("gain_factor", event.target.value)}
-            />
+            <span>Base device</span>
+            <select
+              value={form.base_device}
+              onChange={(event) =>
+                update(
+                  "base_device",
+                  event.target.value as FirmwareFormState["base_device"],
+                )
+              }
+            >
+              <option value="">Select a base device</option>
+              {Object.entries(BASE_DEVICE_PROFILES).map(([value, profile]) => (
+                <option key={value} value={value}>
+                  {profile.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span>Server</span>
@@ -356,6 +377,13 @@ export function FirmwarePanel({
             />
           </label>
         </div>
+
+        {form.base_device ? (
+          <p className="panel-note">
+            Using the checked-in {BASE_DEVICE_PROFILES[form.base_device].label}{" "}
+            board defaults for microphone, speaker, mute switch, and gain.
+          </p>
+        ) : null}
 
         {renderError ? (
           <p className="form-error" role="alert">

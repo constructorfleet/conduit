@@ -9,16 +9,12 @@ import {
   fragmentFileName,
 } from "./FirmwarePanel";
 
-/// A form with every field the endpoint has no default for.
 function filledForm() {
   return {
     ...emptyFirmwareForm,
     device: "kitchen",
+    base_device: "sat1" as const,
     pipeline: "default",
-    microphone: "sat1_mics",
-    speaker: "announcement_resampling_speaker",
-    mute_switch: "master_mute_switch",
-    gain_factor: "6",
     server: "192.168.1.10:8080",
   };
 }
@@ -26,17 +22,10 @@ function filledForm() {
 /// Fills the required fields through the UI, as an operator would.
 async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
   const form = filledForm();
-  for (const [label, value] of [
-    ["Device name", form.device],
-    ["Pipeline", form.pipeline],
-    ["Microphone id", form.microphone],
-    ["Speaker id", form.speaker],
-    ["Mute switch id", form.mute_switch],
-    ["Gain factor", form.gain_factor],
-    ["Server", form.server],
-  ] as const) {
-    await user.type(screen.getByLabelText(label), value);
-  }
+  await user.type(screen.getByLabelText("Device name"), form.device);
+  await user.selectOptions(screen.getByLabelText("Base device"), form.base_device);
+  await user.type(screen.getByLabelText("Pipeline"), form.pipeline);
+  await user.type(screen.getByLabelText("Server"), form.server);
 }
 
 /// A dashboard that accepted the upload.
@@ -69,16 +58,28 @@ const FRAGMENT = [
 ].join("\n");
 
 describe("the request a form describes", () => {
-  it("omits an optional field left blank rather than sending it empty", () => {
-    // The endpoint distinguishes "not asked for" from "asked for, blank", and
-    // the console has to preserve that: a blank `max_utterance_ms` means the
-    // server's default, not a zero-length utterance.
+  it("derives Satellite1 board ids from the selected base device", () => {
     const request = firmwareRequestFrom(filledForm());
 
     expect(request).not.toHaveProperty("max_utterance_ms");
     expect(request).not.toHaveProperty("debug_udp_port");
     expect(request).not.toHaveProperty("debug_udp_host");
+    expect(request.microphone).toBe("sat1_mics");
+    expect(request.speaker).toBe("announcement_resampling_speaker");
+    expect(request.mute_switch).toBe("master_mute_switch");
     expect(request.gain_factor).toBe(6);
+  });
+
+  it("derives Voice PE board ids from the selected base device", () => {
+    const request = firmwareRequestFrom({
+      ...filledForm(),
+      base_device: "voicepe",
+    });
+
+    expect(request.microphone).toBe("i2s_mics");
+    expect(request.speaker).toBe("announcement_resampling_speaker");
+    expect(request.mute_switch).toBe("master_mute_switch");
+    expect(request.gain_factor).toBe(4);
   });
 
   it("sends an explicitly emptied debug host, because that is how it is off", () => {
@@ -140,9 +141,9 @@ describe("Firmware panel", () => {
     });
   });
 
-  it("refuses a missing board id itself, naming what is blank", async () => {
-    // The endpoint has no default for a board id either. Asking the server
-    // would get the same refusal a round trip later and less specifically.
+  it("refuses a missing base device itself, naming what is blank", async () => {
+    // The selected board profile is what carries the board ids. Asking the
+    // server without it would get the same refusal a round trip later.
     const user = userEvent.setup();
     const onRender = vi.fn(async () => FRAGMENT);
     render(panel({ onRender }));
@@ -150,7 +151,7 @@ describe("Firmware panel", () => {
     await user.type(screen.getByLabelText("Device name"), "kitchen");
     await user.click(screen.getByRole("button", { name: "Render fragment" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("microphone");
+    expect(screen.getByRole("alert")).toHaveTextContent("base device");
     expect(onRender).not.toHaveBeenCalled();
   });
 
@@ -185,9 +186,18 @@ describe("Firmware panel", () => {
     await user.click(screen.getByRole("button", { name: "Render fragment" }));
     expect(screen.getByLabelText("Fragment YAML")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Microphone id"), "-2");
+    await user.selectOptions(screen.getByLabelText("Base device"), "voicepe");
 
     expect(screen.queryByLabelText("Fragment YAML")).not.toBeInTheDocument();
+  });
+
+  it("does not ask for board ids the selected base device already defines", () => {
+    render(panel({ onRender: async () => FRAGMENT }));
+
+    expect(screen.queryByLabelText("Microphone id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Speaker id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Mute switch id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Gain factor")).not.toBeInTheDocument();
   });
 });
 
