@@ -198,6 +198,21 @@
     <div id="identify-result"></div>
   </section>
 
+  <section id="link-panel">
+    <h2>Link</h2>
+    <dl class="kv" id="link-body"><dt>Loading…</dt><dd></dd></dl>
+    <div style="margin-top:12px;display:grid;gap:8px">
+      <input type="url" id="link-conduit-url" placeholder="Conduit URL" autocomplete="off" />
+      <input type="password" id="link-token" placeholder="Operator token" autocomplete="off" />
+      <input type="text" id="link-peer-name" placeholder="Peer name" value="Conduit Vox" />
+      <div class="row">
+        <button id="link-connect" class="primary">Link</button>
+        <button id="link-unlink" class="danger">Unlink</button>
+      </div>
+    </div>
+    <div id="link-notice"></div>
+  </section>
+
   <section id="enroll-panel" class="full">
     <h2>Enroll a voice</h2>
     <div class="row" style="gap:12px">
@@ -250,10 +265,10 @@
 // persisted, because a page that stored a bearer token in localStorage would
 // hand it to any other page on this origin — including a malicious one Conduit's
 // reverse proxy happens to also serve.
-const apiKey = new URLSearchParams(location.search).get("api_key") || null;
+let activeApiKey = new URLSearchParams(location.search).get("api_key") || null;
 function headers(base) {
   const h = new Headers(base || {});
-  if (apiKey) h.set("authorization", "Bearer " + apiKey);
+  if (activeApiKey) h.set("authorization", "Bearer " + activeApiKey);
   return h;
 }
 
@@ -308,6 +323,77 @@ async function loadHealth() {
     }
   } catch (error) {
     paint("health-notice", "err", `Could not load health: ${error.message}`);
+  }
+}
+
+// ---------- Link ----------
+
+async function loadLink() {
+  const dl = document.getElementById("link-body");
+  paint("link-notice", "", "");
+  try {
+    const body = await api("/link");
+    const rows = [["Status", body.status]];
+    if (body.status === "linked") {
+      rows.push(
+        ["Conduit", body.conduit_url],
+        ["Peer", body.peer_name],
+        ["Peer id", body.peer_id],
+        ["Provider", body.provider_definition_id],
+        ["Linked at", body.linked_at],
+      );
+      document.getElementById("link-conduit-url").value = body.conduit_url || "";
+      document.getElementById("link-peer-name").value = body.peer_name || "Conduit Vox";
+    }
+    dl.innerHTML = "";
+    for (const [label, value] of rows) {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = String(value);
+      dl.append(dt, dd);
+    }
+    document.getElementById("link-unlink").disabled = body.status !== "linked";
+  } catch (error) {
+    dl.innerHTML = "<dt>Status</dt><dd>error</dd>";
+    paint("link-notice", "err", `Could not load link status: ${error.message}`);
+  }
+}
+
+async function connectLink() {
+  const conduitUrl = document.getElementById("link-conduit-url").value.trim();
+  const operatorToken = document.getElementById("link-token").value.trim();
+  const peerName = document.getElementById("link-peer-name").value.trim() || "Conduit Vox";
+  paint("link-notice", "", "");
+  try {
+    const linked = await api("/link", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        conduit_url: conduitUrl,
+        operator_token: operatorToken,
+        peer_name: peerName,
+      }),
+    });
+    if (linked.local_api_key) activeApiKey = linked.local_api_key;
+    document.getElementById("link-token").value = "";
+    paint("link-notice", "ok", "Linked.");
+    await loadLink();
+    await loadSpeakers();
+    await loadHealth();
+  } catch (error) {
+    paint("link-notice", "err", `Link failed: ${error.message}`);
+  }
+}
+
+async function disconnectLink() {
+  if (!confirm("Unlink this Vox peer from Conduit?")) return;
+  try {
+    await api("/link", { method: "DELETE" });
+    paint("link-notice", "ok", "Unlinked.");
+    await loadLink();
+  } catch (error) {
+    paint("link-notice", "err", `Unlink failed: ${error.message}`);
   }
 }
 
@@ -630,7 +716,10 @@ document.getElementById("identify-stop").addEventListener("click", async () => {
 // ---------- Init ----------
 
 document.getElementById("refresh-health").addEventListener("click", loadHealth);
+document.getElementById("link-connect").addEventListener("click", connectLink);
+document.getElementById("link-unlink").addEventListener("click", disconnectLink);
 loadHealth();
+loadLink();
 loadSpeakers();
 </script>
 </body>
