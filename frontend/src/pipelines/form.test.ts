@@ -225,7 +225,7 @@ describe("graphFromForm", () => {
 
     const sink = graphFromForm(form).nodes.find((node) => node.kind === "sink");
 
-    expect(sink?.kind === "sink" ? sink.modality ?? "audio" : null).toBe(
+    expect(sink?.kind === "sink" ? (sink.modality ?? "audio") : null).toBe(
       "audio",
     );
   });
@@ -240,7 +240,7 @@ describe("graphFromForm", () => {
 
     const sink = graphFromForm(form).nodes.find((node) => node.kind === "sink");
 
-    expect(sink?.kind === "sink" ? sink.modality ?? "audio" : null).toBe(
+    expect(sink?.kind === "sink" ? (sink.modality ?? "audio") : null).toBe(
       "text",
     );
   });
