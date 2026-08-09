@@ -16,6 +16,7 @@ import type {
   RawTurnEvents,
   TurnList,
   TurnSnapshot,
+  VoxLinkView,
 } from "./contracts/client";
 import { pipelineViewFixture, turnSnapshotFixture } from "./contracts/client";
 import {
@@ -66,6 +67,8 @@ export interface SnapshotClient {
   renameSpeaker: (id: string, name: string) => Promise<EnrolledSpeaker>;
   enrollSpeaker: (id: string, audio: Blob) => Promise<EnrolledSpeaker>;
   deleteSpeaker: (id: string) => Promise<void>;
+  loadVoxLinks: () => Promise<VoxLinkView[]>;
+  deleteVoxLink: (peerId: string) => Promise<void>;
   loadTurns: () => Promise<TurnList>;
   loadTurn: (turnId: string) => Promise<TurnSnapshot>;
   loadTurnEvents: (turnId: string) => Promise<RawTurnEvents>;
@@ -159,6 +162,8 @@ export function createSnapshotClient(
     renameSpeaker: (id, name) => client.renameSpeaker(id, name),
     enrollSpeaker: (id, audio) => client.enrollSpeaker(id, audio),
     deleteSpeaker: (id) => client.deleteSpeaker(id),
+    loadVoxLinks: () => client.listVoxLinks(),
+    deleteVoxLink: (peerId) => client.deleteVoxLink(peerId),
     loadTurns: () => client.listTurns(),
     loadTurn: (turnId) => client.getTurn(turnId),
     loadTurnEvents: (turnId) => client.getTurnEvents(turnId),
@@ -221,6 +226,8 @@ function createMockSnapshotClient(
       enrolled_at: "2025-01-01T00:00:00Z",
     }),
     deleteSpeaker: async () => {},
+    loadVoxLinks: async () => [],
+    deleteVoxLink: async () => {},
     loadTurns: async () => ({ turns: [turnSnapshotFixture] }),
     loadTurn: async () => turnSnapshotFixture,
     loadTurnEvents: async (turnId) => ({ turn_id: turnId, events: [] }),

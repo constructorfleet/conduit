@@ -8,7 +8,6 @@ import {
   CircleCheck,
   KeyRound,
   ListFilter,
-  Mic,
   Network,
   Play,
   Plus,
@@ -18,10 +17,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  Square,
   Trash2,
-  Upload,
-  UserPlus,
   Users,
   Workflow,
   X,
@@ -45,7 +41,6 @@ import type {
 } from "./apiClient";
 import type {
   ComponentConfigProperty,
-  EnrolledSpeaker,
   NodeKind,
   ProviderComponentCatalog,
   ProviderComponentDescriptor,
@@ -61,6 +56,7 @@ import type {
   SpeakerEngine,
   TurnSnapshot,
   TransformRule,
+  VoxLinkView,
   WakeRuntime,
 } from "./contracts/client";
 import {
@@ -114,7 +110,6 @@ import { formFromGraph, graphFromForm } from "./pipelines/form";
 import { initialEventStreamPlan } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
 import { fieldLabel, fieldLabels } from "./fieldLabel";
-import { startRecording, type Recording } from "./recorder";
 import {
   type OperatorAccess,
   clearOperatorAccess,
@@ -127,7 +122,7 @@ const sections = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "pipelines", label: "Pipelines", icon: Workflow },
   { id: "providers", label: "Providers", icon: Boxes },
-  { id: "speakers", label: "Speakers", icon: Users },
+  { id: "vox", label: "Vox", icon: Users },
   { id: "firmware", label: "Firmware", icon: CircuitBoard },
   { id: "events", label: "Events", icon: Radio },
   { id: "settings", label: "Settings", icon: Settings },
@@ -137,18 +132,6 @@ const sections = [
 type SectionId = (typeof sections)[number]["id"];
 
 type ProviderTester = (providerId: string) => Promise<string>;
-
-/// Everything the Speakers section does, in the terms it does it in.
-///
-/// Narrower than the snapshot client on purpose: the panel manages people,
-/// and nothing about it should be able to reach a pipeline.
-export interface SpeakerApi {
-  load: () => Promise<EnrolledSpeaker[]>;
-  create: (name: string) => Promise<EnrolledSpeaker>;
-  rename: (id: string, name: string) => Promise<EnrolledSpeaker>;
-  enroll: (id: string, audio: Blob) => Promise<EnrolledSpeaker>;
-  remove: (id: string) => Promise<void>;
-}
 
 interface AppProps {
   initialSnapshot?: OperatorStatusSnapshot;
@@ -414,6 +397,7 @@ function OperatorWorkspace({
       initialProviderDefinitions ?? [],
     ),
   );
+  const [voxLinks, setVoxLinks] = useState<readonly VoxLinkView[]>([]);
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const eventPlan = useMemo(() => {
     const plan = initialEventStreamPlan();
@@ -578,20 +562,10 @@ function OperatorWorkspace({
     await refreshSnapshotFromApi();
   }
 
-  /// The roster operations, bound to whichever client this workspace has.
-  ///
-  /// Memoized because the panel loads on mount and would otherwise reload on
-  /// every render of the workspace around it.
-  const speakerApi = useMemo<SpeakerApi>(
-    () => ({
-      load: () => snapshotClient.loadSpeakers(),
-      create: (name) => snapshotClient.createSpeaker(name),
-      rename: (id, name) => snapshotClient.renameSpeaker(id, name),
-      enroll: (id, audio) => snapshotClient.enrollSpeaker(id, audio),
-      remove: (id) => snapshotClient.deleteSpeaker(id),
-    }),
-    [snapshotClient],
-  );
+  async function deleteVoxLink(peerId: string): Promise<void> {
+    await snapshotClient.deleteVoxLink(peerId);
+    setVoxLinks((current) => current.filter((link) => link.peer_id !== peerId));
+  }
 
   /// Renders a device's fragment, bound to whichever client this workspace has.
   ///
@@ -645,6 +619,7 @@ function OperatorWorkspace({
           loadedPipelineViews,
           loadedComponentCatalog,
           loadedProviderDefinitionViews,
+          loadedVoxLinks,
           loadedTurns,
         ] = await Promise.all([
           snapshotClient.loadSnapshot(),
@@ -660,6 +635,7 @@ function OperatorWorkspace({
           initialProviderDefinitions
             ? Promise.resolve([...initialProviderDefinitions])
             : snapshotClient.loadProviderDefinitions(),
+          snapshotClient.loadVoxLinks(),
           initialEvents
             ? Promise.resolve({ turns: [] })
             : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
@@ -729,6 +705,7 @@ function OperatorWorkspace({
         setSnapshot(nextSnapshot);
         setPipelineViews(nextPipelineViews);
         setComponentCatalog(baseComponentCatalog);
+        setVoxLinks(loadedVoxLinks);
         setProviderDefinitions((current) =>
           mergeProviderDefinitions(loadedProviderDefinitions, current),
         );
@@ -742,6 +719,7 @@ function OperatorWorkspace({
         setSnapshot(null);
         setPipelineViews(initialPipelineViews ?? []);
         setComponentCatalog(initialComponentCatalog ?? { components: [] });
+        setVoxLinks([]);
         setSnapshotState("error");
         setLoadError(
           caught instanceof Error
@@ -861,7 +839,7 @@ function OperatorWorkspace({
 
         <SectionPanel
           section={activeSection}
-          speakers={speakerApi}
+          voxLinks={voxLinks}
           onFirmwareRender={renderFirmware}
           onFirmwareFlash={flashFirmware}
           events={initialEvents ?? eventEnvelopeFixtures}
@@ -888,6 +866,7 @@ function OperatorWorkspace({
           onProviderPhrases={onProviderPhrases ?? loadProviderPhrases}
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
+          onVoxLinkDelete={deleteVoxLink}
           onPipelineStored={storePipelineGraph}
           onPipelineDelete={deletePipeline}
         />
@@ -902,7 +881,7 @@ function defaultDataMode(): OperatorDataMode {
 
 function SectionPanel({
   section,
-  speakers,
+  voxLinks,
   onFirmwareRender,
   onFirmwareFlash,
   events,
@@ -925,9 +904,10 @@ function SectionPanel({
   onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
+  onVoxLinkDelete,
 }: {
   section: SectionId;
-  speakers: SpeakerApi;
+  voxLinks: readonly VoxLinkView[];
   onFirmwareRender: FirmwareRenderer;
   onFirmwareFlash: FirmwareFlasher;
   events: readonly EventEnvelope[];
@@ -956,6 +936,7 @@ function SectionPanel({
     previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
+  onVoxLinkDelete: (peerId: string) => Promise<void>;
 }) {
   if (loadError) {
     return (
@@ -1002,8 +983,8 @@ function SectionPanel({
     );
   }
 
-  if (section === "speakers") {
-    return <SpeakersPanel speakers={speakers} />;
+  if (section === "vox") {
+    return <VoxPanel />;
   }
 
   if (section === "firmware") {
@@ -1023,10 +1004,12 @@ function SectionPanel({
         pipelineViews={pipelineViews}
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
+        voxLinks={voxLinks}
         onProviderTest={onProviderTest}
         onProviderPhrases={onProviderPhrases}
         onProviderDefinitionSave={onProviderDefinitionSave}
         onProviderDefinitionDelete={onProviderDefinitionDelete}
+        onVoxLinkDelete={onVoxLinkDelete}
       />
     );
   }
@@ -1117,20 +1100,31 @@ interface ProviderCardView {
   status: ProviderStatus | null;
 }
 
+function VoxPanel() {
+  return (
+    <section className="vox-panel surface" aria-label="Conduit Vox">
+      <iframe className="vox-frame" src="/vox/ui" title="Conduit Vox" />
+    </section>
+  );
+}
+
 function ProvidersPanel({
   componentCatalog,
   pipelineViews,
   providerDefinitions,
   providers,
+  voxLinks,
   onProviderTest,
   onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
+  onVoxLinkDelete,
 }: {
   componentCatalog: ProviderComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
+  voxLinks: readonly VoxLinkView[];
   onProviderTest: ProviderTester;
   onProviderPhrases: PhraseLoader;
   /// Saves a definition. `previousId` is the id it was stored under, when it
@@ -1141,6 +1135,7 @@ function ProvidersPanel({
     previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
+  onVoxLinkDelete: (peerId: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
@@ -1480,6 +1475,24 @@ function ProvidersPanel({
     }
   }
 
+  async function revokeVoxLink(link: VoxLinkView) {
+    try {
+      await onVoxLinkDelete(link.peer_id);
+      setProviderNotices((current) => ({
+        ...current,
+        [`vox-link-${link.peer_id}`]: `Vox link ${link.peer_id} revoked`,
+      }));
+    } catch (caught) {
+      setProviderNotices((current) => ({
+        ...current,
+        [`vox-link-${link.peer_id}`]:
+          caught instanceof Error
+            ? caught.message
+            : `Unable to revoke Vox link ${link.peer_id}`,
+      }));
+    }
+  }
+
   return (
     <div className="providers-stack">
       <section className="summary-grid" aria-label="Provider summary">
@@ -1537,6 +1550,62 @@ function ProvidersPanel({
           {notice}
         </p>
       ))}
+
+      <section className="linked-services surface" aria-label="Linked services">
+        <div className="panel-heading-row">
+          <div>
+            <h2>Linked services</h2>
+            <p className="panel-caption">
+              Conduit proxies one linked Vox peer at <code>/vox/*</code>.
+            </p>
+          </div>
+        </div>
+        {voxLinks.length === 0 ? (
+          <p className="panel-notice">
+            No Vox peer linked. Complete the Vox link flow before loading the
+            embedded UI.
+          </p>
+        ) : (
+          <table className="provider-table">
+            <thead>
+              <tr>
+                <th scope="col">Service</th>
+                <th scope="col">Base URL</th>
+                <th scope="col">Provider</th>
+                <th scope="col">Granted by</th>
+                <th scope="col">
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {voxLinks.map((link) => (
+                <tr className="provider-row" key={link.peer_id}>
+                  <td>
+                    <div className="provider-name">
+                      <strong>{link.peer_name}</strong>
+                      <span>{link.peer_id}</span>
+                    </div>
+                  </td>
+                  <td>{link.peer_base_url}</td>
+                  <td>{link.provider_definition_id}</td>
+                  <td>{link.granted_by}</td>
+                  <td className="provider-row-actions">
+                    <button
+                      className="icon-action danger"
+                      type="button"
+                      aria-label={`Revoke ${link.peer_id}`}
+                      onClick={() => void revokeVoxLink(link)}
+                    >
+                      <Trash2 size={16} aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       {providerStageGroups.map((group) => (
         <section
@@ -2038,367 +2107,6 @@ function ProviderConfigSummary({
       )}
     </div>
   );
-}
-
-/// A row's transient state: what it is doing and what it last said.
-interface SpeakerRowState {
-  recording: Recording | null;
-  busy: boolean;
-  notice: string | null;
-  renaming: string | null;
-}
-
-const idleRow: SpeakerRowState = {
-  recording: null,
-  busy: false,
-  notice: null,
-  renaming: null,
-};
-
-/// Who the deployment knows, and how it came to know them.
-///
-/// Identification has been a pipeline stage for a while, but a stage that
-/// matches a voice against enrolled prints is useless until something enrolls
-/// one. This is that something — and it is also the only place a
-/// [`SpeakerId`] is tied to a name, because the identification service is
-/// deliberately never told who anybody is.
-function SpeakersPanel({ speakers: api }: { speakers: SpeakerApi }) {
-  const [speakers, setSpeakers] = useState<readonly EnrolledSpeaker[] | null>(
-    null,
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [rows, setRows] = useState<Record<string, SpeakerRowState>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .load()
-      .then((loaded) => {
-        if (!cancelled) {
-          setSpeakers(loaded);
-          setLoadError(null);
-        }
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          setSpeakers([]);
-          setLoadError(messageOf(caught, "Unable to load the speaker roster"));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
-
-  function rowState(id: string): SpeakerRowState {
-    return rows[id] ?? idleRow;
-  }
-
-  function updateRow(id: string, update: Partial<SpeakerRowState>) {
-    setRows((current) => ({
-      ...current,
-      [id]: { ...(current[id] ?? idleRow), ...update },
-    }));
-  }
-
-  /// Replaces one entry with what the server just said about it.
-  function replaceSpeaker(speaker: EnrolledSpeaker) {
-    setSpeakers((current) =>
-      (current ?? []).map((entry) =>
-        entry.id === speaker.id ? speaker : entry,
-      ),
-    );
-  }
-
-  async function addSpeaker(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = newName.trim();
-    if (!name || creating) {
-      return;
-    }
-
-    setCreating(true);
-    try {
-      const created = await api.create(name);
-      setSpeakers((current) => [...(current ?? []), created]);
-      setNewName("");
-      setLoadError(null);
-    } catch (caught) {
-      setLoadError(messageOf(caught, `Unable to add ${name}`));
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function renameSpeaker(speaker: EnrolledSpeaker) {
-    const name = (rowState(speaker.id).renaming ?? "").trim();
-    if (!name || name === speaker.name) {
-      updateRow(speaker.id, { renaming: null });
-      return;
-    }
-
-    updateRow(speaker.id, { busy: true });
-    try {
-      replaceSpeaker(await api.rename(speaker.id, name));
-      updateRow(speaker.id, { renaming: null, notice: null, busy: false });
-    } catch (caught) {
-      updateRow(speaker.id, {
-        busy: false,
-        notice: messageOf(caught, `Unable to rename ${speaker.name}`),
-      });
-    }
-  }
-
-  /// Sends one utterance, however it was captured.
-  ///
-  /// Recording and uploading differ only in where the file came from, so they
-  /// share everything after that — including what the service said when it
-  /// refused, which is the part an operator acts on.
-  async function sendSample(speaker: EnrolledSpeaker, audio: Blob) {
-    updateRow(speaker.id, { busy: true, notice: null });
-    try {
-      const enrolled = await api.enroll(speaker.id, audio);
-      replaceSpeaker(enrolled);
-      updateRow(speaker.id, {
-        busy: false,
-        notice: `Sample accepted — ${enrolled.samples} on file`,
-      });
-    } catch (caught) {
-      updateRow(speaker.id, {
-        busy: false,
-        notice: messageOf(caught, `Unable to enroll ${speaker.name}`),
-      });
-    }
-  }
-
-  async function startSample(speaker: EnrolledSpeaker) {
-    try {
-      const recording = await startRecording();
-      updateRow(speaker.id, { recording, notice: null });
-    } catch (caught) {
-      updateRow(speaker.id, {
-        notice: messageOf(caught, "Unable to reach a microphone"),
-      });
-    }
-  }
-
-  async function finishSample(speaker: EnrolledSpeaker) {
-    const recording = rowState(speaker.id).recording;
-    if (!recording) {
-      return;
-    }
-    updateRow(speaker.id, { recording: null });
-    await sendSample(speaker, await recording.stop());
-  }
-
-  async function removeSpeaker(speaker: EnrolledSpeaker) {
-    updateRow(speaker.id, { busy: true, notice: null });
-    try {
-      await api.remove(speaker.id);
-      setSpeakers((current) =>
-        (current ?? []).filter((entry) => entry.id !== speaker.id),
-      );
-    } catch (caught) {
-      updateRow(speaker.id, {
-        busy: false,
-        // The roster entry is still there on purpose when the service will
-        // not forget the voice print, so this is a state to show rather than
-        // a failure to swallow.
-        notice: messageOf(caught, `Unable to remove ${speaker.name}`),
-      });
-    }
-  }
-
-  const roster = speakers ?? [];
-  const enrolled = roster.filter((speaker) => speaker.samples > 0).length;
-
-  return (
-    <div className="providers-stack">
-      <section className="summary-grid" aria-label="Speaker summary">
-        <MetricTile label="Speakers" value={roster.length.toString()} />
-        <MetricTile label="Enrolled" value={enrolled.toString()} />
-        <MetricTile
-          label="Not yet recorded"
-          value={(roster.length - enrolled).toString()}
-        />
-      </section>
-
-      <form className="speaker-add" onSubmit={addSpeaker}>
-        <label className="field">
-          <span className="field-label">Name</span>
-          <input
-            value={newName}
-            placeholder="Who is this?"
-            onChange={(event) => setNewName(event.target.value)}
-          />
-        </label>
-        <button
-          className="secondary-action"
-          type="submit"
-          disabled={creating || newName.trim().length === 0}
-        >
-          <UserPlus size={16} aria-hidden="true" />
-          Add speaker
-        </button>
-      </form>
-
-      {loadError ? (
-        <p className="form-error" role="alert">
-          {loadError}
-        </p>
-      ) : null}
-
-      {speakers === null ? (
-        <p className="panel-notice">Loading the speaker roster…</p>
-      ) : roster.length === 0 ? (
-        <p className="panel-notice">
-          Nobody is enrolled yet. Add a name, then record a sample of their
-          voice — until a voice is enrolled, every turn reaches a tool&rsquo;s
-          permission check with no speaker.
-        </p>
-      ) : (
-        <table className="provider-table">
-          <thead>
-            <tr>
-              <th scope="col">Speaker</th>
-              <th scope="col">Samples</th>
-              <th scope="col">Enrolled against</th>
-              <th scope="col">
-                <span className="visually-hidden">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {roster.map((speaker) => {
-              const row = rowState(speaker.id);
-              return (
-                <tr className="provider-row" key={speaker.id}>
-                  <td>
-                    {row.renaming === null ? (
-                      <div className="provider-name">
-                        <strong>{speaker.name}</strong>
-                        <span>{speaker.id}</span>
-                      </div>
-                    ) : (
-                      <input
-                        aria-label={`New name for ${speaker.name}`}
-                        value={row.renaming}
-                        autoFocus
-                        onChange={(event) =>
-                          updateRow(speaker.id, {
-                            renaming: event.target.value,
-                          })
-                        }
-                        onBlur={() => void renameSpeaker(speaker)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            void renameSpeaker(speaker);
-                          }
-                          if (event.key === "Escape") {
-                            updateRow(speaker.id, { renaming: null });
-                          }
-                        }}
-                      />
-                    )}
-                    {row.notice ? (
-                      <p className="speaker-notice">{row.notice}</p>
-                    ) : null}
-                  </td>
-                  <td>
-                    <div className="provider-state">
-                      <span
-                        className={`state-dot ${speaker.samples > 0 ? "good" : "warn"}`}
-                        aria-hidden="true"
-                      />
-                      <span>
-                        {speaker.samples > 0
-                          ? `${speaker.samples} on file`
-                          : "no voice yet"}
-                      </span>
-                    </div>
-                  </td>
-                  <td>{speaker.provider ?? "—"}</td>
-                  <td>
-                    <div className="provider-card-controls">
-                      {row.recording ? (
-                        <button
-                          className="icon-action success"
-                          type="button"
-                          aria-label={`Stop recording ${speaker.name}`}
-                          onClick={() => void finishSample(speaker)}
-                        >
-                          <Square size={16} aria-hidden="true" />
-                        </button>
-                      ) : (
-                        <button
-                          className="icon-action"
-                          type="button"
-                          aria-label={`Record a sample for ${speaker.name}`}
-                          disabled={row.busy}
-                          onClick={() => void startSample(speaker)}
-                        >
-                          <Mic size={16} aria-hidden="true" />
-                        </button>
-                      )}
-                      <label
-                        className="icon-action"
-                        aria-label={`Upload a sample for ${speaker.name}`}
-                      >
-                        <Upload size={16} aria-hidden="true" />
-                        <input
-                          type="file"
-                          accept="audio/wav,.wav"
-                          className="visually-hidden"
-                          disabled={row.busy}
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            // Cleared so the same file can be chosen twice:
-                            // a second take of the same recording is a
-                            // normal thing to want.
-                            event.target.value = "";
-                            if (file) {
-                              void sendSample(speaker, file);
-                            }
-                          }}
-                        />
-                      </label>
-                      <button
-                        className="icon-action"
-                        type="button"
-                        aria-label={`Rename ${speaker.name}`}
-                        disabled={row.busy}
-                        onClick={() =>
-                          updateRow(speaker.id, { renaming: speaker.name })
-                        }
-                      >
-                        <KeyRound size={16} aria-hidden="true" />
-                      </button>
-                      <button
-                        className="icon-action danger"
-                        type="button"
-                        aria-label={`Remove ${speaker.name}`}
-                        disabled={row.busy}
-                        onClick={() => void removeSpeaker(speaker)}
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-/// What went wrong, in the words of whoever refused.
-function messageOf(caught: unknown, fallback: string): string {
-  return caught instanceof Error && caught.message ? caught.message : fallback;
 }
 
 function SettingsPanel({
