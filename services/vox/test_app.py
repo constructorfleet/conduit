@@ -8,6 +8,7 @@ download standing between a developer and a test run.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -26,12 +27,14 @@ from app import (
     DEFAULT_MODELS,
     EMBEDDING_WIDTHS,
     ENGINE_CLASSES,
+    ConduitSpeaker,
     MAX_LABEL_LENGTH,
     MODEL_SAMPLE_RATE,
     LinkStore,
     NeMoEncoder,
     PyannoteEncoder,
     Roster,
+    Syncer,
     SpeechBrainEncoder,
     VoicePrints,
     build_encoder,
@@ -71,6 +74,21 @@ class FakeConduitClient:
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
         self.delete_requests.append((conduit_url, peer_id, sync_token))
+
+
+class FakeSpeakerClient:
+    def __init__(self, responses: list[list[ConduitSpeaker] | Exception]) -> None:
+        self._responses = responses
+        self.requests: list[tuple[str, str]] = []
+
+    async def list_speakers(
+        self, conduit_url: str, sync_token: str
+    ) -> list[ConduitSpeaker]:
+        self.requests.append((conduit_url, sync_token))
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class ToneEncoder:
@@ -833,6 +851,101 @@ def test_unlink_best_effort_revokes_conduit_then_removes_local_state(
     ]
     assert not (tmp_path / LinkStore.FILENAME).exists()
     assert client.get("/link").json() == {"status": "unlinked"}
+
+
+def test_startup_sync_pulls_conduit_labels_into_the_local_roster(tmp_path: Path) -> None:
+    speaker = uuid.uuid4()
+    remote_only = uuid.uuid4()
+    local_only = uuid.uuid4()
+    prints = VoicePrints(tmp_path)
+    roster = Roster(tmp_path)
+    links = LinkStore(tmp_path)
+    links.save(
+        conduit_url="http://conduit.internal:8080",
+        sync_token="sync-token",
+        peer_id="peer-1",
+        peer_name="Kitchen Vox",
+        provider_definition_id="vox-peer-1",
+        local_api_key="local-key",
+    )
+    prints.add(speaker, np.array([1.0, 0.0], dtype=np.float32))
+    roster.touch(speaker, 1)
+    roster.set_label(speaker, "Wrong Local Label")
+    prints.add(local_only, np.array([0.0, 1.0], dtype=np.float32))
+    roster.touch(local_only, 1)
+    roster.set_label(local_only, "Bench Voice")
+    conduit = FakeSpeakerClient(
+        [[
+            ConduitSpeaker(id=str(speaker), name="Ada Lovelace"),
+            ConduitSpeaker(id=str(remote_only), name="Grace Hopper"),
+        ]]
+    )
+
+    with TestClient(
+        create_app(
+            encoder=ToneEncoder(),
+            prints=prints,
+            roster=roster,
+            link_store=links,
+            speaker_client=conduit,
+            sync_interval_seconds=60.0,
+        )
+    ) as client:
+        synced = client.get(
+            "/speakers", headers={"authorization": "Bearer local-key"}
+        )
+
+    assert synced.status_code == 200
+    speakers = {entry["uuid"]: entry for entry in synced.json()["speakers"]}
+    assert speakers[str(speaker)]["label"] == "Ada Lovelace"
+    assert speakers[str(speaker)]["samples"] == 1
+    assert speakers[str(remote_only)]["label"] == "Grace Hopper"
+    assert speakers[str(remote_only)]["samples"] == 0
+    assert speakers[str(local_only)]["label"] == "Bench Voice"
+    assert conduit.requests == [("http://conduit.internal:8080", "sync-token")]
+
+
+def test_syncer_retries_with_exponential_backoff_without_crashing(
+    tmp_path: Path,
+) -> None:
+    links = LinkStore(tmp_path)
+    links.save(
+        conduit_url="http://conduit.internal:8080",
+        sync_token="sync-token",
+        peer_id="peer-1",
+        peer_name="Kitchen Vox",
+        provider_definition_id="vox-peer-1",
+        local_api_key="local-key",
+    )
+    conduit = FakeSpeakerClient(
+        [
+            httpx.ConnectError("dial tone of the damned"),
+            httpx.ConnectError("still dead"),
+            [ConduitSpeaker(id=str(uuid.uuid4()), name="Ada Lovelace")],
+        ]
+    )
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 3:
+            raise asyncio.CancelledError()
+
+    syncer = Syncer(
+        prints=VoicePrints(tmp_path),
+        roster=Roster(tmp_path),
+        links=links,
+        conduit=conduit,
+        interval_seconds=5.0,
+        max_backoff_seconds=12.0,
+        sleep=fake_sleep,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(syncer.run_forever())
+
+    assert sleeps == [5.0, 10.0, 5.0]
+    assert len(conduit.requests) == 3
 
 
 def test_a_saved_link_with_group_or_world_permissions_is_refused(tmp_path: Path) -> None:

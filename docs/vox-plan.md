@@ -133,7 +133,7 @@ New module in `app.py` for link state:
 Tokens never enter logs. `link.json` is refused if group- or world-readable,
 mirroring how Conduit already handles its tokens file.
 
-### 6. Vox → Conduit roster sync
+### 6. [x] Vox → Conduit roster sync
 
 New `Syncer` task in `app.py`, started at app startup if a link exists:
 

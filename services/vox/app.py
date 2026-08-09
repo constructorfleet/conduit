@@ -29,6 +29,7 @@ questions, and only the first one has a stage in a Conduit pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -36,10 +37,11 @@ import os
 import secrets
 import tempfile
 import uuid
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 import httpx
 import numpy as np
@@ -193,6 +195,10 @@ class VoicePrints:
     def count(self) -> int:
         return len(self._enrolled())
 
+    def samples(self, speaker: uuid.UUID) -> int:
+        path = self._path(speaker)
+        return Roster._samples_on_disk(path)
+
     def _enrolled(self) -> list[Path]:
         """Every stored voice print. Nothing enrolled yet is not an error."""
         if not self.directory.is_dir():
@@ -318,7 +324,11 @@ class Roster:
                 )
                 changed = True
         for stale in [u for u in entries if u not in seen]:
-            del entries[stale]
+            existing = entries[stale]
+            if existing.label is None:
+                del entries[stale]
+            else:
+                entries[stale] = replace(existing, samples=0, updated_at=self._now())
             changed = True
         if changed:
             try:
@@ -373,6 +383,24 @@ class Roster:
         if existing is None:
             return None
         entry = replace(existing, label=label, updated_at=self._now())
+        entries[speaker] = entry
+        self._save()
+        return entry
+
+    def upsert(self, speaker: uuid.UUID, *, label: str | None, samples: int) -> SpeakerEntry:
+        entries = self._load()
+        now = self._now()
+        existing = entries.get(speaker)
+        if existing is None:
+            entry = SpeakerEntry(
+                uuid=speaker,
+                label=label,
+                samples=samples,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            entry = replace(existing, label=label, samples=samples, updated_at=now)
         entries[speaker] = entry
         self._save()
         return entry
@@ -782,6 +810,18 @@ class ConduitLinkClient(Protocol):
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class ConduitSpeaker:
+    id: str
+    name: str
+
+
+class ConduitSpeakerClient(Protocol):
+    async def list_speakers(
+        self, conduit_url: str, sync_token: str
+    ) -> list[ConduitSpeaker]: ...
+
+
 class HttpConduitClient:
     """HTTP client for Conduit's `/v1/vox/links` API."""
 
@@ -836,6 +876,120 @@ class HttpConduitClient:
             LOG.warning("best-effort Vox unlink failed: peer=%s error=%s", peer_id, error)
 
 
+class HttpConduitSpeakerClient:
+    """HTTP client for Conduit's `/v1/speakers` roster sync."""
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 10.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._timeout = timeout
+        self._transport = transport
+
+    async def list_speakers(
+        self, conduit_url: str, sync_token: str
+    ) -> list[ConduitSpeaker]:
+        url = f"{conduit_url.rstrip('/')}/v1/speakers"
+        async with httpx.AsyncClient(
+            timeout=self._timeout, transport=self._transport
+        ) as client:
+            response = await client.get(
+                url,
+                headers={"authorization": f"Bearer {sync_token}"},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return [
+            ConduitSpeaker(id=str(item["id"]), name=str(item["name"]))
+            for item in payload
+        ]
+
+
+class Syncer:
+    """Keeps Vox's local roster aligned with Conduit's roster labels."""
+
+    def __init__(
+        self,
+        *,
+        prints: VoicePrints,
+        roster: Roster,
+        links: LinkStore,
+        conduit: ConduitSpeakerClient,
+        interval_seconds: float = 300.0,
+        max_backoff_seconds: float = 900.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self.prints = prints
+        self.roster = roster
+        self.links = links
+        self.conduit = conduit
+        self.interval_seconds = interval_seconds
+        self.max_backoff_seconds = max_backoff_seconds
+        self._sleep = sleep
+
+    async def sync_once(self) -> int:
+        state = self.links.load()
+        if state is None:
+            return 0
+        speakers = await self.conduit.list_speakers(state.conduit_url, state.sync_token)
+        self.roster.reconcile(self.prints)
+        synced = 0
+        for remote in speakers:
+            try:
+                speaker = uuid.UUID(remote.id)
+            except ValueError:
+                LOG.warning(
+                    "skipping Conduit speaker with invalid UUID: peer=%s speaker=%r",
+                    state.peer_id,
+                    remote.id,
+                )
+                continue
+            self.roster.upsert(
+                speaker,
+                label=remote.name.strip() or None,
+                samples=self.prints.samples(speaker),
+            )
+            synced += 1
+        LOG.info(
+            "synced Vox roster from Conduit: peer=%s speakers=%d",
+            state.peer_id,
+            synced,
+        )
+        return synced
+
+    async def run_forever(self) -> None:
+        delay = 0.0
+        failure_delay = min(max(1.0, self.interval_seconds), self.max_backoff_seconds)
+        while True:
+            if delay > 0.0:
+                await self._sleep(delay)
+            try:
+                await self.sync_once()
+                delay = self.interval_seconds
+                failure_delay = min(
+                    max(1.0, self.interval_seconds), self.max_backoff_seconds
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - task must never crash
+                try:
+                    state = self.links.load()
+                except LinkStoreSecurityError:
+                    state = None
+                retry_in = failure_delay
+                LOG.warning(
+                    "Vox roster sync failed: peer=%s conduit=%s retry_in=%.0fs error=%s",
+                    state.peer_id if state is not None else "unlinked",
+                    state.conduit_url if state is not None else "unknown",
+                    retry_in,
+                    error,
+                )
+                delay = retry_in
+                failure_delay = min(retry_in * 2, self.max_backoff_seconds)
+
+
 def _trimmed_url(value: str, name: str) -> str:
     trimmed = value.strip().rstrip("/")
     if not trimmed:
@@ -856,13 +1010,15 @@ def create_app(
     roster: Roster | None = None,
     link_store: LinkStore | None = None,
     conduit_client: ConduitLinkClient | None = None,
+    speaker_client: ConduitSpeakerClient | None = None,
+    sync_interval_seconds: float | None = None,
+    sync_max_backoff_seconds: float | None = None,
 ) -> FastAPI:
     """Builds the service.
 
     `encoder`, `prints`, and `roster` are injected by the tests, which have no
     use for a model download to check that a 404 is a 404.
     """
-    app = FastAPI(title="Conduit Vox", version="1")
     api_key = os.environ.get("SPEAKER_ID_API_KEY") or None
     store = prints or VoicePrints(
         Path(os.environ.get("SPEAKER_ID_DATA_DIR", "/data"))
@@ -873,14 +1029,48 @@ def create_app(
     names = roster or Roster(store.directory)
     links = link_store or LinkStore(store.directory)
     conduit = conduit_client or HttpConduitClient()
+    speakers = speaker_client or HttpConduitSpeakerClient()
     engine = os.environ.get("SPEAKER_ID_ENGINE", "speechbrain")
     model_name = os.environ.get("SPEAKER_ID_MODEL") or DEFAULT_MODELS.get(engine, "")
     model_cache = Path(os.environ.get("SPEAKER_ID_MODEL_DIR", "/models"))
     device = os.environ.get("SPEAKER_ID_DEVICE", "cpu")
+    sync_interval = sync_interval_seconds or float(
+        os.environ.get("SPEAKER_ID_SYNC_INTERVAL_SECONDS", "300")
+    )
+    sync_backoff = sync_max_backoff_seconds or float(
+        os.environ.get("SPEAKER_ID_SYNC_MAX_BACKOFF_SECONDS", "900")
+    )
 
     loaded: dict[str, Encoder] = {}
     if encoder is not None:
         loaded["encoder"] = encoder
+
+    syncer = Syncer(
+        prints=store,
+        roster=names,
+        links=links,
+        conduit=speakers,
+        interval_seconds=sync_interval,
+        max_backoff_seconds=sync_backoff,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        task: asyncio.Task[None] | None = None
+        try:
+            try:
+                if links.load() is not None:
+                    task = asyncio.create_task(syncer.run_forever())
+            except LinkStoreSecurityError as error:
+                LOG.warning("could not start Vox roster sync: %s", error)
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="Conduit Vox", version="1", lifespan=lifespan)
 
     def get_encoder() -> Encoder:
         # Loaded on first use rather than at import, so the container starts,
