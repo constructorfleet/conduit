@@ -34,12 +34,26 @@ Then either:
 | --- | --- | --- |
 | `POST /identify` | `audio/wav` or `audio/flac` | `{"speaker": "<uuid>" \| null, "confidence": 0.0–1.0}` |
 | `POST /speakers/{uuid}/enroll` | `audio/wav` or `audio/flac` | `{"speaker": "<uuid>", "samples": n}` |
+| `GET /speakers` | — | `{"speakers": [{"uuid", "label", "samples", "created_at", "updated_at"}, …]}` |
+| `PATCH /speakers/{uuid}` | `{"label": "<name>" \| null}` | The updated entry; `404` if nobody was enrolled |
 | `DELETE /speakers/{uuid}` | — | `204`, or `404` if nobody was enrolled |
 | `GET /health` | — | `{"status": "ok", …}` |
 
 Conduit owns the identifier and this service stores it as an opaque file name,
 so a deployment can change embedding models without every speaker becoming a
 stranger to the tools that check who is asking.
+
+Vox holds an optional **label** for each speaker alongside the print. Conduit
+remains the source of truth for the roster; Vox's label is a convenience for
+its own UI so an operator sees "Alice" rather than a UUID. Setting a label is
+`PATCH /speakers/{uuid}` with `{"label": "…"}`; clearing one is the same
+request with `{"label": null}`. Labels are capped at 100 characters and never
+enter Conduit unless a sync (below) writes them there.
+
+The roster is persisted as `roster.json` alongside the `.npy` files. Missing
+or corrupt manifests are rebuilt from the prints themselves on the next read,
+so an in-place upgrade from a version that only wrote prints keeps every
+enrolled voice — just without labels until an operator supplies them.
 
 Enrolling the same speaker again adds a sample rather than replacing one;
 identification compares against the mean of everything they enrolled. Three or

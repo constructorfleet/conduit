@@ -22,9 +22,11 @@ from app import (
     DEFAULT_MODELS,
     EMBEDDING_WIDTHS,
     ENGINE_CLASSES,
+    MAX_LABEL_LENGTH,
     MODEL_SAMPLE_RATE,
     NeMoEncoder,
     PyannoteEncoder,
+    Roster,
     SpeechBrainEncoder,
     VoicePrints,
     build_encoder,
@@ -413,6 +415,127 @@ def test_resampling_preserves_duration() -> None:
     samples = np.sin(np.linspace(0, 100, 48_000)).astype(np.float32)
     resampled = resample(samples, 48_000, 16_000)
     assert resampled.size == pytest.approx(16_000, abs=1)
+
+
+def test_the_speaker_list_is_empty_when_nobody_is_enrolled(client: TestClient) -> None:
+    response = client.get("/speakers")
+
+    assert response.status_code == 200
+    assert response.json() == {"speakers": []}
+
+
+def test_enrolling_adds_the_speaker_to_the_roster(client: TestClient) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    body = client.get("/speakers").json()
+
+    assert len(body["speakers"]) == 1
+    entry = body["speakers"][0]
+    assert entry["uuid"] == str(speaker)
+    assert entry["label"] is None
+    assert entry["samples"] == 1
+    assert entry["created_at"]
+    assert entry["updated_at"]
+
+
+def test_enrolling_the_same_speaker_again_bumps_their_sample_count(
+    client: TestClient,
+) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    entry = client.get("/speakers").json()["speakers"][0]
+
+    assert entry["samples"] == 2
+
+
+def test_forgetting_a_speaker_also_removes_them_from_the_roster(
+    client: TestClient,
+) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+    client.delete(f"/speakers/{speaker}")
+
+    assert client.get("/speakers").json()["speakers"] == []
+
+
+def test_a_label_can_be_set_and_read_back(client: TestClient) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    labeled = client.patch(f"/speakers/{speaker}", json={"label": "Alice"})
+
+    assert labeled.status_code == 200
+    assert labeled.json()["label"] == "Alice"
+    assert client.get("/speakers").json()["speakers"][0]["label"] == "Alice"
+
+
+def test_a_label_can_be_cleared_by_setting_it_to_null(client: TestClient) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+    client.patch(f"/speakers/{speaker}", json={"label": "Alice"})
+
+    cleared = client.patch(f"/speakers/{speaker}", json={"label": None})
+
+    assert cleared.status_code == 200
+    assert cleared.json()["label"] is None
+
+
+def test_a_label_beyond_the_limit_is_refused(client: TestClient) -> None:
+    speaker = uuid.uuid4()
+    client.post(f"/speakers/{speaker}/enroll", content=tone(440))
+
+    refused = client.patch(
+        f"/speakers/{speaker}", json={"label": "x" * (MAX_LABEL_LENGTH + 1)}
+    )
+
+    assert refused.status_code == 422
+
+
+def test_labeling_a_speaker_nobody_enrolled_is_a_404(client: TestClient) -> None:
+    refused = client.patch(f"/speakers/{uuid.uuid4()}", json={"label": "Alice"})
+
+    assert refused.status_code == 404
+
+
+def test_a_label_survives_a_restart(tmp_path: Path) -> None:
+    speaker = uuid.uuid4()
+    first = TestClient(create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path)))
+    first.post(f"/speakers/{speaker}/enroll", content=tone(440))
+    first.patch(f"/speakers/{speaker}", json={"label": "Alice"})
+
+    reloaded = TestClient(
+        create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path))
+    )
+    entry = reloaded.get("/speakers").json()["speakers"][0]
+
+    assert entry["label"] == "Alice"
+
+
+def test_a_print_without_a_manifest_entry_is_rebuilt_on_read(tmp_path: Path) -> None:
+    # An upgrade from a version that only wrote .npy files should not lose
+    # entries the print files already document; the roster reconciles on the
+    # first read rather than showing an empty list a user knows is wrong.
+    prints = VoicePrints(tmp_path)
+    speaker = uuid.uuid4()
+    prints.add(speaker, np.array([1.0, 0.0], dtype=np.float32))
+
+    client = TestClient(create_app(encoder=ToneEncoder(), prints=prints))
+    entries = client.get("/speakers").json()["speakers"]
+
+    assert len(entries) == 1
+    assert entries[0]["uuid"] == str(speaker)
+    assert entries[0]["label"] is None
+    assert entries[0]["samples"] == 1
+
+
+def test_health_reports_the_roster_count(client: TestClient) -> None:
+    client.post(f"/speakers/{uuid.uuid4()}/enroll", content=tone(440))
+    client.post(f"/speakers/{uuid.uuid4()}/enroll", content=tone(440))
+
+    assert client.get("/health").json()["enrolled"] == 2
 
 
 def test_a_voice_pointing_away_scores_nothing_rather_than_half() -> None:

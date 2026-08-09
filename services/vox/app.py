@@ -30,11 +30,13 @@ questions, and only the first one has a stage in a Conduit pipeline.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -42,6 +44,7 @@ import numpy as np
 import soundfile as sf
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 LOG = logging.getLogger("vox")
 
@@ -75,6 +78,12 @@ MIN_ENROLL_SECONDS = 1.0
 # whose wake gate never opened captured almost nothing, and a confident match
 # against 200 ms of silence is worse than no answer.
 MIN_IDENTIFY_SECONDS = 0.35
+
+# The longest label Vox will store for a speaker. Vox owns the label only for
+# its own UI: Conduit is the source of truth and enforces its own limits. Long
+# enough for a real name; short enough that a paste from an unrelated buffer is
+# refused before it lands as a label somebody has to unpick.
+MAX_LABEL_LENGTH = 100
 
 
 class Encoder(Protocol):
@@ -185,6 +194,195 @@ class VoicePrints:
         if not self.directory.is_dir():
             return []
         return list(self.directory.glob("*.npy"))
+
+
+@dataclass(frozen=True)
+class SpeakerEntry:
+    """What the roster knows about one speaker.
+
+    Vox owns the label only for its own UI. Conduit is the source of truth,
+    which is why the field is nullable — a speaker enrolled directly against
+    Vox for testing has no name until somebody types one.
+    """
+
+    uuid: uuid.UUID
+    label: str | None
+    samples: int
+    created_at: str
+    updated_at: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "uuid": str(self.uuid),
+            "label": self.label,
+            "samples": self.samples,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class Roster:
+    """Labels and sample counts, one manifest for the store.
+
+    The prints in `VoicePrints` are the load-bearing files — losing one loses
+    a voice. This is the incidental sibling: losing it loses a name a person
+    typed. So the two are written separately, and the roster reconciles from
+    the prints on read (upgrade from a version that had no manifest, or a
+    manifest write that lost a race with the print write).
+    """
+
+    FILENAME = "roster.json"
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self._path = directory / self.FILENAME
+        self._entries: dict[uuid.UUID, SpeakerEntry] | None = None
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _load(self) -> dict[uuid.UUID, SpeakerEntry]:
+        if self._entries is not None:
+            return self._entries
+        entries: dict[uuid.UUID, SpeakerEntry] = {}
+        if self._path.is_file():
+            try:
+                data = json.loads(self._path.read_text())
+            except json.JSONDecodeError as error:
+                # A corrupted manifest is not worth crashing over: the prints
+                # themselves are on disk and the roster rebuilds from them.
+                LOG.warning("roster manifest is not valid JSON, rebuilding: %s", error)
+                data = {}
+            for row in data.get("speakers", []):
+                try:
+                    identifier = uuid.UUID(row["uuid"])
+                except (KeyError, ValueError, TypeError):
+                    LOG.warning("ignoring roster row with a non-UUID name: %r", row)
+                    continue
+                entries[identifier] = SpeakerEntry(
+                    uuid=identifier,
+                    label=row.get("label"),
+                    samples=int(row.get("samples", 0)),
+                    created_at=str(row.get("created_at") or self._now()),
+                    updated_at=str(row.get("updated_at") or self._now()),
+                )
+        self._entries = entries
+        return entries
+
+    def _save(self) -> None:
+        entries = self._load()
+        payload = {"speakers": [entry.to_dict() for entry in entries.values()]}
+        self.directory.mkdir(parents=True, exist_ok=True)
+        # Written beside the target and renamed, so a crash mid-write leaves
+        # the previous manifest rather than a truncated one.
+        temporary = self._path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2))
+        temporary.replace(self._path)
+
+    def reconcile(self, prints: VoicePrints) -> None:
+        """Aligns the manifest with what is on disk.
+
+        For every print file, ensure an entry exists (label unknown). Drop
+        every entry whose print file no longer exists — a print removed
+        out-of-band is a speaker Vox cannot identify, and holding a label for
+        them would show a name the operator cannot select.
+        """
+        entries = self._load()
+        seen: set[uuid.UUID] = set()
+        changed = False
+        for path in prints._enrolled():
+            try:
+                identifier = uuid.UUID(path.stem)
+            except ValueError:
+                continue
+            seen.add(identifier)
+            existing = entries.get(identifier)
+            samples = self._samples_on_disk(path)
+            if existing is None:
+                now = self._now()
+                entries[identifier] = SpeakerEntry(
+                    uuid=identifier,
+                    label=None,
+                    samples=samples,
+                    created_at=now,
+                    updated_at=now,
+                )
+                changed = True
+            elif existing.samples != samples:
+                entries[identifier] = replace(
+                    existing, samples=samples, updated_at=self._now()
+                )
+                changed = True
+        for stale in [u for u in entries if u not in seen]:
+            del entries[stale]
+            changed = True
+        if changed:
+            try:
+                self._save()
+            except OSError as error:
+                # Read paths still work from memory even if the disk write
+                # failed; a read-only volume is a diagnosable state rather
+                # than a crashing service.
+                LOG.warning("could not persist reconciled roster: %s", error)
+
+    def list(self, prints: VoicePrints) -> list[SpeakerEntry]:
+        self.reconcile(prints)
+        return sorted(
+            self._load().values(),
+            key=lambda entry: ((entry.label or "").casefold(), str(entry.uuid)),
+        )
+
+    def touch(self, speaker: uuid.UUID, samples: int) -> SpeakerEntry:
+        """Records that `speaker` has `samples` prints on file.
+
+        Called after an enrol succeeds. Preserves an existing label; creates
+        the entry if this is a first enrolment.
+        """
+        entries = self._load()
+        now = self._now()
+        existing = entries.get(speaker)
+        if existing is None:
+            entry = SpeakerEntry(
+                uuid=speaker,
+                label=None,
+                samples=samples,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            entry = replace(existing, samples=samples, updated_at=now)
+        entries[speaker] = entry
+        self._save()
+        return entry
+
+    def remove(self, speaker: uuid.UUID) -> bool:
+        entries = self._load()
+        if speaker not in entries:
+            return False
+        del entries[speaker]
+        self._save()
+        return True
+
+    def set_label(self, speaker: uuid.UUID, label: str | None) -> SpeakerEntry | None:
+        entries = self._load()
+        existing = entries.get(speaker)
+        if existing is None:
+            return None
+        entry = replace(existing, label=label, updated_at=self._now())
+        entries[speaker] = entry
+        self._save()
+        return entry
+
+    def count(self) -> int:
+        return len(self._load())
+
+    @staticmethod
+    def _samples_on_disk(path: Path) -> int:
+        try:
+            data = np.load(path)
+        except (OSError, ValueError):
+            return 0
+        return int(data.shape[0]) if data.ndim == 2 else 0
 
 
 def cosine(left: np.ndarray, right: np.ndarray) -> float:
@@ -449,19 +647,37 @@ def seconds(samples: np.ndarray) -> float:
     return samples.size / MODEL_SAMPLE_RATE
 
 
+class LabelUpdate(BaseModel):
+    """Body of `PATCH /speakers/{uuid}`.
+
+    `label` is `None` to clear an existing label; the field is nullable
+    rather than optional so a caller can distinguish "leave it alone" (omit)
+    from "clear it" (send `null`) — but since PATCH always writes what is
+    sent, both are equivalent here and the null case is the meaningful one.
+    """
+
+    label: str | None = Field(default=None, max_length=MAX_LABEL_LENGTH)
+
+
 def create_app(
-    encoder: Encoder | None = None, prints: VoicePrints | None = None
+    encoder: Encoder | None = None,
+    prints: VoicePrints | None = None,
+    roster: Roster | None = None,
 ) -> FastAPI:
     """Builds the service.
 
-    `encoder` and `prints` are injected by the tests, which have no use for a
-    model download to check that a 404 is a 404.
+    `encoder`, `prints`, and `roster` are injected by the tests, which have no
+    use for a model download to check that a 404 is a 404.
     """
     app = FastAPI(title="Conduit Vox", version="1")
     api_key = os.environ.get("SPEAKER_ID_API_KEY") or None
     store = prints or VoicePrints(
         Path(os.environ.get("SPEAKER_ID_DATA_DIR", "/data"))
     )
+    # Roster shares the prints directory so a single volume mount carries
+    # both; there is no split between "the voices" and "the names for them"
+    # that a deployment would sensibly want to configure separately.
+    names = roster or Roster(store.directory)
     engine = os.environ.get("SPEAKER_ID_ENGINE", "speechbrain")
     model_name = os.environ.get("SPEAKER_ID_MODEL") or DEFAULT_MODELS.get(engine, "")
     model_cache = Path(os.environ.get("SPEAKER_ID_MODEL_DIR", "/models"))
@@ -516,6 +732,10 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, object]:
+        # Reconciled here so the count reflects prints somebody added
+        # out-of-band (an upgrade, a volume restore) rather than only what the
+        # manifest happened to remember.
+        names.reconcile(store)
         return {
             "status": "ok",
             "engine": engine,
@@ -524,13 +744,37 @@ def create_app(
             # Reported so an operator can tell, before they mount an existing
             # /data volume, whether the prints in it can be compared at all.
             "embedding_width": EMBEDDING_WIDTHS.get(engine),
-            "enrolled": store.count(),
+            "enrolled": names.count(),
             # Whether the encoder is in memory yet. A container that has
             # answered no requests has not paid for the model, and saying so is
             # the difference between a slow first request and a service
             # somebody restarts because they think it is wedged.
             "model_loaded": "encoder" in loaded,
         }
+
+    @app.get("/speakers")
+    def list_speakers(_: None = Depends(authorize)) -> dict[str, object]:
+        return {"speakers": [entry.to_dict() for entry in names.list(store)]}
+
+    @app.patch("/speakers/{speaker}")
+    def label_speaker(
+        speaker: str,
+        update: LabelUpdate,
+        _: None = Depends(authorize),
+    ) -> dict[str, object]:
+        identity = speaker_id(speaker)
+        # Reconciled first: a print that predates the manifest still shows up
+        # in the list route, and its label should be settable without an
+        # enrol round-trip to create the entry.
+        names.reconcile(store)
+        entry = names.set_label(identity, update.label)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"speaker {identity} is not enrolled",
+            )
+        LOG.info("labelled %s as %r", identity, update.label)
+        return entry.to_dict()
 
     @app.post("/identify")
     async def identify(
@@ -574,13 +818,16 @@ def create_app(
             )
 
         held = store.add(identity, get_encoder().embed(samples))
+        names.touch(identity, held)
         LOG.info("enrolled %s from %.2fs (%d samples)", identity, seconds(samples), held)
         return {"speaker": str(identity), "samples": held}
 
     @app.delete("/speakers/{speaker}")
     def forget(speaker: str, _: None = Depends(authorize)) -> Response:
         identity = speaker_id(speaker)
-        if not store.remove(identity):
+        removed_print = store.remove(identity)
+        removed_entry = names.remove(identity)
+        if not removed_print and not removed_entry:
             # Conduit treats this as success — the caller asked for that voice
             # print to be gone and it is — but the status still says which
             # happened, for anyone driving the service directly.
