@@ -5,6 +5,7 @@ use axum::http::{Request, StatusCode};
 use conduit_api::linked_services::hash_token;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
+use conduit_provider::storage::{LinkedServiceKind, VoxLink};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -112,4 +113,31 @@ async fn deleting_a_linked_service_from_management_removes_it() {
     let (status, _) = call(&state, delete("/v1/linked-services/household-memory")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(state.vox_link("household-memory").await.expect("store").is_none());
+}
+
+#[tokio::test]
+async fn listing_legacy_vox_links_synthesizes_their_panel_manifest() {
+    let state = AppState::new(EventBus::default());
+    state
+        .put_vox_link(VoxLink {
+            service_kind: LinkedServiceKind::Vox,
+            peer_id: "kitchen-vox-01".to_owned(),
+            peer_name: "Kitchen Vox".to_owned(),
+            peer_base_url: "http://vox.internal:8081".to_owned(),
+            sync_token_hash: "hash".to_owned(),
+            provider_definition_id: "vox-kitchen-vox-01".to_owned(),
+            panel: None,
+            granted_by: "Operator Console".to_owned(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+        })
+        .await
+        .expect("stores");
+
+    let (status, body) = call(&state, get("/v1/linked-services")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body.as_array().expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["panel"]["label"], "Vox");
+    assert_eq!(list[0]["panel"]["path"], "/ui/");
 }

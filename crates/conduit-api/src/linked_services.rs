@@ -52,7 +52,7 @@ impl TryFrom<VoxLink> for LinkedServiceView {
     type Error = ApiError;
 
     fn try_from(link: VoxLink) -> Result<Self, Self::Error> {
-        let panel = link.panel.ok_or_else(|| {
+        let panel = panel_for(&link).ok_or_else(|| {
             ApiError::unprocessable(format!(
                 "linked service `{}` has no panel to render",
                 link.peer_id
@@ -111,7 +111,7 @@ pub async fn list(
     let mut views = Vec::new();
     for id in state.vox_link_ids().await.map_err(store_failure)? {
         if let Some(link) = state.vox_link(&id).await.map_err(store_failure)? {
-            if let Some(_panel) = &link.panel {
+            if panel_for(&link).is_some() {
                 views.push(LinkedServiceView::try_from(link)?);
             }
         }
@@ -365,6 +365,20 @@ fn normalise_panel(panel: &LinkedServicePanel) -> Result<LinkedServicePanel, Api
         label,
         icon,
         path: path.to_owned(),
+    })
+}
+
+fn panel_for(link: &VoxLink) -> Option<LinkedServicePanel> {
+    link.panel.clone().or_else(|| match link.service_kind {
+        // Backward compatibility for Vox links stored before panel manifests
+        // existed: they were real linked peers and should still surface a tab.
+        LinkedServiceKind::Vox => Some(LinkedServicePanel {
+            id: "vox".to_owned(),
+            label: "Vox".to_owned(),
+            icon: "users".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        _ => None,
     })
 }
 
