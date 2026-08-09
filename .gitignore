@@ -9,6 +9,7 @@ __pycache__/
 /.cargo/registry
 .playwright-cli/
 output/playwright/
+output/
 
 # openWakeWord models, fetched by scripts/fetch-wake-models.sh. Upstream
 # release artifacts rather than ours, so they are downloaded and not carried.

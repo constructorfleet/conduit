@@ -2,6 +2,7 @@
 #
 #   docker compose up                          # just Conduit
 #   docker compose --profile vox up            # and Conduit Vox (speaker identification)
+#   docker compose --profile memoria up        # and Conduit Memoria (memory service)
 #   docker compose --profile wyoming-asr up    # and local speech recognition
 #   docker compose --profile openwakeword up   # and a wake word server
 #
@@ -98,6 +99,112 @@ services:
       - speaker-id-models:/models
     restart: unless-stopped
 
+  # Conduit Memoria — the reference memory service with HTTP API and MCP backing,
+  # reached at http://memoria:8080 from Conduit.
+  #
+  # Create a provider definition of type `http_memory` whose `base_url` is
+  # that address, then add a Memory stage to a pipeline. Or link the two
+  # from Memoria's own UI (`/ui`) and Conduit will provision the definition for you.
+  #
+  # Set CONDUIT_MEMORIA_IMAGE to pin a published tag, or leave it unset to build
+  # from this repository. The GPU tag is the same image with a CUDA base: see
+  # services/memoria/README.md.
+  memoria:
+    profiles: ["memoria"]
+    image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:builtin}
+    build:
+      context: ./services/memoria
+      args:
+        BACKEND: builtin
+        DEVICE: cpu
+    environment:
+      # Optional. When set, Conduit's provider definition needs the same value
+      # as its api_key. Unset means the service is open, which is only
+      # reasonable because its port is not published. Linking through the UI
+      # generates one and persists it, so this variable is only for headless
+      # deployments that provision auth up front.
+      MEMORIA_API_KEY: ${MEMORIA_API_KEY:-}
+      # Address Conduit should store when Memoria is linked from the embedded UI.
+      # This is the Docker-network name, not an operator browser URL.
+      MEMORIA_BASE_URL: ${MEMORIA_BASE_URL:-http://memoria:8080}
+      # Optional: Enable MCP server interface
+      MEMORIA_MCP_ENABLED: ${MEMORIA_MCP_ENABLED:-false}
+      # Optional: MCP transport (stdio, http, or sse)
+      MEMORIA_MCP_TRANSPORT: ${MEMORIA_MCP_TRANSPORT:-stdio}
+    volumes:
+      # Engrams outlive the container, or memories are lost after an update.
+      - memoria-data:/data
+      # Optional: Cache for embedding models (pgvector/qdrant backend)
+      - memoria-cache:/cache
+    restart: unless-stopped
+
+  # Memoria with pgvector backend - needs PostgreSQL with pgvector extension
+  memoria-pgvector:
+    profiles: ["memoria-pgvector"]
+    image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:pgvector}
+    build:
+      context: ./services/memoria
+      args:
+        BACKEND: pgvector
+        DEVICE: cpu
+    environment:
+      MEMORIA_API_KEY: ${MEMORIA_API_KEY:-}
+      MEMORIA_BASE_URL: ${MEMORIA_BASE_URL:-http://memoria:8080}
+      MEMORIA_BACKEND: pgvector
+      MEMORIA_DATABASE_URL: ${MEMORIA_DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/memoria}
+      MEMORIA_MCP_ENABLED: ${MEMORIA_MCP_ENABLED:-false}
+      MEMORIA_MCP_TRANSPORT: ${MEMORIA_MCP_TRANSPORT:-stdio}
+    depends_on:
+      - postgres
+    volumes:
+      - memoria-data:/data
+      - memoria-cache:/cache
+    restart: unless-stopped
+
+  # Memoria with qdrant backend - needs Qdrant server
+  memoria-qdrant:
+    profiles: ["memoria-qdrant"]
+    image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:qdrant}
+    build:
+      context: ./services/memoria
+      args:
+        BACKEND: qdrant
+        DEVICE: cpu
+    environment:
+      MEMORIA_API_KEY: ${MEMORIA_API_KEY:-}
+      MEMORIA_BASE_URL: ${MEMORIA_BASE_URL:-http://memoria:8080}
+      MEMORIA_BACKEND: qdrant
+      MEMORIA_QDRANT_URL: ${MEMORIA_QDRANT_URL:-http://qdrant:6333}
+      MEMORIA_QDRANT_COLLECTION: ${MEMORIA_QDRANT_COLLECTION:-memoria}
+      MEMORIA_MCP_ENABLED: ${MEMORIA_MCP_ENABLED:-false}
+      MEMORIA_MCP_TRANSPORT: ${MEMORIA_MCP_TRANSPORT:-stdio}
+    depends_on:
+      - qdrant
+    volumes:
+      - memoria-data:/data
+      - memoria-cache:/cache
+    restart: unless-stopped
+
+  # PostgreSQL for Memoria pgvector backend
+  postgres:
+    profiles: ["memoria-pgvector"]
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: memoria
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # Qdrant for Memoria qdrant backend
+  qdrant:
+    profiles: ["memoria-qdrant"]
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
   # Speech recognition, reached at tcp://wyoming-asr:10300 from Conduit.
   #
   # Create a provider definition of type `wyoming` whose `url` is that address,
@@ -170,3 +277,7 @@ volumes:
   openwakeword-models:
   microwakeword-models:
   nanowakeword-models:
+  memoria-data:
+  memoria-cache:
+  postgres-data:
+  qdrant-data:

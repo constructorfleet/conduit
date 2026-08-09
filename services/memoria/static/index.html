@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conduit Memoria</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; }
+        .api-key-input { -webkit-text-security: disc; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div id="app" class="max-w-7xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-8">
+            <div class="flex items-center justify-between">
+                <h1 class="text-3xl font-bold flex items-center gap-2">
+                    <i data-lucide="brain" class="w-8 h-8 text-purple-500"></i>
+                    Conduit Memoria
+                </h1>
+                <div id="connection-status" class="flex items-center gap-2">
+                    <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
+                    <span class="text-sm text-gray-400">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="mb-6 border-b border-gray-700">
+            <div class="flex gap-4 overflow-x-auto">
+                <button onclick="showSection('dashboard')" class="nav-btn px-4 py-2 text-sm font-medium border-b-2 border-purple-500 text-purple-400">
+                    Dashboard
+                </button>
+                <button onclick="showSection('engrams')" class="nav-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-gray-300">
+                    Engrams
+                </button>
+                <button onclick="showSection('search')" class="nav-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-gray-300">
+                    Search
+                </button>
+                <button onclick="showSection('speakers')" class="nav-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-gray-300">
+                    Speakers
+                </button>
+                <button onclick="showSection('link')" class="nav-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-gray-300">
+                    Conduit Link
+                </button>
+            </div>
+        </nav>
+
+        <!-- Dashboard Section -->
+        <section id="dashboard-section" class="section">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold">Total Engrams</h3>
+                        <i data-lucide="database" class="w-5 h-5 text-purple-500"></i>
+                    </div>
+                    <p id="total-engrams" class="text-3xl font-bold">0</p>
+                    <p class="text-sm text-gray-400 mt-2">All stored memories</p>
+                </div>
+
+                <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold">Backend</h3>
+                        <i data-lucide="server" class="w-5 h-5 text-green-500"></i>
+                    </div>
+                    <p id="backend-type" class="text-3xl font-bold">-</p>
+                    <p class="text-sm text-gray-400 mt-2">Storage engine</p>
+                </div>
+
+                <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold">Conduit Link</h3>
+                        <i data-lucide="link" class="w-5 h-5 text-blue-500"></i>
+                    </div>
+                    <p id="link-status" class="text-3xl font-bold">-</p>
+                    <p class="text-sm text-gray-400 mt-2">Integration status</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <p class="text-sm text-gray-400">Global</p>
+                    <p id="global-count" class="text-2xl font-bold text-purple-400">0</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <p class="text-sm text-gray-400">Conversation</p>
+                    <p id="conversation-count" class="text-2xl font-bold text-blue-400">0</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <p class="text-sm text-gray-400">Speaker</p>
+                    <p id="speaker-count" class="text-2xl font-bold text-green-400">0</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <p class="text-sm text-gray-400">Health</p>
+                    <p id="health-status" class="text-2xl font-bold text-green-400">OK</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Engrams Section -->
+        <section id="engrams-section" class="section hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold">Engrams</h2>
+                <button onclick="showEngramModal()" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg flex items-center gap-2">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    Add Engram
+                </button>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <div class="p-4 border-b border-gray-700 flex gap-4">
+                    <select id="filter-scope" onchange="loadEngrams()" class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                        <option value="">All Scopes</option>
+                        <option value="global">Global</option>
+                        <option value="conversation">Conversation</option>
+                        <option value="speaker">Speaker</option>
+                    </select>
+                    <input type="text" id="filter-speaker" placeholder="Speaker ID" onchange="loadEngrams()" class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                    <input type="text" id="filter-conversation" placeholder="Conversation ID" onchange="loadEngrams()" class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+                </div>
+
+                <div id="engrams-list" class="divide-y divide-gray-700 max-h-[600px] overflow-y-auto">
+                    <p class="p-4 text-center text-gray-400">Loading engrams...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Search Section -->
+        <section id="search-section" class="section hidden">
+            <h2 class="text-2xl font-bold mb-6">Search Engrams</h2>
+
+            <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-6">
+                <div class="flex gap-4 mb-4">
+                    <input type="text" id="search-query" placeholder="Enter search query..." class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    <button onclick="performSearch()" class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg flex items-center gap-2">
+                        <i data-lucide="search" class="w-4 h-4"></i>
+                        Search
+                    </button>
+                </div>
+                <div class="flex gap-4 text-sm">
+                    <select id="search-scope" class="bg-gray-700 border border-gray-600 rounded px-3 py-2">
+                        <option value="">All Scopes</option>
+                        <option value="global">Global</option>
+                        <option value="conversation">Conversation</option>
+                        <option value="speaker">Speaker</option>
+                    </select>
+                    <input type="number" id="search-limit" value="10" min="1" max="100" class="bg-gray-700 border border-gray-600 rounded px-3 py-2 w-24">
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" id="search-semantic" class="rounded">
+                        <span>Semantic Search</span>
+                    </label>
+                </div>
+            </div>
+
+            <div id="search-results" class="space-y-4">
+                <p class="text-center text-gray-400">Enter a query to search engrams</p>
+            </div>
+        </section>
+
+        <!-- Speakers Section -->
+        <section id="speakers-section" class="section hidden">
+            <h2 class="text-2xl font-bold mb-6">Speaker Memories</h2>
+
+            <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-6">
+                <div class="flex gap-4">
+                    <input type="text" id="speaker-input" placeholder="Enter speaker ID..." class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    <button onclick="loadSpeakerEngrams()" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg flex items-center gap-2">
+                        <i data-lucide="user" class="w-4 h-4"></i>
+                        Load Memories
+                    </button>
+                </div>
+            </div>
+
+            <div id="speaker-engrams" class="space-y-4">
+                <p class="text-center text-gray-400">Enter a speaker ID to view their memories</p>
+            </div>
+        </section>
+
+        <!-- Link Section -->
+        <section id="link-section" class="section hidden">
+            <h2 class="text-2xl font-bold mb-6">Conduit Integration</h2>
+
+            <div id="link-status-panel" class="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-6">
+                <p class="text-center text-gray-400">Loading link status...</p>
+            </div>
+
+            <div id="link-form" class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+                <h3 class="text-lg font-semibold mb-4">Link to Conduit</h3>
+                <form onsubmit="createLink(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Conduit URL</label>
+                        <input type="url" id="conduit-url" required placeholder="http://conduit:8080" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Operator Token</label>
+                        <input type="password" id="operator-token" required class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Peer Name</label>
+                        <input type="text" id="peer-name" value="memoria" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    </div>
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg flex items-center justify-center gap-2">
+                        <i data-lucide="link" class="w-4 h-4"></i>
+                        Link to Conduit
+                    </button>
+                </form>
+            </div>
+
+            <div id="unlink-section" class="hidden mt-6">
+                <button onclick="deleteLink()" class="w-full bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg flex items-center justify-center gap-2">
+                    <i data-lucide="unlink" class="w-4 h-4"></i>
+                    Unlink from Conduit
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <!-- Engram Modal -->
+    <div id="engram-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 w-full max-w-lg mx-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modal-title" class="text-xl font-bold">Add Engram</h3>
+                <button onclick="closeEngramModal()" class="text-gray-400 hover:text-white">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+            <form onsubmit="saveEngram(event)" class="space-y-4">
+                <input type="hidden" id="engram-id">
+                <div>
+                    <label class="block text-sm font-medium mb-2">Content</label>
+                    <textarea id="engram-content" required rows="4" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3" placeholder="Enter memory content..."></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Scope</label>
+                    <select id="engram-scope" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                        <option value="global">Global</option>
+                        <option value="conversation">Conversation</option>
+                        <option value="speaker">Speaker</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Speaker ID (optional)</label>
+                    <input type="text" id="engram-speaker" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Conversation ID (optional)</label>
+                    <input type="text" id="engram-conversation" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-2">Metadata (JSON, optional)</label>
+                    <textarea id="engram-metadata" rows="2" class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-3 font-mono text-sm" placeholder='{"key": "value"}'></textarea>
+                </div>
+                <div class="flex gap-4">
+                    <button type="button" onclick="closeEngramModal()" class="flex-1 bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-lg">Cancel</button>
+                    <button type="submit" class="flex-1 bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // API configuration
+        let API_BASE = window.location.origin;
+        let API_KEY = new URLSearchParams(window.location.search).get('api_key');
+
+        // HTTP client with auth
+        async function apiCall(endpoint, options = {}) {
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers,
+            };
+
+            if (API_KEY) {
+                headers['Authorization'] = `Bearer ${API_KEY}`;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    ...options,
+                    headers,
+                });
+
+                if (response.status === 204) {
+                    return null;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.detail || response.statusText);
+                }
+
+                return response.json();
+            } catch (error) {
+                console.error('API call failed:', error);
+                throw error;
+            }
+        }
+
+        // Section navigation
+        function showSection(sectionName) {
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.add('hidden');
+            });
+
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('border-purple-500', 'text-purple-400');
+                btn.classList.add('border-transparent');
+            });
+
+            document.getElementById(`${sectionName}-section`).classList.remove('hidden');
+
+            const activeBtn = document.querySelector(`[onclick="showSection('${sectionName}')"]`);
+            if (activeBtn) {
+                activeBtn.classList.add('border-purple-500', 'text-purple-400');
+                activeBtn.classList.remove('border-transparent');
+            }
+
+            // Load section data
+            if (sectionName === 'dashboard') loadDashboard();
+            if (sectionName === 'engrams') loadEngrams();
+            if (sectionName === 'link') loadLinkStatus();
+        }
+
+        // Dashboard
+        async function loadDashboard() {
+            try {
+                const health = await apiCall('/health');
+                document.getElementById('total-engrams').textContent = health.engram_count;
+                document.getElementById('backend-type').textContent = health.backend;
+                document.getElementById('health-status').textContent = 'OK';
+                document.getElementById('link-status').textContent = health.linked ? 'Linked' : 'Unlinked';
+                document.getElementById('connection-status').innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span class="text-sm text-gray-400">Connected</span>
+                `;
+
+                // Load scope counts
+                const scopes = ['global', 'conversation', 'speaker'];
+                for (const scope of scopes) {
+                    const engrams = await apiCall(`/engrams?scope=${scope}&limit=1`);
+                    document.getElementById(`${scope}-count`).textContent = engrams.length;
+                }
+            } catch (error) {
+                document.getElementById('connection-status').innerHTML = `
+                    <span class="w-2 h-2 bg-red-500 rounded-full"></span>
+                    <span class="text-sm text-gray-400">Failed to connect</span>
+                `;
+                document.getElementById('health-status').textContent = 'Error';
+            }
+        }
+
+        // Engrams
+        async function loadEngrams() {
+            try {
+                const scope = document.getElementById('filter-scope').value;
+                const speaker = document.getElementById('filter-speaker').value;
+                const conversation = document.getElementById('filter-conversation').value;
+
+                const params = new URLSearchParams();
+                if (scope) params.append('scope', scope);
+                if (speaker) params.append('speaker_id', speaker);
+                if (conversation) params.append('conversation_id', conversation);
+
+                const engrams = await apiCall(`/engrams?${params}`);
+                displayEngrams(engrams);
+            } catch (error) {
+                document.getElementById('engrams-list').innerHTML = `
+                    <p class="p-4 text-center text-red-400">Failed to load engrams: ${error.message}</p>
+                `;
+            }
+        }
+
+        function displayEngrams(engrams) {
+            const container = document.getElementById('engrams-list');
+
+            if (engrams.length === 0) {
+                container.innerHTML = '<p class="p-4 text-center text-gray-400">No engrams found</p>';
+                return;
+            }
+
+            container.innerHTML = engrams.map(engram => `
+                <div class="p-4 hover:bg-gray-750 transition-colors">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="px-2 py-1 rounded text-xs font-medium ${getScopeColor(engram.scope)}">${engram.scope}</span>
+                                <span class="text-xs text-gray-500">${engram.created_at}</span>
+                            </div>
+                            <p class="text-gray-200 mb-2">${escapeHtml(engram.content)}</p>
+                            ${engram.speaker_id ? `<p class="text-xs text-gray-500">Speaker: ${escapeHtml(engram.speaker_id)}</p>` : ''}
+                            ${engram.conversation_id ? `<p class="text-xs text-gray-500">Conversation: ${escapeHtml(engram.conversation_id)}</p>` : ''}
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="editEngram('${engram.id}')" class="text-blue-400 hover:text-blue-300">
+                                <i data-lucide="edit-2" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="deleteEngram('${engram.id}')" class="text-red-400 hover:text-red-300">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            lucide.createIcons();
+        }
+
+        function getScopeColor(scope) {
+            switch (scope) {
+                case 'global': return 'bg-purple-900 text-purple-300';
+                case 'conversation': return 'bg-blue-900 text-blue-300';
+                case 'speaker': return 'bg-green-900 text-green-300';
+                default: return 'bg-gray-700 text-gray-300';
+            }
+        }
+
+        // Engram Modal
+        function showEngramModal(engram = null) {
+            const modal = document.getElementById('engram-modal');
+            const title = document.getElementById('modal-title');
+
+            if (engram) {
+                title.textContent = 'Edit Engram';
+                document.getElementById('engram-id').value = engram.id;
+                document.getElementById('engram-content').value = engram.content;
+                document.getElementById('engram-scope').value = engram.scope;
+                document.getElementById('engram-speaker').value = engram.speaker_id || '';
+                document.getElementById('engram-conversation').value = engram.conversation_id || '';
+                document.getElementById('engram-metadata').value = engram.metadata ? JSON.stringify(engram.metadata, null, 2) : '';
+            } else {
+                title.textContent = 'Add Engram';
+                document.getElementById('engram-id').value = '';
+                document.getElementById('engram-content').value = '';
+                document.getElementById('engram-scope').value = 'global';
+                document.getElementById('engram-speaker').value = '';
+                document.getElementById('engram-conversation').value = '';
+                document.getElementById('engram-metadata').value = '';
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeEngramModal() {
+            document.getElementById('engram-modal').classList.add('hidden');
+        }
+
+        async function saveEngram(event) {
+            event.preventDefault();
+
+            const engramId = document.getElementById('engram-id').value;
+            const content = document.getElementById('engram-content').value;
+            const scope = document.getElementById('engram-scope').value;
+            const speakerId = document.getElementById('engram-speaker').value || null;
+            const conversationId = document.getElementById('engram-conversation').value || null;
+
+            let metadata = null;
+            const metadataText = document.getElementById('engram-metadata').value;
+            if (metadataText) {
+                try {
+                    metadata = JSON.parse(metadataText);
+                } catch (error) {
+                    alert('Invalid JSON metadata');
+                    return;
+                }
+            }
+
+            const data = {
+                content,
+                scope,
+                speaker_id: speakerId,
+                conversation_id: conversationId,
+                metadata,
+            };
+
+            try {
+                if (engramId) {
+                    await apiCall(`/engrams/${engramId}`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ content, metadata }),
+                    });
+                } else {
+                    await apiCall('/engrams', {
+                        method: 'POST',
+                        body: JSON.stringify(data),
+                    });
+                }
+
+                closeEngramModal();
+                loadEngrams();
+            } catch (error) {
+                alert(`Failed to save engram: ${error.message}`);
+            }
+        }
+
+        async function editEngram(engramId) {
+            try {
+                const engram = await apiCall(`/engrams/${engramId}`);
+                showEngramModal(engram);
+            } catch (error) {
+                alert(`Failed to load engram: ${error.message}`);
+            }
+        }
+
+        async function deleteEngram(engramId) {
+            if (!confirm('Are you sure you want to delete this engram?')) {
+                return;
+            }
+
+            try {
+                await apiCall(`/engrams/${engramId}`, { method: 'DELETE' });
+                loadEngrams();
+            } catch (error) {
+                alert(`Failed to delete engram: ${error.message}`);
+            }
+        }
+
+        // Search
+        async function performSearch() {
+            const query = document.getElementById('search-query').value.trim();
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+
+            const scope = document.getElementById('search-scope').value || null;
+            const limit = parseInt(document.getElementById('search-limit').value) || 10;
+            const semantic = document.getElementById('search-semantic').checked;
+
+            try {
+                const results = await apiCall('/engrams/search', {
+                    method: 'POST',
+                    body: JSON.stringify({ query, limit, scope }),
+                });
+
+                displaySearchResults(results);
+            } catch (error) {
+                document.getElementById('search-results').innerHTML = `
+                    <p class="text-center text-red-400">Search failed: ${error.message}</p>
+                `;
+            }
+        }
+
+        function displaySearchResults(results) {
+            const container = document.getElementById('search-results');
+
+            if (results.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-400">No results found</p>';
+                return;
+            }
+
+            container.innerHTML = results.map(result => `
+                <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-1 rounded text-xs font-medium ${getScopeColor(result.engram.scope)}">${result.engram.scope}</span>
+                            <span class="text-sm font-medium text-purple-400">${(result.score * 100).toFixed(1)}% match</span>
+                        </div>
+                        <span class="text-xs text-gray-500">${result.engram.created_at}</span>
+                    </div>
+                    <p class="text-gray-200">${escapeHtml(result.engram.content)}</p>
+                </div>
+            `).join('');
+        }
+
+        // Speaker engrams
+        async function loadSpeakerEngrams() {
+            const speakerId = document.getElementById('speaker-input').value.trim();
+            if (!speakerId) {
+                alert('Please enter a speaker ID');
+                return;
+            }
+
+            try {
+                const engrams = await apiCall(`/engrams/speakers/${speakerId}`);
+                displaySpeakerEngrams(engrams, speakerId);
+            } catch (error) {
+                document.getElementById('speaker-engrams').innerHTML = `
+                    <p class="text-center text-red-400">Failed to load speaker memories: ${error.message}</p>
+                `;
+            }
+        }
+
+        function displaySpeakerEngrams(engrams, speakerId) {
+            const container = document.getElementById('speaker-engrams');
+
+            if (engrams.length === 0) {
+                container.innerHTML = `<p class="text-center text-gray-400">No memories found for speaker: ${escapeHtml(speakerId)}</p>`;
+                return;
+            }
+
+            container.innerHTML = `
+                <h3 class="text-lg font-semibold mb-4">Memories for ${escapeHtml(speakerId)} (${engrams.length})</h3>
+                <div class="space-y-4">
+                    ${engrams.map(engram => `
+                        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                            <div class="flex justify-between items-start mb-2">
+                                <span class="px-2 py-1 rounded text-xs font-medium ${getScopeColor(engram.scope)}">${engram.scope}</span>
+                                <span class="text-xs text-gray-500">${engram.created_at}</span>
+                            </div>
+                            <p class="text-gray-200">${escapeHtml(engram.content)}</p>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // Link management
+        async function loadLinkStatus() {
+            try {
+                const status = await apiCall('/link');
+                displayLinkStatus(status);
+            } catch (error) {
+                document.getElementById('link-status-panel').innerHTML = `
+                    <p class="text-center text-red-400">Failed to load link status: ${error.message}</p>
+                `;
+            }
+        }
+
+        function displayLinkStatus(status) {
+            const panel = document.getElementById('link-status-panel');
+            const form = document.getElementById('link-form');
+            const unlinkSection = document.getElementById('unlink-section');
+
+            if (status.status === 'linked') {
+                panel.innerHTML = `
+                    <div class="flex items-center gap-3 mb-4">
+                        <span class="w-3 h-3 bg-green-500 rounded-full"></span>
+                        <span class="text-lg font-semibold text-green-400">Linked to Conduit</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <p class="text-gray-400">Peer ID</p>
+                            <p class="font-mono">${escapeHtml(status.peer_id || 'N/A')}</p>
+                        </div>
+                        <div>
+                            <p class="text-gray-400">Peer Name</p>
+                            <p class="font-mono">${escapeHtml(status.peer_name || 'N/A')}</p>
+                        </div>
+                        <div class="col-span-2">
+                            <p class="text-gray-400">Conduit URL</p>
+                            <p class="font-mono">${escapeHtml(status.conduit_url || 'N/A')}</p>
+                        </div>
+                    </div>
+                `;
+                form.classList.add('hidden');
+                unlinkSection.classList.remove('hidden');
+            } else {
+                panel.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="w-3 h-3 bg-yellow-500 rounded-full"></span>
+                        <span class="text-lg font-semibold text-yellow-400">Not linked to Conduit</span>
+                    </div>
+                    <p class="text-gray-400 mt-2">Link Memoria to Conduit to enable automatic sync and integration.</p>
+                `;
+                form.classList.remove('hidden');
+                unlinkSection.classList.add('hidden');
+            }
+        }
+
+        async function createLink(event) {
+            event.preventDefault();
+
+            const conduitUrl = document.getElementById('conduit-url').value;
+            const operatorToken = document.getElementById('operator-token').value;
+            const peerName = document.getElementById('peer-name').value;
+
+            try {
+                const status = await apiCall('/link', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        conduit_url: conduitUrl,
+                        operator_token: operatorToken,
+                        peer_name: peerName,
+                    }),
+                });
+
+                displayLinkStatus(status);
+            } catch (error) {
+                alert(`Failed to link: ${error.message}`);
+            }
+        }
+
+        async function deleteLink() {
+            if (!confirm('Are you sure you want to unlink from Conduit?')) {
+                return;
+            }
+
+            try {
+                await apiCall('/link', { method: 'DELETE' });
+                loadLinkStatus();
+            } catch (error) {
+                alert(`Failed to unlink: ${error.message}`);
+            }
+        }
+
+        // Utility functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDashboard();
+        });
+    </script>
+</body>
+</html>

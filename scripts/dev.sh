@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Runs the API server, Conduit Vox, and the Operator Console together for local
+# Runs the API server, Conduit Vox, Conduit Memoria, and the Operator Console together for local
 # development.
 #
-# Two processes is the honest shape of the stack, but starting them by hand
+# Three processes is the honest shape of the stack, but starting them by hand
 # means remembering which port the Vite proxy expects and which authentication
-# mode the server refuses to start without. This is that pair, started once,
-# and stopped together: killing the script kills both, so there is no orphaned
+# mode the server refuses to start without. This is that trio, started once,
+# and stopped together: killing the script kills all three, so there is no orphaned
 # server holding 8080 the next time.
 #
 # The default is the mode a laptop wants — an open API, and real providers from
 # whatever Provider Definitions are saved — because that is the loop worth
 # making frictionless. Everything else is a flag.
 #
-#   scripts/dev.sh                          # anonymous API, Vox, real providers
+#   scripts/dev.sh                          # anonymous API, Vox, Memoria, real providers
 #   scripts/dev.sh --tokens secrets/tokens.json
 #   scripts/dev.sh --echo                   # no speech engine or model server
 #   scripts/dev.sh --api-port 8081 --ui-port 5174
@@ -35,6 +35,7 @@ readonly ROOT
 api_port=8080
 ops_port=9090
 vox_port=8091
+memoria_port=8092
 ui_port=5173
 # Empty means anonymous; a path means authenticate against that token file.
 tokens=""
@@ -45,7 +46,7 @@ dry_run=0
 
 usage() {
     cat <<USAGE
-${SELF} — run the Conduit API, Vox, and Operator Console together
+${SELF} — run the Conduit API, Vox, Memoria, and Operator Console together
 
 Usage: scripts/dev.sh [options]
 
@@ -59,11 +60,12 @@ Options:
   --api-port PORT      Service API port (default ${api_port}).
   --ops-port PORT      Ops API port for /health, /ready, /metrics (default ${ops_port}).
   --vox-port PORT      Conduit Vox port (default ${vox_port}).
+  --memoria-port PORT  Conduit Memoria port (default ${memoria_port}).
   --ui-port PORT       Operator Console port (default ${ui_port}).
   --dry-run            Print what would run, start nothing.
   -h, --help           Show this help.
 
-All three processes bind loopback only. Ctrl-C stops the trio.
+All four processes bind loopback only. Ctrl-C stops the quartet.
 USAGE
 }
 
@@ -131,6 +133,12 @@ while [[ $# -gt 0 ]]; do
             vox_port="$2"
             shift 2
             ;;
+        --memoria-port)
+            require_value "$@"
+            require_port --memoria-port "$2"
+            memoria_port="$2"
+            shift 2
+            ;;
         --dry-run)
             dry_run=1
             shift
@@ -149,8 +157,8 @@ done
 
 # Distinct ports, or one listener wins and the other dies on bind with an error
 # that names an address rather than the flag that collided.
-if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${vox_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${vox_port}" || "${ops_port}" == "${ui_port}" || "${vox_port}" == "${ui_port}" ]]; then
-    die "--api-port, --ops-port, --vox-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${vox_port}, ${ui_port})"
+if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${vox_port}" || "${api_port}" == "${memoria_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${vox_port}" || "${ops_port}" == "${memoria_port}" || "${ops_port}" == "${ui_port}" || "${vox_port}" == "${memoria_port}" || "${vox_port}" == "${ui_port}" || "${memoria_port}" == "${ui_port}" ]]; then
+    die "--api-port, --ops-port, --vox-port, --memoria-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${vox_port}, ${memoria_port}, ${ui_port})"
 fi
 
 # Checked here rather than left to the server: a missing token file after a
@@ -192,18 +200,28 @@ export VITE_CONDUIT_API_TARGET="http://127.0.0.1:${api_port}"
 # bundle still talks to Conduit at the same path; only Vite learns the direct
 # upstream so the embedded UI works before a link exists.
 export VITE_CONDUIT_VOX_TARGET="http://127.0.0.1:${vox_port}"
+# What the Vite proxy forwards /memoria to during local development. The production
+# bundle still talks to Conduit at the same path; only Vite learns the direct
+# upstream so the embedded UI works before a link exists.
+export VITE_CONDUIT_MEMORIA_TARGET="http://127.0.0.1:${memoria_port}"
 vox_dev_root="${ROOT}/output/dev/vox"
 readonly vox_dev_root
 # Vox defaults to container paths. On a host shell those are a great way to
 # find out which directories do not exist, or worse, do and are unwritable.
 export SPEAKER_ID_DATA_DIR="${SPEAKER_ID_DATA_DIR:-${vox_dev_root}/data}"
 export SPEAKER_ID_MODEL_DIR="${SPEAKER_ID_MODEL_DIR:-${vox_dev_root}/models}"
+memoria_dev_root="${ROOT}/output/dev/memoria"
+readonly memoria_dev_root
+# Memoria defaults to container paths. On a host shell those are a great way to
+# find out which directories do not exist, or worse, do and are unwritable.
+export MEMORIA_DATA_DIR="${MEMORIA_DATA_DIR:-${memoria_dev_root}/data}"
 
 cat <<SUMMARY
 conduit dev
   api            http://127.0.0.1:${api_port}
   ops            http://127.0.0.1:${ops_port}
   vox            http://127.0.0.1:${vox_port}
+  memoria        http://127.0.0.1:${memoria_port}
   console        http://127.0.0.1:${ui_port}
   access         ${auth_summary}
   providers      ${provider_summary}
@@ -219,10 +237,13 @@ if [[ "${dry_run}" -eq 1 ]]; then
   CONDUIT_ALLOW_ANONYMOUS=${CONDUIT_ALLOW_ANONYMOUS}
   VITE_CONDUIT_API_TARGET=${VITE_CONDUIT_API_TARGET}
   VITE_CONDUIT_VOX_TARGET=${VITE_CONDUIT_VOX_TARGET}
+  VITE_CONDUIT_MEMORIA_TARGET=${VITE_CONDUIT_MEMORIA_TARGET}
   SPEAKER_ID_DATA_DIR=${SPEAKER_ID_DATA_DIR}
   SPEAKER_ID_MODEL_DIR=${SPEAKER_ID_MODEL_DIR}
+  MEMORIA_DATA_DIR=${MEMORIA_DATA_DIR}
   cargo run ${cargo_args[*]}
-  .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
+  .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
+  .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${memoria_port}
   npm run dev -- --port ${ui_port} --strictPort --host 127.0.0.1
 RESOLVED
     exit 0
@@ -243,7 +264,7 @@ fi
 # already holding it, and on a developer machine the answer is usually a tunnel
 # or a previous run. Skipped when `lsof` is missing rather than treated as free.
 if command -v lsof >/dev/null 2>&1; then
-    for port_pair in "api:${api_port}" "ops:${ops_port}" "vox:${vox_port}" "console:${ui_port}"; do
+    for port_pair in "api:${api_port}" "ops:${ops_port}" "vox:${vox_port}" "memoria:${memoria_port}" "console:${ui_port}"; do
         label="${port_pair%%:*}"
         port="${port_pair##*:}"
         if holder=$(lsof -nP -sTCP:LISTEN -iTCP:"${port}" 2>/dev/null | awk 'NR == 2 {print $1 " (pid " $2 ")"}') \
@@ -265,7 +286,7 @@ vox_dir="${ROOT}/services/vox"
 readonly vox_dir
 vox_venv="${vox_dir}/.venv"
 readonly vox_venv
-vox_python="${vox_venv}/bin/python"
+vox_python="${vox_venv}/bin/python3"
 readonly vox_python
 
 # Vox's UI and health routes only need the base requirements, so the default
@@ -279,7 +300,7 @@ if ! "${vox_python}" -c "import fastapi, httpx, numpy, soundfile, uvicorn" >/dev
     (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -r requirements.txt)
 fi
 
-mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}"
+mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}" "${MEMORIA_DATA_DIR}"
 
 # Compiled before either process starts, so a compile error is a compile error
 # and not a console proxying to a port nothing ever opened.
@@ -288,6 +309,7 @@ printf '\nbuilding conduit-api\n'
 
 api_pid=""
 vox_pid=""
+memoria_pid=""
 ui_pid=""
 
 # `cargo run` and `npm run dev` are wrappers: the processes that actually hold
@@ -311,7 +333,7 @@ descendants() {
 stop() {
     trap - EXIT INT TERM
     local pid victim
-    for pid in "${ui_pid}" "${vox_pid}" "${api_pid}"; do
+    for pid in "${ui_pid}" "${memoria_pid}" "${vox_pid}" "${api_pid}"; do
         [[ -n "${pid}" ]] || continue
         for victim in $(descendants "${pid}"); do
             kill "${victim}" 2>/dev/null || true
@@ -329,6 +351,28 @@ printf 'starting Conduit Vox\n'
 (cd "${vox_dir}" && exec "${vox_python}" -m uvicorn app:app --host 127.0.0.1 --port "${vox_port}") &
 vox_pid=$!
 
+memoria_dir="${ROOT}/services/memoria"
+readonly memoria_dir
+memoria_venv="${memoria_dir}/.venv"
+readonly memoria_venv
+memoria_python="${memoria_venv}/bin/python"
+readonly memoria_python
+
+# Memoria's UI and health routes only need the base requirements, so the default
+# development script installs those rather than every backend's dependencies.
+if [[ ! -x "${memoria_python}" ]]; then
+    printf '\ncreating the Memoria virtualenv\n'
+    (cd "${memoria_dir}" && python3 -m venv .venv)
+fi
+if ! "${memoria_python}" -c "import fastapi, httpx, numpy, uvicorn" >/dev/null 2>&1; then
+    printf '\ninstalling Memoria dependencies\n'
+    (cd "${memoria_dir}" && "${memoria_venv}/bin/pip" install -r requirements.txt)
+fi
+
+printf 'starting Conduit Memoria\n'
+(cd "${memoria_dir}" && exec "${memoria_python}" -m uvicorn app:app --host 127.0.0.1 --port "${memoria_port}") &
+memoria_pid=$!
+
 # `--host 127.0.0.1` because Vite otherwise resolves `localhost` to IPv6 only on
 # macOS, and the console would refuse the loopback address this script prints.
 printf 'starting the operator console\n\n'
@@ -339,15 +383,17 @@ ui_pid=$!
 # Polled rather than `wait -n`, which needs bash 4.3 and so is absent from the
 # bash macOS ships. Either process exiting takes the other down: a console
 # proxying to a dead server is a worse debugging experience than a clean stop.
-while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${vox_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
+while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${vox_pid}" 2>/dev/null && kill -0 "${memoria_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
     sleep 1
 done
 
 if ! kill -0 "${api_pid}" 2>/dev/null; then
-    printf '\n%s: conduit-api exited; stopping Vox and the operator console\n' "${SELF}" >&2
+    printf '\n%s: conduit-api exited; stopping Vox, Memoria, and the operator console\n' "${SELF}" >&2
 elif ! kill -0 "${vox_pid}" 2>/dev/null; then
-    printf '\n%s: Conduit Vox exited; stopping conduit-api and the operator console\n' "${SELF}" >&2
+    printf '\n%s: Conduit Vox exited; stopping conduit-api, Memoria, and the operator console\n' "${SELF}" >&2
+elif ! kill -0 "${memoria_pid}" 2>/dev/null; then
+    printf '\n%s: Conduit Memoria exited; stopping conduit-api, Vox, and the operator console\n' "${SELF}" >&2
 else
-    printf '\n%s: the operator console exited; stopping conduit-api and Vox\n' "${SELF}" >&2
+    printf '\n%s: the operator console exited; stopping conduit-api, Vox, and Memoria\n' "${SELF}" >&2
 fi
 exit 1

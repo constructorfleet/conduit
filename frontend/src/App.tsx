@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Boxes,
+  Brain,
   ChevronRight,
   CircuitBoard,
   CircleAlert,
@@ -123,6 +124,7 @@ const sections = [
   { id: "pipelines", label: "Pipelines", icon: Workflow },
   { id: "providers", label: "Providers", icon: Boxes },
   { id: "vox", label: "Vox", icon: Users },
+  { id: "memoria", label: "Memoria", icon: Brain },
   { id: "firmware", label: "Firmware", icon: CircuitBoard },
   { id: "events", label: "Events", icon: Radio },
   { id: "settings", label: "Settings", icon: Settings },
@@ -987,6 +989,10 @@ function SectionPanel({
     return <VoxPanel />;
   }
 
+  if (section === "memoria") {
+    return <MemoriaPanel />;
+  }
+
   if (section === "firmware") {
     return (
       <FirmwarePanel
@@ -1104,6 +1110,14 @@ function VoxPanel() {
   return (
     <section className="vox-panel surface" aria-label="Conduit Vox">
       <iframe className="vox-frame" src="/vox/ui/" title="Conduit Vox" />
+    </section>
+  );
+}
+
+function MemoriaPanel() {
+  return (
+    <section className="memoria-panel surface" aria-label="Conduit Memoria">
+      <iframe className="memoria-frame" src="/memoria/ui/" title="Conduit Memoria" />
     </section>
   );
 }
