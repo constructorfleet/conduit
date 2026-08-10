@@ -861,11 +861,11 @@ function OperatorWorkspace({
             <h1>
               {firstRun
                 ? "First-Run Setup"
-                : sections.find((section) => section.id === activeSection)
+                : (sections.find((section) => section.id === activeSection)
                     ?.label ??
                   linkedServices.find(
                     (service) => `linked:${service.peer_id}` === activeSection,
-                  )?.panel.label}
+                  )?.panel.label)}
             </h1>
           </div>
           <div className="runtime-strip">
@@ -1169,13 +1169,7 @@ interface ProviderCardView {
   status: ProviderStatus | null;
 }
 
-function EmbeddedServicePanel({
-  title,
-  src,
-}: {
-  title: string;
-  src: string;
-}) {
+function EmbeddedServicePanel({ title, src }: { title: string; src: string }) {
   return (
     <section className="embedded-service-panel surface" aria-label={title}>
       <iframe className="embedded-service-frame" src={src} title={title} />

@@ -3498,12 +3498,15 @@ describe("Vox workspace", () => {
 
     await enterVoxSection(user);
 
-    const panel = screen.getByLabelText("Conduit Vox");
-    const frame = await within(panel).findByTitle("Conduit Vox");
+    const panel = screen
+      .getAllByLabelText("Vox")
+      .find((node) => node.classList.contains("embedded-service-panel"));
+    expect(panel).toBeDefined();
+    const frame = await within(panel!).findByTitle("Vox");
 
     expect(panel).toHaveClass("embedded-service-panel");
     expect(frame).toHaveClass("embedded-service-frame");
-    expect(frame).toHaveAttribute("src", "/vox/ui/");
+    expect(frame).toHaveAttribute("src", "/linked-services/kitchen/ui/");
   });
 
   it("lists linked Vox services in Providers and can revoke one", async () => {

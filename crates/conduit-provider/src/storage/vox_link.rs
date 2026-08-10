@@ -15,14 +15,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkedServiceKind {
+    /// Vox speaker identification and enrollment.
     Vox,
+    /// Memoria memory / MCP surface.
     Memoria,
+    /// Instrumenta tool / integration surface.
     Instrumenta,
+    /// Excita wakeword and management.
     Excita,
+    /// Any other linked service without a typed fallback panel.
     Generic,
 }
 
 impl LinkedServiceKind {
+    /// Snake-case wire name matching the serde encoding.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
