@@ -12,10 +12,10 @@ use conduit_core::graph::PipelineGraph;
 use conduit_core::id::SpeakerId;
 use conduit_core::testing::voice_graph;
 use conduit_provider::storage::{
-    validate_name, EnrolledSpeaker, LinkedServiceKind, LinkedServicePanel, LlmVariant,
-    McpTransport, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    ProviderDefinitionVariant, ProviderSecret, SpeakerRosterStore, ToolVariant, VoxLink,
-    VoxLinkStore,
+    validate_name, EnrolledSpeaker, LinkedService, LinkedServiceKind, LinkedServicePanel,
+    LinkedServiceStore, LlmVariant, McpTransport, PipelineStore, ProviderDefinition,
+    ProviderDefinitionStore, ProviderDefinitionVariant, ProviderSecret, SpeakerRosterStore,
+    ToolVariant,
 };
 
 /// A small but complete pipeline, named `name`.
@@ -68,7 +68,7 @@ pub async fn a_roster_behaves_like_a_store(store: Arc<dyn SpeakerRosterStore>) {
 /// The behaviour every Vox Link Store backend owes its callers.
 ///
 /// `store` must be empty. It is left non-empty.
-pub async fn vox_links_behave_like_a_store(store: Arc<dyn VoxLinkStore>) {
+pub async fn linked_services_behave_like_a_store(store: Arc<dyn LinkedServiceStore>) {
     an_empty_vox_link_store_is_empty(&store).await;
     a_stored_vox_link_comes_back(&store).await;
     vox_link_peer_ids_are_listed_in_order(&store).await;
@@ -361,8 +361,8 @@ async fn a_mismatched_speaker_id_is_refused(store: &Arc<dyn SpeakerRosterStore>)
 }
 
 /// A link row with fixed timestamps, so every backend can round-trip it exactly.
-pub fn vox_link(peer_id: &str, peer_name: &str) -> VoxLink {
-    VoxLink {
+pub fn linked_service(peer_id: &str, peer_name: &str) -> LinkedService {
+    LinkedService {
         service_kind: LinkedServiceKind::Vox,
         peer_id: peer_id.to_owned(),
         peer_name: peer_name.to_owned(),
@@ -383,8 +383,8 @@ pub fn vox_link(peer_id: &str, peer_name: &str) -> VoxLink {
     }
 }
 
-fn replacement_vox_link(peer_id: &str) -> VoxLink {
-    VoxLink {
+fn replacement_vox_link(peer_id: &str) -> LinkedService {
+    LinkedService {
         peer_name: "Kitchen Vox Replacement".to_owned(),
         sync_token_hash: "replacement-token-hash".to_owned(),
         last_seen: Some(
@@ -392,11 +392,11 @@ fn replacement_vox_link(peer_id: &str) -> VoxLink {
                 .expect("fixed timestamp")
                 .with_timezone(&chrono::Utc),
         ),
-        ..vox_link(peer_id, "Kitchen Vox")
+        ..linked_service(peer_id, "Kitchen Vox")
     }
 }
 
-async fn an_empty_vox_link_store_is_empty(store: &Arc<dyn VoxLinkStore>) {
+async fn an_empty_vox_link_store_is_empty(store: &Arc<dyn LinkedServiceStore>) {
     assert!(store.list().await.expect("lists").is_empty(), "a new Vox link store is empty");
     assert!(store.get("missing").await.expect("gets").is_none());
     assert!(
@@ -405,9 +405,9 @@ async fn an_empty_vox_link_store_is_empty(store: &Arc<dyn VoxLinkStore>) {
     );
 }
 
-async fn a_stored_vox_link_comes_back(store: &Arc<dyn VoxLinkStore>) {
+async fn a_stored_vox_link_comes_back(store: &Arc<dyn LinkedServiceStore>) {
     assert!(
-        !store.put("kitchen", vox_link("kitchen", "Kitchen Vox")).await.expect("stores"),
+        !store.put("kitchen", linked_service("kitchen", "Kitchen Vox")).await.expect("stores"),
         "newly created"
     );
     assert!(
@@ -419,8 +419,8 @@ async fn a_stored_vox_link_comes_back(store: &Arc<dyn VoxLinkStore>) {
     assert_eq!(stored, replacement_vox_link("kitchen"), "what went in comes back out");
 }
 
-async fn vox_link_peer_ids_are_listed_in_order(store: &Arc<dyn VoxLinkStore>) {
-    store.put("bedroom", vox_link("bedroom", "Bedroom Vox")).await.expect("stores");
+async fn vox_link_peer_ids_are_listed_in_order(store: &Arc<dyn LinkedServiceStore>) {
+    store.put("bedroom", linked_service("bedroom", "Bedroom Vox")).await.expect("stores");
 
     let ids = store.list().await.expect("lists");
     assert_eq!(ids, ["bedroom", "kitchen"], "sorted");
@@ -430,7 +430,7 @@ async fn vox_link_peer_ids_are_listed_in_order(store: &Arc<dyn VoxLinkStore>) {
     }
 }
 
-async fn vox_link_removal_is_visible(store: &Arc<dyn VoxLinkStore>) {
+async fn vox_link_removal_is_visible(store: &Arc<dyn LinkedServiceStore>) {
     assert!(store.remove("kitchen").await.expect("removes"), "it was there");
     assert!(store.get("kitchen").await.expect("gets").is_none(), "and now it is not");
     assert_eq!(store.list().await.expect("lists"), ["bedroom"]);
@@ -440,12 +440,14 @@ async fn vox_link_removal_is_visible(store: &Arc<dyn VoxLinkStore>) {
     );
 }
 
-async fn every_vox_link_method_refuses_an_unusable_peer_id(store: &Arc<dyn VoxLinkStore>) {
+async fn every_vox_link_method_refuses_an_unusable_peer_id(
+    store: &Arc<dyn LinkedServiceStore>,
+) {
     let before = store.list().await.expect("lists");
 
     for peer_id in UNUSABLE_NAMES {
         assert!(
-            store.put(peer_id, vox_link("escape", "Escape Vox")).await.is_err(),
+            store.put(peer_id, linked_service("escape", "Escape Vox")).await.is_err(),
             "put({peer_id:?}) must be refused"
         );
         assert!(store.get(peer_id).await.is_err(), "get({peer_id:?}) must be refused");
@@ -455,10 +457,10 @@ async fn every_vox_link_method_refuses_an_unusable_peer_id(store: &Arc<dyn VoxLi
     assert_eq!(store.list().await.expect("lists"), before, "a refused peer id stores nothing");
 }
 
-async fn a_mismatched_vox_link_peer_id_is_refused(store: &Arc<dyn VoxLinkStore>) {
+async fn a_mismatched_vox_link_peer_id_is_refused(store: &Arc<dyn LinkedServiceStore>) {
     let before = store.get("bedroom").await.expect("gets");
     assert!(
-        store.put("bedroom", vox_link("other", "Other Vox")).await.is_err(),
+        store.put("bedroom", linked_service("other", "Other Vox")).await.is_err(),
         "the store key and the peer id the link carries must match"
     );
     assert_eq!(

@@ -10,9 +10,9 @@ use conduit_core::Result;
 use conduit_mcp::McpClient;
 use conduit_metrics::Metrics;
 use conduit_provider::storage::{
-    EnrolledSpeaker, McpTransport, PipelineStore, ProviderCapability, ProviderDefinition,
-    ProviderDefinitionStore, ProviderDefinitionVariant, SpeakerRosterStore, ToolVariant,
-    VoxLink, VoxLinkStore,
+    EnrolledSpeaker, LinkedService, LinkedServiceStore, McpTransport, PipelineStore,
+    ProviderCapability, ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant,
+    SpeakerRosterStore, ToolVariant,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
@@ -34,7 +34,7 @@ pub struct AppState {
     /// Who the deployment has named and enrolled.
     speakers: Arc<dyn SpeakerRosterStore>,
     /// Conduit Vox peers this deployment is linked to.
-    vox_links: Arc<dyn VoxLinkStore>,
+    linked_services: Arc<dyn LinkedServiceStore>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
@@ -83,7 +83,7 @@ impl AppState {
             pipelines,
             provider_definitions,
             speakers: Arc::new(MemoryStore::new()),
-            vox_links: Arc::new(MemoryStore::new()),
+            linked_services: Arc::new(MemoryStore::new()),
             providers: Arc::new(RwLock::new(None)),
             provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
@@ -109,8 +109,8 @@ impl AppState {
 
     /// Keeps Vox link records in `store` rather than in memory.
     #[must_use]
-    pub fn with_vox_link_store(mut self, store: Arc<dyn VoxLinkStore>) -> Self {
-        self.vox_links = store;
+    pub fn with_linked_service_store(mut self, store: Arc<dyn LinkedServiceStore>) -> Self {
+        self.linked_services = store;
         self
     }
 
@@ -119,8 +119,8 @@ impl AppState {
     /// # Errors
     ///
     /// Returns an error if the store is unavailable.
-    pub async fn vox_link_ids(&self) -> Result<Vec<String>> {
-        self.vox_links.list().await
+    pub async fn linked_service_ids(&self) -> Result<Vec<String>> {
+        self.linked_services.list().await
     }
 
     /// Fetches one Vox link.
@@ -128,8 +128,8 @@ impl AppState {
     /// # Errors
     ///
     /// Returns an error if the store is unavailable or the entry cannot be read.
-    pub async fn vox_link(&self, peer_id: &str) -> Result<Option<VoxLink>> {
-        self.vox_links.get(peer_id).await
+    pub async fn linked_service(&self, peer_id: &str) -> Result<Option<LinkedService>> {
+        self.linked_services.get(peer_id).await
     }
 
     /// Stores a Vox link, returning `true` if it replaced one.
@@ -137,9 +137,9 @@ impl AppState {
     /// # Errors
     ///
     /// Returns an error if the id is unusable or the write fails.
-    pub async fn put_vox_link(&self, link: VoxLink) -> Result<bool> {
+    pub async fn put_linked_service(&self, link: LinkedService) -> Result<bool> {
         let peer_id = link.peer_id.clone();
-        self.vox_links.put(&peer_id, link).await
+        self.linked_services.put(&peer_id, link).await
     }
 
     /// Removes a Vox link, returning `true` if it existed.
@@ -147,8 +147,8 @@ impl AppState {
     /// # Errors
     ///
     /// Returns an error if the store is unavailable.
-    pub async fn remove_vox_link(&self, peer_id: &str) -> Result<bool> {
-        self.vox_links.remove(peer_id).await
+    pub async fn remove_linked_service(&self, peer_id: &str) -> Result<bool> {
+        self.linked_services.remove(peer_id).await
     }
 
     /// Speaker ids in the roster, in order.

@@ -9,8 +9,8 @@ use std::time::Duration;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::{Error, Result};
 use conduit_provider::storage::{
-    validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    SpeakerRosterStore, VoxLink, VoxLinkStore,
+    validate_name, EnrolledSpeaker, LinkedService, LinkedServiceStore, PipelineStore,
+    ProviderDefinition, ProviderDefinitionStore, SpeakerRosterStore,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
@@ -285,7 +285,7 @@ impl SpeakerRosterStore for PostgresStore {
 }
 
 #[async_trait::async_trait]
-impl VoxLinkStore for PostgresStore {
+impl LinkedServiceStore for PostgresStore {
     async fn list(&self) -> Result<Vec<String>> {
         let rows = sqlx::query("SELECT peer_id FROM vox_links ORDER BY peer_id")
             .fetch_all(&self.pool)
@@ -298,7 +298,7 @@ impl VoxLinkStore for PostgresStore {
             .collect())
     }
 
-    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+    async fn get(&self, peer_id: &str) -> Result<Option<LinkedService>> {
         validate_name(peer_id)?;
         let row = sqlx::query("SELECT link FROM vox_links WHERE peer_id = $1")
             .bind(peer_id)
@@ -309,20 +309,23 @@ impl VoxLinkStore for PostgresStore {
         let Some(row) = row else { return Ok(None) };
         let link: serde_json::Value = row.try_get("link").map_err(Self::failure)?;
         serde_json::from_value(link).map(Some).map_err(|error| {
-            Error::Config(format!("the stored vox link `{peer_id}` is not valid: {error}"))
+            Error::Config(format!(
+                "the stored linked service `{peer_id}` is not valid: {error}"
+            ))
         })
     }
 
-    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool> {
+    async fn put(&self, peer_id: &str, link: LinkedService) -> Result<bool> {
         validate_name(peer_id)?;
         if link.peer_id != peer_id {
             return Err(Error::Config(format!(
-                "vox link peer id `{}` does not match route id `{peer_id}`",
+                "linked service peer id `{}` does not match route id `{peer_id}`",
                 link.peer_id
             )));
         }
-        let json = serde_json::to_value(&link)
-            .map_err(|error| Error::Config(format!("cannot encode the vox link: {error}")))?;
+        let json = serde_json::to_value(&link).map_err(|error| {
+            Error::Config(format!("cannot encode the linked service: {error}"))
+        })?;
 
         let row = sqlx::query(
             "INSERT INTO vox_links (peer_id, link) VALUES ($1, $2)

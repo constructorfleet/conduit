@@ -1,11 +1,12 @@
-//! Links to a Conduit Vox instance.
+//! Links to a Conduit satellite service.
 //!
-//! One row per linked Vox peer. An operator establishes a link once and Vox
-//! then syncs the roster and reverse-proxies its UI through Conduit; nothing
+//! One row per linked peer. An operator establishes a link once and the peer
+//! then reverse-proxies its UI through Conduit and may run service-specific
+//! side channels (Vox roster sync, Memoria memory surface, etc.); nothing
 //! outside this crate cares that the storage is dual-schema. The interesting
 //! rule is that the sync token is stored as a SHA-256 hash so a leaked
-//! `link.json` on a Conduit host cannot be replayed against `/v1/speakers`
-//! without also compromising the DB.
+//! `link.json` on a Conduit host cannot be replayed against the peer without
+//! also compromising the DB.
 
 use chrono::{DateTime, Utc};
 use conduit_core::Result;
@@ -60,7 +61,7 @@ pub struct LinkedServicePanel {
 
 /// One linked Vox peer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VoxLink {
+pub struct LinkedService {
     /// What kind of service this row represents.
     ///
     /// Defaults to `vox` so existing stored rows continue to deserialize as the
@@ -102,15 +103,15 @@ pub struct VoxLink {
 /// by peer id — so that a deployment's choice of backend stays one decision
 /// rather than one per kind of thing stored.
 #[async_trait::async_trait]
-pub trait VoxLinkStore: Send + Sync + 'static {
+pub trait LinkedServiceStore: Send + Sync + 'static {
     /// Peer ids in stable order.
     async fn list(&self) -> Result<Vec<String>>;
 
     /// Fetches one link.
-    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>>;
+    async fn get(&self, peer_id: &str) -> Result<Option<LinkedService>>;
 
     /// Stores a link, returning whether it replaced one.
-    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool>;
+    async fn put(&self, peer_id: &str, link: LinkedService) -> Result<bool>;
 
     /// Removes a link, returning whether it existed.
     async fn remove(&self, peer_id: &str) -> Result<bool>;

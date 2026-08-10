@@ -77,7 +77,8 @@ async fn creating_a_link_mints_a_token_and_auto_provisions_a_provider() {
         ProviderDefinitionVariant::SpeakerId { variant: SpeakerIdVariant::Http { .. } }
     ));
 
-    let link = state.vox_link("kitchen-vox-01").await.expect("store").expect("the link exists");
+    let link =
+        state.linked_service("kitchen-vox-01").await.expect("store").expect("the link exists");
     assert_eq!(link.provider_definition_id, provider_id);
     assert_eq!(
         link.sync_token_hash,
@@ -153,7 +154,7 @@ async fn a_link_that_would_overwrite_a_hand_authored_provider_refuses() {
         .expect("store")
         .expect("still there");
     assert_eq!(survivor.label, "hand-authored");
-    assert!(state.vox_link("kitchen-vox-01").await.expect("store").is_none());
+    assert!(state.linked_service("kitchen-vox-01").await.expect("store").is_none());
 }
 
 #[tokio::test]
@@ -165,7 +166,7 @@ async fn deleting_a_link_revokes_the_row_but_keeps_the_provider() {
     let (status, _) = call(&state, delete("/v1/vox/links/kitchen-vox-01")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    assert!(state.vox_link("kitchen-vox-01").await.expect("store").is_none());
+    assert!(state.linked_service("kitchen-vox-01").await.expect("store").is_none());
     assert!(
         state.provider_definition(&provider_id).await.expect("store").is_some(),
         "the provider survives so pipelines that named it keep working"

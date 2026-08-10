@@ -9,8 +9,8 @@ use std::sync::{Mutex, PoisonError};
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
 use conduit_provider::storage::{
-    validate_name, EnrolledSpeaker, PipelineStore, ProviderDefinition, ProviderDefinitionStore,
-    SpeakerRosterStore, VoxLink, VoxLinkStore,
+    validate_name, EnrolledSpeaker, LinkedService, LinkedServiceStore, PipelineStore,
+    ProviderDefinition, ProviderDefinitionStore, SpeakerRosterStore,
 };
 
 use crate::is_listable;
@@ -21,7 +21,7 @@ pub struct MemoryStore {
     pipelines: Mutex<BTreeMap<String, PipelineGraph>>,
     providers: Mutex<BTreeMap<String, ProviderDefinition>>,
     speakers: Mutex<BTreeMap<String, EnrolledSpeaker>>,
-    vox_links: Mutex<BTreeMap<String, VoxLink>>,
+    linked_services: Mutex<BTreeMap<String, LinkedService>>,
 }
 
 impl MemoryStore {
@@ -50,8 +50,10 @@ impl MemoryStore {
         self.speakers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn lock_vox_links(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, VoxLink>> {
-        self.vox_links.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock_linked_services(
+        &self,
+    ) -> std::sync::MutexGuard<'_, BTreeMap<String, LinkedService>> {
+        self.linked_services.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -140,29 +142,29 @@ impl SpeakerRosterStore for MemoryStore {
 }
 
 #[async_trait::async_trait]
-impl VoxLinkStore for MemoryStore {
+impl LinkedServiceStore for MemoryStore {
     async fn list(&self) -> Result<Vec<String>> {
-        Ok(self.lock_vox_links().keys().filter(|id| is_listable(id)).cloned().collect())
+        Ok(self.lock_linked_services().keys().filter(|id| is_listable(id)).cloned().collect())
     }
 
-    async fn get(&self, peer_id: &str) -> Result<Option<VoxLink>> {
+    async fn get(&self, peer_id: &str) -> Result<Option<LinkedService>> {
         validate_name(peer_id)?;
-        Ok(self.lock_vox_links().get(peer_id).cloned())
+        Ok(self.lock_linked_services().get(peer_id).cloned())
     }
 
-    async fn put(&self, peer_id: &str, link: VoxLink) -> Result<bool> {
+    async fn put(&self, peer_id: &str, link: LinkedService) -> Result<bool> {
         validate_name(peer_id)?;
         if link.peer_id != peer_id {
             return Err(conduit_core::Error::Config(format!(
-                "vox link peer id `{}` does not match route id `{peer_id}`",
+                "linked service peer id `{}` does not match route id `{peer_id}`",
                 link.peer_id
             )));
         }
-        Ok(self.lock_vox_links().insert(peer_id.to_owned(), link).is_some())
+        Ok(self.lock_linked_services().insert(peer_id.to_owned(), link).is_some())
     }
 
     async fn remove(&self, peer_id: &str) -> Result<bool> {
         validate_name(peer_id)?;
-        Ok(self.lock_vox_links().remove(peer_id).is_some())
+        Ok(self.lock_linked_services().remove(peer_id).is_some())
     }
 }

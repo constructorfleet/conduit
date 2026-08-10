@@ -18,8 +18,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
 use conduit_provider::storage::{
-    LinkedServiceKind, LinkedServicePanel, ProviderDefinition, ProviderDefinitionVariant,
-    ProviderSecret, SpeakerEngine, SpeakerIdVariant, VoxLink,
+    LinkedService, LinkedServiceKind, LinkedServicePanel, ProviderDefinition,
+    ProviderDefinitionVariant, ProviderSecret, SpeakerEngine, SpeakerIdVariant,
 };
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -74,8 +74,8 @@ pub struct VoxLinkView {
     pub last_seen: Option<chrono::DateTime<Utc>>,
 }
 
-impl From<VoxLink> for VoxLinkView {
-    fn from(link: VoxLink) -> Self {
+impl From<LinkedService> for VoxLinkView {
+    fn from(link: LinkedService) -> Self {
         Self {
             peer_id: link.peer_id,
             peer_name: link.peer_name,
@@ -122,7 +122,7 @@ pub async fn create(
     let sync_token = mint_sync_token();
     let sync_token_hash = hash_token(&sync_token);
 
-    let link = VoxLink {
+    let link = LinkedService {
         service_kind: LinkedServiceKind::Vox,
         peer_id: peer_id.clone(),
         peer_name: peer_name.to_owned(),
@@ -166,7 +166,7 @@ pub async fn create(
         .put_provider_definition(&provider_definition_id, definition)
         .await
         .map_err(store_failure)?;
-    state.put_vox_link(link).await.map_err(|error| {
+    state.put_linked_service(link).await.map_err(|error| {
         // Best-effort rollback: if the link row cannot be written, undo the
         // provider write so a retry does not trip the "already exists" refusal.
         let state = state.clone();
@@ -203,8 +203,8 @@ pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<VoxLinkView>>, ApiError> {
     let mut views = Vec::new();
-    for id in state.vox_link_ids().await.map_err(store_failure)? {
-        if let Some(link) = state.vox_link(&id).await.map_err(store_failure)? {
+    for id in state.linked_service_ids().await.map_err(store_failure)? {
+        if let Some(link) = state.linked_service(&id).await.map_err(store_failure)? {
             views.push(link.into());
         }
     }
@@ -223,7 +223,7 @@ pub async fn delete(
     Path(peer_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
-    if state.remove_vox_link(&peer_id).await.map_err(store_failure)? {
+    if state.remove_linked_service(&peer_id).await.map_err(store_failure)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("no vox link for peer `{peer_id}`")))
@@ -301,14 +301,14 @@ fn provider_id_for(peer_id: &str) -> String {
     format!("vox-{peer_id}")
 }
 
-async fn linked_peer(state: &AppState) -> Result<VoxLink, ApiError> {
-    let ids = state.vox_link_ids().await.map_err(store_failure)?;
+async fn linked_peer(state: &AppState) -> Result<LinkedService, ApiError> {
+    let ids = state.linked_service_ids().await.map_err(store_failure)?;
     match ids.as_slice() {
         [] => Err(ApiError::not_found(
             "no Vox peer is linked; complete the link flow first".to_owned(),
         )),
         [peer_id] => state
-            .vox_link(peer_id)
+            .linked_service(peer_id)
             .await
             .map_err(store_failure)?
             .ok_or_else(|| ApiError::not_found(format!("no vox link for peer `{peer_id}`"))),
