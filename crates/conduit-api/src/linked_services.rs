@@ -21,29 +21,46 @@ use crate::auth::ManagementCaller;
 use crate::error::JsonBody;
 use crate::{ApiError, AppState};
 
+/// Body of `POST /v1/linked-services` — the peer's request to establish a link.
 #[derive(Debug, Deserialize)]
 pub struct CreateLinkedServiceRequest {
+    /// What kind of service is linking (used for typed fallback panels).
     pub service_kind: LinkedServiceKind,
+    /// Human-readable label the operator gave the peer.
     pub peer_name: String,
+    /// Stable id the peer chose for itself.
     pub peer_id: String,
+    /// Base URL Conduit reaches the peer at (proxy target).
     pub peer_base_url: String,
+    /// Panel manifest the peer wants Conduit to surface.
     pub panel: LinkedServicePanel,
 }
 
+/// Body of the 201 response from `POST /v1/linked-services`.
 #[derive(Debug, Serialize)]
 pub struct CreateLinkedServiceResponse {
+    /// Opaque bearer the peer stores locally and presents on peer-revoke.
     pub sync_token: String,
 }
 
+/// One linked service row as rendered by the management API.
 #[derive(Debug, Serialize)]
 pub struct LinkedServiceView {
+    /// Which kind of service this row represents.
     pub service_kind: LinkedServiceKind,
+    /// Stable peer id.
     pub peer_id: String,
+    /// Operator-visible peer label.
     pub peer_name: String,
+    /// Base URL Conduit reaches the peer at.
     pub peer_base_url: String,
+    /// Resolved panel manifest (inline or typed-kind fallback).
     pub panel: LinkedServicePanel,
+    /// Operator credential name that authorised the link.
     pub granted_by: String,
+    /// When the link was established.
     pub granted_at: chrono::DateTime<Utc>,
+    /// Last time the peer was seen using its sync token, if ever.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<chrono::DateTime<Utc>>,
 }
@@ -71,6 +88,7 @@ impl TryFrom<VoxLink> for LinkedServiceView {
     }
 }
 
+/// `POST /v1/linked-services` — creates a link and returns the sync token.
 pub async fn create(
     ManagementCaller(caller): ManagementCaller,
     State(state): State<AppState>,
@@ -104,6 +122,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(CreateLinkedServiceResponse { sync_token })))
 }
 
+/// `GET /v1/linked-services` — lists linked peers with their resolved panels.
 pub async fn list(
     _caller: ManagementCaller,
     State(state): State<AppState>,
@@ -119,6 +138,7 @@ pub async fn list(
     Ok(Json(views))
 }
 
+/// `DELETE /v1/linked-services/{peer_id}` — operator-authenticated unlink.
 pub async fn delete(
     _caller: ManagementCaller,
     State(state): State<AppState>,
@@ -128,12 +148,11 @@ pub async fn delete(
     if state.remove_vox_link(&peer_id).await.map_err(store_failure)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(ApiError::not_found(format!(
-            "no linked service for peer `{peer_id}`"
-        )))
+        Err(ApiError::not_found(format!("no linked service for peer `{peer_id}`")))
     }
 }
 
+/// `DELETE /v1/linked-services/{peer_id}` with bearer — peer-initiated revoke.
 pub async fn revoke(
     State(state): State<AppState>,
     Path(peer_id): Path<String>,
@@ -141,9 +160,7 @@ pub async fn revoke(
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
     let Some(link) = state.vox_link(&peer_id).await.map_err(store_failure)? else {
-        return Err(ApiError::not_found(format!(
-            "no linked service for peer `{peer_id}`"
-        )));
+        return Err(ApiError::not_found(format!("no linked service for peer `{peer_id}`")));
     };
     let token = bearer(&headers).ok_or_else(ApiError::unauthorized)?;
     if hash_token(token) != link.sync_token_hash {
@@ -153,6 +170,7 @@ pub async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `ANY /linked-services/{peer_id}/{*rest}` — reverse proxy to the peer.
 pub async fn proxy(
     _caller: ManagementCaller,
     State(state): State<AppState>,
@@ -222,7 +240,9 @@ async fn linked_peer(state: &AppState, path: &str) -> Result<VoxLink, ApiError> 
     let peer_id = path
         .strip_prefix("/linked-services/")
         .and_then(|rest| rest.split('/').next())
-        .ok_or_else(|| ApiError::not_found(format!("unsupported linked-service route `{path}`")))?;
+        .ok_or_else(|| {
+            ApiError::not_found(format!("unsupported linked-service route `{path}`"))
+        })?;
     let peer_id = normalise_peer_id(peer_id)?;
     state
         .vox_link(&peer_id)
@@ -333,9 +353,7 @@ fn normalise_peer_id(raw: &str) -> Result<String, ApiError> {
     }
     let normalised = trimmed.to_ascii_lowercase();
     if normalised.len() > 128
-        || !normalised
-            .chars()
-            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-' | '_'))
+        || !normalised.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-' | '_'))
     {
         return Err(ApiError::unprocessable(
             "peer_id must be 1-128 characters of lowercase letters, digits, `-`, or `_`",
@@ -360,12 +378,7 @@ fn normalise_panel(panel: &LinkedServicePanel) -> Result<LinkedServicePanel, Api
     if !path.starts_with('/') {
         return Err(ApiError::unprocessable("panel.path must start with `/`"));
     }
-    Ok(LinkedServicePanel {
-        id,
-        label,
-        icon,
-        path: path.to_owned(),
-    })
+    Ok(LinkedServicePanel { id, label, icon, path: path.to_owned() })
 }
 
 fn panel_for(link: &VoxLink) -> Option<LinkedServicePanel> {
@@ -389,6 +402,7 @@ fn mint_sync_token() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Hex-encoded SHA-256 of a sync token, used for storage and bearer compare.
 pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);

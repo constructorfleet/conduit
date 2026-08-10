@@ -71,11 +71,7 @@ async fn creating_a_linked_service_mints_a_sync_token_and_lists_the_panel() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let sync_token = body["sync_token"].as_str().expect("sync token").to_owned();
 
-    let stored = state
-        .vox_link("household-memory")
-        .await
-        .expect("store")
-        .expect("stored row");
+    let stored = state.vox_link("household-memory").await.expect("store").expect("stored row");
     assert_eq!(stored.service_kind.as_str(), "memoria");
     assert_eq!(stored.panel.as_ref().expect("panel").label, "Memoria");
     assert_eq!(stored.sync_token_hash, hash_token(&sync_token));

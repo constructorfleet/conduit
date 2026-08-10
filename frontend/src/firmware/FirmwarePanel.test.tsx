@@ -23,7 +23,10 @@ function filledForm() {
 async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
   const form = filledForm();
   await user.type(screen.getByLabelText("Device name"), form.device);
-  await user.selectOptions(screen.getByLabelText("Base device"), form.base_device);
+  await user.selectOptions(
+    screen.getByLabelText("Base device"),
+    form.base_device,
+  );
   await user.type(screen.getByLabelText("Pipeline"), form.pipeline);
   await user.type(screen.getByLabelText("Server"), form.server);
 }

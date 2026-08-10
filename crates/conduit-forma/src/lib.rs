@@ -13,13 +13,13 @@
 //! - Integration with Conduit's transform pipeline
 
 pub mod engine;
+pub mod provider;
 pub mod rule;
 pub mod storage;
-pub mod provider;
 
 pub use engine::Engine;
-pub use rule::{FormaRule, RuleType, RuleCondition, RuleAction, CaseConversion};
 pub use provider::FormaProvider;
+pub use rule::{CaseConversion, FormaRule, RuleAction, RuleCondition, RuleType};
 pub use storage::{FormaStore, MemoryStore, RuleSet};
 
 /// Error types for Forma operations
@@ -27,16 +27,16 @@ pub use storage::{FormaStore, MemoryStore, RuleSet};
 pub enum FormaError {
     #[error("Rule validation failed: {0}")]
     Validation(String),
-    
+
     #[error("Rule execution failed: {0}")]
     Execution(String),
-    
+
     #[error("Storage error: {0}")]
     Storage(String),
-    
+
     #[error("Invalid rule ID: {0}")]
     InvalidRuleId(String),
-    
+
     #[error("Rule set not found: {0}")]
     RuleSetNotFound(String),
 }

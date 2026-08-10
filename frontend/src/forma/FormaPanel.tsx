@@ -1,6 +1,5 @@
-import {
-  useState,
-} from "react";
+import { useState } from "react";
+import "./FormaPanel.css";
 import {
   Plus,
   Save,
@@ -17,7 +16,13 @@ interface FormaRule {
   name: string;
   description: string;
   rule_type: "replace" | "remove" | "transform" | "insert" | "script";
-  condition: "always" | "matches_pattern" | "contains" | "starts_with" | "ends_with" | "custom";
+  condition:
+    | "always"
+    | "matches_pattern"
+    | "contains"
+    | "starts_with"
+    | "ends_with"
+    | "custom";
   action: {
     pattern?: string;
     replacement?: string;
@@ -77,9 +82,13 @@ export function FormaPanel() {
       ],
     },
   ]);
-  const [selectedRuleSet, setSelectedRuleSet] = useState<RuleSet | null>(ruleSets[0]);
+  const [selectedRuleSet, setSelectedRuleSet] = useState<RuleSet | null>(
+    ruleSets[0],
+  );
   const [editingRule, setEditingRule] = useState<FormaRule | null>(null);
-  const [testInput, setTestInput] = useState("Hello, World! 🌟 This is **bold** text.");
+  const [testInput, setTestInput] = useState(
+    "Hello, World! 🌟 This is **bold** text.",
+  );
   const [testOutput, setTestOutput] = useState("");
   const [showTestResults, setShowTestResults] = useState(false);
 
@@ -116,8 +125,8 @@ export function FormaPanel() {
                 ? set.rules.map((r) => (r.id === rule.id ? rule : r))
                 : [...set.rules, rule].sort((a, b) => b.priority - a.priority),
             }
-          : set
-      )
+          : set,
+      ),
     );
 
     setSelectedRuleSet((current) =>
@@ -126,9 +135,11 @@ export function FormaPanel() {
             ...current,
             rules: current.rules.some((r) => r.id === rule.id)
               ? current.rules.map((r) => (r.id === rule.id ? rule : r))
-              : [...current.rules, rule].sort((a, b) => b.priority - a.priority),
+              : [...current.rules, rule].sort(
+                  (a, b) => b.priority - a.priority,
+                ),
           }
-        : current
+        : current,
     );
 
     setEditingRule(null);
@@ -144,8 +155,8 @@ export function FormaPanel() {
               ...set,
               rules: set.rules.filter((rule) => rule.id !== ruleId),
             }
-          : set
-      )
+          : set,
+      ),
     );
 
     setSelectedRuleSet((current) =>
@@ -154,7 +165,7 @@ export function FormaPanel() {
             ...current,
             rules: current.rules.filter((rule) => rule.id !== ruleId),
           }
-        : current
+        : current,
     );
   };
 
@@ -167,11 +178,11 @@ export function FormaPanel() {
           ? {
               ...set,
               rules: set.rules.map((rule) =>
-                rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule
+                rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule,
               ),
             }
-          : set
-      )
+          : set,
+      ),
     );
 
     setSelectedRuleSet((current) =>
@@ -179,10 +190,10 @@ export function FormaPanel() {
         ? {
             ...current,
             rules: current.rules.map((rule) =>
-              rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule
+              rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule,
             ),
           }
-        : current
+        : current,
     );
   };
 
@@ -210,9 +221,9 @@ export function FormaPanel() {
     if (!rule.enabled) return text;
 
     try {
-      let pattern = rule.action.pattern || "";
-      let flags = rule.action.flags || "";
-      let regex = new RegExp(pattern, flags);
+      const pattern = rule.action.pattern || "";
+      const flags = rule.action.flags || "";
+      const regex = new RegExp(pattern, flags);
 
       switch (rule.rule_type) {
         case "replace":
@@ -236,7 +247,7 @@ export function FormaPanel() {
           }
           if (rule.action.case_conversion === "sentence") {
             return text.replace(/(^\s*\w|[.!?]\s*\w)/g, (char) =>
-              char.toUpperCase()
+              char.toUpperCase(),
             );
           }
           return text;
@@ -261,204 +272,177 @@ export function FormaPanel() {
     }
   };
 
+  const sortedRules = selectedRuleSet
+    ? [...selectedRuleSet.rules].sort((a, b) => b.priority - a.priority)
+    : [];
+
+  const handleNewSet = () => {
+    const newSet: RuleSet = {
+      id: `set-${Date.now()}`,
+      name: "New Rule Set",
+      description: "",
+      rules: [],
+    };
+    setRuleSets([...ruleSets, newSet]);
+    setSelectedRuleSet(newSet);
+  };
+
   return (
-    <section className="forma-panel surface" aria-label="Conduit Forma">
-      <div className="forma-layout">
-        <div className="forma-sidebar">
-          <div className="panel-heading-row">
-            <div>
-              <h2>Rule Sets</h2>
-              <p className="panel-caption">
-                Collections of transformation rules
-              </p>
-            </div>
-            <button
-              className="secondary-action"
-              type="button"
-              onClick={() => {
-                const newSet: RuleSet = {
-                  id: `set-${Date.now()}`,
-                  name: "New Rule Set",
-                  description: "",
-                  rules: [],
-                };
-                setRuleSets([...ruleSets, newSet]);
-                setSelectedRuleSet(newSet);
-              }}
-            >
-              <Plus size={17} aria-hidden="true" />
-              New Set
-            </button>
-          </div>
-
-          <div className="rule-sets-list">
+    <section className="forma-panel" aria-label="Conduit Forma">
+      <header className="forma-header">
+        <span className="tag">
+          <span>Rule set</span>
+          <select
+            value={selectedRuleSet?.id ?? ""}
+            onChange={(e) => {
+              const found = ruleSets.find((s) => s.id === e.target.value);
+              if (found) setSelectedRuleSet(found);
+            }}
+            aria-label="Select rule set"
+          >
             {ruleSets.map((set) => (
-              <button
-                key={set.id}
-                type="button"
-                className={`rule-set-item ${
-                  selectedRuleSet?.id === set.id ? "selected" : ""
-                }`}
-                onClick={() => setSelectedRuleSet(set)}
-              >
-                <div className="rule-set-info">
-                  <strong>{set.name}</strong>
-                  <span>{set.rules.length} rules</span>
-                </div>
-                {selectedRuleSet?.id === set.id && (
-                  <CheckCircle size={16} aria-hidden="true" />
-                )}
-              </button>
+              <option key={set.id} value={set.id}>
+                {set.name} ({set.rules.length})
+              </option>
             ))}
-          </div>
+          </select>
+        </span>
+        <div className="row">
+          <button className="btn" type="button" onClick={handleNewSet}>
+            <Plus size={16} aria-hidden="true" /> New set
+          </button>
+          <button
+            className="btn primary"
+            type="button"
+            onClick={handleAddRule}
+            disabled={!selectedRuleSet}
+          >
+            <Plus size={16} aria-hidden="true" /> Add rule
+          </button>
         </div>
+      </header>
 
-        <div className="forma-main">
-          {selectedRuleSet ? (
-            <>
-              <div className="panel-heading-row">
-                <div>
-                  <h2>{selectedRuleSet.name}</h2>
-                  <p className="panel-caption">
-                    {selectedRuleSet.description || "No description"}
-                  </p>
-                </div>
-                <div className="rule-actions">
-                  <button
-                    className="primary-action"
-                    type="button"
-                    onClick={handleAddRule}
-                  >
-                    <Plus size={17} aria-hidden="true" />
-                    Add Rule
-                  </button>
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    onClick={handleTestRules}
-                  >
-                    <Play size={17} aria-hidden="true" />
-                    Test Rules
-                  </button>
-                </div>
-              </div>
+      <main className="forma-main">
+        <section className="card full">
+          <h2>Test</h2>
+          <div className="stack">
+            <label>
+              <span className="field-label">Input</span>
+              <textarea
+                className="mono"
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                placeholder="Enter text to test transformations…"
+                rows={3}
+              />
+            </label>
+            <div className="row">
+              <button
+                className="btn primary"
+                type="button"
+                onClick={handleTestRules}
+                disabled={!selectedRuleSet}
+              >
+                <Play size={16} aria-hidden="true" /> Run
+              </button>
+            </div>
+            {showTestResults && (
+              <label>
+                <span className="field-label">Output</span>
+                <textarea
+                  className="mono"
+                  value={testOutput}
+                  readOnly
+                  rows={3}
+                />
+              </label>
+            )}
+          </div>
+        </section>
 
-              <div className="test-area">
-                <label className="field">
-                  <span>Test Input</span>
-                  <textarea
-                    value={testInput}
-                    onChange={(e) => setTestInput(e.target.value)}
-                    placeholder="Enter text to test transformations..."
-                    rows={3}
-                  />
-                </label>
-
-                {showTestResults && (
-                  <div className="test-results">
-                    <label className="field">
-                      <span>Test Output</span>
-                      <textarea
-                        value={testOutput}
-                        readOnly
-                        rows={3}
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              <div className="rules-list">
-                {selectedRuleSet.rules
-                  .sort((a, b) => b.priority - a.priority)
-                  .map((rule) => (
-                    <div
-                      key={rule.id}
-                      className={`rule-item ${
-                        editingRule?.id === rule.id ? "editing" : ""
-                      } ${!rule.enabled ? "disabled" : ""}`}
-                    >
-                      <div className="rule-header">
-                        <div className="rule-info">
-                          <strong>{rule.name}</strong>
-                          <span className="rule-type">
-                            {rule.rule_type.toUpperCase()}
-                          </span>
-                          <span className="rule-priority">
-                            Priority: {rule.priority}
-                          </span>
-                        </div>
-                        <div className="rule-actions">
-                          <button
-                            className="icon-action"
-                            type="button"
-                            aria-label={rule.enabled ? "Disable" : "Enable"}
-                            onClick={() => handleToggleRule(rule.id)}
-                          >
-                            {rule.enabled ? (
-                              <CheckCircle size={16} aria-hidden="true" />
-                            ) : (
-                              <AlertCircle size={16} aria-hidden="true" />
-                            )}
-                          </button>
-                          <button
-                            className="icon-action"
-                            type="button"
-                            aria-label="Edit rule"
-                            onClick={() => setEditingRule(rule)}
-                          >
-                            <Settings size={16} aria-hidden="true" />
-                          </button>
-                          <button
-                            className="icon-action danger"
-                            type="button"
-                            aria-label="Delete rule"
-                            onClick={() => handleDeleteRule(rule.id)}
-                          >
-                            <Trash2 size={16} aria-hidden="true" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="rule-description">
-                        {rule.description || "No description"}
-                      </div>
-
-                      <div className="rule-details">
-                        <div className="rule-condition">
-                          <span className="detail-label">Condition:</span>
-                          <span className="detail-value">
-                            {rule.condition}
-                          </span>
-                        </div>
-                        <div className="rule-action">
-                          <span className="detail-label">Action:</span>
-                          <span className="detail-value">
-                            {rule.action.pattern && (
-                              <code>
-                                {rule.rule_type === "replace"
-                                  ? `s/${rule.action.pattern}/${rule.action.replacement}/`
-                                  : `/${rule.action.pattern}/`}
-                              </code>
-                            )}
-                            {rule.action.case_conversion && (
-                              <span>Case: {rule.action.case_conversion}</span>
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </>
+        <section className="card full">
+          <h2>Rules</h2>
+          {!selectedRuleSet || sortedRules.length === 0 ? (
+            <p className="empty">
+              No rules in this set — add one to get started.
+            </p>
           ) : (
-            <div className="empty-state">
-              <Settings size={48} aria-hidden="true" />
-              <p>Select a rule set to manage transformation rules</p>
+            <div>
+              {sortedRules.map((rule) => (
+                <div
+                  key={rule.id}
+                  className={`rule-row ${!rule.enabled ? "disabled" : ""}`}
+                >
+                  <div className="rule-head">
+                    <div className="rule-head-left">
+                      <strong>{rule.name}</strong>
+                      <span className="chip">{rule.rule_type}</span>
+                      <span className="rule-priority">
+                        Priority: {rule.priority}
+                      </span>
+                    </div>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button
+                        className="btn icon"
+                        type="button"
+                        aria-label={rule.enabled ? "Disable" : "Enable"}
+                        onClick={() => handleToggleRule(rule.id)}
+                      >
+                        {rule.enabled ? (
+                          <CheckCircle size={16} aria-hidden="true" />
+                        ) : (
+                          <AlertCircle size={16} aria-hidden="true" />
+                        )}
+                      </button>
+                      <button
+                        className="btn icon"
+                        type="button"
+                        aria-label="Edit rule"
+                        onClick={() => setEditingRule(rule)}
+                      >
+                        <Settings size={16} aria-hidden="true" />
+                      </button>
+                      <button
+                        className="btn icon danger"
+                        type="button"
+                        aria-label="Delete rule"
+                        onClick={() => handleDeleteRule(rule.id)}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  {rule.description && (
+                    <p className="rule-meta">{rule.description}</p>
+                  )}
+                  <div className="rule-details">
+                    <span>
+                      <span className="detail-label">Condition:</span>{" "}
+                      {rule.condition}
+                    </span>
+                    {rule.action.pattern && (
+                      <span>
+                        <span className="detail-label">Action:</span>{" "}
+                        <code>
+                          {rule.rule_type === "replace"
+                            ? `s/${rule.action.pattern}/${rule.action.replacement ?? ""}/`
+                            : `/${rule.action.pattern}/`}
+                        </code>
+                      </span>
+                    )}
+                    {rule.action.case_conversion && (
+                      <span>
+                        <span className="detail-label">Case:</span>{" "}
+                        {rule.action.case_conversion}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-        </div>
-      </div>
+        </section>
+      </main>
 
       {editingRule && (
         <RuleEditor
@@ -481,23 +465,23 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
   const [editedRule, setEditedRule] = useState<FormaRule>({ ...rule });
 
   return (
-    <div className="rule-editor-overlay">
-      <div className="rule-editor">
-        <div className="rule-editor-header">
-          <h3>Edit Rule</h3>
+    <div className="modal-overlay">
+      <div className="modal">
+        <div className="modal-header">
+          <h3>Edit rule</h3>
           <button
-            className="icon-action"
+            className="btn icon"
             type="button"
             onClick={onCancel}
             aria-label="Close"
           >
-            <X size={20} aria-hidden="true" />
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
-        <div className="rule-editor-body">
-          <label className="field">
-            <span>Rule Name</span>
+        <div className="stack">
+          <label>
+            <span className="field-label">Rule name</span>
             <input
               type="text"
               value={editedRule.name}
@@ -507,8 +491,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
             />
           </label>
 
-          <label className="field">
-            <span>Description</span>
+          <label>
+            <span className="field-label">Description</span>
             <textarea
               value={editedRule.description}
               onChange={(e) =>
@@ -519,14 +503,14 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
           </label>
 
           <div className="field-row">
-            <label className="field">
-              <span>Rule Type</span>
+            <label>
+              <span className="field-label">Rule type</span>
               <select
                 value={editedRule.rule_type}
                 onChange={(e) =>
                   setEditedRule({
                     ...editedRule,
-                    rule_type: e.target.value as any,
+                    rule_type: e.target.value as FormaRule["rule_type"],
                   })
                 }
               >
@@ -538,8 +522,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
               </select>
             </label>
 
-            <label className="field">
-              <span>Priority</span>
+            <label>
+              <span className="field-label">Priority</span>
               <input
                 type="number"
                 value={editedRule.priority}
@@ -553,14 +537,14 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
             </label>
           </div>
 
-          <label className="field">
-            <span>Condition</span>
+          <label>
+            <span className="field-label">Condition</span>
             <select
               value={editedRule.condition}
               onChange={(e) =>
                 setEditedRule({
                   ...editedRule,
-                  condition: e.target.value as any,
+                  condition: e.target.value as FormaRule["condition"],
                 })
               }
             >
@@ -575,8 +559,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
 
           {editedRule.rule_type === "replace" && (
             <>
-              <label className="field">
-                <span>Pattern (Regex)</span>
+              <label>
+                <span className="field-label">Pattern (regex)</span>
                 <input
                   type="text"
                   value={editedRule.action.pattern || ""}
@@ -592,8 +576,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
                 />
               </label>
 
-              <label className="field">
-                <span>Replacement</span>
+              <label>
+                <span className="field-label">Replacement</span>
                 <input
                   type="text"
                   value={editedRule.action.replacement || ""}
@@ -609,8 +593,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
                 />
               </label>
 
-              <label className="field">
-                <span>Flags (e.g., 'gi' for global, case-insensitive)</span>
+              <label>
+                <span className="field-label">Flags (e.g. gi)</span>
                 <input
                   type="text"
                   value={editedRule.action.flags || ""}
@@ -629,8 +613,8 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
           )}
 
           {editedRule.rule_type === "transform" && (
-            <label className="field">
-              <span>Case Conversion</span>
+            <label>
+              <span className="field-label">Case conversion</span>
               <select
                 value={editedRule.action.case_conversion || "lower"}
                 onChange={(e) =>
@@ -638,7 +622,9 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
                     ...editedRule,
                     action: {
                       ...editedRule.action,
-                      case_conversion: e.target.value as any,
+                      case_conversion: e.target.value as NonNullable<
+                        FormaRule["action"]["case_conversion"]
+                      >,
                     },
                   })
                 }
@@ -663,12 +649,12 @@ function RuleEditor({ rule, onSave, onCancel }: RuleEditorProps) {
           </label>
         </div>
 
-        <div className="rule-editor-footer">
-          <button className="secondary-action" type="button" onClick={onCancel}>
+        <div className="modal-actions">
+          <button className="btn" type="button" onClick={onCancel}>
             Cancel
           </button>
           <button
-            className="primary-action"
+            className="btn primary"
             type="button"
             onClick={() => onSave(editedRule)}
           >

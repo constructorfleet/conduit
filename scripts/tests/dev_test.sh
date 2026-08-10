@@ -83,6 +83,8 @@ emits "the default points the console proxy at the API" \
     "VITE_CONDUIT_API_TARGET=http://127.0.0.1:8080"
 emits "the default points the Vox proxy at the local Vox service" \
     "VITE_CONDUIT_VOX_TARGET=http://127.0.0.1:8091"
+emits "the default points the Memoria proxy at the local Memoria service" \
+    "VITE_CONDUIT_MEMORIA_TARGET=http://127.0.0.1:8092"
 emits "the default stores Vox prints in a writable local directory" \
     "SPEAKER_ID_DATA_DIR=${root}/output/dev/vox/data"
 emits "the default stores Vox models in a writable local directory" \
@@ -90,7 +92,9 @@ emits "the default stores Vox models in a writable local directory" \
 emits "the default serves the console on Vite's port" \
     "npm run dev -- --port 5173 --strictPort --host 127.0.0.1"
 emits "the default starts Vox on its own loopback port" \
-    ".venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8091"
+    ".venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8091"
+emits "the default starts Memoria on its own loopback port" \
+    ".venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8092"
 
 # --- Authentication ----------------------------------------------------------
 
@@ -131,6 +135,8 @@ emits "--ops-port moves the ops listener" "CONDUIT_OPS_BIND=127.0.0.1:9191" --op
 emits "--ui-port moves the console" "npm run dev -- --port 5174 --strictPort --host 127.0.0.1" --ui-port 5174
 emits "--vox-port moves the Vox listener" \
     "VITE_CONDUIT_VOX_TARGET=http://127.0.0.1:8191" --vox-port 8191
+emits "--memoria-port moves the Memoria listener" \
+    "VITE_CONDUIT_MEMORIA_TARGET=http://127.0.0.1:8291" --memoria-port 8291
 
 refuses "a non-numeric port is refused" "--api-port" --api-port http://8080
 refuses "port zero is refused" "--ui-port" --ui-port 0
