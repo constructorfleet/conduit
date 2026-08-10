@@ -21,9 +21,9 @@ use conduit_store::PostgresStore;
 use sqlx::AssertSqlSafe;
 
 use conformance::{
-    a_roster_behaves_like_a_store, behaves_like_a_store, graph, provider_definition,
-    provider_definitions_behave_like_a_store, vox_link, vox_links_behave_like_a_store,
-    UNUSABLE_NAMES,
+    a_roster_behaves_like_a_store, behaves_like_a_store, graph, linked_service,
+    linked_services_behave_like_a_store, provider_definition,
+    provider_definitions_behave_like_a_store, UNUSABLE_NAMES,
 };
 
 /// The database to test against, if one was named.
@@ -106,9 +106,9 @@ async fn it_behaves_like_a_roster() {
 
 #[tokio::test]
 async fn it_behaves_like_a_vox_link_store() {
-    let store: Arc<dyn conduit_provider::storage::VoxLinkStore> =
+    let store: Arc<dyn conduit_provider::storage::LinkedServiceStore> =
         Arc::new(store_or_skip!("vox_link_contract"));
-    vox_links_behave_like_a_store(store).await;
+    linked_services_behave_like_a_store(store).await;
 }
 
 #[tokio::test]
@@ -270,10 +270,10 @@ async fn the_provider_definition_is_stored_as_queryable_json() {
 #[tokio::test]
 async fn the_vox_link_is_stored_as_queryable_json() {
     let store = store_or_skip!("vox_link_queryable");
-    conduit_provider::storage::VoxLinkStore::put(
+    conduit_provider::storage::LinkedServiceStore::put(
         &store,
         "kitchen",
-        vox_link("kitchen", "Kitchen Vox"),
+        linked_service("kitchen", "Kitchen Vox"),
     )
     .await
     .expect("stores");

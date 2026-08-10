@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use conduit_api::linked_services::hash_token;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_provider::storage::{LinkedServiceKind, VoxLink};
+use conduit_provider::storage::{LinkedService, LinkedServiceKind};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -71,7 +71,8 @@ async fn creating_a_linked_service_mints_a_sync_token_and_lists_the_panel() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let sync_token = body["sync_token"].as_str().expect("sync token").to_owned();
 
-    let stored = state.vox_link("household-memory").await.expect("store").expect("stored row");
+    let stored =
+        state.linked_service("household-memory").await.expect("store").expect("stored row");
     assert_eq!(stored.service_kind.as_str(), "memoria");
     assert_eq!(stored.panel.as_ref().expect("panel").label, "Memoria");
     assert_eq!(stored.sync_token_hash, hash_token(&sync_token));
@@ -98,7 +99,7 @@ async fn revoking_a_linked_service_by_sync_token_removes_it() {
 
     let (status, _) = call(&state, request).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(state.vox_link("household-memory").await.expect("store").is_none());
+    assert!(state.linked_service("household-memory").await.expect("store").is_none());
 }
 
 #[tokio::test]
@@ -108,14 +109,14 @@ async fn deleting_a_linked_service_from_management_removes_it() {
 
     let (status, _) = call(&state, delete("/v1/linked-services/household-memory")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(state.vox_link("household-memory").await.expect("store").is_none());
+    assert!(state.linked_service("household-memory").await.expect("store").is_none());
 }
 
 #[tokio::test]
 async fn listing_legacy_vox_links_synthesizes_their_panel_manifest() {
     let state = AppState::new(EventBus::default());
     state
-        .put_vox_link(VoxLink {
+        .put_linked_service(LinkedService {
             service_kind: LinkedServiceKind::Vox,
             peer_id: "kitchen-vox-01".to_owned(),
             peer_name: "Kitchen Vox".to_owned(),
@@ -136,4 +137,58 @@ async fn listing_legacy_vox_links_synthesizes_their_panel_manifest() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["panel"]["label"], "Vox");
     assert_eq!(list[0]["panel"]["path"], "/ui/");
+}
+
+#[tokio::test]
+async fn listing_legacy_instrumenta_links_synthesizes_their_panel_manifest() {
+    let state = AppState::new(EventBus::default());
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Instrumenta,
+            peer_id: "instrumenta-main".to_owned(),
+            peer_name: "Instrumenta".to_owned(),
+            peer_base_url: "http://instrumenta.internal:8080".to_owned(),
+            sync_token_hash: "hash".to_owned(),
+            provider_definition_id: String::new(),
+            panel: None,
+            granted_by: "Operator Console".to_owned(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+        })
+        .await
+        .expect("stores");
+
+    let (status, body) = call(&state, get("/v1/linked-services")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body.as_array().expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["panel"]["label"], "Instrumenta");
+    assert_eq!(list[0]["panel"]["icon"], "code");
+}
+
+#[tokio::test]
+async fn listing_legacy_excita_links_synthesizes_their_panel_manifest() {
+    let state = AppState::new(EventBus::default());
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Excita,
+            peer_id: "excita-main".to_owned(),
+            peer_name: "Excita".to_owned(),
+            peer_base_url: "http://excita.internal:8080".to_owned(),
+            sync_token_hash: "hash".to_owned(),
+            provider_definition_id: String::new(),
+            panel: None,
+            granted_by: "Operator Console".to_owned(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+        })
+        .await
+        .expect("stores");
+
+    let (status, body) = call(&state, get("/v1/linked-services")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body.as_array().expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["panel"]["label"], "Excita");
+    assert_eq!(list[0]["panel"]["icon"], "radio");
 }

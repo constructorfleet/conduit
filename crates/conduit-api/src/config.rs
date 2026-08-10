@@ -13,7 +13,7 @@ use std::time::Duration;
 use conduit_core::{Error, Result};
 use conduit_openai::OpenAiConfig;
 use conduit_provider::storage::{
-    PipelineStore, ProviderDefinitionStore, SpeakerRosterStore, VoxLinkStore,
+    LinkedServiceStore, PipelineStore, ProviderDefinitionStore, SpeakerRosterStore,
 };
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::{FileStore, MemoryStore};
@@ -184,8 +184,8 @@ pub async fn speaker_roster_store_from_env() -> Result<Arc<dyn SpeakerRosterStor
 /// # Errors
 ///
 /// Returns [`Error::Config`] if the configured directory cannot be used.
-pub async fn vox_link_store_from_env() -> Result<Arc<dyn VoxLinkStore>> {
-    vox_link_store_from_vars(&std::env::vars().collect()).await
+pub async fn linked_service_store_from_env() -> Result<Arc<dyn LinkedServiceStore>> {
+    linked_service_store_from_vars(&std::env::vars().collect()).await
 }
 
 /// Opens the speaker roster store described by `vars`.
@@ -323,7 +323,7 @@ fn default_provider_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
     default_data_subdir(vars, PROVIDER_DIR, "providers")
 }
 
-fn default_vox_link_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
+fn default_linked_service_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
     default_data_subdir(vars, VOX_LINK_DIR, "vox-links")
 }
 
@@ -332,9 +332,9 @@ fn default_vox_link_dir(vars: &HashMap<String, String>) -> Result<PathBuf> {
 /// # Errors
 ///
 /// Returns [`Error::Config`] if the configured directory cannot be used.
-pub async fn vox_link_store_from_vars(
+pub async fn linked_service_store_from_vars(
     vars: &HashMap<String, String>,
-) -> Result<Arc<dyn VoxLinkStore>> {
+) -> Result<Arc<dyn LinkedServiceStore>> {
     #[cfg(feature = "postgres")]
     if let Some(url) = vars.get(DATABASE_URL) {
         if !url.trim().is_empty() {
@@ -356,7 +356,7 @@ pub async fn vox_link_store_from_vars(
             Ok(Arc::new(FileStore::open(directory).await?))
         }
         None => {
-            let directory = default_vox_link_dir(vars)?;
+            let directory = default_linked_service_dir(vars)?;
             tracing::info!(
                 directory = %directory.display(),
                 "storing Vox links in the default local data directory"

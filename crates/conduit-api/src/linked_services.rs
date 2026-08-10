@@ -11,7 +11,7 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
-use conduit_provider::storage::{LinkedServiceKind, LinkedServicePanel, VoxLink};
+use conduit_provider::storage::{LinkedService, LinkedServiceKind, LinkedServicePanel};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -65,10 +65,10 @@ pub struct LinkedServiceView {
     pub last_seen: Option<chrono::DateTime<Utc>>,
 }
 
-impl TryFrom<VoxLink> for LinkedServiceView {
+impl TryFrom<LinkedService> for LinkedServiceView {
     type Error = ApiError;
 
-    fn try_from(link: VoxLink) -> Result<Self, Self::Error> {
+    fn try_from(link: LinkedService) -> Result<Self, Self::Error> {
         let panel = panel_for(&link).ok_or_else(|| {
             ApiError::unprocessable(format!(
                 "linked service `{}` has no panel to render",
@@ -99,14 +99,14 @@ pub async fn create(
     let peer_base_url = trimmed_field("peer_base_url", &request.peer_base_url)?;
     let panel = normalise_panel(&request.panel)?;
 
-    if state.vox_link(&peer_id).await.map_err(store_failure)?.is_some() {
+    if state.linked_service(&peer_id).await.map_err(store_failure)?.is_some() {
         return Err(ApiError::conflict(format!(
             "linked service `{peer_id}` already exists; unlink it first"
         )));
     }
 
     let sync_token = mint_sync_token();
-    let link = VoxLink {
+    let link = LinkedService {
         service_kind: request.service_kind,
         peer_id: peer_id.clone(),
         peer_name: peer_name.to_owned(),
@@ -118,7 +118,7 @@ pub async fn create(
         granted_at: Utc::now(),
         last_seen: None,
     };
-    state.put_vox_link(link).await.map_err(store_failure)?;
+    state.put_linked_service(link).await.map_err(store_failure)?;
     Ok((StatusCode::CREATED, Json(CreateLinkedServiceResponse { sync_token })))
 }
 
@@ -128,8 +128,8 @@ pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<LinkedServiceView>>, ApiError> {
     let mut views = Vec::new();
-    for id in state.vox_link_ids().await.map_err(store_failure)? {
-        if let Some(link) = state.vox_link(&id).await.map_err(store_failure)? {
+    for id in state.linked_service_ids().await.map_err(store_failure)? {
+        if let Some(link) = state.linked_service(&id).await.map_err(store_failure)? {
             if panel_for(&link).is_some() {
                 views.push(LinkedServiceView::try_from(link)?);
             }
@@ -145,7 +145,7 @@ pub async fn delete(
     Path(peer_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
-    if state.remove_vox_link(&peer_id).await.map_err(store_failure)? {
+    if state.remove_linked_service(&peer_id).await.map_err(store_failure)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("no linked service for peer `{peer_id}`")))
@@ -159,14 +159,14 @@ pub async fn revoke(
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
-    let Some(link) = state.vox_link(&peer_id).await.map_err(store_failure)? else {
+    let Some(link) = state.linked_service(&peer_id).await.map_err(store_failure)? else {
         return Err(ApiError::not_found(format!("no linked service for peer `{peer_id}`")));
     };
     let token = bearer(&headers).ok_or_else(ApiError::unauthorized)?;
     if hash_token(token) != link.sync_token_hash {
         return Err(ApiError::unauthorized());
     }
-    state.remove_vox_link(&peer_id).await.map_err(store_failure)?;
+    state.remove_linked_service(&peer_id).await.map_err(store_failure)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -236,7 +236,7 @@ pub async fn proxy(
     })
 }
 
-async fn linked_peer(state: &AppState, path: &str) -> Result<VoxLink, ApiError> {
+async fn linked_peer(state: &AppState, path: &str) -> Result<LinkedService, ApiError> {
     let peer_id = path
         .strip_prefix("/linked-services/")
         .and_then(|rest| rest.split('/').next())
@@ -245,7 +245,7 @@ async fn linked_peer(state: &AppState, path: &str) -> Result<VoxLink, ApiError> 
         })?;
     let peer_id = normalise_peer_id(peer_id)?;
     state
-        .vox_link(&peer_id)
+        .linked_service(&peer_id)
         .await
         .map_err(store_failure)?
         .ok_or_else(|| ApiError::not_found(format!("no linked service for peer `{peer_id}`")))
@@ -381,7 +381,7 @@ fn normalise_panel(panel: &LinkedServicePanel) -> Result<LinkedServicePanel, Api
     Ok(LinkedServicePanel { id, label, icon, path: path.to_owned() })
 }
 
-fn panel_for(link: &VoxLink) -> Option<LinkedServicePanel> {
+fn panel_for(link: &LinkedService) -> Option<LinkedServicePanel> {
     link.panel.clone().or_else(|| match link.service_kind {
         // Backward compatibility for Vox links stored before panel manifests
         // existed: they were real linked peers and should still surface a tab.
@@ -391,7 +391,25 @@ fn panel_for(link: &VoxLink) -> Option<LinkedServicePanel> {
             icon: "users".to_owned(),
             path: "/ui/".to_owned(),
         }),
-        _ => None,
+        LinkedServiceKind::Memoria => Some(LinkedServicePanel {
+            id: "memoria".to_owned(),
+            label: "Memoria".to_owned(),
+            icon: "brain".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        LinkedServiceKind::Instrumenta => Some(LinkedServicePanel {
+            id: "instrumenta".to_owned(),
+            label: "Instrumenta".to_owned(),
+            icon: "code".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        LinkedServiceKind::Excita => Some(LinkedServicePanel {
+            id: "excita".to_owned(),
+            label: "Excita".to_owned(),
+            icon: "radio".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        LinkedServiceKind::Generic => None,
     })
 }
 

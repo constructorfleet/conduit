@@ -16,8 +16,8 @@ use axum::Router;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_provider::storage::{
-    LinkedServiceKind, LinkedServicePanel, ProviderDefinition, ProviderDefinitionVariant,
-    ProviderSecret, SpeakerEngine, SpeakerIdVariant, VoxLink,
+    LinkedService, LinkedServiceKind, LinkedServicePanel, ProviderDefinition,
+    ProviderDefinitionVariant, ProviderSecret, SpeakerEngine, SpeakerIdVariant,
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -63,7 +63,7 @@ async fn proxy_forwards_the_request_with_the_stored_vox_api_key() {
     let state = AppState::new(EventBus::default());
     install_link_provider(&state, &upstream.base_url).await;
     state
-        .put_vox_link(VoxLink {
+        .put_linked_service(LinkedService {
             service_kind: LinkedServiceKind::Vox,
             peer_id: "kitchen".to_owned(),
             peer_name: "Kitchen Vox".to_owned(),
@@ -108,7 +108,7 @@ async fn proxy_rewrites_redirect_locations_back_under_conduit() {
     let state = AppState::new(EventBus::default());
     install_link_provider(&state, &upstream.base_url).await;
     state
-        .put_vox_link(VoxLink {
+        .put_linked_service(LinkedService {
             service_kind: LinkedServiceKind::Vox,
             peer_id: "kitchen".to_owned(),
             peer_name: "Kitchen Vox".to_owned(),
