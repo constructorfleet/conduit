@@ -22,9 +22,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -68,7 +67,6 @@ def _build_create_body(
         "peer_name": request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": base_url,
-        "mcp_url": f"{base_url.rstrip('/')}/mcp",
         "panel": {
             "id": "instrumenta",
             "label": "Instrumenta",
@@ -157,16 +155,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         extension_to_dict=_ext_to,
     )
 
-    security = HTTPBearer(auto_error=False)
-
-    async def verify_token(
-        credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    ) -> None:
-        if config.api_key and (
-            credentials is None or credentials.credentials != config.api_key
-        ):
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.backend = backend
@@ -226,10 +214,6 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/")
     async def root() -> RedirectResponse:
         return RedirectResponse(url="/ui/")
-
-    # `verify_token` is defined but has no protected routes in the skeleton;
-    # keep it referenced so a linter does not eagerly delete it.
-    app.state.verify_token = verify_token
 
     return app
 

@@ -54,13 +54,6 @@ class TestHealth:
         assert data["backend"] == "sqlite"
         assert data["linked"] is False
 
-    def test_health_stays_ok_regardless_of_upstream(self, client: TestClient) -> None:
-        # v1 posture: /health reports Instrumenta itself, never aggregates
-        # upstreams. There are no upstreams configured here — the point of the
-        # test is documenting the contract: /health does not touch them.
-        assert client.get("/health").json()["status"] == "ok"
-
-
 class TestMcpEndpoint:
     def test_mcp_endpoint_advertises_empty_surface(self, client: TestClient) -> None:
         response = client.post("/mcp")
@@ -76,12 +69,15 @@ class TestRootRedirect:
         assert response.headers["location"] == "/ui/"
 
 
-class TestApiKey:
-    def test_link_get_is_unauthenticated(self, client: TestClient) -> None:
-        # The link router itself owns its authentication; here we just assert
-        # the router is mounted and reachable, which is the skeleton's job.
-        response = client.get("/link")
-        assert response.status_code in (200, 401, 404)
+class TestLinkRouter:
+    def test_link_router_is_mounted(self, client: TestClient) -> None:
+        # The shared conduit_link router exposes GET /link; a fresh service is
+        # unlinked, so it responds 404 rather than the "route not registered"
+        # 404 (which would come with an empty allow-list). We assert the route
+        # exists in the OpenAPI schema — mounting is what the skeleton needs
+        # to prove; the router's own tests cover the semantics.
+        paths = client.get("/openapi.json").json()["paths"]
+        assert "/link" in paths
 
 
 class TestSecretBoxFailLoud:
