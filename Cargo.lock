@@ -1153,7 +1153,7 @@ dependencies = [
  "conduit-provider",
  "futures-util",
  "hound",
- "ndarray 0.16.1",
+ "ndarray 0.17.2",
  "ort",
  "tokio",
  "tokio-stream",

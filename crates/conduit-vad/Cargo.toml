@@ -33,7 +33,7 @@ tracing.workspace = true
 # export fails the same way, including the one named `ifless`. `conduit-wake`
 # keeps `tract`, which loads openWakeWord fine.
 ort = { version = "=2.0.0-rc.10", optional = true }
-ndarray = { version = "0.16", optional = true }
+ndarray = { version = "0.17", optional = true }
 
 [dev-dependencies]
 bytes.workspace = true
