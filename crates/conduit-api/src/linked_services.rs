@@ -193,9 +193,7 @@ pub async fn probe(
         )));
     }
     let manifest: LinkedServiceManifest = response.json().await.map_err(|error| {
-        ApiError::unprocessable(format!(
-            "manifest at `{manifest_url}` did not parse: {error}"
-        ))
+        ApiError::unprocessable(format!("manifest at `{manifest_url}` did not parse: {error}"))
     })?;
     Ok(Json(manifest))
 }

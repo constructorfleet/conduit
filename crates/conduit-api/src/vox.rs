@@ -19,8 +19,8 @@ use base64::Engine;
 use chrono::Utc;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel};
 use conduit_provider::storage::{
-    LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret, SpeakerEngine,
-    SpeakerIdVariant,
+    LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
+    SpeakerEngine, SpeakerIdVariant,
 };
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};

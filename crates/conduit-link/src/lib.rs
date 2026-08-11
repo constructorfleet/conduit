@@ -96,14 +96,8 @@ mod tests {
 
     #[test]
     fn service_kind_serialises_snake_case() {
-        assert_eq!(
-            serde_json::to_value(LinkedServiceKind::Dicta).unwrap(),
-            json!("dicta"),
-        );
-        assert_eq!(
-            serde_json::to_value(LinkedServiceKind::Forma).unwrap(),
-            json!("forma"),
-        );
+        assert_eq!(serde_json::to_value(LinkedServiceKind::Dicta).unwrap(), json!("dicta"),);
+        assert_eq!(serde_json::to_value(LinkedServiceKind::Forma).unwrap(), json!("forma"),);
     }
 
     #[test]
@@ -131,27 +125,18 @@ mod tests {
             path: "/ui/".into(),
         };
         let value = serde_json::to_value(&panel).unwrap();
-        assert_eq!(
-            value,
-            json!({"id":"vox","label":"Voices","icon":"mic","path":"/ui/"}),
-        );
+        assert_eq!(value, json!({"id":"vox","label":"Voices","icon":"mic","path":"/ui/"}),);
         let back: LinkedServicePanel = serde_json::from_value(value).unwrap();
         assert_eq!(back, panel);
     }
 
     #[test]
     fn reachability_serialises_snake_case() {
-        assert_eq!(
-            serde_json::to_value(Reachability::Ok).unwrap(),
-            json!("ok"),
-        );
+        assert_eq!(serde_json::to_value(Reachability::Ok).unwrap(), json!("ok"),);
         assert_eq!(
             serde_json::to_value(Reachability::Unreachable).unwrap(),
             json!("unreachable"),
         );
-        assert_eq!(
-            serde_json::to_value(Reachability::Unknown).unwrap(),
-            json!("unknown"),
-        );
+        assert_eq!(serde_json::to_value(Reachability::Unknown).unwrap(), json!("unknown"),);
     }
 }
