@@ -182,7 +182,8 @@ pub async fn create(
 
     let sync_token = mint_sync_token();
     let provider_definition_id =
-        vox_auto.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+        vox_auto.as_ref().map(|(id, _, _)| id.clone()).unwrap_or_default();
+    let proxy_auth_bearer = vox_auto.as_ref().map(|(_, _, bearer)| bearer.clone());
     let link = LinkedService {
         service_kind: request.service_kind,
         peer_id: peer_id.clone(),
@@ -194,12 +195,13 @@ pub async fn create(
         granted_by: caller.name.clone(),
         granted_at: Utc::now(),
         last_seen: None,
+        proxy_auth_bearer,
     };
 
     // Order matters: the provider definition is written first so a failure
     // mid-link leaves an inert definition rather than a link row pointing at
     // a definition that never landed.
-    let response_extension = if let Some((provider_id, definition)) = vox_auto {
+    let response_extension = if let Some((provider_id, definition, _)) = vox_auto {
         state.put_provider_definition(&provider_id, definition).await.map_err(store_failure)?;
         Some(serde_json::json!({ "provider_definition_id": provider_id }))
     } else {
@@ -247,6 +249,11 @@ pub async fn create(
 
 /// Prepare (but do not write) the Vox auto-provisioned provider definition.
 ///
+/// Returns `(provider_id, definition, proxy_auth_bearer)` — the bearer is the
+/// raw `local_api_key` Vox will accept on its own routes, which the row
+/// needs so Conduit's reverse proxy can present it on forwarded requests
+/// (spec 0005 §Reverse-proxy contract strips the operator's own bearer).
+///
 /// Extracted so validation errors — missing extension, blank `local_api_key`,
 /// or an existing provider definition — reject the request before any state
 /// mutation.
@@ -256,7 +263,7 @@ async fn prepare_vox_auto_provision(
     peer_name: &str,
     peer_base_url: &str,
     extension: &Option<JsonValue>,
-) -> Result<(String, ProviderDefinition), ApiError> {
+) -> Result<(String, ProviderDefinition, String), ApiError> {
     let raw = extension.as_ref().ok_or_else(|| {
         ApiError::unprocessable(
             "linking a Vox peer requires `extension.local_api_key`".to_owned(),
@@ -303,7 +310,7 @@ async fn prepare_vox_auto_provision(
         settings: serde_json::Map::new(),
     };
 
-    Ok((provider_definition_id, definition))
+    Ok((provider_definition_id, definition, local_api_key.to_owned()))
 }
 
 /// `GET /v1/linked-services` — lists linked peers with their resolved panels.
@@ -424,6 +431,16 @@ pub async fn proxy(
             continue;
         }
         upstream = upstream.header(name, value);
+    }
+    // If the peer needs a bearer for its own routes, substitute the one
+    // Conduit stored at link time. Spec 0005 §Reverse-proxy contract strips
+    // the operator's incoming `authorization` so it never leaks to the
+    // peer; this puts a peer-scoped bearer in its place so the iframe's
+    // fetch calls actually authenticate.
+    if let Some(bearer_token) = peer.proxy_auth_bearer.as_deref() {
+        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {bearer_token}")) {
+            upstream = upstream.header(header::AUTHORIZATION, value);
+        }
     }
     upstream = upstream.body(reqwest::Body::wrap_stream(body.into_data_stream()));
 

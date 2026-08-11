@@ -80,6 +80,7 @@ async fn proxy_forwards_the_request_with_the_stored_vox_api_key() {
             granted_by: "operator".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
+            proxy_auth_bearer: None,
         })
         .await
         .expect("stores");
@@ -125,6 +126,7 @@ async fn proxy_rewrites_redirect_locations_back_under_conduit() {
             granted_by: "operator".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
+            proxy_auth_bearer: None,
         })
         .await
         .expect("stores");
@@ -212,4 +214,96 @@ async fn vox_peer(seen: Arc<tokio::sync::Mutex<Option<ObservedRequest>>>) -> Vox
     });
 
     VoxPeer { base_url: format!("http://{address}") }
+}
+
+#[tokio::test]
+async fn linked_services_proxy_injects_the_row_proxy_auth_bearer() {
+    // Spec 0005 strips the operator's authorization header before the proxy
+    // forwards a request, so an iframed peer UI otherwise couldn't
+    // authenticate to its own service. The row's proxy_auth_bearer fills
+    // that gap: Conduit swaps the operator bearer for the peer-scoped one.
+    let seen = Arc::new(tokio::sync::Mutex::new(None));
+    let upstream = vox_peer(seen.clone()).await;
+
+    let state = AppState::new(EventBus::default());
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Vox,
+            peer_id: "kitchen".to_owned(),
+            peer_name: "Kitchen Vox".to_owned(),
+            peer_base_url: upstream.base_url.clone(),
+            sync_token_hash: "hash".to_owned(),
+            provider_definition_id: String::new(),
+            panel: Some(LinkedServicePanel {
+                id: "vox".to_owned(),
+                label: "Vox".to_owned(),
+                icon: "users".to_owned(),
+                path: "/ui/".to_owned(),
+            }),
+            granted_by: "operator".to_owned(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+            proxy_auth_bearer: Some("peer-scoped-key".to_owned()),
+        })
+        .await
+        .expect("stores");
+
+    let mut request = post_request("/linked-services/kitchen/identify", b"test");
+    request
+        .headers_mut()
+        .insert("authorization", HeaderValue::from_static("Bearer operator-secret"));
+    let response = call(&state, request).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let observed = seen.lock().await.clone().expect("request observed");
+    assert_eq!(
+        observed.authorization.as_deref(),
+        Some("Bearer peer-scoped-key"),
+        "proxy must swap the operator bearer for the peer's stored key"
+    );
+}
+
+#[tokio::test]
+async fn linked_services_proxy_forwards_no_authorization_when_none_stored() {
+    // A peer that doesn't need bearer auth (e.g. Memoria running open on the
+    // internal network) has proxy_auth_bearer=None. The proxy still strips
+    // the operator bearer per 0005, but doesn't invent a replacement.
+    let seen = Arc::new(tokio::sync::Mutex::new(None));
+    let upstream = vox_peer(seen.clone()).await;
+
+    let state = AppState::new(EventBus::default());
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Memoria,
+            peer_id: "memoria".to_owned(),
+            peer_name: "Memoria".to_owned(),
+            peer_base_url: upstream.base_url.clone(),
+            sync_token_hash: "hash".to_owned(),
+            provider_definition_id: String::new(),
+            panel: Some(LinkedServicePanel {
+                id: "memoria".to_owned(),
+                label: "Memoria".to_owned(),
+                icon: "brain".to_owned(),
+                path: "/ui/".to_owned(),
+            }),
+            granted_by: "operator".to_owned(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+            proxy_auth_bearer: None,
+        })
+        .await
+        .expect("stores");
+
+    let mut request = post_request("/linked-services/memoria/identify", b"test");
+    request
+        .headers_mut()
+        .insert("authorization", HeaderValue::from_static("Bearer operator-secret"));
+    let response = call(&state, request).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let observed = seen.lock().await.clone().expect("request observed");
+    assert_eq!(
+        observed.authorization, None,
+        "operator bearer stripped, no replacement injected"
+    );
 }

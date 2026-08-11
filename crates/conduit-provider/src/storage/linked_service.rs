@@ -58,6 +58,19 @@ pub struct LinkedService {
     /// Last time the peer was seen using its sync token, or `None` if never.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<DateTime<Utc>>,
+    /// Bearer Conduit presents when proxying to this peer.
+    ///
+    /// Spec 0005 §Reverse-proxy contract strips `authorization` before
+    /// forwarding — an operator's Conduit token must not leak to a linked
+    /// service — so a peer that runs its own auth (like Vox with
+    /// `SPEAKER_ID_API_KEY` or the auto-generated `local_api_key`) has no
+    /// bearer to check against. This row-scoped bearer fills that gap: the
+    /// proxy substitutes it into the outgoing request so the peer sees a
+    /// key it knows. Stored plain rather than hashed because the peer
+    /// verifies it by string compare, so a hash on our end would leave the
+    /// proxy with nothing to present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_auth_bearer: Option<String>,
 }
 
 /// Somewhere Vox links are kept.
