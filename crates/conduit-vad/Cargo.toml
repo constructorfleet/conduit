@@ -32,7 +32,7 @@ tracing.workspace = true
 # different output shapes, so neither one alone is the model. Every published
 # export fails the same way, including the one named `ifless`. `conduit-wake`
 # keeps `tract`, which loads openWakeWord fine.
-ort = { version = "=2.0.0-rc.10", optional = true }
+ort = { version = "=2.0.0-rc.13", optional = true }
 ndarray = { version = "0.16", optional = true }
 
 [dev-dependencies]
