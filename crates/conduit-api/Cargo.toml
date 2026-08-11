@@ -17,6 +17,7 @@ conduit-bedrock.workspace = true
 conduit-deepgram.workspace = true
 conduit-elevenlabs.workspace = true
 conduit-google.workspace = true
+conduit-link.workspace = true
 conduit-marytts.workspace = true
 conduit-openai.workspace = true
 # `default-features = false` so the `polly` feature below is the only thing that

@@ -7,56 +7,19 @@
 //! rule is that the sync token is stored as a SHA-256 hash so a leaked
 //! `link.json` on a Conduit host cannot be replayed against the peer without
 //! also compromising the DB.
+//!
+//! The wire vocabulary (`LinkedServiceKind`, `LinkedServicePanel`,
+//! `Reachability`, `LinkStatus`) lives in the `conduit-link` crate; storage
+//! only re-exports what its rows carry.
 
 use chrono::{DateTime, Utc};
 use conduit_core::Result;
+use conduit_link::LinkedServiceKind;
+pub use conduit_link::LinkedServicePanel;
 use serde::{Deserialize, Serialize};
-
-/// What sort of linked service this row represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkedServiceKind {
-    /// Vox speaker identification and enrollment.
-    Vox,
-    /// Memoria memory / MCP surface.
-    Memoria,
-    /// Instrumenta tool / integration surface.
-    Instrumenta,
-    /// Excita wakeword and management.
-    Excita,
-    /// Any other linked service without a typed fallback panel.
-    Generic,
-}
-
-impl LinkedServiceKind {
-    /// Snake-case wire name matching the serde encoding.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Vox => "vox",
-            Self::Memoria => "memoria",
-            Self::Instrumenta => "instrumenta",
-            Self::Excita => "excita",
-            Self::Generic => "generic",
-        }
-    }
-}
 
 fn default_service_kind() -> LinkedServiceKind {
     LinkedServiceKind::Vox
-}
-
-/// An operator panel a linked service wants Conduit to surface.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinkedServicePanel {
-    /// Stable identifier for the panel within this service.
-    pub id: String,
-    /// Operator-visible tab label.
-    pub label: String,
-    /// Icon name the console should render for this panel.
-    pub icon: String,
-    /// Upstream path, rooted at the peer base URL.
-    pub path: String,
 }
 
 /// One linked Vox peer.

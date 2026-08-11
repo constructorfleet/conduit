@@ -11,7 +11,8 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
-use conduit_provider::storage::{LinkedService, LinkedServiceKind, LinkedServicePanel};
+use conduit_link::{LinkedServiceKind, LinkedServicePanel};
+use conduit_provider::storage::LinkedService;
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,6 +42,31 @@ pub struct CreateLinkedServiceRequest {
 pub struct CreateLinkedServiceResponse {
     /// Opaque bearer the peer stores locally and presents on peer-revoke.
     pub sync_token: String,
+}
+
+/// Body of `POST /v1/linked-services/probe` — a manual-add manifest lookup.
+#[derive(Debug, Deserialize)]
+pub struct ProbeLinkedServiceRequest {
+    /// Base URL of the service to probe. Conduit fetches `{url}/manifest`.
+    pub url: String,
+}
+
+/// A service's self-description, served at `GET /manifest`.
+///
+/// Every satellite exposes this so the operator can add it by URL from Console
+/// and Conduit can register/proxy it without service-specific glue.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LinkedServiceManifest {
+    /// What sort of service this is.
+    pub service_kind: LinkedServiceKind,
+    /// Stable id the service chose for itself.
+    pub peer_id: String,
+    /// Human-readable label the service suggests.
+    pub peer_name: String,
+    /// Base URL the service is reachable at, from Conduit's network vantage.
+    pub peer_base_url: String,
+    /// Panel the service asks Conduit to surface.
+    pub panel: LinkedServicePanel,
 }
 
 /// One linked service row as rendered by the management API.
@@ -136,6 +162,40 @@ pub async fn list(
         }
     }
     Ok(Json(views))
+}
+
+/// `POST /v1/linked-services/probe` — fetch a peer's manifest for the
+/// operator to confirm before creating the link.
+pub async fn probe(
+    _caller: ManagementCaller,
+    JsonBody(request): JsonBody<ProbeLinkedServiceRequest>,
+) -> Result<Json<LinkedServiceManifest>, ApiError> {
+    let base = trimmed_field("url", &request.url)?;
+    let base_url = reqwest::Url::parse(base).map_err(|error| {
+        ApiError::unprocessable(format!("url `{base}` is invalid: {error}"))
+    })?;
+    let manifest_url = base_url.join("manifest").map_err(|error| {
+        ApiError::unprocessable(format!("cannot derive manifest URL from `{base}`: {error}"))
+    })?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| {
+            ApiError::unavailable(format!("cannot build probe client: {error}"))
+        })?;
+    let response = client.get(manifest_url.clone()).send().await.map_err(|error| {
+        ApiError::unavailable(format!("could not reach `{manifest_url}`: {error}"))
+    })?;
+    if !response.status().is_success() {
+        return Err(ApiError::unavailable(format!(
+            "manifest at `{manifest_url}` returned {}",
+            response.status()
+        )));
+    }
+    let manifest: LinkedServiceManifest = response.json().await.map_err(|error| {
+        ApiError::unprocessable(format!("manifest at `{manifest_url}` did not parse: {error}"))
+    })?;
+    Ok(Json(manifest))
 }
 
 /// `DELETE /v1/linked-services/{peer_id}` — operator-authenticated unlink.
@@ -407,6 +467,18 @@ fn panel_for(link: &LinkedService) -> Option<LinkedServicePanel> {
             id: "excita".to_owned(),
             label: "Excita".to_owned(),
             icon: "radio".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        LinkedServiceKind::Dicta => Some(LinkedServicePanel {
+            id: "dicta".to_owned(),
+            label: "Dicta".to_owned(),
+            icon: "wand".to_owned(),
+            path: "/ui/".to_owned(),
+        }),
+        LinkedServiceKind::Forma => Some(LinkedServicePanel {
+            id: "forma".to_owned(),
+            label: "Forma".to_owned(),
+            icon: "shapes".to_owned(),
             path: "/ui/".to_owned(),
         }),
         LinkedServiceKind::Generic => None,
