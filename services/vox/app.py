@@ -832,7 +832,15 @@ class ConduitSpeakerClient(Protocol):
 
 
 class HttpConduitClient:
-    """HTTP client for Conduit's `/v1/vox/links` API."""
+    """HTTP client for Conduit's generic linked-services API.
+
+    Translates Vox's link body shape (peer_id, vox_base_url, vox_api_key) into
+    the generic `/v1/linked-services` shape (peer_base_url + panel manifest +
+    extension.local_api_key), so callers keep the Vox-shaped call site while
+    the wire uses the shared endpoint. Response is likewise unpacked from
+    `extension.provider_definition_id` into the flat shape callers already
+    consume.
+    """
 
     def __init__(
         self,
@@ -849,11 +857,24 @@ class HttpConduitClient:
         operator_token: str,
         body: dict[str, str],
     ) -> dict[str, str]:
-        url = f"{conduit_url.rstrip('/')}/v1/vox/links"
+        url = f"{conduit_url.rstrip('/')}/v1/linked-services"
+        request_body = {
+            "service_kind": "vox",
+            "peer_id": body["peer_id"],
+            "peer_name": body["peer_name"],
+            "peer_base_url": body["vox_base_url"],
+            "panel": {
+                "id": "vox",
+                "label": "Vox",
+                "icon": "users",
+                "path": "/ui/",
+            },
+            "extension": {"local_api_key": body["vox_api_key"]},
+        }
         with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             response = client.post(
                 url,
-                json=body,
+                json=request_body,
                 headers={"authorization": f"Bearer {operator_token}"},
             )
         if response.status_code >= 400:
@@ -862,13 +883,14 @@ class HttpConduitClient:
                 detail=f"Conduit refused the Vox link with HTTP {response.status_code}",
             )
         payload = response.json()
+        extension = payload.get("extension") or {}
         return {
             "sync_token": str(payload["sync_token"]),
-            "provider_definition_id": str(payload["provider_definition_id"]),
+            "provider_definition_id": str(extension["provider_definition_id"]),
         }
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
-        url = f"{conduit_url.rstrip('/')}/v1/vox/links/{peer_id}"
+        url = f"{conduit_url.rstrip('/')}/v1/linked-services/{peer_id}"
         try:
             with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
                 response = client.delete(
