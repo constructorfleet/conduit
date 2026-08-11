@@ -1,5 +1,7 @@
 """Builtin storage backend using JSON files and BM25 search."""
 
+from __future__ import annotations
+
 import json
 import logging
 import math
