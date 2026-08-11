@@ -5,3 +5,6 @@ httpx==0.28.1
 numpy==2.5.1
 pytest==9.1.1
 soundfile==0.14.0
+# The shared link module lives in-repo; pip installs it editable so CI sees
+# the same source Vox will import at runtime.
+-e ../../packages/conduit-link
