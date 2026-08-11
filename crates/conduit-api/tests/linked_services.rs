@@ -5,7 +5,8 @@ use axum::http::{Request, StatusCode};
 use conduit_api::linked_services::hash_token;
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
-use conduit_provider::storage::{LinkedService, LinkedServiceKind};
+use conduit_link::LinkedServiceKind;
+use conduit_provider::storage::LinkedService;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 

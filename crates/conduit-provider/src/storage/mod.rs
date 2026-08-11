@@ -22,9 +22,7 @@ pub mod vad;
 pub mod wake;
 pub mod wake_models;
 
-pub use linked_service::{
-    LinkedService, LinkedServiceKind, LinkedServicePanel, LinkedServiceStore,
-};
+pub use linked_service::{LinkedService, LinkedServiceStore};
 pub use llm::LlmVariant;
 pub use memory::MemoryVariant;
 pub use roster::{EnrolledSpeaker, SpeakerRosterStore};

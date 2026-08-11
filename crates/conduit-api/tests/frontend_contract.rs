@@ -1071,6 +1071,8 @@ export type LinkedServiceKind =
   | "memoria"
   | "instrumenta"
   | "excita"
+  | "dicta"
+  | "forma"
   | "generic";
 
 export interface LinkedServicePanel {{

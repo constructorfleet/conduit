@@ -793,6 +793,7 @@ dependencies = [
  "conduit-deepgram",
  "conduit-elevenlabs",
  "conduit-google",
+ "conduit-link",
  "conduit-marytts",
  "conduit-mcp",
  "conduit-memory",
@@ -948,6 +949,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conduit-link"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "conduit-marytts"
 version = "0.1.0"
 dependencies = [
@@ -1050,6 +1060,7 @@ dependencies = [
  "bytes",
  "chrono",
  "conduit-core",
+ "conduit-link",
  "conduit-provider",
  "futures-core",
  "futures-util",
@@ -1110,6 +1121,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "conduit-core",
+ "conduit-link",
  "conduit-provider",
  "conduit-store",
  "serde",
