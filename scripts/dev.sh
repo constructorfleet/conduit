@@ -299,6 +299,12 @@ if ! "${vox_python}" -c "import fastapi, httpx, numpy, soundfile, uvicorn" >/dev
     printf '\ninstalling Vox dependencies\n'
     (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -r requirements.txt)
 fi
+# The shared link module ships as a local editable install so every service
+# depends on the same wire client rather than hand-rolling its own.
+if ! "${vox_python}" -c "import conduit_link" >/dev/null 2>&1; then
+    printf '\ninstalling shared conduit-link module into Vox\n'
+    (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -e "${ROOT}/packages/conduit-link")
+fi
 
 mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}" "${MEMORIA_DATA_DIR}"
 

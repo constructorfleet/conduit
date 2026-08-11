@@ -20,7 +20,7 @@ class ConduitLinkClient(Protocol):
         conduit_url: str,
         operator_token: str,
         body: Mapping[str, object],
-    ) -> Mapping[str, str]:
+    ) -> Mapping[str, object]:
         """POST /v1/linked-services — returns at minimum a `sync_token`.
 
         Additional response fields (e.g. `provider_definition_id` for Vox) are
@@ -50,7 +50,7 @@ class HttpConduitLinkClient:
         conduit_url: str,
         operator_token: str,
         body: Mapping[str, object],
-    ) -> Mapping[str, str]:
+    ) -> Mapping[str, object]:
         url = f"{conduit_url.rstrip('/')}/v1/linked-services"
         with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             response = client.post(
@@ -60,7 +60,7 @@ class HttpConduitLinkClient:
             )
         response.raise_for_status()
         payload = response.json()
-        return {str(key): str(value) for key, value in payload.items()}
+        return dict(payload)
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
         url = f"{conduit_url.rstrip('/')}/v1/linked-services/{peer_id}"
@@ -95,9 +95,9 @@ class InMemoryConduitLinkClient:
         conduit_url: str,
         operator_token: str,
         body: Mapping[str, object],
-    ) -> Mapping[str, str]:
+    ) -> Mapping[str, object]:
         self.last_create_body = dict(body)
-        response = {"sync_token": secrets.token_urlsafe(32)}
+        response: dict[str, object] = {"sync_token": secrets.token_urlsafe(32)}
         response.update(self._extra)
         return response
 
