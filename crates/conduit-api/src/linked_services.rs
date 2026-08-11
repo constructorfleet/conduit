@@ -168,8 +168,8 @@ pub async fn create(
             prepare_vox_auto_provision(
                 &state,
                 &peer_id,
-                &peer_name,
-                &peer_base_url,
+                peer_name,
+                peer_base_url,
                 &request.extension,
             )
             .await?,
