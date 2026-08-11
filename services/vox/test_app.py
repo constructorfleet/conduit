@@ -37,6 +37,7 @@ from app import (
     Syncer,
     SpeechBrainEncoder,
     VoicePrints,
+    VoxLinkExtension,
     WidthMismatchError,
     build_encoder,
     check_width,
@@ -45,6 +46,37 @@ from app import (
     hugging_face_token,
     resample,
 )
+from conduit_link import LinkedServicePanel, LinkState
+
+
+def _save_test_link(
+    store: LinkStore,
+    *,
+    conduit_url: str = "http://conduit.internal:8080",
+    sync_token: str = "sync-token",
+    peer_id: str = "peer-1",
+    peer_name: str = "Kitchen Vox",
+    provider_definition_id: str = "vox-peer-1",
+    local_api_key: str = "local-key",
+    linked_at: str = "2026-01-01T00:00:00+00:00",
+) -> None:
+    """Compat helper — the legacy `LinkStore.save(**kwargs)` shape written by
+    tests before the migration onto `conduit_link.LinkStore[VoxLinkExtension]`.
+    Keeps the test call sites terse without threading LinkState/panel through
+    every fixture."""
+    state = LinkState(
+        conduit_url=conduit_url,
+        peer_id=peer_id,
+        peer_name=peer_name,
+        sync_token=sync_token,
+        panel=LinkedServicePanel(title="Vox", path="/ui/", icon="users"),
+        linked_at=linked_at,
+    )
+    extension = VoxLinkExtension(
+        provider_definition_id=provider_definition_id,
+        local_api_key=local_api_key,
+    )
+    store.save(state, extension)
 
 
 @dataclass
@@ -930,14 +962,7 @@ def test_startup_sync_pulls_conduit_labels_into_the_local_roster(tmp_path: Path)
     prints = VoicePrints(tmp_path)
     roster = Roster(tmp_path)
     links = LinkStore(tmp_path)
-    links.save(
-        conduit_url="http://conduit.internal:8080",
-        sync_token="sync-token",
-        peer_id="peer-1",
-        peer_name="Kitchen Vox",
-        provider_definition_id="vox-peer-1",
-        local_api_key="local-key",
-    )
+    _save_test_link(links)
     prints.add(speaker, np.array([1.0, 0.0], dtype=np.float32))
     roster.touch(speaker, 1)
     roster.set_label(speaker, "Wrong Local Label")
@@ -979,14 +1004,7 @@ def test_syncer_retries_with_exponential_backoff_without_crashing(
     tmp_path: Path,
 ) -> None:
     links = LinkStore(tmp_path)
-    links.save(
-        conduit_url="http://conduit.internal:8080",
-        sync_token="sync-token",
-        peer_id="peer-1",
-        peer_name="Kitchen Vox",
-        provider_definition_id="vox-peer-1",
-        local_api_key="local-key",
-    )
+    _save_test_link(links)
     conduit = FakeSpeakerClient(
         [
             httpx.ConnectError("dial tone of the damned"),
@@ -1020,14 +1038,7 @@ def test_syncer_retries_with_exponential_backoff_without_crashing(
 
 def test_a_saved_link_with_group_or_world_permissions_is_refused(tmp_path: Path) -> None:
     store = LinkStore(tmp_path)
-    store.save(
-        conduit_url="http://conduit.internal:8080",
-        sync_token="sync-token",
-        peer_id="peer-1",
-        peer_name="Kitchen Vox",
-        provider_definition_id="vox-peer-1",
-        local_api_key="local-key",
-    )
+    _save_test_link(store)
     os.chmod(tmp_path / LinkStore.FILENAME, 0o644)
     client = TestClient(
         create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path))
