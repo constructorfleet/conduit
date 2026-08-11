@@ -21,10 +21,12 @@ Current implementation anchors: `crates/conduit-api/src/linked_services.rs`
 
 Two invariants govern every implementation:
 
-1. **Sync tokens are never stored raw.** Conduit stores only the SHA-256 hex of
-   the minted token. The raw token is returned once to the peer and held only
-   there. A leaked Conduit storage snapshot cannot be replayed against the
-   peer.
+1. **Handshake tokens are never stored raw.** This applies symmetrically to
+   BOTH `sync_token` (Conduit→peer direction) and `peer_token` (peer→Conduit
+   direction). Each side stores only the SHA-256 hex of the token it received;
+   the raw value crosses the wire exactly once, at the handshake, and is held
+   only by the party that will present it. A leaked storage snapshot on
+   either side cannot be replayed against the other.
 2. **Reachability is not optional.** Conduit probes each link's health on
    startup and on link creation (any *change*), and the probe is a real HTTP
    request against the peer — never a short-circuit or mock. A link that fails
@@ -47,9 +49,16 @@ own local auth for its own UI when unlinked.
   `[a-z0-9-_]{1,128}`. Case-folded lowercase. Empty, over-long, or
   out-of-charset ids are rejected with `422`.
 - **`LinkedServiceKind`** — one of `vox`, `memoria`, `instrumenta`, `excita`,
-  `generic`. New named kinds are added when a service earns a stable typed
-  fallback panel (see [Panel manifest](#panel-manifest)); `generic` is always
-  available for anything without a typed kind.
+  `dicta`, `forma`, `generic`. New named kinds are added when a service earns
+  a stable typed fallback panel (see [Panel manifest](#panel-manifest));
+  `generic` is always available for anything without a typed kind.
+- **`sync_token`** — 256-bit base64url-no-pad, minted by Conduit, presented
+  by the peer to authenticate peer→Conduit calls. Stored on both sides only
+  as its SHA-256 hex (see [Rules that must hold](#rules-that-must-hold)).
+- **`peer_token`** — 256-bit base64url-no-pad, minted by the peer, presented
+  by Conduit to authenticate Conduit→peer side-channel calls. Same
+  hash-only-stored invariant. See [Side channels](#side-channels) for what
+  this authenticates.
 - **One row per peer id.** Re-linking a peer id replaces the prior row rather
   than accumulating stale rows, so operator recovery is idempotent.
 - **Multiple peers of the same kind** are supported — an operator may link two
@@ -66,9 +75,16 @@ POST /v1/linked-services
   "peer_id":       "memoria-prod",
   "peer_name":     "Memoria (prod)",
   "peer_base_url": "https://memoria.example",
-  "panel": { "id": "memoria", "label": "Memory", "icon": "brain", "path": "/ui/" }
+  "panel":         { "id": "memoria", "label": "Memory", "icon": "brain", "path": "/ui/" },
+  "peer_token":    "<opaque 256-bit base64url no-pad>",
+  "capabilities":  ["memoria.mcp"]
 }
 ```
+
+`peer_token` is REQUIRED (256-bit base64url-no-pad, minted by the peer).
+`capabilities` is REQUIRED but MAY be an empty array; each entry is a
+side-channel capability name (see [Side channels](#side-channels)). Unknown
+capability names are stored verbatim — Conduit does not enforce a registry.
 
 Conduit responds `201`:
 
@@ -76,11 +92,14 @@ Conduit responds `201`:
 { "sync_token": "<opaque 256-bit base64url no-pad>" }
 ```
 
-Conduit stores the row with `sync_token_hash = sha256_hex(sync_token)`. The raw
-token is never persisted server-side and never returned again. The peer
-persists `{conduit_url, peer_id, sync_token, panel, granted_at}` locally in a
-`link.json` with file-owner-only permissions; a world-readable file is a hard
-error at load (see Vox's `LinkStoreSecurityError` pattern).
+The `201` acknowledges that BOTH `peer_token` and `capabilities` were stored.
+Conduit stores the row with `sync_token_hash = sha256_hex(sync_token)` and
+`peer_token_hash = sha256_hex(peer_token)`; the raw `sync_token` is returned
+once and never persisted server-side, and the raw `peer_token` is discarded
+after the hash is written. The peer persists
+`{conduit_url, peer_id, sync_token, peer_token, panel, granted_at}` locally in
+a `link.json` with file-owner-only permissions; a world-readable file is a
+hard error at load (see Vox's `LinkStoreSecurityError` pattern).
 
 Re-issuing `POST /v1/linked-services` for an existing `peer_id` returns `409`;
 the peer must `DELETE` first and re-link (see [Revocation](#revocation)).
@@ -100,9 +119,9 @@ Conduit iframes the panel at `/linked-services/{peer_id}{path}`.
 
 **Fallback panels.** Rows written before the panel manifest existed have no
 inline panel. For a typed `LinkedServiceKind` (`vox`, `memoria`,
-`instrumenta`, `excita`) Conduit synthesises a stable fallback so the tab keeps
-appearing. `Generic` has no fallback — a `Generic` row without a manifest is
-filtered out of `GET /v1/linked-services`.
+`instrumenta`, `excita`, `dicta`, `forma`) Conduit synthesises a stable
+fallback so the tab keeps appearing. `Generic` has no fallback — a `Generic`
+row without a manifest is filtered out of `GET /v1/linked-services`.
 
 Panels appear in navigation only when the manifest resolves *and* the peer's
 reachability state is not `unreachable` (see [Reachability](#reachability)).
@@ -168,6 +187,56 @@ failure, not an error to the caller — the create still returns `201` with
 **Probe is real.** Conformance tests must exercise the probe over real HTTP;
 no in-crate short-circuit.
 
+**Side-channel health is NOT part of `reachability`.** A failing side channel
+(see [Side channels](#side-channels)) MUST NOT flip `reachability` to
+`unreachable`. That field is the base-protocol health signal only, so a broken
+extension never hides a service's UI tab from the operator.
+
+## Side channels
+
+The generic protocol above is the floor. Service-specific side channels layer
+on top of it, keyed by `service_kind` and advertised in `capabilities` at
+handshake time. This section is normative for every side channel; individual
+channel specs (e.g. `vox.roster`, `dicta.transform`, `excita.wake-events`)
+refine the shape per capability.
+
+**Direction.** Side channels are dual-mode. A capability MAY be peer→Conduit
+(the peer calls Conduit with its `sync_token`), Conduit→peer (Conduit calls
+the peer with its `peer_token`), or both. Each per-capability spec MUST
+declare which direction(s) it uses.
+
+**Transport.** The baseline is HTTP+JSON — one request, one JSON response,
+using the standard status codes. A capability MAY upgrade to
+Server-Sent Events (SSE) for streaming when latency or push semantics require
+it; long-polling and websockets are NOT part of the baseline. Whatever the
+transport, requests and responses ride the same TLS/origin as the base link
+endpoint on that side.
+
+**Authentication.**
+
+- **Peer→Conduit** capabilities MUST authenticate with
+  `Authorization: Bearer {sync_token}`. Conduit matches by hashing the
+  presented bearer against `sync_token_hash`.
+- **Conduit→peer** capabilities MUST authenticate with
+  `Authorization: Bearer {peer_token}`. The peer matches by hashing the
+  presented bearer against `peer_token_hash`.
+- The rule in [Rules that must hold](#rules-that-must-hold) applies: a
+  presented value that happens to equal the stored hash is rejected. Replaying
+  the hash must not authenticate.
+
+**Capability manifest.** The `capabilities` array in the handshake is the
+authoritative list of channels this peer will speak. A capability that is not
+declared at handshake is not usable — either side MAY reject the call. To add
+a capability after linking, the operator MUST unlink and re-link. Capability
+names are dotted-lowercase strings; the base spec RESERVES the top-level
+prefixes for `LinkedServiceKind` values (`vox.*`, `memoria.*`, `dicta.*`,
+`excita.*`, `instrumenta.*`, `forma.*`).
+
+**Failure semantics.** A side-channel failure (timeout, non-2xx, connection
+error) MUST be logged with the peer id and capability name and retried per
+the capability's own retry policy. It MUST NOT change the base row's
+`reachability` field. This keeps a broken extension from disabling the tab.
+
 ## Revocation
 
 Two paths, one endpoint:
@@ -186,19 +255,20 @@ so the row is cleaned up, tolerating a non-2xx or network failure.
 
 ## Extension points
 
-The generic protocol above is the floor. Service-specific side channels layer
-on top of it, keyed by `service_kind`:
+Concrete side channels layered on top of the [Side channels](#side-channels)
+contract, keyed by `service_kind`:
 
-- **Vox** — roster sync (Conduit posts speaker changes to the peer,
-  authenticated by the peer's sync token).
+- **Vox** — `vox.roster`: roster sync (peer→Conduit today; retrofit ticket in
+  flight).
 - **Memoria** — memory/MCP surface — orthogonal to the panel, not part of this
   spec.
-- **Dicta** — utterance transform surface consumed by Conduit's pipeline.
-- **Excita** — wake-word event surface.
+- **Dicta** — `dicta.transform`: utterance transform surface consumed by
+  Conduit's pipeline (Conduit→peer).
+- **Excita** — `excita.wake-events`: wake-word event surface.
 
-Side channels reuse the same sync-token trust and the same peer identity; they
-do not require a second handshake. Their contracts live in each service's own
-spec.
+Every channel above reuses base identity and the tokens issued at handshake;
+none require a second handshake. Their per-capability contracts live in each
+service's own spec.
 
 ## Versioning
 
@@ -219,7 +289,7 @@ callers use `/v1/linked-services`.
 | Method | Path                              | Auth                | Purpose                         |
 |--------|-----------------------------------|---------------------|---------------------------------|
 | POST   | `/v1/linked-services`             | none (peer-initiated) | Create link, return `sync_token` |
-| GET    | `/v1/linked-services`             | operator            | List links + panels + reachability |
+| GET    | `/v1/linked-services`             | operator            | List links + panels + reachability + `capabilities` |
 | DELETE | `/v1/linked-services/{peer_id}`   | operator OR bearer  | Operator-delete or peer-revoke  |
 | ANY    | `/linked-services/{peer_id}/{*}`  | operator            | Reverse proxy to peer           |
 
@@ -242,9 +312,10 @@ callers use `/v1/linked-services`.
   auth.
 - Any change to Conduit's audio pipeline (STT/TTS/wake). This spec covers
   linking only.
-- Migrating the in-Conduit Forma rule engine (`frontend/src/forma/`) to Dicta —
-  Dicta is a separate standalone service; the in-Conduit rule engine is
-  unrelated.
+- Building the Forma standalone service itself is out of scope for THIS spec,
+  but `forma` is a first-class `LinkedServiceKind` so a future standalone
+  Forma will link like any other service. (The former non-goal — migrating
+  the in-Conduit rule engine to Dicta — is unrelated and remains excluded.)
 
 ## Verification
 
