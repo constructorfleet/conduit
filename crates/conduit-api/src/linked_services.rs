@@ -11,6 +11,8 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
+use conduit_core::event::{Envelope, Event};
+use conduit_core::id::TraceId;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel};
 use conduit_provider::storage::{
     LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
@@ -225,6 +227,18 @@ pub async fn create(
         store_failure(error)
     })?;
 
+    // Announce the new link so any listener (Operator Console SSE, tests) can
+    // refresh without polling. Diagnostics stage — this isn't part of the
+    // utterance flow.
+    state.bus.publish(Envelope::new(
+        TraceId::new(),
+        Event::LinkedServiceLinked {
+            peer_id: peer_id.clone(),
+            peer_name: peer_name.to_owned(),
+            service_kind: request.service_kind.as_str().to_owned(),
+        },
+    ));
+
     Ok((
         StatusCode::CREATED,
         Json(CreateLinkedServiceResponse { sync_token, extension: response_extension }),
@@ -350,6 +364,10 @@ pub async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
     if state.remove_linked_service(&peer_id).await.map_err(store_failure)? {
+        state.bus.publish(Envelope::new(
+            TraceId::new(),
+            Event::LinkedServiceUnlinked { peer_id: peer_id.clone() },
+        ));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("no linked service for peer `{peer_id}`")))
@@ -371,6 +389,10 @@ pub async fn revoke(
         return Err(ApiError::unauthorized());
     }
     state.remove_linked_service(&peer_id).await.map_err(store_failure)?;
+    state.bus.publish(Envelope::new(
+        TraceId::new(),
+        Event::LinkedServiceUnlinked { peer_id: peer_id.clone() },
+    ));
     Ok(StatusCode::NO_CONTENT)
 }
 

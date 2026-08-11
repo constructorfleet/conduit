@@ -767,6 +767,50 @@ function OperatorWorkspace({
     snapshotClient,
   ]);
 
+  // Live-refresh linked services when a peer links or unlinks. Without this,
+  // an operator who linked from the peer's own UI (e.g. Vox's /link page)
+  // would have to reload the Console to see the row appear. EventSource
+  // reconnects on drop automatically; the effect cleans up on unmount.
+  useEffect(() => {
+    if (typeof EventSource === "undefined") {
+      return;
+    }
+    // Only subscribe to the diagnostics stage — the two new event variants
+    // both live there — so we don't stream every wake-word detection into
+    // the Console just to listen for link changes.
+    const source = new EventSource("/v1/events?stage=diagnostics");
+    let cancelled = false;
+
+    async function refreshLinkedServices() {
+      try {
+        const [nextLinkedServices, nextVoxLinks] = await Promise.all([
+          snapshotClient.loadLinkedServices(),
+          snapshotClient.loadVoxLinks(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setLinkedServices(nextLinkedServices);
+        setVoxLinks(nextVoxLinks);
+      } catch {
+        // A refresh that fails is not worth surfacing: the next successful
+        // link/unlink event will retry, and manual reload still works.
+      }
+    }
+
+    source.addEventListener("LinkedServiceLinked", () => {
+      void refreshLinkedServices();
+    });
+    source.addEventListener("LinkedServiceUnlinked", () => {
+      void refreshLinkedServices();
+    });
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [snapshotClient]);
+
   if (firstRun) {
     return (
       <main className="first-run-shell">

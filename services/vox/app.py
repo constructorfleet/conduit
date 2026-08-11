@@ -773,7 +773,11 @@ def _public_link(record: LinkRecord[VoxLinkExtension]) -> dict[str, str]:
 
 class LinkRequest(BaseModel):
     conduit_url: str
-    operator_token: str
+    # Optional so operators of anonymous (no-auth) Conduit deployments can
+    # link without inventing a token. Handler strips whitespace and sends the
+    # result as-is to Conduit, which falls back to "anonymous" caller when
+    # no bearer was required.
+    operator_token: str = ""
     peer_name: str
     force: bool = False
 
@@ -1202,7 +1206,11 @@ def create_app(
 
         conduit_url = _trimmed_url(body.conduit_url, "conduit_url")
         peer_name = _trimmed_field(body.peer_name, "peer_name")
-        operator_token = _trimmed_field(body.operator_token, "operator_token")
+        # A Conduit with no auth configured accepts an empty bearer, so an
+        # operator linking a fresh dev instance should not be forced to invent
+        # a token here. Kept as a plain strip rather than _trimmed_field so
+        # the field is optional but never sent as whitespace.
+        operator_token = body.operator_token.strip()
         peer_id = (
             existing.state.peer_id if existing is not None else str(uuid.uuid4())
         )

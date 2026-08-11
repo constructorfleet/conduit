@@ -17,6 +17,8 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
+use conduit_core::event::{Envelope, Event};
+use conduit_core::id::TraceId;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel};
 use conduit_provider::storage::{
     LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
@@ -192,6 +194,18 @@ pub async fn create(
         "linked a Conduit Vox peer"
     );
 
+    // Symmetric with linked_services::create — a legacy Vox link should
+    // refresh the Console the same way a generic /v1/linked-services link
+    // does.
+    state.bus.publish(Envelope::new(
+        TraceId::new(),
+        Event::LinkedServiceLinked {
+            peer_id: peer_id.clone(),
+            peer_name: peer_name.to_owned(),
+            service_kind: LinkedServiceKind::Vox.as_str().to_owned(),
+        },
+    ));
+
     Ok((
         StatusCode::CREATED,
         Json(CreateVoxLinkResponse { sync_token, provider_definition_id }),
@@ -225,6 +239,10 @@ pub async fn delete(
 ) -> Result<StatusCode, ApiError> {
     let peer_id = normalise_peer_id(&peer_id)?;
     if state.remove_linked_service(&peer_id).await.map_err(store_failure)? {
+        state.bus.publish(Envelope::new(
+            TraceId::new(),
+            Event::LinkedServiceUnlinked { peer_id: peer_id.clone() },
+        ));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("no vox link for peer `{peer_id}`")))

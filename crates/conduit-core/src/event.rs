@@ -287,6 +287,30 @@ pub enum Event {
         /// Whether the pipeline recovered, e.g. by failing over.
         recovered: bool,
     },
+
+    // ---- linked services -------------------------------------------------
+    /// A linked service came online (POST /v1/linked-services succeeded).
+    ///
+    /// Published so the Operator Console can refresh its linked-services
+    /// list without polling: an operator who just linked a peer from that
+    /// peer's own UI (e.g. Vox's `/link` form) should see the row appear
+    /// without reloading the page.
+    LinkedServiceLinked {
+        /// Peer id the operator or the peer chose.
+        peer_id: String,
+        /// Human-readable label for the operator UI.
+        peer_name: String,
+        /// Kind of service — the wire name matches
+        /// `conduit_link::LinkedServiceKind` (`"vox"`, `"memoria"`, …).
+        service_kind: String,
+    },
+    /// A linked service was removed (DELETE /v1/linked-services/{peer_id}
+    /// or a peer-revoke). Symmetric with [`Event::LinkedServiceLinked`];
+    /// same rationale for publishing.
+    LinkedServiceUnlinked {
+        /// Peer id whose row was removed.
+        peer_id: String,
+    },
 }
 
 impl Event {
@@ -362,6 +386,12 @@ impl Event {
                 error: "connection refused".to_owned(),
                 recovered: false,
             },
+            Self::LinkedServiceLinked {
+                peer_id: "kitchen-vox-01".to_owned(),
+                peer_name: "Kitchen Vox".to_owned(),
+                service_kind: "vox".to_owned(),
+            },
+            Self::LinkedServiceUnlinked { peer_id: "kitchen-vox-01".to_owned() },
         ]
     }
 
@@ -395,6 +425,8 @@ impl Event {
             Self::AudioStreaming { .. } => "AudioStreaming",
             Self::TtsFinished { .. } => "TtsFinished",
             Self::StageFailed { .. } => "StageFailed",
+            Self::LinkedServiceLinked { .. } => "LinkedServiceLinked",
+            Self::LinkedServiceUnlinked { .. } => "LinkedServiceUnlinked",
         }
     }
 
@@ -427,7 +459,9 @@ impl Event {
             | Self::UtteranceSegmentStarted { .. }
             | Self::AudioStreaming { .. }
             | Self::TtsFinished { .. } => Stage::Synthesis,
-            Self::StageFailed { .. } => Stage::Diagnostics,
+            Self::StageFailed { .. }
+            | Self::LinkedServiceLinked { .. }
+            | Self::LinkedServiceUnlinked { .. } => Stage::Diagnostics,
         }
     }
 

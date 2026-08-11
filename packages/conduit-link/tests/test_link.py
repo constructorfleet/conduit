@@ -147,6 +147,22 @@ def test_link_creates_and_persists(tmp_path: Path) -> None:
     assert persisted.stat().st_mode & 0o777 == 0o600, "link.json must be 0600"
 
 
+def test_link_accepts_missing_operator_token(tmp_path: Path) -> None:
+    # A Conduit with no auth configured accepts anonymous callers; the shared
+    # router should not force operators to invent a token just to satisfy a
+    # schema check. Omit the field entirely and confirm the link goes through.
+    client = _make_client(tmp_path)
+    response = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.test",
+            "peer_name": "Anon",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "linked"
+
+
 def test_link_conflict_without_force(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
     payload = {

@@ -72,7 +72,14 @@ export type Event =
     }
   | { type: "AudioStreaming"; sequence: number; bytes: number }
   | { type: "TtsFinished"; duration_ms: number }
-  | { type: "StageFailed"; node: string; error: string; recovered: boolean };
+  | { type: "StageFailed"; node: string; error: string; recovered: boolean }
+  | {
+      type: "LinkedServiceLinked";
+      peer_id: string;
+      peer_name: string;
+      service_kind: string;
+    }
+  | { type: "LinkedServiceUnlinked"; peer_id: string };
 
 export type EventType = Event["type"];
 
@@ -426,6 +433,32 @@ export const eventEnvelopeFixtures = [
       "node": "tts",
       "error": "connection refused",
       "recovered": false
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-00000000007f",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:27Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "LinkedServiceLinked",
+      "peer_id": "kitchen-vox-01",
+      "peer_name": "Kitchen Vox",
+      "service_kind": "vox"
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000080",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:28Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "LinkedServiceUnlinked",
+      "peer_id": "kitchen-vox-01"
     }
   }
 ] as const satisfies readonly EventEnvelope[];
