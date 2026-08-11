@@ -12,9 +12,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel};
-use conduit_provider::storage::LinkedService;
+use conduit_provider::storage::{
+    LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
+    SpeakerEngine, SpeakerIdVariant,
+};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -35,13 +39,32 @@ pub struct CreateLinkedServiceRequest {
     pub peer_base_url: String,
     /// Panel manifest the peer wants Conduit to surface.
     pub panel: LinkedServicePanel,
+    /// Service-specific extras. Shape depends on `service_kind`; Vox uses
+    /// `{"local_api_key": "..."}` so Conduit can auto-provision the peer's
+    /// `http_speaker_id` provider definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<JsonValue>,
 }
 
 /// Body of the 201 response from `POST /v1/linked-services`.
+///
+/// Additional fields are service-specific and land under `extension`.
+/// For Vox links, `extension.provider_definition_id` carries the id of the
+/// auto-provisioned `http_speaker_id` provider.
 #[derive(Debug, Serialize)]
 pub struct CreateLinkedServiceResponse {
     /// Opaque bearer the peer stores locally and presents on peer-revoke.
     pub sync_token: String,
+    /// Service-specific response fields, keyed by `service_kind` semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<JsonValue>,
+}
+
+/// Extension payload the shared client sends when `service_kind == vox`.
+#[derive(Debug, Deserialize)]
+struct VoxLinkExtensionRequest {
+    /// API key the Vox peer accepts on its own protected routes.
+    local_api_key: String,
 }
 
 /// Body of `POST /v1/linked-services/probe` — a manual-add manifest lookup.
@@ -115,6 +138,11 @@ impl TryFrom<LinkedService> for LinkedServiceView {
 }
 
 /// `POST /v1/linked-services` — creates a link and returns the sync token.
+///
+/// When `service_kind == vox`, the request MUST carry
+/// `extension.local_api_key` and Conduit auto-provisions an
+/// `http_speaker_id` provider definition that points at the peer. The
+/// response's `extension.provider_definition_id` names it.
 pub async fn create(
     ManagementCaller(caller): ManagementCaller,
     State(state): State<AppState>,
@@ -131,21 +159,137 @@ pub async fn create(
         )));
     }
 
+    // Vox is the one kind that owns a Conduit-side provider definition;
+    // parse-and-check its extension BEFORE minting the token or writing the
+    // row, so an invalid or missing local_api_key rejects the request without
+    // side effects.
+    let vox_auto = if request.service_kind == LinkedServiceKind::Vox {
+        Some(
+            prepare_vox_auto_provision(
+                &state,
+                &peer_id,
+                peer_name,
+                peer_base_url,
+                &request.extension,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
     let sync_token = mint_sync_token();
+    let provider_definition_id =
+        vox_auto.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
     let link = LinkedService {
         service_kind: request.service_kind,
         peer_id: peer_id.clone(),
         peer_name: peer_name.to_owned(),
         peer_base_url: peer_base_url.to_owned(),
         sync_token_hash: hash_token(&sync_token),
-        provider_definition_id: String::new(),
+        provider_definition_id: provider_definition_id.clone(),
         panel: Some(panel),
         granted_by: caller.name.clone(),
         granted_at: Utc::now(),
         last_seen: None,
     };
-    state.put_linked_service(link).await.map_err(store_failure)?;
-    Ok((StatusCode::CREATED, Json(CreateLinkedServiceResponse { sync_token })))
+
+    // Order matters: the provider definition is written first so a failure
+    // mid-link leaves an inert definition rather than a link row pointing at
+    // a definition that never landed.
+    let response_extension = if let Some((provider_id, definition)) = vox_auto {
+        state.put_provider_definition(&provider_id, definition).await.map_err(store_failure)?;
+        Some(serde_json::json!({ "provider_definition_id": provider_id }))
+    } else {
+        None
+    };
+
+    let rollback_state = state.clone();
+    let rollback_provider_id = provider_definition_id.clone();
+    state.put_linked_service(link).await.map_err(move |error| {
+        if !rollback_provider_id.is_empty() {
+            // Best-effort rollback: undo the provider write so a retry does
+            // not trip the "already exists" refusal.
+            tokio::spawn(async move {
+                if let Err(cleanup) =
+                    rollback_state.remove_provider_definition(&rollback_provider_id).await
+                {
+                    tracing::warn!(
+                        provider = %rollback_provider_id,
+                        %cleanup,
+                        "failed to roll back auto-provisioned provider after link write failure"
+                    );
+                }
+            });
+        }
+        store_failure(error)
+    })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateLinkedServiceResponse { sync_token, extension: response_extension }),
+    ))
+}
+
+/// Prepare (but do not write) the Vox auto-provisioned provider definition.
+///
+/// Extracted so validation errors — missing extension, blank `local_api_key`,
+/// or an existing provider definition — reject the request before any state
+/// mutation.
+async fn prepare_vox_auto_provision(
+    state: &AppState,
+    peer_id: &str,
+    peer_name: &str,
+    peer_base_url: &str,
+    extension: &Option<JsonValue>,
+) -> Result<(String, ProviderDefinition), ApiError> {
+    let raw = extension.as_ref().ok_or_else(|| {
+        ApiError::unprocessable(
+            "linking a Vox peer requires `extension.local_api_key`".to_owned(),
+        )
+    })?;
+    let vox_extension: VoxLinkExtensionRequest =
+        serde_json::from_value(raw.clone()).map_err(|error| {
+            ApiError::unprocessable(format!("invalid Vox extension body: {error}"))
+        })?;
+    let local_api_key = trimmed_field("local_api_key", &vox_extension.local_api_key)?;
+
+    let provider_definition_id = format!("vox-{peer_id}");
+    // Refuses replacing an existing definition an operator wrote by hand:
+    // silently overwriting a hand-authored provider is worse than refusing
+    // the link and telling the operator what is in the way.
+    if state
+        .provider_definition(&provider_definition_id)
+        .await
+        .map_err(store_failure)?
+        .is_some()
+    {
+        return Err(ApiError::conflict(format!(
+            "provider definition `{provider_definition_id}` already exists; \
+             remove or rename it before linking this Vox peer"
+        )));
+    }
+
+    let definition = ProviderDefinition {
+        id: provider_definition_id.clone(),
+        label: format!("Conduit Vox — {peer_name}"),
+        variant: ProviderDefinitionVariant::SpeakerId {
+            variant: SpeakerIdVariant::Http {
+                base_url: peer_base_url.to_owned(),
+                api_key: Some(ProviderSecret::Inline { value: local_api_key.to_owned() }),
+                // A default until an operator sets the engine on the peer
+                // through the Providers screen: Vox reports what it is
+                // actually running through its own /health, and a definition
+                // that guessed wrong here identifies the same voice under a
+                // different label anyway.
+                engine: SpeakerEngine::SpeechBrain,
+                threshold_percent: conduit_provider::storage::DEFAULT_THRESHOLD_PERCENT,
+            },
+        },
+        settings: serde_json::Map::new(),
+    };
+
+    Ok((provider_definition_id, definition))
 }
 
 /// `GET /v1/linked-services` — lists linked peers with their resolved panels.
