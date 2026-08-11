@@ -5221,6 +5221,9 @@ function eventComponent(event: Event): string {
       return "synthesis";
     case "StageFailed":
       return event.node;
+    case "LinkedServiceLinked":
+    case "LinkedServiceUnlinked":
+      return "diagnostics";
   }
 }
 
@@ -5270,6 +5273,10 @@ function eventDetail(event: Event): string | null {
     case "ConversationCompleted":
     case "TtsStarted":
       return "boundary";
+    case "LinkedServiceLinked":
+      return `${event.service_kind}: ${event.peer_name}`;
+    case "LinkedServiceUnlinked":
+      return event.peer_id;
   }
 }
 
