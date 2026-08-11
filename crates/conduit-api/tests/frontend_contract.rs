@@ -1748,7 +1748,14 @@ export type Event =
     }}
   | {{ type: "AudioStreaming"; sequence: number; bytes: number }}
   | {{ type: "TtsFinished"; duration_ms: number }}
-  | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }};
+  | {{ type: "StageFailed"; node: string; error: string; recovered: boolean }}
+  | {{
+      type: "LinkedServiceLinked";
+      peer_id: string;
+      peer_name: string;
+      service_kind: string;
+    }}
+  | {{ type: "LinkedServiceUnlinked"; peer_id: string }};
 
 export type EventType = Event["type"];
 

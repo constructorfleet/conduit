@@ -767,6 +767,50 @@ function OperatorWorkspace({
     snapshotClient,
   ]);
 
+  // Live-refresh linked services when a peer links or unlinks. Without this,
+  // an operator who linked from the peer's own UI (e.g. Vox's /link page)
+  // would have to reload the Console to see the row appear. EventSource
+  // reconnects on drop automatically; the effect cleans up on unmount.
+  useEffect(() => {
+    if (typeof EventSource === "undefined") {
+      return;
+    }
+    // Only subscribe to the diagnostics stage — the two new event variants
+    // both live there — so we don't stream every wake-word detection into
+    // the Console just to listen for link changes.
+    const source = new EventSource("/v1/events?stage=diagnostics");
+    let cancelled = false;
+
+    async function refreshLinkedServices() {
+      try {
+        const [nextLinkedServices, nextVoxLinks] = await Promise.all([
+          snapshotClient.loadLinkedServices(),
+          snapshotClient.loadVoxLinks(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setLinkedServices(nextLinkedServices);
+        setVoxLinks(nextVoxLinks);
+      } catch {
+        // A refresh that fails is not worth surfacing: the next successful
+        // link/unlink event will retry, and manual reload still works.
+      }
+    }
+
+    source.addEventListener("LinkedServiceLinked", () => {
+      void refreshLinkedServices();
+    });
+    source.addEventListener("LinkedServiceUnlinked", () => {
+      void refreshLinkedServices();
+    });
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [snapshotClient]);
+
   if (firstRun) {
     return (
       <main className="first-run-shell">
@@ -5119,9 +5163,14 @@ function isErrorEvent(event: Event): boolean {
 }
 
 function isReconstructionBoundaryEvent(event: Event): boolean {
+  // LinkedService* events are lifecycle signals published by the
+  // /v1/linked-services handlers; they aren't part of any turn and would
+  // otherwise create a "diagnostics" stage group on the Turn timeline.
   return (
     event.type === "UtteranceSegmentStarted" ||
-    event.type === "ToolBatchStarted"
+    event.type === "ToolBatchStarted" ||
+    event.type === "LinkedServiceLinked" ||
+    event.type === "LinkedServiceUnlinked"
   );
 }
 
@@ -5177,6 +5226,9 @@ function eventComponent(event: Event): string {
       return "synthesis";
     case "StageFailed":
       return event.node;
+    case "LinkedServiceLinked":
+    case "LinkedServiceUnlinked":
+      return "diagnostics";
   }
 }
 
@@ -5226,6 +5278,10 @@ function eventDetail(event: Event): string | null {
     case "ConversationCompleted":
     case "TtsStarted":
       return "boundary";
+    case "LinkedServiceLinked":
+      return `${event.service_kind}: ${event.peer_name}`;
+    case "LinkedServiceUnlinked":
+      return event.peer_id;
   }
 }
 

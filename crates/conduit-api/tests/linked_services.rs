@@ -245,3 +245,53 @@ async fn linking_a_vox_peer_over_an_existing_provider_is_refused() {
     let (status, _) = call(&state, post("/v1/linked-services", vox_link_body())).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn linking_a_service_publishes_a_linked_service_linked_event() {
+    use conduit_core::event::Event;
+
+    let state = AppState::new(EventBus::default());
+    let mut subscription = state.bus.subscribe();
+
+    let (status, _) = call(&state, post("/v1/linked-services", link_body())).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let envelope = tokio::time::timeout(std::time::Duration::from_secs(1), subscription.recv())
+        .await
+        .expect("event within a second")
+        .expect("event received");
+
+    match &envelope.event {
+        Event::LinkedServiceLinked { peer_id, peer_name, service_kind } => {
+            assert_eq!(peer_id, "household-memory");
+            assert_eq!(peer_name, "Household Memory");
+            assert_eq!(service_kind, "memoria");
+        }
+        other => panic!("expected LinkedServiceLinked, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_linked_service_publishes_a_linked_service_unlinked_event() {
+    use conduit_core::event::Event;
+
+    let state = AppState::new(EventBus::default());
+    call(&state, post("/v1/linked-services", link_body())).await;
+
+    // Subscribe after the create so we only see the delete's event.
+    let mut subscription = state.bus.subscribe();
+    let (status, _) = call(&state, delete("/v1/linked-services/household-memory")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let envelope = tokio::time::timeout(std::time::Duration::from_secs(1), subscription.recv())
+        .await
+        .expect("event within a second")
+        .expect("event received");
+
+    match &envelope.event {
+        Event::LinkedServiceUnlinked { peer_id } => {
+            assert_eq!(peer_id, "household-memory");
+        }
+        other => panic!("expected LinkedServiceUnlinked, got {other:?}"),
+    }
+}

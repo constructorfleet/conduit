@@ -22,7 +22,12 @@ E = TypeVar("E")
 
 class LinkRequest(BaseModel):
     conduit_url: str
-    operator_token: str
+    # Optional so operators of anonymous (no-auth) Conduit deployments can
+    # link without inventing a token; the shared router forwards whatever is
+    # here — including an empty string — as the bearer, and Conduit's
+    # ManagementCaller extractor falls back to "anonymous" when no token was
+    # required by that deployment.
+    operator_token: str = ""
     peer_name: str
     force: bool = False
 
@@ -98,7 +103,11 @@ def make_link_router(
             )
 
         conduit_url = _trimmed("conduit_url", body.conduit_url)
-        operator_token = _trimmed("operator_token", body.operator_token)
+        # operator_token is not trimmed-required: a Conduit with no auth
+        # configured accepts an empty bearer, and forcing operators to invent
+        # a token to link a fresh dev instance is friction with no security
+        # gain (the check that matters happens Conduit-side).
+        operator_token = body.operator_token.strip()
         peer_name = _trimmed("peer_name", body.peer_name)
 
         create_body = dict(build_create_body(body, existing.extension if existing else None))
