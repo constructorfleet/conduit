@@ -6,8 +6,10 @@ Services depend on the `ConduitLinkClient` Protocol; production code injects
 
 from __future__ import annotations
 
-import httpx
+import secrets
 from typing import Mapping, Protocol
+
+import httpx
 
 
 class ConduitLinkClient(Protocol):
@@ -40,7 +42,8 @@ class HttpConduitLinkClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        raise NotImplementedError
+        self._timeout = timeout
+        self._transport = transport
 
     def create_link(
         self,
@@ -48,17 +51,44 @@ class HttpConduitLinkClient:
         operator_token: str,
         body: Mapping[str, object],
     ) -> Mapping[str, str]:
-        raise NotImplementedError
+        url = f"{conduit_url.rstrip('/')}/v1/linked-services"
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            response = client.post(
+                url,
+                json=dict(body),
+                headers={"authorization": f"Bearer {operator_token}"},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return {str(key): str(value) for key, value in payload.items()}
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
-        raise NotImplementedError
+        url = f"{conduit_url.rstrip('/')}/v1/linked-services/{peer_id}"
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            response = client.delete(
+                url,
+                headers={"authorization": f"Bearer {sync_token}"},
+            )
+        # Best-effort: a non-2xx unlink is logged by the caller, not raised.
+        _ = response.status_code
 
 
 class InMemoryConduitLinkClient:
-    """Test fake — no HTTP. Services use this in unit tests via the Protocol."""
+    """Test fake — no HTTP. Services use this in unit tests via the Protocol.
 
-    def __init__(self) -> None:
-        raise NotImplementedError
+    Mints a deterministic `sync_token` on each `create_link` and remembers the
+    request body so tests can assert what the peer sent.
+    """
+
+    def __init__(
+        self,
+        *,
+        extra_response_fields: Mapping[str, str] | None = None,
+    ) -> None:
+        self._extra = dict(extra_response_fields or {})
+        self.last_create_body: Mapping[str, object] | None = None
+        self.last_delete_peer_id: str | None = None
+        self.last_delete_token: str | None = None
 
     def create_link(
         self,
@@ -66,7 +96,11 @@ class InMemoryConduitLinkClient:
         operator_token: str,
         body: Mapping[str, object],
     ) -> Mapping[str, str]:
-        raise NotImplementedError
+        self.last_create_body = dict(body)
+        response = {"sync_token": secrets.token_urlsafe(32)}
+        response.update(self._extra)
+        return response
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
-        raise NotImplementedError
+        self.last_delete_peer_id = peer_id
+        self.last_delete_token = sync_token
