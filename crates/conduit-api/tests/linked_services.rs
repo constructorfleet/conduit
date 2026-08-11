@@ -128,6 +128,7 @@ async fn listing_legacy_vox_links_synthesizes_their_panel_manifest() {
             granted_by: "Operator Console".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
+            proxy_auth_bearer: None,
         })
         .await
         .expect("stores");
@@ -155,6 +156,7 @@ async fn listing_legacy_instrumenta_links_synthesizes_their_panel_manifest() {
             granted_by: "Operator Console".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
+            proxy_auth_bearer: None,
         })
         .await
         .expect("stores");
@@ -182,6 +184,7 @@ async fn listing_legacy_excita_links_synthesizes_their_panel_manifest() {
             granted_by: "Operator Console".to_owned(),
             granted_at: chrono::Utc::now(),
             last_seen: None,
+            proxy_auth_bearer: None,
         })
         .await
         .expect("stores");

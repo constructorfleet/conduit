@@ -196,7 +196,7 @@ def _build_create_body(request: _SharedLinkRequest, _existing: _NoExtension | No
         "service_kind": "memoria",
         "peer_name": request.peer_name,
         "peer_id": peer_id,
-        "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+        "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://localhost:8080"),
         "panel": {
             "id": "memoria",
             "label": "Memoria",
@@ -329,7 +329,7 @@ def _make_link_router():
     config = LinkConfig(
         service_kind=LinkedServiceKind.MEMORIA,
         peer_name="memoria",
-        peer_base_url=os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+        peer_base_url=os.getenv("MEMORIA_BASE_URL", "http://localhost:8080"),
         panel=LinkedServicePanel(title="Memoria", path="/ui/", icon="brain"),
         storage_dir=data_dir,
     )

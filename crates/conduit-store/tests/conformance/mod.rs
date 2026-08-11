@@ -380,6 +380,7 @@ pub fn linked_service(peer_id: &str, peer_name: &str) -> LinkedService {
             .expect("fixed timestamp")
             .with_timezone(&chrono::Utc),
         last_seen: None,
+        proxy_auth_bearer: None,
     }
 }
 

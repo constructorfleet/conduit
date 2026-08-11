@@ -141,6 +141,10 @@ pub async fn create(
         granted_by: caller.name.clone(),
         granted_at: Utc::now(),
         last_seen: None,
+        // Stored so Conduit's reverse proxy can present the peer's own key
+        // on forwarded requests (spec 0005 §Reverse-proxy contract strips
+        // the operator's bearer to keep it from leaking to the peer).
+        proxy_auth_bearer: Some(vox_api_key.to_owned()),
     };
 
     let definition = ProviderDefinition {

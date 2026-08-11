@@ -215,6 +215,10 @@ readonly memoria_dev_root
 # Memoria defaults to container paths. On a host shell those are a great way to
 # find out which directories do not exist, or worse, do and are unwritable.
 export MEMORIA_DATA_DIR="${MEMORIA_DATA_DIR:-${memoria_dev_root}/data}"
+# Memoria's built-in link handshake defaults to the compose service name
+# `memoria`, which doesn't resolve on a host shell. Export the actual loopback
+# origin so Conduit's reachability probe can hit the port dev.sh just started.
+export MEMORIA_BASE_URL="${MEMORIA_BASE_URL:-http://127.0.0.1:${memoria_port}}"
 
 cat <<SUMMARY
 conduit dev
@@ -241,6 +245,7 @@ if [[ "${dry_run}" -eq 1 ]]; then
   SPEAKER_ID_DATA_DIR=${SPEAKER_ID_DATA_DIR}
   SPEAKER_ID_MODEL_DIR=${SPEAKER_ID_MODEL_DIR}
   MEMORIA_DATA_DIR=${MEMORIA_DATA_DIR}
+  MEMORIA_BASE_URL=${MEMORIA_BASE_URL}
   cargo run ${cargo_args[*]}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${memoria_port}
