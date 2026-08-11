@@ -27,10 +27,8 @@ the caller (Conduit or MCP client) apply thresholds and filtering logic.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import secrets
 import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
@@ -45,6 +43,16 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from conduit_link import (
+    HttpConduitLinkClient,
+    LinkConfig,
+    LinkedServiceKind,
+    LinkedServicePanel,
+    LinkRequest as _SharedLinkRequest,
+    LinkStore,
+    make_link_router,
+)
 
 LOG = logging.getLogger("memoria")
 
@@ -157,25 +165,6 @@ class EngramSearch(BaseModel):
     conversation_id: str | None = None
 
 
-class LinkRequest(BaseModel):
-    """Request to link with Conduit."""
-
-    conduit_url: str
-    operator_token: str
-    peer_name: str = "memoria"
-    force: bool = False
-
-
-class LinkStatus(BaseModel):
-    """Link status with Conduit."""
-
-    status: str  # linked, unlinked, config-managed
-    peer_id: str | None = None
-    peer_name: str | None = None
-    conduit_url: str | None = None
-    sync_token: str | None = Field(default=None, exclude=True)
-
-
 class HealthResponse(BaseModel):
     """Health check response."""
 
@@ -185,12 +174,50 @@ class HealthResponse(BaseModel):
     linked: bool
 
 
+# Per-service extension: none; Memoria has no extra state to persist beyond
+# the 0005 base fields, so the extension dataclass is empty.
+class _NoExtension:
+    """Placeholder extension for Memoria — no service-specific link state."""
+
+    __slots__: tuple[()] = ()
+
+
+def _ext_from(_payload: dict[str, object]) -> _NoExtension:
+    return _NoExtension()
+
+
+def _ext_to(_extension: _NoExtension) -> dict[str, object]:
+    return {}
+
+
+def _build_create_body(request: _SharedLinkRequest, _existing: _NoExtension | None) -> dict[str, object]:
+    peer_id = request.peer_name.strip().lower().replace(" ", "-")
+    return {
+        "service_kind": "memoria",
+        "peer_name": request.peer_name,
+        "peer_id": peer_id,
+        "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+        "panel": {
+            "id": "memoria",
+            "label": "Memoria",
+            "icon": "brain",
+            "path": "/ui/",
+        },
+    }
+
+
+def _build_extension(_request, _response, _existing) -> _NoExtension:
+    return _NoExtension()
+
+
+def _public(_extension: _NoExtension) -> dict[str, object]:
+    return {}
+
+
 # Global state
 storage: StorageBackend | None = None
-link_status: LinkStatus | None = None
-link_file_path: Path | None = None
+link_store: LinkStore[_NoExtension] | None = None
 api_key: str | None = None
-conduit_client: httpx.AsyncClient | None = None
 sync_task: asyncio.Task[None] | None = None
 sync_lock = asyncio.Lock()
 
@@ -214,7 +241,7 @@ def get_storage() -> StorageBackend:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global storage, link_status, link_file_path, api_key, conduit_client, sync_task
+    global storage, link_store, api_key, sync_task
 
     # Initialize configuration
     api_key = os.getenv("MEMORIA_API_KEY")
@@ -246,14 +273,21 @@ async def lifespan(app: FastAPI):
     else:
         raise ValueError(f"Unknown backend: {backend_type}")
 
-    # Initialize link status
-    link_file_path = data_dir / "link.json"
-    link_status = load_link_status(link_file_path)
+    # Initialize link store (via the shared conduit_link module).
+    link_store = LinkStore(
+        data_dir,
+        extension_from_dict=_ext_from,
+        extension_to_dict=_ext_to,
+    )
+    app.state.link_store = link_store
 
-    # Initialize conduit client if linked
-    if link_status and link_status.status == "linked" and link_status.conduit_url:
-        conduit_client = httpx.AsyncClient(timeout=30.0)
+    # If a persisted link is present, note it and start the background sync.
+    existing = link_store.load()
+    if existing is not None:
+        LOG.info("linked to Conduit peer=%s since %s", existing.state.peer_id, existing.state.linked_at)
         sync_task = asyncio.create_task(background_sync())
+    else:
+        LOG.info("unlinked")
 
     # Initialize MCP server if enabled
     if os.getenv("MEMORIA_MCP_ENABLED", "false").lower() == "true":
@@ -266,8 +300,6 @@ async def lifespan(app: FastAPI):
         sync_task.cancel()
         with suppress(asyncio.CancelledError):
             await sync_task
-    if conduit_client:
-        await conduit_client.aclose()
     if storage:
         await storage.cleanup()
 
@@ -280,28 +312,42 @@ app = FastAPI(
 )
 
 
-def load_link_status(path: Path) -> LinkStatus | None:
-    """Load link status from file."""
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        return LinkStatus(**data)
-    except Exception as e:
-        LOG.warning(f"Failed to load link status: {e}")
-        return None
+def _make_link_router():
+    """Router factory delegating to conduit_link's shared implementation.
+
+    Called at module import so route registration happens once. The store is
+    resolved from app.state at request time so the lifespan initialiser owns
+    creation.
+    """
+    data_dir = Path(os.getenv("MEMORIA_DATA_DIR", "/data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    store = LinkStore(
+        data_dir,
+        extension_from_dict=_ext_from,
+        extension_to_dict=_ext_to,
+    )
+    config = LinkConfig(
+        service_kind=LinkedServiceKind.MEMORIA,
+        peer_name="memoria",
+        peer_base_url=os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
+        panel=LinkedServicePanel(title="Memoria", path="/ui/", icon="brain"),
+        storage_dir=data_dir,
+    )
+    return make_link_router(
+        config=config,
+        store=store,
+        client=HttpConduitLinkClient(),
+        build_create_body=_build_create_body,
+        build_extension=_build_extension,
+        public_response=_public,
+    )
 
 
-def save_link_status(path: Path, status: LinkStatus) -> None:
-    """Save link status to file."""
-    path.write_text(status.model_dump_json(indent=2))
-    os.chmod(path, 0o600)
+app.include_router(_make_link_router())
 
 
 async def background_sync() -> None:
     """Background task to sync with Conduit."""
-    global link_status, sync_lock
-
     interval = int(os.getenv("MEMORIA_SYNC_INTERVAL_SECONDS", DEFAULT_SYNC_INTERVAL_SECONDS))
     max_backoff = int(os.getenv("MEMORIA_SYNC_MAX_BACKOFF_SECONDS", DEFAULT_SYNC_MAX_BACKOFF_SECONDS))
     backoff = interval
@@ -310,7 +356,7 @@ async def background_sync() -> None:
         try:
             await asyncio.sleep(backoff)
             async with sync_lock:
-                if not link_status or link_status.status != "linked":
+                if link_store is None or link_store.load() is None:
                     continue
 
                 # Sync engrams with Conduit
@@ -356,100 +402,8 @@ async def health_check() -> HealthResponse:
         status="ok",
         backend=health.get("backend", "unknown"),
         engram_count=health.get("engram_count", 0),
-        linked=link_status is not None and link_status.status == "linked",
+        linked=link_store is not None and link_store.load() is not None,
     )
-
-
-@app.get("/link")
-async def get_link() -> LinkStatus:
-    """Get current link status."""
-    if link_status is None:
-        return LinkStatus(status="unlinked")
-    return link_status
-
-
-@app.post("/link")
-async def create_link(request: LinkRequest) -> LinkStatus:
-    """Create link with Conduit."""
-    global link_status, conduit_client, sync_task
-
-    async with sync_lock:
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{request.conduit_url.rstrip('/')}/v1/linked-services",
-                    json={
-                        "service_kind": "memoria",
-                        "peer_name": request.peer_name,
-                        "peer_id": request.peer_name.strip().lower().replace(" ", "-"),
-                        "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://memoria:8080"),
-                        "panel": {
-                            "id": "memoria",
-                            "label": "Memoria",
-                            "icon": "brain",
-                            "path": "/ui/",
-                        },
-                    },
-                    headers={"authorization": f"Bearer {request.operator_token}"},
-                )
-                response.raise_for_status()
-                data = response.json()
-
-        except Exception as e:
-            LOG.error(f"Failed to link with Conduit: {e}")
-            raise HTTPException(status_code=500, detail=f"Link failed: {e}")
-
-        # Store link status
-        link_status = LinkStatus(
-            status="linked",
-            peer_id=request.peer_name.strip().lower().replace(" ", "-"),
-            peer_name=request.peer_name,
-            conduit_url=request.conduit_url.rstrip("/"),
-            sync_token=data["sync_token"],
-        )
-        if link_file_path:
-            save_link_status(link_file_path, link_status)
-
-        # Initialize conduit client and sync task
-        conduit_client = httpx.AsyncClient(timeout=30.0)
-        sync_task = asyncio.create_task(background_sync())
-
-        return link_status
-
-
-@app.delete("/link")
-async def delete_link() -> Response:
-    """Delete link with Conduit."""
-    global link_status, conduit_client, sync_task
-
-    async with sync_lock:
-        if link_status and link_status.status == "linked":
-            # Revoke link in Conduit
-            try:
-                if conduit_client and link_status.peer_id and link_status.sync_token:
-                    await conduit_client.post(
-                        f"{link_status.conduit_url}/v1/linked-services/{link_status.peer_id}/revoke",
-                        headers={"authorization": f"Bearer {link_status.sync_token}"},
-                    )
-            except Exception as e:
-                LOG.warning(f"Failed to revoke link in Conduit: {e}")
-
-        # Stop sync task
-        if sync_task:
-            sync_task.cancel()
-            sync_task = None
-
-        # Close conduit client
-        if conduit_client:
-            await conduit_client.aclose()
-            conduit_client = None
-
-        # Clear link status
-        link_status = None
-        if link_file_path and link_file_path.exists():
-            link_file_path.unlink()
-
-        return Response(status_code=204)
 
 
 @app.post("/engrams", dependencies=[Depends(verify_token)])
