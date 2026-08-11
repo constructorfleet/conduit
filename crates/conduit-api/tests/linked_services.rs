@@ -193,3 +193,55 @@ async fn listing_legacy_excita_links_synthesizes_their_panel_manifest() {
     assert_eq!(list[0]["panel"]["label"], "Excita");
     assert_eq!(list[0]["panel"]["icon"], "radio");
 }
+
+fn vox_link_body() -> serde_json::Value {
+    serde_json::json!({
+        "service_kind": "vox",
+        "peer_name": "Kitchen Vox",
+        "peer_id": "kitchen-vox",
+        "peer_base_url": "http://vox.internal:8081",
+        "panel": {"id": "vox", "label": "Vox", "icon": "users", "path": "/ui/"},
+        "extension": {"local_api_key": "vox-key-abc"}
+    })
+}
+
+#[tokio::test]
+async fn linking_a_vox_peer_auto_provisions_a_speaker_provider() {
+    let state = AppState::new(EventBus::default());
+
+    let (status, body) = call(&state, post("/v1/linked-services", vox_link_body())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let provider_id = body["extension"]["provider_definition_id"]
+        .as_str()
+        .expect("provider_definition_id in extension");
+    assert_eq!(provider_id, "vox-kitchen-vox");
+
+    let definition = state
+        .provider_definition(provider_id)
+        .await
+        .expect("store")
+        .expect("provider definition was auto-provisioned");
+    assert_eq!(definition.label, "Conduit Vox — Kitchen Vox");
+}
+
+#[tokio::test]
+async fn linking_a_vox_peer_without_extension_is_unprocessable() {
+    let state = AppState::new(EventBus::default());
+
+    let mut body = vox_link_body();
+    body.as_object_mut().expect("object").remove("extension");
+    let (status, _) = call(&state, post("/v1/linked-services", body)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn linking_a_vox_peer_over_an_existing_provider_is_refused() {
+    let state = AppState::new(EventBus::default());
+    // First link succeeds and writes vox-kitchen-vox.
+    call(&state, post("/v1/linked-services", vox_link_body())).await;
+    // A retry without unlinking hits the row's own uniqueness first (409),
+    // which is the same guard the pre-migration /v1/vox/links path had.
+    let (status, _) = call(&state, post("/v1/linked-services", vox_link_body())).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
