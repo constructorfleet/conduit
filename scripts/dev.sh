@@ -368,6 +368,12 @@ if ! "${memoria_python}" -c "import fastapi, httpx, numpy, uvicorn" >/dev/null 2
     printf '\ninstalling Memoria dependencies\n'
     (cd "${memoria_dir}" && "${memoria_venv}/bin/pip" install -r requirements.txt)
 fi
+# The shared link module ships as a local editable install so every service
+# depends on the same LinkStore/router rather than hand-rolling its own.
+if ! "${memoria_python}" -c "import conduit_link" >/dev/null 2>&1; then
+    printf '\ninstalling shared conduit-link module into Memoria\n'
+    (cd "${memoria_dir}" && "${memoria_venv}/bin/pip" install -e "${ROOT}/packages/conduit-link")
+fi
 
 printf 'starting Conduit Memoria\n'
 (cd "${memoria_dir}" && exec "${memoria_python}" -m uvicorn app:app --host 127.0.0.1 --port "${memoria_port}") &

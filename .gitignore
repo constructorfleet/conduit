@@ -5,6 +5,7 @@
 .DS_Store
 .env
 __pycache__/
+*.egg-info/
 .venv
 /.cargo/registry
 .playwright-cli/
