@@ -5163,9 +5163,14 @@ function isErrorEvent(event: Event): boolean {
 }
 
 function isReconstructionBoundaryEvent(event: Event): boolean {
+  // LinkedService* events are lifecycle signals published by the
+  // /v1/linked-services handlers; they aren't part of any turn and would
+  // otherwise create a "diagnostics" stage group on the Turn timeline.
   return (
     event.type === "UtteranceSegmentStarted" ||
-    event.type === "ToolBatchStarted"
+    event.type === "ToolBatchStarted" ||
+    event.type === "LinkedServiceLinked" ||
+    event.type === "LinkedServiceUnlinked"
   );
 }
 
