@@ -1055,12 +1055,17 @@ def test_http_conduit_client_sends_the_expected_link_request() -> None:
         seen["url"] = str(request.url)
         seen["authorization"] = request.headers["authorization"]
         seen["body"] = json_body = json.loads(request.content)
-        assert json_body["vox_api_key"] == "local-key"
+        # HttpConduitClient translates the Vox-shaped call arguments into the
+        # generic /v1/linked-services request shape: service_kind + panel +
+        # extension.local_api_key.
+        assert json_body["service_kind"] == "vox"
+        assert json_body["peer_base_url"] == "http://vox.internal:8081"
+        assert json_body["extension"] == {"local_api_key": "local-key"}
         return httpx.Response(
             201,
             json={
                 "sync_token": "sync-token",
-                "provider_definition_id": "vox-peer-1",
+                "extension": {"provider_definition_id": "vox-peer-1"},
             },
         )
 
@@ -1082,5 +1087,5 @@ def test_http_conduit_client_sends_the_expected_link_request() -> None:
         "provider_definition_id": "vox-peer-1",
     }
     assert seen["method"] == "POST"
-    assert seen["url"] == "http://conduit.internal:8080/v1/vox/links"
+    assert seen["url"] == "http://conduit.internal:8080/v1/linked-services"
     assert seen["authorization"] == "Bearer operator-secret"
