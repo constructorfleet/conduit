@@ -56,6 +56,11 @@ from pydantic import BaseModel, Field
 from conduit_link import (
     ConduitLinkClient as _SharedConduitLinkClient,
     HttpConduitLinkClient as _HttpConduitLinkClient,
+    LinkedServicePanel,
+    LinkRecord,
+    LinkState,
+    LinkStore as _SharedLinkStore,
+    LinkStoreSecurityError as _SharedLinkStoreSecurityError,
 )
 
 LOG = logging.getLogger("vox")
@@ -697,109 +702,73 @@ class LabelUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=MAX_LABEL_LENGTH)
 
 
-@dataclass(frozen=True)
-class LinkState:
-    conduit_url: str
-    sync_token: str
-    peer_id: str
-    peer_name: str
-    provider_definition_id: str
-    local_api_key: str
-    linked_at: str
-
-    def public(self) -> dict[str, str]:
-        return {
-            "status": "linked",
-            "conduit_url": self.conduit_url,
-            "peer_id": self.peer_id,
-            "peer_name": self.peer_name,
-            "provider_definition_id": self.provider_definition_id,
-            "linked_at": self.linked_at,
-        }
-
-
-class LinkStoreSecurityError(RuntimeError):
-    """Raised when link.json is readable by anyone except the service user."""
-
-
 class WidthMismatchError(RuntimeError):
     """Raised when a model's embedding width cannot coexist with saved prints."""
 
 
-class LinkStore:
-    """The persisted relationship with one Conduit instance."""
+# Re-exports so callers of the old symbols keep working while we complete the
+# extraction. `LinkStore` is `conduit_link.LinkStore[VoxLinkExtension]`;
+# `LinkStoreSecurityError` is imported straight from the shared module.
+LinkStoreSecurityError = _SharedLinkStoreSecurityError
 
-    FILENAME = "link.json"
+
+@dataclass(frozen=True)
+class VoxLinkExtension:
+    """Vox-specific link state that doesn't fit the base spec-0005 shape.
+
+    Both fields are per-peer secrets or provisioned ids: `provider_definition_id`
+    is the `http_speaker_id` provider Conduit auto-provisioned for this peer,
+    and `local_api_key` is what Vox's own routes authenticate against when the
+    deployment didn't supply one.
+    """
+
+    provider_definition_id: str
+    local_api_key: str
+
+
+def _vox_ext_from_dict(payload: dict[str, object]) -> VoxLinkExtension:
+    return VoxLinkExtension(
+        provider_definition_id=str(payload["provider_definition_id"]),
+        local_api_key=str(payload["local_api_key"]),
+    )
+
+
+def _vox_ext_to_dict(extension: VoxLinkExtension) -> dict[str, object]:
+    return {
+        "provider_definition_id": extension.provider_definition_id,
+        "local_api_key": extension.local_api_key,
+    }
+
+
+class LinkStore(_SharedLinkStore[VoxLinkExtension]):
+    """Vox-shaped `conduit_link.LinkStore` — carries `VoxLinkExtension`.
+
+    Behaviour is inherited unchanged; this subclass exists so the constructor
+    matches the legacy Vox call sites (`LinkStore(directory)`) rather than the
+    keyword-only shared shape, and so `LinkStore.FILENAME` still resolves for
+    tests that assert the on-disk path.
+    """
+
+    FILENAME = _SharedLinkStore.FILENAME
 
     def __init__(self, directory: Path) -> None:
-        self.directory = directory
-        self._path = directory / self.FILENAME
-
-    def load(self) -> LinkState | None:
-        if not self._path.exists():
-            return None
-        self._refuse_loose_permissions()
-        data = json.loads(self._path.read_text())
-        return LinkState(
-            conduit_url=str(data["conduit_url"]),
-            sync_token=str(data["sync_token"]),
-            peer_id=str(data["peer_id"]),
-            peer_name=str(data.get("peer_name") or data["peer_id"]),
-            provider_definition_id=str(data["provider_definition_id"]),
-            local_api_key=str(data["local_api_key"]),
-            linked_at=str(data["linked_at"]),
+        super().__init__(
+            directory,
+            extension_from_dict=_vox_ext_from_dict,
+            extension_to_dict=_vox_ext_to_dict,
         )
 
-    def save(
-        self,
-        *,
-        conduit_url: str,
-        sync_token: str,
-        peer_id: str,
-        peer_name: str,
-        provider_definition_id: str,
-        local_api_key: str,
-    ) -> LinkState:
-        linked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        state = LinkState(
-            conduit_url=conduit_url,
-            sync_token=sync_token,
-            peer_id=peer_id,
-            peer_name=peer_name,
-            provider_definition_id=provider_definition_id,
-            local_api_key=local_api_key,
-            linked_at=linked_at,
-        )
-        payload = {
-            "conduit_url": state.conduit_url,
-            "sync_token": state.sync_token,
-            "peer_id": state.peer_id,
-            "peer_name": state.peer_name,
-            "provider_definition_id": state.provider_definition_id,
-            "local_api_key": state.local_api_key,
-            "linked_at": state.linked_at,
-        }
-        self.directory.mkdir(parents=True, exist_ok=True)
-        temporary = self._path.with_suffix(".json.tmp")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        with os.fdopen(os.open(temporary, flags, 0o600), "w") as file:
-            json.dump(payload, file, indent=2)
-        os.chmod(temporary, 0o600)
-        temporary.replace(self._path)
-        os.chmod(self._path, 0o600)
-        return state
 
-    def remove(self) -> None:
-        if self._path.exists():
-            self._refuse_loose_permissions()
-            self._path.unlink()
-
-    def _refuse_loose_permissions(self) -> None:
-        mode = self._path.stat().st_mode & 0o777
-        if mode & 0o077:
-            raise LinkStoreSecurityError(
-                f"{self.FILENAME} permissions must be 0600; found {mode:03o}"
-            )
+def _public_link(record: LinkRecord[VoxLinkExtension]) -> dict[str, str]:
+    """Vox's redacted view of a linked state. Mirrors the legacy shape."""
+    return {
+        "status": "linked",
+        "conduit_url": record.state.conduit_url,
+        "peer_id": record.state.peer_id,
+        "peer_name": record.state.peer_name,
+        "provider_definition_id": record.extension.provider_definition_id,
+        "linked_at": record.state.linked_at,
+    }
 
 
 class LinkRequest(BaseModel):
@@ -966,10 +935,12 @@ class Syncer:
         self._sleep = sleep
 
     async def sync_once(self) -> int:
-        state = self.links.load()
-        if state is None:
+        record = self.links.load()
+        if record is None:
             return 0
-        speakers = await self.conduit.list_speakers(state.conduit_url, state.sync_token)
+        speakers = await self.conduit.list_speakers(
+            record.state.conduit_url, record.state.sync_token
+        )
         self.roster.reconcile(self.prints)
         synced = 0
         for remote in speakers:
@@ -978,7 +949,7 @@ class Syncer:
             except ValueError:
                 LOG.warning(
                     "skipping Conduit speaker with invalid UUID: peer=%s speaker=%r",
-                    state.peer_id,
+                    record.state.peer_id,
                     remote.id,
                 )
                 continue
@@ -990,7 +961,7 @@ class Syncer:
             synced += 1
         LOG.info(
             "synced Vox roster from Conduit: peer=%s speakers=%d",
-            state.peer_id,
+            record.state.peer_id,
             synced,
         )
         return synced
@@ -1011,14 +982,14 @@ class Syncer:
                 raise
             except Exception as error:  # noqa: BLE001 - task must never crash
                 try:
-                    state = self.links.load()
+                    record = self.links.load()
                 except LinkStoreSecurityError:
-                    state = None
+                    record = None
                 retry_in = failure_delay
                 LOG.warning(
                     "Vox roster sync failed: peer=%s conduit=%s retry_in=%.0fs error=%s",
-                    state.peer_id if state is not None else "unlinked",
-                    state.conduit_url if state is not None else "unknown",
+                    record.state.peer_id if record is not None else "unlinked",
+                    record.state.conduit_url if record is not None else "unknown",
                     retry_in,
                     error,
                 )
@@ -1142,10 +1113,10 @@ def create_app(
         accepted = api_key
         if accepted is None:
             try:
-                state = links.load()
+                record = links.load()
             except LinkStoreSecurityError as error:
                 raise HTTPException(status_code=500, detail=str(error)) from error
-            accepted = state.local_api_key if state is not None else None
+            accepted = record.extension.local_api_key if record is not None else None
         if accepted is None:
             return
         if credentials is None or credentials.credentials != accepted:
@@ -1208,14 +1179,14 @@ def create_app(
     @app.get("/link")
     def link_status() -> dict[str, str]:
         try:
-            state = links.load()
+            record = links.load()
         except LinkStoreSecurityError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
-        if state is None:
+        if record is None:
             if api_key is not None:
                 return {"status": "config-managed"}
             return {"status": "unlinked"}
-        return state.public()
+        return _public_link(record)
 
     @app.post("/link")
     def link(request: Request, body: LinkRequest) -> dict[str, str]:
@@ -1232,9 +1203,13 @@ def create_app(
         conduit_url = _trimmed_url(body.conduit_url, "conduit_url")
         peer_name = _trimmed_field(body.peer_name, "peer_name")
         operator_token = _trimmed_field(body.operator_token, "operator_token")
-        peer_id = existing.peer_id if existing is not None else str(uuid.uuid4())
+        peer_id = (
+            existing.state.peer_id if existing is not None else str(uuid.uuid4())
+        )
         local_api_key = api_key or (
-            existing.local_api_key if existing is not None else secrets.token_urlsafe(32)
+            existing.extension.local_api_key
+            if existing is not None
+            else secrets.token_urlsafe(32)
         )
         vox_base_url = _trimmed_url(
             os.environ.get("SPEAKER_ID_BASE_URL") or str(request.base_url),
@@ -1257,20 +1232,25 @@ def create_app(
                 status_code=502, detail=f"could not reach Conduit: {error}"
             ) from error
 
-        state = links.save(
+        state = LinkState(
             conduit_url=conduit_url,
-            sync_token=created["sync_token"],
             peer_id=peer_id,
             peer_name=peer_name,
+            sync_token=created["sync_token"],
+            panel=LinkedServicePanel(title="Vox", path="/ui/", icon="users"),
+            linked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        extension = VoxLinkExtension(
             provider_definition_id=created["provider_definition_id"],
             local_api_key=local_api_key,
         )
+        record = links.save(state, extension)
         LOG.info(
             "linked Vox to Conduit peer=%s provider=%s",
             peer_id,
-            state.provider_definition_id,
+            record.extension.provider_definition_id,
         )
-        response = state.public()
+        response = _public_link(record)
         if api_key is None:
             response["local_api_key"] = local_api_key
         return response
@@ -1278,14 +1258,18 @@ def create_app(
     @app.delete("/link")
     def unlink() -> Response:
         try:
-            state = links.load()
+            record = links.load()
         except LinkStoreSecurityError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
-        if state is None:
+        if record is None:
             return Response(status_code=204)
-        conduit.delete_link(state.conduit_url, state.peer_id, state.sync_token)
+        conduit.delete_link(
+            record.state.conduit_url,
+            record.state.peer_id,
+            record.state.sync_token,
+        )
         links.remove()
-        LOG.info("unlinked Vox from Conduit peer=%s", state.peer_id)
+        LOG.info("unlinked Vox from Conduit peer=%s", record.state.peer_id)
         return Response(status_code=204)
 
     @app.get("/speakers")
