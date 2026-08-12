@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from instrumenta.app import Config, create_app
 from instrumenta.backend import SqliteBackend
-from instrumenta.secrets import SecretBox, SecretKeyMissingError
+from instrumenta.secret_box import SecretBox, SecretKeyMissingError
 
 
 @pytest.fixture
@@ -41,8 +41,11 @@ def config(data_dir: Path, secret_key: str) -> Config:
 
 
 @pytest.fixture
-def client(config: Config) -> TestClient:
-    return TestClient(create_app(config))
+def client(config: Config):
+    # `with TestClient(...)` triggers the FastAPI lifespan, which the MCP
+    # streamable-HTTP session manager needs before it can serve requests.
+    with TestClient(create_app(config)) as c:
+        yield c
 
 
 class TestHealth:
@@ -55,11 +58,87 @@ class TestHealth:
         assert data["linked"] is False
 
 class TestMcpEndpoint:
-    def test_mcp_endpoint_advertises_empty_surface(self, client: TestClient) -> None:
-        response = client.post("/mcp")
+    """End-to-end MCP wire tests over `/mcp`.
+
+    These use the real streamable-HTTP transport rather than probing the
+    endpoint shape, because that is the only way to catch mount-path bugs
+    (trailing-slash redirects strip POST bodies on strict clients) and
+    handshake regressions.
+    """
+
+    _MCP_HEADERS = {
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+    }
+
+    def _initialize(self, client: TestClient) -> str:
+        response = client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0"},
+                },
+            },
+            headers=self._MCP_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        session_id = response.headers["mcp-session-id"]
+        client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            headers={**self._MCP_HEADERS, "mcp-session-id": session_id},
+        )
+        return session_id
+
+    def test_mount_serves_initialize_handshake(
+        self, client: TestClient
+    ) -> None:
+        response = client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0"},
+                },
+            },
+            headers=self._MCP_HEADERS,
+        )
         assert response.status_code == 200
-        data = response.json()
-        assert data == {"tools": [], "prompts": [], "resources": []}
+        assert "mcp-session-id" in response.headers
+
+    def test_tools_list_returns_all_four_builtins(self, client: TestClient) -> None:
+        session_id = self._initialize(client)
+        response = client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            headers={**self._MCP_HEADERS, "mcp-session-id": session_id},
+        )
+        assert response.status_code == 200
+        # Streamable-HTTP wraps responses in SSE frames; the JSON is on a
+        # `data: ` line. Parse it out rather than pulling in the client SDK.
+        import json
+
+        for line in response.text.splitlines():
+            if line.startswith("data: "):
+                payload = json.loads(line[len("data: ") :])
+                break
+        else:
+            raise AssertionError(f"no data frame in response: {response.text!r}")
+        tool_names = {tool["name"] for tool in payload["result"]["tools"]}
+        assert tool_names == {"http.fetch", "time.now", "math.eval", "text.regex"}
 
 
 class TestRootRedirect:

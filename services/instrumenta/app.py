@@ -6,9 +6,10 @@ tools, and re-exposes the merged surface over streamable-HTTP. It hosts a
 configuration UI for enabling/disabling tools, authoring local prompts and
 resources, and inspecting per-upstream reachability and an audit log.
 
-This module is the v1 skeleton: link endpoints mirroring Memoria/Vox, a SQLite
-backend for configuration, Fernet-encrypted secrets, and an empty `/mcp`
-streamable-HTTP endpoint that the aggregator and built-in tool PRs will fill.
+This module wires link endpoints, a SQLite configuration backend,
+Fernet-encrypted secrets, and the streamable-HTTP MCP endpoint with the four
+built-in tools registered (see `mcp_app.py`). The aggregator PR extends the
+MCP server with upstream-forwarded tools/prompts/resources.
 
 Streamable-HTTP only (SSE deferred): the MCP SDK's streamable-HTTP transport
 handles legacy clients via the `MCP-Protocol-Version` header, so a second SSE
@@ -38,7 +39,8 @@ from conduit_link import (
 )
 
 from .backend import Backend, SqliteBackend
-from .secrets import SecretBox, SecretKeyMissingError
+from .mcp_app import build_mcp_server
+from .secret_box import SecretBox, SecretKeyMissingError
 
 LOG = logging.getLogger("instrumenta")
 
@@ -116,6 +118,10 @@ class Config(BaseModel):
         )
 
 
+def _csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def _make_backend(config: Config) -> Backend:
     if config.backend_type == "sqlite":
         return SqliteBackend(config.data_dir / "instrumenta.db")
@@ -155,13 +161,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         extension_to_dict=_ext_to,
     )
 
+    mcp_server = build_mcp_server()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.backend = backend
-        app.state.link_store = link_store
-        app.state.secret_box = secret_box
-        app.state.config = config
-        yield
+        # `session_manager` only exists after `streamable_http_app()` is called
+        # and must be entered from the host lifespan or the first request
+        # raises `RuntimeError: Task group is not initialized` — the SDK's
+        # ASGI sub-app lifespan is not run for mounted apps in Starlette.
+        async with mcp_server.session_manager.run():
+            app.state.backend = backend
+            app.state.link_store = link_store
+            app.state.secret_box = secret_box
+            app.state.config = config
+            app.state.mcp_server = mcp_server
+            yield
         await backend.close()
 
     app = FastAPI(
@@ -197,15 +211,31 @@ def create_app(config: Config | None = None) -> FastAPI:
             linked=link_store.load() is not None,
         )
 
-    @app.post("/mcp")
-    async def mcp_endpoint() -> dict[str, object]:
-        """Streamable-HTTP MCP endpoint (skeleton).
+    # Mount the streamable-HTTP MCP transport at `/mcp`. The SDK's default
+    # `streamable_http_path='/mcp'` combined with a mount would become
+    # `/mcp/mcp`, so we set the sub-app path to `/` and let the mount prefix
+    # do the routing.
+    #
+    # DNS-rebinding protection defaults to loopback-only; that trips
+    # TestClient (Host: testserver) and any non-loopback deployment. The
+    # allowlist is configurable via `INSTRUMENTA_ALLOWED_HOSTS` /
+    # `INSTRUMENTA_ALLOWED_ORIGINS` (comma-separated) so real deployments
+    # can widen it, and tests get "testserver" by default.
+    from mcp.server.transport_security import TransportSecuritySettings
 
-        The `mcp` SDK's `streamable_http_app()` will be mounted here once the
-        aggregator PR lands; today it returns an empty tool list so integration
-        tests can assert the endpoint is wired without pulling the SDK in.
-        """
-        return {"tools": [], "prompts": [], "resources": []}
+    allowed_hosts = _csv(os.getenv("INSTRUMENTA_ALLOWED_HOSTS", "testserver,localhost,127.0.0.1"))
+    allowed_origins = _csv(os.getenv("INSTRUMENTA_ALLOWED_ORIGINS", ""))
+    transport_security = TransportSecuritySettings(
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+    app.mount(
+        "/mcp",
+        mcp_server.streamable_http_app(
+            streamable_http_path="/",
+            transport_security=transport_security,
+        ),
+    )
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
