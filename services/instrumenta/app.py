@@ -38,9 +38,11 @@ from conduit_link import (
     make_link_router,
 )
 
+from .aggregator import Aggregator, UpstreamStatus
 from .backend import Backend, SqliteBackend
 from .mcp_app import build_mcp_server
 from .secret_box import SecretBox, SecretKeyMissingError
+from .servers_router import make_servers_router
 
 LOG = logging.getLogger("instrumenta")
 
@@ -162,9 +164,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     )
 
     mcp_server = build_mcp_server()
+    aggregator = Aggregator(backend, secret_box)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Register upstream tools BEFORE the session manager starts so
+        # `tools/list` sees them from the first request.
+        await aggregator.start(mcp_server)
         # `session_manager` only exists after `streamable_http_app()` is called
         # and must be entered from the host lifespan or the first request
         # raises `RuntimeError: Task group is not initialized` — the SDK's
@@ -175,7 +181,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.secret_box = secret_box
             app.state.config = config
             app.state.mcp_server = mcp_server
+            app.state.aggregator = aggregator
             yield
+        await aggregator.close()
         await backend.close()
 
     app = FastAPI(
@@ -210,6 +218,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             backend=config.backend_type,
             linked=link_store.load() is not None,
         )
+
+    @app.get("/upstreams")
+    async def list_upstreams() -> list[UpstreamStatus]:
+        """Per-upstream reachability snapshot.
+
+        Kept separate from `/health` so a flaky upstream never flips
+        Conduit's reachability probe on Instrumenta itself.
+        """
+        return aggregator.statuses()
+
+    app.include_router(make_servers_router())
 
     # Mount the streamable-HTTP MCP transport at `/mcp`. The SDK's default
     # `streamable_http_path='/mcp'` combined with a mount would become
