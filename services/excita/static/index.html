@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Conduit Excita</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 14px/1.4 system-ui, -apple-system, sans-serif;
+        margin: 2rem auto;
+        max-width: 720px;
+        padding: 0 1rem;
+      }
+      code { background: rgba(127, 127, 127, 0.15); padding: 0.1em 0.35em; border-radius: 3px; }
+      .muted { opacity: 0.7; }
+      ul { padding-left: 1.25rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Conduit Excita</h1>
+    <p>Wake-word operations service — labelling, debugging, training, and configuring wake-word models.</p>
+    <p class="muted">UI scaffold. The React operator surface lands in the next PR; the JSON API is live.</p>
+    <h2>API surface</h2>
+    <ul>
+      <li><code>GET /health</code> — link health</li>
+      <li><code>GET /phrases</code> · <code>POST /phrases</code></li>
+      <li><code>GET /clips?phrase_id=&amp;verdict=</code> · <code>POST /clips</code> (multipart)</li>
+      <li><code>GET /clips/{id}/audio</code></li>
+      <li><code>POST /clips/{id}/label</code></li>
+      <li><code>POST /link</code> · <code>GET /link</code> · <code>DELETE /link</code></li>
+    </ul>
+    <p>Spec: <a href="https://github.com/Teagan42/conduit/blob/main/docs/specs/0011-excita-wake-word-ops.md">docs/specs/0011-excita-wake-word-ops.md</a></p>
+  </body>
+</html>
