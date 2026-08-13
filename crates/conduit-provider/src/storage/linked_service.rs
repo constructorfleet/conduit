@@ -14,12 +14,16 @@
 
 use chrono::{DateTime, Utc};
 use conduit_core::Result;
-use conduit_link::LinkedServiceKind;
 pub use conduit_link::LinkedServicePanel;
+use conduit_link::{LinkedServiceKind, Reachability};
 use serde::{Deserialize, Serialize};
 
 fn default_service_kind() -> LinkedServiceKind {
     LinkedServiceKind::Vox
+}
+
+fn default_reachability() -> Reachability {
+    Reachability::Unknown
 }
 
 /// One linked Vox peer.
@@ -71,6 +75,17 @@ pub struct LinkedService {
     /// proxy with nothing to present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_auth_bearer: Option<String>,
+    /// Outcome of the most recent `GET {peer_base_url}/link/health` probe.
+    ///
+    /// Written by the create handler and by the startup probe sweep. A
+    /// failed probe does NOT remove the row — a peer that's temporarily
+    /// down should still surface in the console as unreachable rather than
+    /// vanish. Existing stored rows deserialize as `Unknown`.
+    #[serde(default = "default_reachability")]
+    pub reachability: Reachability,
+    /// When the most recent probe fired, or `None` if never probed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_probed_at: Option<DateTime<Utc>>,
 }
 
 /// Somewhere Vox links are kept.
