@@ -193,6 +193,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    from .metrics import PrometheusMiddleware, start_metrics_server
+
+    app.add_middleware(PrometheusMiddleware)
+    start_metrics_server()
+
     link_config = LinkConfig(
         service_kind=LinkedServiceKind.INSTRUMENTA,
         peer_name="instrumenta",

@@ -2,3 +2,4 @@
 # requirements-engine.txt for why the recognizer is installed separately.
 wyoming==1.10.0
 numpy==2.5.1
+prometheus-client>=0.20.0

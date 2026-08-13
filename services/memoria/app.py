@@ -311,6 +311,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from metrics import PrometheusMiddleware, start_metrics_server  # noqa: E402
+
+app.add_middleware(PrometheusMiddleware)
+start_metrics_server()
+
 
 def _make_link_router():
     """Router factory delegating to conduit_link's shared implementation.

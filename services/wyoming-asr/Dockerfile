@@ -50,7 +50,7 @@ RUN pip install --no-cache-dir -r "${ENGINE_REQUIREMENTS}"
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py ./
+COPY app.py metrics.py ./
 
 # Written to at runtime, so it exists and is owned before the drop to a non-root
 # user. It is a mount point in the compose file.
@@ -69,5 +69,5 @@ ENV ASR_ENGINE=canary \
     NEMO_CACHE_DIR=/models/nemo
 
 USER asr
-EXPOSE 10300
+EXPOSE 10300 9090
 ENTRYPOINT ["python", "app.py"]

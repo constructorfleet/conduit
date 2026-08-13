@@ -59,7 +59,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY requirements-speechbrain.txt requirements-pyannote.txt requirements-nemo.txt ./
 RUN pip install --no-cache-dir -r "requirements-${ENGINE}.txt"
 
-COPY app.py ./
+COPY app.py metrics.py ./
 COPY static ./static
 
 # Written to at runtime, so they exist and are owned before the drop to a
@@ -82,5 +82,5 @@ ENV SPEAKER_ID_ENGINE=${ENGINE} \
     NEMO_CACHE_DIR=/models/nemo
 
 USER vox
-EXPOSE 8080
+EXPOSE 8080 9090
 ENTRYPOINT ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
