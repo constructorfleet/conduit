@@ -344,7 +344,8 @@ def test_disarm_detector_stops_scoring(client: TestClient) -> None:
     )
     detector_id = arm.json()["id"]
 
-    assert client.delete(f"/detectors/{detector_id}").status_code == 204
+    delete_resp = client.delete(f"/detectors/{detector_id}")
+    assert delete_resp.status_code == 204
     assert client.get("/detectors").json() == []
 
     with wave.open(str(AUDIO_DIR / "hey_jarvis.wav")) as w:

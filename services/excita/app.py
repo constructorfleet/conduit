@@ -49,7 +49,7 @@ from .engines import (
     OpenWakeWordEngine,
     WakeWordEngine,
 )
-from .supervisor import DetectorSupervisor, WakeEvent, bindings_view
+from .supervisor import DetectorSupervisor, bindings_view
 
 LOG = logging.getLogger("excita")
 
