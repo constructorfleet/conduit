@@ -128,11 +128,13 @@ class TestServersCRUD:
         created = client.post(
             "/servers", json={"name": "gone", "url": "https://example.invalid/mcp"}
         ).json()
-        assert client.delete(f"/servers/{created['id']}").status_code == 204
+        delete_response = client.delete(f"/servers/{created['id']}")
+        assert delete_response.status_code == 204
         assert client.get(f"/servers/{created['id']}").status_code == 404
 
     def test_delete_missing_is_404(self, client: TestClient) -> None:
-        assert client.delete("/servers/nope").status_code == 404
+        response = client.delete("/servers/nope")
+        assert response.status_code == 404
 
 
 class TestUpstreamsRoute:

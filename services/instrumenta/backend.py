@@ -38,13 +38,26 @@ class UpstreamServer:
 
 
 class Backend(Protocol):
-    async def close(self) -> None: ...
-    def has_encrypted_secret(self) -> bool: ...
-    def list_upstream_servers(self) -> list[UpstreamServer]: ...
-    def get_upstream_server(self, server_id: str) -> UpstreamServer | None: ...
-    def insert_upstream_server(self, server: UpstreamServer) -> None: ...
-    def update_upstream_server(self, server: UpstreamServer) -> None: ...
-    def delete_upstream_server(self, server_id: str) -> bool: ...
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    def has_encrypted_secret(self) -> bool:
+        raise NotImplementedError
+
+    def list_upstream_servers(self) -> list[UpstreamServer]:
+        raise NotImplementedError
+
+    def get_upstream_server(self, server_id: str) -> UpstreamServer | None:
+        raise NotImplementedError
+
+    def insert_upstream_server(self, server: UpstreamServer) -> None:
+        raise NotImplementedError
+
+    def update_upstream_server(self, server: UpstreamServer) -> None:
+        raise NotImplementedError
+
+    def delete_upstream_server(self, server_id: str) -> bool:
+        raise NotImplementedError
 
 
 _SCHEMA = """
