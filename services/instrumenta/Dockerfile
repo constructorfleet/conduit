@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py backend.py secret_box.py builtins.py mcp_app.py __init__.py ./instrumenta/
+COPY app.py backend.py secret_box.py builtins.py mcp_app.py aggregator.py servers_router.py __init__.py ./instrumenta/
 COPY static ./instrumenta/static
 
 RUN mkdir -p /data
