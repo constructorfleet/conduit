@@ -251,3 +251,39 @@ _Avoid_: Active satellite
 **Recently Active Satellite**:
 A satellite that has emitted events within a recent operator-facing time window. This is activity history, not proof that the satellite is currently connected.
 _Avoid_: Active satellite
+
+**Wake Engine**:
+A named family of wake-word detection with its own model format, training pipeline, and runtime shape — openWakeWord, microWakeWord, nanoWakeWord, Porcupine. Excita treats each as a first-class `EngineKind` because their pre/post-processing, streaming state, and package formats differ enough that a shared runtime would be a leaky abstraction.
+_Avoid_: Wake backend, detector kind
+
+**Engine Adapter**:
+The per-engine module in `services/excita/engines/<kind>.py` that implements the `WakeWordEngine` Protocol. An engine adapter is free to answer `NotSupportedError` for operations that don't make sense for its runtime — not every engine detects live, trains, or packages, and honest gaps are preferred over stub methods.
+_Avoid_: Engine driver, backend adapter
+
+**Engine Capability**:
+One of `{load/feed, score, train, package}` — the four operations `WakeWordEngine` declares. Each engine adapter advertises a capability subset; Excita's HTTP surface returns `NotSupported` for absent capabilities rather than pretending they exist.
+_Avoid_: Engine feature, engine method
+
+**Detection Runtime**:
+Where a wake-word model actually runs during a live conversation. openWakeWord and nanoWakeWord have host-side detection runtimes inside Excita; microWakeWord's detection runtime is the ESP32 device, not Excita, so Excita's µWW adapter has no live `load`/`feed` — only offline `score` on stored clips plus train and package.
+_Avoid_: Inference host, execution target
+
+**Package Target**:
+The runtime a `package()` call produces bytes for — ONNX for openWakeWord and nanoWakeWord, TFLite-Micro for microWakeWord's ESP32 flash, PPN for Porcupine. Adding a fourth package target is a new enum value and an engine method branch, not a schema migration.
+_Avoid_: Model format, export type
+
+**Model Import**:
+Registering a wake-word model artifact with Excita without training it there. Excita accepts imports from two sources: an operator-uploaded `POST /models/import` and a bind-mounted filesystem directory scanned on boot and on SIGHUP. Model import is what makes microWakeWord and nanoWakeWord usable in Excita while their `train` capability is `NotSupported`.
+_Avoid_: Model upload (only names one of the two paths)
+
+**Filesystem-Imported Model**:
+A model registered from Excita's bind-mounted model directory rather than uploaded through the UI. Filesystem-imported models are deployable from the UI but cannot be deleted through it — the file on disk is authoritative and removing the file is how the operator retires the model.
+_Avoid_: Static model, seeded model
+
+**Phrase**:
+A named wake word an operator arms — "hey Jarvis", "ok Nabu". A phrase is engine-agnostic: the same phrase can have models trained under multiple engines (openWakeWord, microWakeWord, nanoWakeWord) so an operator running µWW on an ESP32 and openWakeWord on a satellite thinks of one wake word, not two. Model rows carry an engine; phrase rows do not.
+_Avoid_: Wake word tag, model name
+
+**Sidecar Manifest**:
+The `<model>.excita.json` file placed next to a filesystem-imported model artifact, carrying engine kind, phrase id, version, and free-form notes. A missing or malformed sidecar surfaces as an import error in Excita's logs rather than a silent load with guessed metadata.
+_Avoid_: Metadata file, model header
