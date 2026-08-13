@@ -231,19 +231,22 @@ Per [0005 §Standalone posture](0005-link-protocol.md#standalone-posture), Excit
 
 ## Implementation scope (this spec's follow-up work)
 
-Delivered in the scaffold PR:
+Delivered so far:
 
 - `services/excita/` (Python + FastAPI, Instrumenta's shape).
 - Data model as SQLite migrations; abstract `Backend` protocol.
-- Engine adapter Protocol (`load`/`score`/`train`/`package`) + `Detector` Protocol + a **null adapter** ("`<op>` not implemented for `<kind>`") so the API surface can be exercised end-to-end without any engine installed.
+- Engine adapter Protocol (`load`/`score`/`train`/`package`) + `Detector` Protocol + a null adapter fallback for slots without a real engine.
 - Ops workflow end-to-end: **upload clip → label → list filtered by label**.
-- Detection surface stubs: `POST /v1/audio/{source}/frames`, `GET /detectors`, `GET /v1/wake-events/recent` — all wired to the null engine so armed detectors respond with a `NotSupported` error rather than silently dropping frames.
+- **openWakeWord adapter**: real `load()` returning a warm `Detector`, `feed()` with residual buffering, `score()` for the debug view; `train`/`package` still `NotSupported` (honest gap).
+- **Detector supervisor**: per-source PCM pre-roll ring buffer, per-fire clip persistence with `source=detector`, in-memory wake-event ring buffer for the standalone-posture diagnostic.
+- Detection endpoints: `POST /detectors` arms, `DELETE /detectors/{id}` disarms, `POST /v1/audio/{source}/frames` feeds the supervisor, `GET /v1/wake-events/recent` returns real fires.
 
 Follow-up PRs (each its own review):
 
-- Real openWakeWord adapter (`load` + `feed` + `score` + basic `train`). Motivation: it's the only engine where the training loop is realistically in-process on a laptop.
-- Detector supervisor: pre-roll buffer, `excita_local` deploy target, wake-event POST per [0007](0007-excita-wake-events-side-channel.md).
-- WebSocket audio ingress (`WS /v1/audio/{source}`).
+- openWakeWord training (`train` non-`NotSupported`). Motivation: only engine where the training loop is realistically in-process on a laptop.
+- WebSocket audio ingress (`WS /v1/audio/{source}`) — cheaper than HTTP-per-frame for high-rate satellites.
+- Conduit wake-event POST per [0007](0007-excita-wake-events-side-channel.md) — pushes fires upstream when a link is established.
+- `deploy_target` DB model, `excita_local` target kind, and DB-persisted bindings so an armed detector survives restarts.
 - microWakeWord adapter (`package` for TFLite-micro; detection likely stays on-device).
 - Porcupine adapter (`load` + `feed`; `train` → `NotSupported` with Picovoice Console link).
 - Follow-up specs: `0012-excita-clip-ingest-side-channel.md` (detector push details), `0013-excita-audio-ingress-side-channel.md` (frame POST + WebSocket contract), `0014-excita-deploy-side-channel.md` (linked-service config push).
