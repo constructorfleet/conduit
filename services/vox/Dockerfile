@@ -4,11 +4,15 @@
 # and only one of them gets tested. Two arguments vary: ENGINE picks the
 # embedding backend, and BASE_IMAGE/TORCH_INDEX/DEVICE pick CPU or GPU.
 #
-#   CPU: docker build -t conduit-vox:speechbrain services/vox
-#   GPU: docker build -t conduit-vox:speechbrain-gpu \
+# Build context is the repository root, not services/vox: the image installs
+# packages/conduit-link, a workspace-local package the service imports at
+# runtime and that lives outside the service directory.
+#
+#   CPU: docker build -t conduit-vox:speechbrain -f services/vox/Dockerfile .
+#   GPU: docker build -t conduit-vox:speechbrain-gpu -f services/vox/Dockerfile \
 #          --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
 #          --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
-#          --build-arg DEVICE=cuda services/vox
+#          --build-arg DEVICE=cuda .
 #
 #   pyannote: --build-arg ENGINE=pyannote  -t conduit-vox:pyannote
 #   NeMo:     --build-arg ENGINE=nemo      -t conduit-vox:nemo
@@ -47,20 +51,25 @@ WORKDIR /srv
 # Torch first and from its own index, so the CPU image pulls CPU wheels rather
 # than the multi-gigabyte CUDA build that PyPI serves by default. This layer is
 # the expensive one and changes only when the pin does.
-COPY requirements-torch.txt ./
+COPY services/vox/requirements-torch.txt ./
 RUN pip install --no-cache-dir --index-url "${TORCH_INDEX}" -r requirements-torch.txt
 
-COPY requirements.txt ./
+COPY services/vox/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Only the chosen engine's dependency, so a SpeechBrain image does not carry
 # NeMo's several gigabytes of collections it will never call. Copying all three
 # and installing one keeps the COPY cacheable across engines.
-COPY requirements-speechbrain.txt requirements-pyannote.txt requirements-nemo.txt ./
+COPY services/vox/requirements-speechbrain.txt services/vox/requirements-pyannote.txt services/vox/requirements-nemo.txt ./
 RUN pip install --no-cache-dir -r "requirements-${ENGINE}.txt"
 
-COPY app.py metrics.py ./
-COPY static ./static
+# Workspace-local package the service imports at runtime. Installed after the
+# heavy torch and engine layers so an edit to it does not invalidate them.
+COPY packages/conduit-link ./conduit-link
+RUN pip install --no-cache-dir ./conduit-link
+
+COPY services/vox/app.py services/vox/metrics.py ./
+COPY services/vox/static ./static
 
 # Written to at runtime, so they exist and are owned before the drop to a
 # non-root user. Both are mount points in the compose file.

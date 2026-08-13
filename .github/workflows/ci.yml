@@ -271,9 +271,12 @@ jobs:
       # runs to gigabytes and would evict the far more frequently used Rust
       # cache entries from the same repository budget.
       - uses: docker/setup-buildx-action@v4
+      # Context is the repo root, not services/vox: the Dockerfile installs
+      # packages/conduit-link, which lives outside the service directory.
       - uses: docker/build-push-action@v7
         with:
-          context: services/vox
+          context: .
+          file: services/vox/Dockerfile
           push: false
 
   # The reference Wyoming ASR service ships in this repository, so its tests are
@@ -332,8 +335,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       # Context is the repo root, not services/excita: the Dockerfile installs
       # packages/conduit-link, which lives outside the service directory. The
-      # same reason instrumenta/memoria/vox images that import conduit_link at
-      # runtime need attention — tracked separately.
+      # instrumenta/memoria/vox images do the same.
       - uses: docker/build-push-action@v7
         with:
           context: .
