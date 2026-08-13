@@ -1,32 +1,30 @@
+# Build context is the repository root, not services/memoria: the image
+# installs packages/conduit-link, a workspace-local package the service imports
+# at runtime and that lives outside the service directory.
+#
+#   docker build -t conduit-memoria:builtin -f services/memoria/Dockerfile .
 FROM python:3.13-slim
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements*.txt ./
+COPY services/memoria/requirements*.txt ./
 
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# If using pgvector backend, install additional dependencies
 ARG BACKEND=builtin
 RUN if [ "$BACKEND" = "pgvector" ]; then \
     pip install --no-cache-dir -r requirements-pgvector.txt; \
     fi
 
-# If using qdrant backend, install additional dependencies
 RUN if [ "$BACKEND" = "qdrant" ]; then \
     pip install --no-cache-dir -r requirements-qdrant.txt; \
     fi
 
-# If using GPU, install torch with CUDA support
 ARG DEVICE=cpu
 RUN if [ "$DEVICE" = "cuda" ]; then \
     pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
@@ -34,13 +32,15 @@ RUN if [ "$DEVICE" = "cuda" ]; then \
     pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
     fi
 
-# Copy application code
-COPY app.py builtin_backend.py pgvector_backend.py qdrant_backend.py mcp_server.py metrics.py ./
+# Workspace-local package the service imports at runtime. Installed after the
+# heavy torch layer so an edit to it does not invalidate that layer.
+COPY packages/conduit-link ./conduit-link
+RUN pip install --no-cache-dir ./conduit-link
 
-# Create data directory
+COPY services/memoria/app.py services/memoria/builtin_backend.py services/memoria/pgvector_backend.py services/memoria/qdrant_backend.py services/memoria/mcp_server.py services/memoria/metrics.py ./
+
 RUN mkdir -p /data /cache
 
-# Set environment variables
 ENV MEMORIA_DATA_DIR=/data
 ENV MEMORIA_CACHE_DIR=/cache
 ENV MEMORIA_BACKEND=${BACKEND}
@@ -51,9 +51,7 @@ ENV MEMORIA_MCP_ENABLED=false
 # 8081: MCP server (HTTP/SSE)
 EXPOSE 8080 8081 9090
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application
 CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

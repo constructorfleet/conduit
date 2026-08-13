@@ -73,7 +73,10 @@ services:
     profiles: ["vox", "speaker-id"]
     image: ${CONDUIT_VOX_IMAGE:-${CONDUIT_SPEAKER_ID_IMAGE:-conduit-vox:speechbrain}}
     build:
-      context: ./services/vox
+      # Repo root: the Dockerfile installs packages/conduit-link, which lives
+      # outside the service directory.
+      context: .
+      dockerfile: services/vox/Dockerfile
     environment:
       # Optional. When set, Conduit's provider definition needs the same value
       # as its api_key. Unset means the service is open, which is only
@@ -113,7 +116,10 @@ services:
     profiles: ["memoria"]
     image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:builtin}
     build:
-      context: ./services/memoria
+      # Repo root: the Dockerfile installs packages/conduit-link, which lives
+      # outside the service directory.
+      context: .
+      dockerfile: services/memoria/Dockerfile
       args:
         BACKEND: builtin
         DEVICE: cpu
@@ -143,7 +149,8 @@ services:
     profiles: ["memoria-pgvector"]
     image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:pgvector}
     build:
-      context: ./services/memoria
+      context: .
+      dockerfile: services/memoria/Dockerfile
       args:
         BACKEND: pgvector
         DEVICE: cpu
@@ -166,7 +173,8 @@ services:
     profiles: ["memoria-qdrant"]
     image: ${CONDUIT_MEMORIA_IMAGE:-conduit-memoria:qdrant}
     build:
-      context: ./services/memoria
+      context: .
+      dockerfile: services/memoria/Dockerfile
       args:
         BACKEND: qdrant
         DEVICE: cpu

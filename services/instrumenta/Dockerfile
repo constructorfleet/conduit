@@ -1,3 +1,8 @@
+# Build context is the repository root, not services/instrumenta: the image
+# installs packages/conduit-link, a workspace-local package the service imports
+# at runtime and that lives outside the service directory.
+#
+#   docker build -t conduit-instrumenta -f services/instrumenta/Dockerfile .
 FROM python:3.13-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -7,11 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY services/instrumenta/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py backend.py secret_box.py builtins.py mcp_app.py aggregator.py servers_router.py metrics.py __init__.py ./instrumenta/
-COPY static ./instrumenta/static
+# Workspace-local package the service imports at runtime.
+COPY packages/conduit-link ./conduit-link
+RUN pip install --no-cache-dir ./conduit-link
+
+COPY services/instrumenta/app.py services/instrumenta/backend.py services/instrumenta/secret_box.py services/instrumenta/builtins.py services/instrumenta/mcp_app.py services/instrumenta/aggregator.py services/instrumenta/servers_router.py services/instrumenta/metrics.py services/instrumenta/__init__.py ./instrumenta/
+COPY services/instrumenta/static ./instrumenta/static
 
 RUN mkdir -p /data
 ENV INSTRUMENTA_DATA_DIR=/data
