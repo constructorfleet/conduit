@@ -35,7 +35,7 @@ RUN if [ "$DEVICE" = "cuda" ]; then \
     fi
 
 # Copy application code
-COPY app.py builtin_backend.py pgvector_backend.py qdrant_backend.py mcp_server.py ./
+COPY app.py builtin_backend.py pgvector_backend.py qdrant_backend.py mcp_server.py metrics.py ./
 
 # Create data directory
 RUN mkdir -p /data /cache
@@ -49,7 +49,7 @@ ENV MEMORIA_MCP_ENABLED=false
 # Expose ports
 # 8080: HTTP API and UI
 # 8081: MCP server (HTTP/SSE)
-EXPOSE 8080 8081
+EXPOSE 8080 8081 9090
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

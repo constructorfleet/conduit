@@ -1085,6 +1085,11 @@ def create_app(
 
     app = FastAPI(title="Conduit Vox", version="1", lifespan=lifespan)
 
+    from metrics import PrometheusMiddleware, start_metrics_server
+
+    app.add_middleware(PrometheusMiddleware)
+    start_metrics_server()
+
     def get_encoder() -> Encoder:
         # Loaded on first use rather than at import, so the container starts,
         # answers /health, and reports a model that will not load as an error

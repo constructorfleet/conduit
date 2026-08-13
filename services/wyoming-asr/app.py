@@ -48,6 +48,13 @@ from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
+from metrics import (
+    TRANSCRIBE_AUDIO_SECONDS,
+    TRANSCRIBE_DURATION,
+    TRANSCRIBE_REQUESTS,
+    start_metrics_server,
+)
+
 LOG = logging.getLogger("wyoming-asr")
 
 # The format every engine here is trained on, and the only one a Wyoming payload
@@ -441,16 +448,19 @@ class AsrHandler(AsyncEventHandler):
         language = self._language
         self._language = None
         self._discard_audio()
+        TRANSCRIBE_AUDIO_SECONDS.labels("wyoming-asr").observe(seconds)
         if not audio:
             # Not an error: a turn whose gate opened on silence recognized
             # nothing, and an empty final transcript says so. Leaving the client
             # waiting does not, and neither does asking a model to transcribe
             # zero samples.
             LOG.info("audio-stop with no audio; answering an empty transcript")
+            TRANSCRIBE_REQUESTS.labels("wyoming-asr", "empty").inc()
             await self.write_event(Transcript(text="").event())
             return True
 
         loop = asyncio.get_running_loop()
+        started = asyncio.get_running_loop().time()
         try:
             # Off the event loop: transcription is seconds of blocking compute
             # and this process serves more than one connection.
@@ -459,8 +469,16 @@ class AsrHandler(AsyncEventHandler):
             )
         except Exception as error:  # noqa: BLE001 - torch and the hub raise broadly
             LOG.exception("transcription failed after %.2fs of audio", seconds)
+            TRANSCRIBE_REQUESTS.labels("wyoming-asr", "error").inc()
+            TRANSCRIBE_DURATION.labels("wyoming-asr").observe(
+                asyncio.get_running_loop().time() - started
+            )
             return await self._refuse(f"transcription failed: {error}", "asr-failed")
 
+        TRANSCRIBE_DURATION.labels("wyoming-asr").observe(
+            asyncio.get_running_loop().time() - started
+        )
+        TRANSCRIBE_REQUESTS.labels("wyoming-asr", "ok").inc()
         LOG.info("transcribed %.2fs of audio into %d characters", seconds, len(text))
         # One `transcript` event, which is what Conduit treats as final. A
         # `transcript-chunk` would be read as a partial and leave the turn
@@ -479,6 +497,7 @@ async def serve(argv: list[str] | None = None) -> None:
     arguments = parser.parse_args(argv)
 
     logging.basicConfig(level=os.environ.get("ASR_LOG", "INFO").upper())
+    start_metrics_server()
     selection = engine_from_environment()
     limits = limits_from_environment()
     # Loaded before the listener opens, unlike speaker-id's lazy encoder: there
