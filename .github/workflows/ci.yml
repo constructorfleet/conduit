@@ -314,9 +314,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Python 3.11 because openwakeword requires `tflite-runtime<3` as an
+      # unconditional dep and tflite-runtime does not publish wheels for
+      # 3.12+ yet. The Dockerfile is pinned to the same version for the
+      # same reason; drifting the CI Python off it would let a green build
+      # ship a red image.
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: services/excita/requirements-dev.txt
       # conduit-link is a workspace-local package the service imports at
@@ -327,6 +332,11 @@ jobs:
         run: |
           pip install -r requirements-dev.txt
           pip install -e ../../packages/conduit-link
+      # Same fetcher the `check` job uses for the Rust conduit-wake tests.
+      # The detection tests skip when the models aren't there, which would
+      # let the one thing worth proving about a detector be the one thing
+      # CI never checks.
+      - run: scripts/fetch-wake-models.sh
       - name: Run tests
         working-directory: services/excita
         env:

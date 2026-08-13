@@ -5,11 +5,13 @@ microWakeWord / Porcupine adapters are follow-ons.
 """
 
 from .base import Detector, EngineKind, NotSupportedError, NullEngine, WakeWordEngine
+from .openwakeword import OpenWakeWordEngine
 
 __all__ = [
     "Detector",
     "EngineKind",
     "NotSupportedError",
     "NullEngine",
+    "OpenWakeWordEngine",
     "WakeWordEngine",
 ]

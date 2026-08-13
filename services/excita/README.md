@@ -11,14 +11,23 @@ cd services/excita
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 pip install -e ../../packages/conduit-link
-EXCITA_DATA_DIR=./data python -m excita.app     # or: python app.py
+
+# One-time: fetch the shared openWakeWord ONNX models. Without them the
+# openwakeword engine stays a NullEngine and detection endpoints return 501.
+../../scripts/fetch-wake-models.sh ./wake-models
+
+EXCITA_DATA_DIR=./data EXCITA_WAKE_MODELS_DIR=./wake-models \
+  python -m excita.app
 ```
 
 Serves on `:8084` per spec 0010. UI at `/ui/`, JSON API on the routes listed
-in the scaffold's `static/index.html`.
+in `static/index.html`.
 
 ## Tests
 
 ```sh
-pytest
+../../scripts/fetch-wake-models.sh   # once; puts models where tests look
+PYTHONPATH=.. pytest
 ```
+
+Detection tests skip when the fetched models are missing.

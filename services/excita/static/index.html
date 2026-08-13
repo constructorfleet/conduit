@@ -20,7 +20,7 @@
   <body>
     <h1>Conduit Excita</h1>
     <p>Wake-word operations service — labelling, debugging, training, and configuring wake-word models.</p>
-    <p class="muted">UI scaffold. The React operator surface lands in the next PR; the JSON API is live.</p>
+    <p class="muted">UI scaffold. The React operator surface lands in a later PR; the JSON API is live.</p>
     <h2>API surface</h2>
     <ul>
       <li><code>GET /health</code> — link health</li>
@@ -28,6 +28,9 @@
       <li><code>GET /clips?phrase_id=&amp;verdict=</code> · <code>POST /clips</code> (multipart)</li>
       <li><code>GET /clips/{id}/audio</code></li>
       <li><code>POST /clips/{id}/label</code></li>
+      <li><code>GET /detectors</code> · <code>POST /detectors</code> · <code>DELETE /detectors/{id}</code></li>
+      <li><code>POST /v1/audio/{source}/frames</code> — int16 mono 16 kHz PCM</li>
+      <li><code>GET /v1/wake-events/recent</code></li>
       <li><code>POST /link</code> · <code>GET /link</code> · <code>DELETE /link</code></li>
     </ul>
     <p>Spec: <a href="https://github.com/Teagan42/conduit/blob/main/docs/specs/0011-excita-wake-word-ops.md">docs/specs/0011-excita-wake-word-ops.md</a></p>

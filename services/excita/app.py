@@ -42,7 +42,14 @@ from conduit_link import (
 
 from .backend import Backend, Clip, Label, Phrase, SqliteBackend, new_id
 from .clip_store import ClipStore, UnsupportedMimeError
-from .engines import EngineKind, NotSupportedError, NullEngine, WakeWordEngine
+from .engines import (
+    EngineKind,
+    NotSupportedError,
+    NullEngine,
+    OpenWakeWordEngine,
+    WakeWordEngine,
+)
+from .supervisor import DetectorSupervisor, WakeEvent, bindings_view
 
 LOG = logging.getLogger("excita")
 
@@ -92,13 +99,26 @@ class Config(BaseModel):
     data_dir: Path
     backend_type: str
     base_url: str
+    # Where the three shared openWakeWord ONNX files live. Defaults to
+    # `<data_dir>/wake-models`, populated by `scripts/fetch-wake-models.sh`
+    # (or a bind mount in production). When the pair isn't there the
+    # openwakeword engine slot stays as `NullEngine`, so the API surface
+    # continues to answer 501 instead of the app failing to boot — spec
+    # 0011 §Non-goals: replacing engine-specific tooling.
+    wake_models_dir: Path | None = None
+    pre_roll_ms: int = 2000
 
     @classmethod
     def from_env(cls) -> "Config":
+        data_dir = Path(os.getenv("EXCITA_DATA_DIR", "/data"))
+        wake_env = os.getenv("EXCITA_WAKE_MODELS_DIR")
+        wake_dir = Path(wake_env) if wake_env else data_dir / "wake-models"
         return cls(
-            data_dir=Path(os.getenv("EXCITA_DATA_DIR", "/data")),
+            data_dir=data_dir,
             backend_type=os.getenv("EXCITA_BACKEND", "sqlite"),
             base_url=os.getenv("EXCITA_BASE_URL", f"http://localhost:{DEFAULT_PORT}"),
+            wake_models_dir=wake_dir,
+            pre_roll_ms=int(os.getenv("EXCITA_PREROLL_MS", "2000")),
         )
 
 
@@ -156,11 +176,7 @@ class LabelOut(BaseModel):
 
 
 class DetectorOut(BaseModel):
-    """A `(phrase, model, engine, source_device)` binding armed in-process.
-
-    Empty in the scaffold — populated once an `excita_local` deploy target
-    plus a real engine adapter land (spec 0011 §Runtime detection loop).
-    """
+    """A `(phrase, model, engine, source_device)` binding armed in-process."""
 
     id: str
     phrase_id: str
@@ -172,27 +188,51 @@ class DetectorOut(BaseModel):
     last_frame_at: str | None
 
 
-class WakeEventOut(BaseModel):
-    """Local ring-buffer entry (spec 0011 §Standalone posture).
+class ArmDetectorIn(BaseModel):
+    phrase_id: str
+    model_ref: str
+    source_device: str
+    engine: str = EngineKind.OPENWAKEWORD.value
+    threshold: float | None = None
 
-    Populated by the detector supervisor on a fire; empty in the scaffold.
-    """
+
+class WakeEventOut(BaseModel):
+    """Local ring-buffer entry (spec 0011 §Standalone posture)."""
 
     detector_id: str
     phrase_id: str
+    source_device: str
     confidence: float
     detected_at: str
     audio_clip_id: str | None
 
 
-def _default_engines() -> dict[EngineKind, WakeWordEngine]:
-    """Null adapters for every declared engine kind.
+def _default_engines(config: Config) -> dict[EngineKind, WakeWordEngine]:
+    """Real engine where models are available, `NullEngine` otherwise.
 
-    Ensures the detection surface answers with a `501`-shaped error rather
-    than a `404` when a real engine hasn't been wired yet — the spec 0011
-    "honest gap, not a stub" contract.
+    openWakeWord gets a real adapter iff the two shared ONNX models are
+    present at boot. When they're not, the slot stays a `NullEngine` so
+    the API answers with a 501 naming the missing capability rather than
+    a 404 or a crash — spec 0011's "honest gap, not a stub" contract.
     """
-    return {kind: NullEngine(kind) for kind in EngineKind}
+    engines: dict[EngineKind, WakeWordEngine] = {
+        kind: NullEngine(kind) for kind in EngineKind
+    }
+    wake_dir = config.wake_models_dir
+    if wake_dir is not None:
+        melspec = wake_dir / "melspectrogram.onnx"
+        embedding = wake_dir / "embedding_model.onnx"
+        if melspec.exists() and embedding.exists():
+            engines[EngineKind.OPENWAKEWORD] = OpenWakeWordEngine(
+                melspec_path=melspec,
+                embedding_path=embedding,
+            )
+            LOG.info("openwakeword engine ready from %s", wake_dir)
+        else:
+            LOG.info(
+                "openwakeword models not found in %s; slot stays null", wake_dir
+            )
+    return engines
 
 
 def _make_backend(config: Config) -> Backend:
@@ -243,7 +283,12 @@ def create_app(config: Config | None = None) -> FastAPI:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     backend = _make_backend(config)
     clip_store = ClipStore(config.data_dir / "clips")
-    engines = _default_engines()
+    engines = _default_engines(config)
+    supervisor = DetectorSupervisor(
+        backend=backend,
+        clip_store=clip_store,
+        pre_roll_ms=config.pre_roll_ms,
+    )
 
     link_store = LinkStore[_NoExtension](
         config.data_dir,
@@ -257,6 +302,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         app.state.clip_store = clip_store
         app.state.link_store = link_store
         app.state.engines = engines
+        app.state.supervisor = supervisor
         app.state.config = config
         yield
         await backend.close()
@@ -424,41 +470,82 @@ def create_app(config: Config | None = None) -> FastAPI:
         backend.upsert_label(label)
         return LabelOut(**label.__dict__)
 
-    # --- detection surface (scaffold) ---
-    #
-    # Spec 0011 §Runtime detection loop. The supervisor, the pre-roll
-    # buffer, and wake-event emission per spec 0007 land in a follow-up PR
-    # (see spec 0011 §Implementation scope). These endpoints exist now so
-    # a satellite wiring itself up can distinguish "endpoint missing"
-    # (deployment error) from "engine unavailable" (expected in scaffold).
+    # --- detection surface (spec 0011 §Runtime detection loop) ---
 
     @app.get("/detectors")
     async def list_detectors() -> list[DetectorOut]:
-        return []
+        return [DetectorOut(**row) for row in bindings_view(supervisor.list_bindings())]
+
+    @app.post("/detectors", status_code=201)
+    async def arm_detector(body: ArmDetectorIn) -> DetectorOut:
+        try:
+            kind = EngineKind(body.engine)
+        except ValueError as error:
+            raise HTTPException(422, f"unknown engine: {body.engine}") from error
+        if backend.get_phrase(body.phrase_id) is None:
+            raise HTTPException(404, f"phrase not found: {body.phrase_id}")
+        engine = engines[kind]
+        try:
+            detector = engine.load(body.model_ref, body.phrase_id, threshold=body.threshold) \
+                if kind is EngineKind.OPENWAKEWORD \
+                else engine.load(body.model_ref, body.phrase_id)  # type: ignore[call-arg]
+        except NotSupportedError as error:
+            # An engine slot that stayed `NullEngine` at boot is what
+            # happens when its model files are missing. Reporting the
+            # engine's own message keeps the operator's diagnostic honest
+            # (spec 0011: honest gap, not a stub).
+            raise HTTPException(501, str(error)) from error
+        except FileNotFoundError as error:
+            raise HTTPException(404, str(error)) from error
+        except Exception as error:  # noqa: BLE001
+            raise HTTPException(500, f"engine load failed: {error}") from error
+        binding = supervisor.arm(
+            phrase_id=body.phrase_id,
+            model_ref=body.model_ref,
+            source_device=body.source_device,
+            detector=detector,
+        )
+        return DetectorOut(**bindings_view([binding])[0])
+
+    @app.delete("/detectors/{detector_id}", status_code=204)
+    async def disarm_detector(detector_id: str) -> Response:
+        if not supervisor.disarm(detector_id):
+            raise HTTPException(404, f"detector not armed: {detector_id}")
+        return Response(status_code=204)
 
     @app.post("/detectors/{detector_id}/reset", status_code=204)
     async def reset_detector(detector_id: str) -> Response:
-        raise HTTPException(404, f"detector not armed: {detector_id}")
+        if not supervisor.reset(detector_id):
+            raise HTTPException(404, f"detector not armed: {detector_id}")
+        return Response(status_code=204)
 
     @app.post("/v1/audio/{source_device}/frames", status_code=202)
-    async def ingest_frame(source_device: str, request: Request) -> Response:
-        # Bearer auth, PCM validation, supervisor dispatch land with the
-        # supervisor PR. For now the endpoint exists and refuses honestly
-        # so a mis-wired client sees a NotSupported message, not a 404.
+    async def ingest_frame(source_device: str, request: Request) -> dict[str, object]:
         body = await request.body()
         if not body:
             raise HTTPException(422, "empty frame")
-        engine = engines[EngineKind.OPENWAKEWORD]
-        try:
-            engine.load("scaffold", source_device)
-        except NotSupportedError as error:
-            raise HTTPException(501, str(error)) from error
-        return Response(status_code=202)
+        if len(body) % 2 != 0:
+            # int16 mono contract on the wire — an odd-length frame means
+            # the sender is speaking a different codec, and silently
+            # trimming would delay the diagnostic to the score curve.
+            raise HTTPException(422, "frame length not a multiple of 2 (int16 mono)")
+        fires = supervisor.feed(source_device, body)
+        return {"accepted": True, "fires": len(fires)}
 
     @app.get("/v1/wake-events/recent")
     async def recent_wake_events(limit: int = 64) -> list[WakeEventOut]:
-        _ = limit
-        return []
+        limit = max(1, min(limit, 256))
+        return [
+            WakeEventOut(
+                detector_id=e.detector_id,
+                phrase_id=e.phrase_id,
+                source_device=e.source_device,
+                confidence=e.confidence,
+                detected_at=e.detected_at,
+                audio_clip_id=e.audio_clip_id,
+            )
+            for e in supervisor.recent_events(limit)
+        ]
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

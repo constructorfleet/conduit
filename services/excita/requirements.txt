@@ -3,3 +3,10 @@ uvicorn[standard]>=0.24
 httpx==0.28.1
 pydantic==2.13.4
 python-multipart>=0.0.9
+# Wake-word runtime. openwakeword ships as a small pure-Python package that
+# expects a tflite / onnxruntime backend at import time; we pin the ONNX
+# path because it's the same runtime the Rust conduit-wake crate uses, so
+# the two agree on which artifacts to trust.
+openwakeword>=0.6.0
+onnxruntime>=1.16
+numpy>=1.24

@@ -1,7 +1,13 @@
-"""End-to-end scaffold tests: upload → label → list.
+"""End-to-end tests.
+
+Ops surface: upload → label → list.
+Detection surface: arm openWakeWord against the fetched models + real
+hey_jarvis fixture, feed silence and real audio, verify fires and clips.
 
 One external seam: the FastAPI app via `TestClient`. Fixtures use a per-test
-temp data dir so nothing leaks between runs.
+temp data dir so nothing leaks between runs. Detection tests are marked to
+skip when the pinned openWakeWord ONNX models aren't present — CI runs
+`scripts/fetch-wake-models.sh` first so the models are always there in CI.
 """
 
 from __future__ import annotations
@@ -14,6 +20,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 from excita.app import Config, create_app
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WAKE_MODELS_DIR = REPO_ROOT / "crates" / "conduit-wake" / "tests" / "models"
+AUDIO_DIR = REPO_ROOT / "crates" / "conduit-wake" / "tests" / "audio"
+HEY_JARVIS_MODEL = WAKE_MODELS_DIR / "hey_jarvis_v0.1.onnx"
+
+
+def _wake_models_available() -> bool:
+    return all(
+        (WAKE_MODELS_DIR / name).exists()
+        for name in ("melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx")
+    )
+
+
+requires_wake_models = pytest.mark.skipif(
+    not _wake_models_available(),
+    reason="openWakeWord ONNX models missing; run scripts/fetch-wake-models.sh",
+)
 
 
 def _wav_bytes(freq_hz: int = 440, duration_ms: int = 250, sample_rate: int = 16000) -> bytes:
@@ -39,6 +64,8 @@ def config(tmp_path: Path) -> Config:
         data_dir=tmp_path,
         backend_type="sqlite",
         base_url="http://localhost:8084",
+        wake_models_dir=WAKE_MODELS_DIR if _wake_models_available() else None,
+        pre_roll_ms=2000,
     )
 
 
@@ -188,11 +215,166 @@ def test_audio_frame_rejects_empty(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
-def test_audio_frame_returns_501_with_null_engine(client: TestClient) -> None:
-    """Honest gap: engine says `NotSupported`, endpoint surfaces it as 501."""
-    resp = client.post("/v1/audio/kitchen/frames", content=b"\x00\x01\x02\x03")
+def test_audio_frame_rejects_odd_length(client: TestClient) -> None:
+    """int16 mono contract on the wire — an odd byte count means codec drift."""
+    resp = client.post("/v1/audio/kitchen/frames", content=b"\x00\x01\x02")
+    assert resp.status_code == 422
+
+
+def test_audio_frame_no_bindings_is_a_no_op(client: TestClient) -> None:
+    """A frame with no armed detector still returns 202 — it's absorbed by
+    the pre-roll buffer so a satellite that comes online before an operator
+    arms a detector isn't punished for it."""
+    resp = client.post("/v1/audio/kitchen/frames", content=b"\x00\x00" * 640)
+    assert resp.status_code == 202
+    assert resp.json() == {"accepted": True, "fires": 0}
+
+
+def test_arm_detector_without_model_returns_501(client: TestClient) -> None:
+    """No wake_models_dir configured (or fetch script not run) → null engine
+    still refuses honestly with an engine-named message."""
+    phrase_id = _create_phrase(client)
+    resp = client.post(
+        "/detectors",
+        json={
+            "phrase_id": phrase_id,
+            "model_ref": "/nonexistent/hey_jarvis.onnx",
+            "source_device": "kitchen",
+            "engine": "microwakeword",  # slot deliberately still NullEngine
+        },
+    )
     assert resp.status_code == 501
-    assert "openwakeword" in resp.json()["detail"]
+    assert "microwakeword" in resp.json()["detail"]
+
+
+def test_arm_detector_missing_phrase_404s(client: TestClient) -> None:
+    resp = client.post(
+        "/detectors",
+        json={
+            "phrase_id": "nope",
+            "model_ref": "irrelevant",
+            "source_device": "kitchen",
+        },
+    )
+    assert resp.status_code == 404
+
+
+@requires_wake_models
+def test_arm_openwakeword_and_feed_hey_jarvis(client: TestClient) -> None:
+    """End-to-end: arm hey_jarvis, feed the real fixture WAV in 40 ms chunks,
+    expect at least one fire, a clip persisted with source=detector, and a
+    row in the local wake-events ring buffer."""
+    phrase_id = _create_phrase(client)
+    arm = client.post(
+        "/detectors",
+        json={
+            "phrase_id": phrase_id,
+            "model_ref": str(HEY_JARVIS_MODEL),
+            "source_device": "kitchen",
+        },
+    )
+    assert arm.status_code == 201, arm.text
+    binding = arm.json()
+    assert binding["engine"] == "openwakeword"
+    assert binding["source_device"] == "kitchen"
+
+    with wave.open(str(AUDIO_DIR / "hey_jarvis.wav")) as w:
+        assert w.getframerate() == 16000 and w.getnchannels() == 1
+        pcm = w.readframes(w.getnframes())
+
+    # 40 ms @ 16 kHz mono = 1280 bytes; smaller than one predict window on
+    # purpose so the residual-buffer path in the detector is exercised.
+    chunk_bytes = 1280
+    total_fires = 0
+    for offset in range(0, len(pcm), chunk_bytes):
+        resp = client.post(
+            "/v1/audio/kitchen/frames",
+            content=pcm[offset : offset + chunk_bytes],
+        )
+        assert resp.status_code == 202
+        total_fires += resp.json()["fires"]
+    assert total_fires >= 1, "hey_jarvis fixture must produce at least one fire"
+
+    events = client.get("/v1/wake-events/recent").json()
+    assert events, "wake-event ring buffer must record the fire"
+    fire = events[0]
+    assert fire["phrase_id"] == phrase_id
+    assert fire["source_device"] == "kitchen"
+    assert fire["confidence"] >= 0.5
+    assert fire["audio_clip_id"] is not None
+
+    clips = client.get("/clips", params={"phrase_id": phrase_id}).json()
+    detector_clips = [c for c in clips if c["source"] == "detector"]
+    assert detector_clips, "fire must persist a detector-sourced clip"
+    assert detector_clips[0]["source_peer"] == "kitchen"
+
+
+@requires_wake_models
+def test_silence_does_not_fire(client: TestClient) -> None:
+    """A stream of zero-valued PCM never crosses the threshold."""
+    phrase_id = _create_phrase(client)
+    client.post(
+        "/detectors",
+        json={
+            "phrase_id": phrase_id,
+            "model_ref": str(HEY_JARVIS_MODEL),
+            "source_device": "kitchen",
+        },
+    ).raise_for_status()
+
+    for _ in range(20):
+        resp = client.post(
+            "/v1/audio/kitchen/frames", content=b"\x00\x00" * 640
+        )
+        assert resp.status_code == 202
+        assert resp.json()["fires"] == 0
+    assert client.get("/v1/wake-events/recent").json() == []
+
+
+@requires_wake_models
+def test_disarm_detector_stops_scoring(client: TestClient) -> None:
+    phrase_id = _create_phrase(client)
+    arm = client.post(
+        "/detectors",
+        json={
+            "phrase_id": phrase_id,
+            "model_ref": str(HEY_JARVIS_MODEL),
+            "source_device": "kitchen",
+        },
+    )
+    detector_id = arm.json()["id"]
+
+    assert client.delete(f"/detectors/{detector_id}").status_code == 204
+    assert client.get("/detectors").json() == []
+
+    with wave.open(str(AUDIO_DIR / "hey_jarvis.wav")) as w:
+        pcm = w.readframes(w.getnframes())
+    resp = client.post("/v1/audio/kitchen/frames", content=pcm)
+    assert resp.status_code == 202
+    # No armed binding for the source → nothing scores, nothing fires.
+    assert resp.json()["fires"] == 0
+    assert client.get("/v1/wake-events/recent").json() == []
+
+
+@requires_wake_models
+def test_bindings_are_source_scoped(client: TestClient) -> None:
+    """A binding armed for `kitchen` must not score `bedroom` frames."""
+    phrase_id = _create_phrase(client)
+    client.post(
+        "/detectors",
+        json={
+            "phrase_id": phrase_id,
+            "model_ref": str(HEY_JARVIS_MODEL),
+            "source_device": "kitchen",
+        },
+    ).raise_for_status()
+
+    with wave.open(str(AUDIO_DIR / "hey_jarvis.wav")) as w:
+        pcm = w.readframes(w.getnframes())
+    # Same audio, wrong source — nothing should fire.
+    resp = client.post("/v1/audio/bedroom/frames", content=pcm)
+    assert resp.status_code == 202
+    assert resp.json()["fires"] == 0
 
 
 def test_upload_to_missing_phrase_404s(client: TestClient) -> None:
