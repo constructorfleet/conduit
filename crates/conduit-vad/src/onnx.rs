@@ -128,17 +128,23 @@ impl Model {
         // of audio at a time on a thread Conduit already set aside for it, and a
         // backend spawning its own pool per session would contend with every other
         // stage for no gain on a workload this small.
-        let session = Session::builder()
-            .and_then(|builder| builder.with_optimization_level(GraphOptimizationLevel::Level3))
-            .and_then(|builder| builder.with_intra_threads(1))
-            .and_then(|builder| builder.with_inter_threads(1))
-            .and_then(|builder| builder.commit_from_file(path))
-            .map_err(|error| {
-                Error::Config(format!(
-                    "cannot load the Silero VAD model `{}`: {error}",
-                    path.display()
-                ))
-            })?;
+        // `ort` 2.0-rc.13 parameterises each builder-step error by the builder
+        // state, so chaining with `and_then` on a single `Result<SessionBuilder>`
+        // no longer type-checks. Threading each step through `?` and mapping the
+        // final error the same way keeps behaviour identical.
+        let build = || -> ort::Result<Session> {
+            Session::builder()?
+                .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .with_intra_threads(1)?
+                .with_inter_threads(1)?
+                .commit_from_file(path)
+        };
+        let session = build().map_err(|error| {
+            Error::Config(format!(
+                "cannot load the Silero VAD model `{}`: {error}",
+                path.display()
+            ))
+        })?;
 
         Ok(Self { session: Mutex::new(session), window, sample_rate: i64::from(sample_rate) })
     }
