@@ -81,6 +81,8 @@ async fn proxy_forwards_the_request_with_the_stored_vox_api_key() {
             granted_at: chrono::Utc::now(),
             last_seen: None,
             proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
         })
         .await
         .expect("stores");
@@ -127,6 +129,8 @@ async fn proxy_rewrites_redirect_locations_back_under_conduit() {
             granted_at: chrono::Utc::now(),
             last_seen: None,
             proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
         })
         .await
         .expect("stores");
@@ -244,6 +248,8 @@ async fn linked_services_proxy_injects_the_row_proxy_auth_bearer() {
             granted_at: chrono::Utc::now(),
             last_seen: None,
             proxy_auth_bearer: Some("peer-scoped-key".to_owned()),
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
         })
         .await
         .expect("stores");
@@ -290,6 +296,8 @@ async fn linked_services_proxy_forwards_no_authorization_when_none_stored() {
             granted_at: chrono::Utc::now(),
             last_seen: None,
             proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
         })
         .await
         .expect("stores");

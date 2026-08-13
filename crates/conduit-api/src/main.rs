@@ -79,6 +79,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = signal.send(());
     });
 
+    // Spec 0005 §Reachability: probe every stored link once on startup so
+    // an operator sees fresh reachability state after Conduit restarts,
+    // rather than a stale `Unknown` on rows that already had a probe.
+    // Non-blocking — a slow peer must not gate the listener coming up.
+    let probe_state = state.clone();
+    tokio::spawn(async move {
+        conduit_api::linked_services::probe_all(&probe_state).await;
+    });
+
     let service =
         axum::serve(listener, router(state.clone())).with_graceful_shutdown(service_signal);
     let ops = axum::serve(ops_listener, ops_router(state)).with_graceful_shutdown(ops_signal);

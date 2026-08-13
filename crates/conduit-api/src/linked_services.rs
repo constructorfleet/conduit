@@ -13,7 +13,7 @@ use base64::Engine;
 use chrono::Utc;
 use conduit_core::event::{Envelope, Event};
 use conduit_core::id::TraceId;
-use conduit_link::{LinkedServiceKind, LinkedServicePanel};
+use conduit_link::{LinkedServiceKind, LinkedServicePanel, Reachability};
 use conduit_provider::storage::{
     LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
     SpeakerEngine, SpeakerIdVariant,
@@ -114,6 +114,11 @@ pub struct LinkedServiceView {
     /// Last time the peer was seen using its sync token, if ever.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<chrono::DateTime<Utc>>,
+    /// Outcome of the most recent `GET {peer_base_url}/link/health` probe.
+    pub reachability: Reachability,
+    /// When the most recent probe fired, if ever.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_probed_at: Option<chrono::DateTime<Utc>>,
 }
 
 impl TryFrom<LinkedService> for LinkedServiceView {
@@ -135,6 +140,8 @@ impl TryFrom<LinkedService> for LinkedServiceView {
             granted_by: link.granted_by,
             granted_at: link.granted_at,
             last_seen: link.last_seen,
+            reachability: link.reachability,
+            last_probed_at: link.last_probed_at,
         })
     }
 }
@@ -196,6 +203,8 @@ pub async fn create(
         granted_at: Utc::now(),
         last_seen: None,
         proxy_auth_bearer,
+        reachability: Reachability::Unknown,
+        last_probed_at: None,
     };
 
     // Order matters: the provider definition is written first so a failure
@@ -240,6 +249,13 @@ pub async fn create(
             service_kind: request.service_kind.as_str().to_owned(),
         },
     ));
+
+    // Reachability probe (spec 0005 §Reachability): prove the peer is up
+    // rather than deferring the discovery until first proxied request. The
+    // probe is bounded — a dead peer must not stretch the create response —
+    // and its outcome is written back onto the row, not gated on. A
+    // failing probe leaves the row in place with `reachability=unreachable`.
+    probe_and_record(&state, &peer_id).await;
 
     Ok((
         StatusCode::CREATED,
@@ -666,6 +682,79 @@ fn panel_for(link: &LinkedService) -> Option<LinkedServicePanel> {
         }),
         LinkedServiceKind::Generic => None,
     })
+}
+
+/// Bound on a single reachability probe. A dead peer must not stretch the
+/// `POST /v1/linked-services` response past this — spec 0005 wants the
+/// operator to see the row created, unreachable, and get on with their day.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Probe one linked service's `/link/health` endpoint, write the outcome
+/// back onto its row, and log any transition. Never removes the row.
+async fn probe_and_record(state: &AppState, peer_id: &str) {
+    let Ok(Some(mut link)) = state.linked_service(peer_id).await else {
+        return;
+    };
+    let previous = link.reachability;
+    let now = Utc::now();
+    let reachable = probe_health(&link.peer_base_url).await;
+    link.reachability = if reachable { Reachability::Ok } else { Reachability::Unreachable };
+    link.last_probed_at = Some(now);
+    if reachable {
+        // A successful probe is also a successful contact; keep `last_seen`
+        // aligned so the console doesn't show a stale gap between the two.
+        link.last_seen = Some(now);
+    }
+    if previous != link.reachability {
+        tracing::info!(
+            peer = %peer_id,
+            from = ?previous,
+            to = ?link.reachability,
+            "linked-service reachability transition"
+        );
+    }
+    if let Err(error) = state.put_linked_service(link).await {
+        tracing::warn!(peer = %peer_id, %error, "failed to persist probe outcome");
+    }
+}
+
+/// Issue `GET {peer_base_url}/link/health` with a bounded timeout. Returns
+/// `true` only on a 2xx response.
+async fn probe_health(peer_base_url: &str) -> bool {
+    let Ok(base) = reqwest::Url::parse(peer_base_url) else {
+        return false;
+    };
+    let Ok(url) = base.join("link/health") else {
+        return false;
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(PROBE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    match client.get(url).send().await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+/// Probe every stored linked service. Run once at startup so a peer that
+/// went down while Conduit was off doesn't sit at `Reachability::Unknown`
+/// until the operator triggers a request.
+pub async fn probe_all(state: &AppState) {
+    let ids = match state.linked_service_ids().await {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "cannot list linked services for startup probe");
+            return;
+        }
+    };
+    for peer_id in ids {
+        probe_and_record(state, &peer_id).await;
+    }
 }
 
 fn mint_sync_token() -> String {

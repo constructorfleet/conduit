@@ -145,6 +145,8 @@ pub async fn create(
         // on forwarded requests (spec 0005 §Reverse-proxy contract strips
         // the operator's bearer to keep it from leaking to the peer).
         proxy_auth_bearer: Some(vox_api_key.to_owned()),
+        reachability: conduit_link::Reachability::Unknown,
+        last_probed_at: None,
     };
 
     let definition = ProviderDefinition {
