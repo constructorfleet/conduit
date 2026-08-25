@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 from nanowakeword.interpreter import NanoInterpreter
 
-from .base import Detector, EngineKind, NotSupportedError
+from .base import Detector, EngineKind, NotSupportedError, gap_reason
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280
@@ -133,10 +133,7 @@ class NanoWakeWordEngine:
         return curve
 
     def train(self, dataset_snapshot_id: str, base: str | None) -> str:
-        raise NotSupportedError(
-            "nanowakeword training does not run in-process; configure "
-            "EXCITA_TRAIN_WORKER_URL to route training to an external worker."
-        )
+        raise NotSupportedError(gap_reason(self.kind, "train"))
 
     def package(self, model_ref: str, target_kind: str) -> bytes:
         if target_kind != "onnx":

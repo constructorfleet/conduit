@@ -14,6 +14,7 @@ from .base import (
     NullEngine,
     WakeWordEngine,
     capability_view,
+    gap_reason,
 )
 from .microwakeword import MicroWakeWordEngine
 from .nanowakeword import NanoWakeWordEngine
@@ -30,4 +31,5 @@ __all__ = [
     "OpenWakeWordEngine",
     "WakeWordEngine",
     "capability_view",
+    "gap_reason",
 ]

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .base import Detector, EngineKind, NotSupportedError
+from .base import Detector, EngineKind, NotSupportedError, gap_reason
 
 try:  # pragma: no cover - import guard, exercised only on wheels-less hosts
     from tflite_runtime.interpreter import Interpreter as _TfLiteInterpreter
@@ -46,11 +46,7 @@ class MicroWakeWordEngine:
     package_targets = ("tflite_micro",)
 
     def load(self, model_ref: str, phrase_id: str) -> Detector:
-        raise NotSupportedError(
-            "microwakeword does not run live host-side detection in Excita; "
-            "detection happens on the ESP32. Use score() against stored clips "
-            "or package() for the device."
-        )
+        raise NotSupportedError(gap_reason(self.kind, "load"))
 
     def score(self, audio: bytes, model_ref: str) -> list[float]:
         """Per-hop scores across a full 16 kHz mono PCM WAV."""
@@ -90,10 +86,7 @@ class MicroWakeWordEngine:
         return curve
 
     def train(self, dataset_snapshot_id: str, base: str | None) -> str:
-        raise NotSupportedError(
-            "microwakeword training does not run in-process; configure "
-            "EXCITA_TRAIN_WORKER_URL to route training to an external worker."
-        )
+        raise NotSupportedError(gap_reason(self.kind, "train"))
 
     def package(self, model_ref: str, target_kind: str) -> bytes:
         if target_kind != "tflite_micro":

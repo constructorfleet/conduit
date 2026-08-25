@@ -633,7 +633,8 @@ def test_same_phrase_across_engines_is_one_row_set(client: TestClient) -> None:
 
 def test_delete_upload_model_soft_deletes(client: TestClient) -> None:
     model_id = _import_model(client, metadata=_import_metadata()).json()["id"]
-    assert client.delete(f"/models/{model_id}").status_code == 204
+    delete_resp = client.delete(f"/models/{model_id}")
+    assert delete_resp.status_code == 204
     assert client.get("/models").json() == []
     assert client.get(f"/models/{model_id}").status_code == 404
 
@@ -732,7 +733,8 @@ def test_scan_bumps_version_to_new_row(import_client: TestClient) -> None:
     import_dir = import_client.app.state.config.model_import_dir
     import_dir.mkdir(parents=True, exist_ok=True)
     _write_import(import_dir, version="v3")
-    assert len(import_client.post("/models/scan").json()["imported_ids"]) == 1
+    first_scan = import_client.post("/models/scan").json()
+    assert len(first_scan["imported_ids"]) == 1
 
     _write_import(import_dir, version="v4")
     scan = import_client.post("/models/scan").json()

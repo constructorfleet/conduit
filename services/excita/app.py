@@ -67,6 +67,7 @@ from .engines import (
     OpenWakeWordEngine,
     WakeWordEngine,
     capability_view,
+    gap_reason,
 )
 from .supervisor import DetectorSupervisor, bindings_view
 
@@ -368,15 +369,24 @@ def _capability_missing(
     """Structured 501 body for engine capability gaps (ADR-0023).
 
     The frontend keys on `code` and renders `message` as a tooltip; it
-    never parses error text to figure out what an engine can't do.
+    never parses error text to figure out what an engine can't do. The
+    body carries only the authored reason sentences from
+    `engines.base.gap_reason` — exception internals stay in the server
+    log, never in a response.
     """
+    LOG.info(
+        "engine capability gap engine=%s capability=%s detail=%s",
+        kind.value,
+        capability,
+        error,
+    )
     return JSONResponse(
         status_code=501,
         content={
             "code": "engine_capability_missing",
             "engine": kind.value,
             "capability": capability,
-            "message": str(error),
+            "message": gap_reason(kind, capability),
         },
     )
 

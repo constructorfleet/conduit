@@ -96,54 +96,100 @@ class Label:
 
 
 class Backend(Protocol):
-    async def close(self) -> None: ...
+    """Interface only — every body is a stub. CodeQL's no-effect rule is
+    satisfied with explicit `raise NotImplementedError` bodies rather than
+    bare `...`."""
 
-    def list_phrases(self) -> list[Phrase]: ...
-    def get_phrase(self, phrase_id: str) -> Phrase | None: ...
-    def insert_phrase(self, phrase: Phrase) -> None: ...
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    def list_phrases(self) -> list[Phrase]:
+        raise NotImplementedError
+
+    def get_phrase(self, phrase_id: str) -> Phrase | None:
+        raise NotImplementedError
+
+    def insert_phrase(self, phrase: Phrase) -> None:
+        raise NotImplementedError
 
     def list_clips(
         self,
         phrase_id: str | None = None,
         verdict: str | None = None,
         limit: int = 100,
-    ) -> list[Clip]: ...
-    def get_clip(self, clip_id: str) -> Clip | None: ...
-    def get_clip_by_sha256(self, phrase_id: str, sha256: str) -> Clip | None: ...
-    def insert_clip(self, clip: Clip) -> None: ...
+    ) -> list[Clip]:
+        raise NotImplementedError
 
-    def get_label(self, clip_id: str, labeller: str) -> Label | None: ...
-    def upsert_label(self, label: Label) -> None: ...
+    def get_clip(self, clip_id: str) -> Clip | None:
+        raise NotImplementedError
 
-    def get_phrase_by_name(self, name: str) -> Phrase | None: ...
+    def get_clip_by_sha256(self, phrase_id: str, sha256: str) -> Clip | None:
+        raise NotImplementedError
+
+    def insert_clip(self, clip: Clip) -> None:
+        raise NotImplementedError
+
+    def get_label(self, clip_id: str, labeller: str) -> Label | None:
+        raise NotImplementedError
+
+    def upsert_label(self, label: Label) -> None:
+        raise NotImplementedError
+
+    def get_phrase_by_name(self, name: str) -> Phrase | None:
+        raise NotImplementedError
 
     def list_models(
         self,
         phrase_id: str | None = None,
         source: str | None = None,
         include_deleted: bool = False,
-    ) -> list[Model]: ...
+    ) -> list[Model]:
+        raise NotImplementedError
+
     def get_model(
         self, model_id: str, include_deleted: bool = False
-    ) -> Model | None: ...
+    ) -> Model | None:
+        raise NotImplementedError
+
     def get_filesystem_model(
         self, filesystem_path: str, version: str
-    ) -> Model | None: ...
+    ) -> Model | None:
+        raise NotImplementedError
+
     def get_model_by_version(
         self, phrase_id: str, engine: str, version: str
-    ) -> Model | None: ...
+    ) -> Model | None:
+        raise NotImplementedError
+
     def promote_upload_model(
         self, model_id: str, filesystem_path: str, mtime: str, size: int
-    ) -> None: ...
-    def active_filesystem_paths(self) -> set[str]: ...
-    def insert_model(self, model: Model) -> None: ...
-    def touch_model(self, model_id: str, mtime: str, size: int) -> None: ...
-    def resurrect_model(self, model_id: str, mtime: str, size: int) -> None: ...
-    def soft_delete_model(self, model_id: str) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
-    def list_deploy_targets(self) -> list[DeployTarget]: ...
-    def get_deploy_target(self, target_id: str) -> DeployTarget | None: ...
-    def insert_deploy_target(self, target: DeployTarget) -> None: ...
+    def active_filesystem_paths(self) -> set[str]:
+        raise NotImplementedError
+
+    def insert_model(self, model: Model) -> None:
+        raise NotImplementedError
+
+    def touch_model(self, model_id: str, mtime: str, size: int) -> None:
+        raise NotImplementedError
+
+    def resurrect_model(self, model_id: str, mtime: str, size: int) -> None:
+        raise NotImplementedError
+
+    def soft_delete_model(self, model_id: str) -> None:
+        raise NotImplementedError
+
+    def list_deploy_targets(self) -> list[DeployTarget]:
+        raise NotImplementedError
+
+    def get_deploy_target(self, target_id: str) -> DeployTarget | None:
+        raise NotImplementedError
+
+    def insert_deploy_target(self, target: DeployTarget) -> None:
+        raise NotImplementedError
+
     def record_publish(
         self,
         target_id: str,
@@ -151,7 +197,8 @@ class Backend(Protocol):
         status: str,
         error: str | None,
         at: str,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 _SCHEMA = """

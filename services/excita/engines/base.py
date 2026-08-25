@@ -18,6 +18,33 @@ class EngineKind(str, Enum):
 # declared alongside `load` — no adapter supports one without the other.
 CAPABILITIES = ("load", "feed", "score", "train", "package")
 
+# Operator-facing reason sentences for the permanent capability gaps
+# (ADR-0023: say *why*, not just *what*). Authored here as literals so both
+# the adapters' NotSupportedError messages and the HTTP 501 bodies carry the
+# same text — and so no exception internals ever reach a response body.
+_GAP_REASONS: dict[tuple[str, str], str] = {
+    ("microwakeword", "load"): (
+        "microWakeWord does not run live host-side detection in Excita; "
+        "detection happens on the ESP32."
+    ),
+    ("microwakeword", "train"): (
+        "microWakeWord training does not run in-process; configure "
+        "EXCITA_TRAIN_WORKER_URL to route training to an external worker."
+    ),
+    ("nanowakeword", "train"): (
+        "nanoWakeWord training does not run in-process; configure "
+        "EXCITA_TRAIN_WORKER_URL to route training to an external worker."
+    ),
+}
+
+
+def gap_reason(kind: EngineKind, capability: str) -> str:
+    """Static operator-facing sentence for a capability gap."""
+    reason = _GAP_REASONS.get((kind.value, capability))
+    if reason is not None:
+        return reason
+    return f"{kind.value} does not support {capability}."
+
 
 class NotSupportedError(RuntimeError):
     """Raised by adapters for operations they cannot perform.
