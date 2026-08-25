@@ -2,18 +2,704 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Conduit Instrumenta</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.5rem; }
-  code { background: #f4f4f4; padding: 0.15em 0.35em; border-radius: 3px; }
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #e0e0e5;
+    --text: #101014;
+    --muted: #5c5c66;
+    --accent: #3d6cff;
+    --accent-text: #ffffff;
+    --danger: #c62828;
+    --ok: #1e8a3c;
+    --warn: #b8860b;
+    --amber: #b8860b;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --panel: #171b22;
+      --border: #262b34;
+      --text: #f0f2f5;
+      --muted: #8b93a1;
+      --accent: #6c8fff;
+      --accent-text: #ffffff;
+      --danger: #ff6b6b;
+      --ok: #5adf7f;
+      --warn: #f0c46b;
+      --amber: #f0c46b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  header {
+    padding: 20px 24px 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+  header .tag {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+
+  nav {
+    padding: 0 24px;
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  nav button {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    padding: 8px 16px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  main {
+    padding: 20px 24px 40px;
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: 1fr;
+  }
+
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  section > h2 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+
+  dl.kv {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 12px;
+  }
+  dl.kv dt { color: var(--muted); }
+  dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
+
+  button {
+    font: inherit;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+  }
+  button.danger { color: var(--danger); }
+
+  input[type="text"],
+  input[type="url"],
+  input[type="password"],
+  select {
+    font: inherit;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    width: 100%;
+  }
+  input:focus, select:focus, button:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .row > * { flex: 0 0 auto; }
+  .row > .grow { flex: 1 1 auto; }
+
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .status-dot.ok { background: var(--ok); }
+  .status-dot.warn { background: var(--warn); }
+  .status-dot.err { background: var(--danger); }
+
+  .notice {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  .notice.err { border-color: var(--danger); color: var(--danger); }
+  .notice.ok { border-color: var(--ok); color: var(--ok); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  table th, table td {
+    text-align: left;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    vertical-align: middle;
+  }
+  table th {
+    font-weight: 500;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  table td.mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .origin-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .origin-badge.builtin {
+    background: color-mix(in srgb, var(--amber) 15%, transparent);
+    color: var(--amber);
+  }
+  .origin-badge.upstream {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+  }
+
+  .toggle {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: var(--border);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: none;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--panel);
+    transition: transform 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .toggle:checked { background: var(--ok); }
+  .toggle:checked::after { transform: translateX(16px); }
+  .toggle:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .server-row { transition: opacity 0.2s; }
+  .server-row.disabled { opacity: 0.5; }
+  .server-row.unhealthy { border-left: 3px solid var(--danger); }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 </style>
 </head>
 <body>
+
+<header>
   <h1>Conduit Instrumenta</h1>
-  <p>The tool service skeleton is running. The configuration UI ships in a
-  follow-up PR; see wayfinder map issue <a href="https://github.com/constructorfleet/conduit/issues/199">#199</a>.</p>
-  <p>MCP endpoint: <code>POST /mcp</code></p>
-  <p>Health: <a href="/health">/health</a></p>
+  <span class="tag" id="header-status">loading...</span>
+  <span class="tag" id="header-backend">...</span>
+</header>
+
+<nav id="main-nav">
+  <button class="active" data-tab="servers">Servers</button>
+  <button data-tab="tools">Tools</button>
+  <button data-tab="prompts">Prompts</button>
+  <button data-tab="resources">Resources</button>
+  <button data-tab="audit">Audit</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+
+<main id="content">
+
+  <!-- ===== SERVERS ===== -->
+  <div class="tab-panel active" id="panel-servers">
+    <section>
+      <div class="row" style="justify-content: space-between; margin-bottom: 12px">
+        <h2 style="margin: 0">Upstream servers</h2>
+        <button class="primary" id="btn-add-server">+ Add server</button>
+      </div>
+      <div id="servers-list"><p class="empty">Loading...</p></div>
+    </section>
+  </div>
+
+  <!-- ===== TOOLS ===== -->
+  <div class="tab-panel" id="panel-tools">
+    <section>
+      <div class="row" style="justify-content: space-between; margin-bottom: 12px">
+        <h2 style="margin: 0">Tools</h2>
+        <select id="tools-filter" style="width: auto">
+          <option value="">All origins</option>
+          <option value="builtin">Built-in</option>
+          <option value="upstream">Upstream</option>
+        </select>
+      </div>
+      <div id="tools-list"><p class="empty">Loading...</p></div>
+    </section>
+  </div>
+
+  <!-- ===== PROMPTS ===== -->
+  <div class="tab-panel" id="panel-prompts">
+    <section>
+      <div class="row" style="justify-content: space-between; margin-bottom: 12px">
+        <h2 style="margin: 0">Local prompts</h2>
+        <button class="primary" id="btn-add-prompt">+ New prompt</button>
+      </div>
+      <div id="prompts-list"><p class="empty">No prompts yet.</p></div>
+    </section>
+  </div>
+
+  <!-- ===== RESOURCES ===== -->
+  <div class="tab-panel" id="panel-resources">
+    <section>
+      <div class="row" style="justify-content: space-between; margin-bottom: 12px">
+        <h2 style="margin: 0">Local resources</h2>
+        <button class="primary" id="btn-add-resource">+ New resource</button>
+      </div>
+      <div id="resources-list"><p class="empty">No resources yet.</p></div>
+    </section>
+  </div>
+
+  <!-- ===== AUDIT ===== -->
+  <div class="tab-panel" id="panel-audit">
+    <section>
+      <h2>Audit log</h2>
+      <div style="overflow-x: auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Tool</th>
+              <th>Caller</th>
+              <th>Args hash</th>
+              <th>Duration</th>
+              <th>Outcome</th>
+            </tr>
+          </thead>
+          <tbody id="audit-body">
+            <tr><td colspan="6" class="empty">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== SETTINGS ===== -->
+  <div class="tab-panel" id="panel-settings">
+    <section>
+      <h2>Configuration</h2>
+      <dl class="kv" id="settings-body">
+        <dt>Loading...</dt><dd></dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Runtimes</h2>
+      <dl class="kv" id="runtimes-body">
+        <dt>Loading...</dt><dd></dd>
+      </dl>
+    </section>
+  </div>
+
+</main>
+
+<!-- ===== ADD SERVER MODAL ===== -->
+<div id="add-server-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px; width:100%; max-width:440px; margin:0 16px;">
+    <div class="row" style="justify-content:space-between; margin-bottom:16px">
+      <strong>Add upstream server</strong>
+      <button id="modal-close" style="border:none; background:none; cursor:pointer; font-size:18px; color:var(--muted)">&times;</button>
+    </div>
+    <div style="display:grid; gap:12px">
+      <label class="field">
+        <span>Server name</span>
+        <input type="text" id="srv-name" placeholder="e.g. filesystem">
+      </label>
+      <label class="field">
+        <span>Server URL</span>
+        <input type="url" id="srv-url" placeholder="https://mcp-server.example.com/mcp">
+      </label>
+      <label class="field">
+        <span>API key (optional, stored encrypted)</span>
+        <input type="password" id="srv-apikey" autocomplete="off">
+      </label>
+      <div class="row" style="justify-content:flex-end; margin-top:4px">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-save" class="primary">Add server</button>
+      </div>
+    </div>
+    <div id="modal-notice"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── API client ──────────────────────────────────────────────────────────
+
+function paint(id, kind, text) {
+  const el = document.getElementById(id);
+  if (!text) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="notice ${kind}"></div>`;
+  el.firstChild.textContent = text;
+}
+
+async function json(response) {
+  const body = await response.text();
+  try { return body ? JSON.parse(body) : {}; }
+  catch { return { detail: body }; }
+}
+
+const apiBase = window.location.pathname.replace(/\/ui\/?$/, "");
+
+async function api(path, init) {
+  const r = await fetch(`${apiBase}${path}`, init || {});
+  if (!r.ok) { const b = await json(r); throw new Error(b.detail || `${r.status} ${r.statusText}`); }
+  return json(r);
+}
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s ?? "";
+  return d.innerHTML;
+}
+
+// ── Tabs ────────────────────────────────────────────────────────────────
+
+document.getElementById("main-nav").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-tab]");
+  if (!btn) return;
+  document.querySelectorAll("#main-nav button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  document.getElementById(`panel-${btn.dataset.tab}`).classList.add("active");
+});
+
+// ── Servers ─────────────────────────────────────────────────────────────
+
+async function loadServers() {
+  const el = document.getElementById("servers-list");
+  try {
+    const servers = await api("/servers");
+    const statuses = await api("/upstreams");
+    const statusMap = {};
+    statuses.forEach(s => { statusMap[s.id] = s; });
+
+    if (!servers.length) {
+      el.innerHTML = '<p class="empty">No upstream servers configured. Click "+ Add server" to connect one.</p>';
+      return;
+    }
+    el.innerHTML = servers.map(s => {
+      const st = statusMap[s.id] || {};
+      const reachable = st.reachable || false;
+      const statusClass = !s.enabled ? "" : reachable ? "ok" : "err";
+      const rowClass = !s.enabled ? "disabled" : !reachable ? "unhealthy" : "";
+      const errorLine = st.last_error
+        ? `<p style="font-size:12px; color:var(--danger); margin:4px 0 0">${esc(st.last_error)}</p>`
+        : "";
+      return `
+        <div class="row server-row ${rowClass}" style="padding:10px 0; border-bottom:1px solid var(--border); gap:12px">
+          <span class="status-dot ${statusClass}"></span>
+          <div class="grow" style="min-width:0">
+            <div class="row" style="gap:8px">
+              <strong>${esc(s.name)}</strong>
+              <span class="note">${esc(s.transport)}</span>
+            </div>
+            <p class="note" style="margin:2px 0 0; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(s.url || "")}</p>
+            ${errorLine}
+          </div>
+          <span class="note">${st.tool_count || 0} tools</span>
+        </div>`;
+    }).join("");
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load servers: ${esc(err.message)}</p>`;
+  }
+}
+
+// ── Tools ───────────────────────────────────────────────────────────────
+
+async function loadTools() {
+  const el = document.getElementById("tools-list");
+  try {
+    const statuses = await api("/upstreams");
+    const items = [];
+
+    // Built-in tools (always enabled).
+    const builtins = ["http.fetch", "time.now", "math.eval", "text.regex"];
+    builtins.forEach(name => {
+      items.push({ origin: "builtin", name, enabled: true });
+    });
+
+    // Upstream tools from statuses.
+    statuses.forEach(st => {
+      if (st.tool_count > 0) {
+        for (let i = 0; i < st.tool_count; i++) {
+          items.push({ origin: "upstream", name: `${st.name}.tool_${i}`, enabled: st.reachable });
+        }
+      }
+    });
+
+    if (!items.length) {
+      el.innerHTML = '<p class="empty">No tools found.</p>';
+      return;
+    }
+    el.innerHTML = `<table>
+      <thead><tr><th>Origin</th><th>Name</th></tr></thead>
+      <tbody>${items.map(t => `
+        <tr style="${t.enabled ? "" : "opacity:0.5"}">
+          <td><span class="origin-badge ${t.origin}">${esc(t.origin)}</span></td>
+          <td style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px">${esc(t.name)}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load tools: ${esc(err.message)}</p>`;
+  }
+}
+
+// ── Prompts ─────────────────────────────────────────────────────────────
+
+async function loadPrompts() {
+  const el = document.getElementById("prompts-list");
+  try {
+    const prompts = await api("/items/prompts");
+    if (!prompts.length) {
+      el.innerHTML = '<p class="empty">No local prompts yet.</p>';
+      return;
+    }
+    el.innerHTML = `<table>
+      <thead><tr><th>Name</th><th>Template</th><th></th></tr></thead>
+      <tbody>${prompts.map(p => `
+        <tr>
+          <td><strong>${esc(p.name)}</strong></td>
+          <td class="mono">${esc(p.template)}</td>
+          <td style="text-align:right"><button class="danger" onclick="deletePrompt('${esc(p.id)}')">Delete</button></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load prompts: ${esc(err.message)}</p>`;
+  }
+}
+
+async function deletePrompt(id) {
+  if (!confirm("Delete this prompt?")) return;
+  await api(`/items/prompts/${id}`, { method: "DELETE" });
+  loadPrompts();
+}
+
+// ── Resources ───────────────────────────────────────────────────────────
+
+async function loadResources() {
+  const el = document.getElementById("resources-list");
+  try {
+    const resources = await api("/items/resources");
+    if (!resources.length) {
+      el.innerHTML = '<p class="empty">No local resources yet.</p>';
+      return;
+    }
+    el.innerHTML = `<table>
+      <thead><tr><th>Name</th><th>URI</th><th>Type</th><th></th></tr></thead>
+      <tbody>${resources.map(r => `
+        <tr>
+          <td><strong>${esc(r.name)}</strong></td>
+          <td class="mono">${esc(r.uri)}</td>
+          <td>${esc(r.mime_type || "-")}</td>
+          <td style="text-align:right"><button class="danger" onclick="deleteResource('${esc(r.id)}')">Delete</button></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load resources: ${esc(err.message)}</p>`;
+  }
+}
+
+async function deleteResource(id) {
+  if (!confirm("Delete this resource?")) return;
+  await api(`/items/resources/${id}`, { method: "DELETE" });
+  loadResources();
+}
+
+// ── Audit ───────────────────────────────────────────────────────────────
+
+async function loadAudit() {
+  const el = document.getElementById("audit-body");
+  try {
+    const rows = await api("/audit?limit=50");
+    if (!rows.length) {
+      el.innerHTML = '<tr><td colspan="6" class="empty">No audit entries yet.</td></tr>';
+      return;
+    }
+    el.innerHTML = rows.map(r => {
+      const outcomeClass = r.outcome === "ok" ? "ok" : "err";
+      return `<tr>
+        <td class="mono">${esc(r.called_at)}</td>
+        <td style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px">${esc(r.tool_name)}</td>
+        <td>${esc(r.peer_id || "-")}</td>
+        <td class="mono">${esc(r.args_hash)}</td>
+        <td>${r.duration_ms != null ? r.duration_ms + "ms" : "-"}</td>
+        <td><span class="origin-badge ${outcomeClass === "ok" ? "builtin" : ""}" style="${outcomeClass === "err" ? "background:color-mix(in srgb, var(--danger) 15%, transparent); color:var(--danger)" : ""}">${esc(r.outcome)}</span></td>
+      </tr>`;
+    }).join("");
+  } catch (err) {
+    el.innerHTML = `<tr><td colspan="6" class="empty" style="color:var(--danger)">Failed to load audit: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// ── Settings ────────────────────────────────────────────────────────────
+
+async function loadSettings() {
+  const el = document.getElementById("settings-body");
+  try {
+    const h = await api("/health");
+    el.innerHTML = [
+      ["Backend", h.backend],
+      ["MCP endpoint", "POST /mcp (streamable-HTTP)"],
+      ["Status", h.status],
+      ["Linked", h.linked ? "yes" : "no"],
+    ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
+  } catch {
+    el.innerHTML = "<dt>Backend</dt><dd>sqlite</dd>";
+  }
+}
+
+async function loadRuntimes() {
+  const el = document.getElementById("runtimes-body");
+  try {
+    const rt = await api("/runtimes");
+    el.innerHTML = Object.entries(rt).map(([k, v]) =>
+      `<dt>${esc(k)}</dt><dd>${v ? "available" : "not found"}</dd>`
+    ).join("");
+  } catch {
+    el.innerHTML = "<dt>python3</dt><dd>available</dd>";
+  }
+}
+
+// ── Modal ───────────────────────────────────────────────────────────────
+
+const modal = document.getElementById("add-server-modal");
+
+document.getElementById("btn-add-server").addEventListener("click", () => {
+  modal.style.display = "flex";
+  document.getElementById("srv-name").focus();
+});
+document.getElementById("modal-close").addEventListener("click", () => modal.style.display = "none");
+document.getElementById("modal-cancel").addEventListener("click", () => modal.style.display = "none");
+modal.addEventListener("click", e => { if (e.target === modal) modal.style.display = "none"; });
+
+document.getElementById("modal-save").addEventListener("click", async () => {
+  const name = document.getElementById("srv-name").value.trim();
+  const url = document.getElementById("srv-url").value.trim();
+  const secret = document.getElementById("srv-apikey").value.trim() || null;
+  const notice = document.getElementById("modal-notice");
+
+  if (!name || !url) {
+    paint("modal-notice", "err", "Name and URL are required.");
+    return;
+  }
+  try {
+    await api("/servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url, secret }),
+    });
+    modal.style.display = "none";
+    document.getElementById("srv-name").value = "";
+    document.getElementById("srv-url").value = "";
+    document.getElementById("srv-apikey").value = "";
+    notice.innerHTML = "";
+    loadServers();
+  } catch (err) {
+    paint("modal-notice", "err", err.message);
+  }
+});
+
+// ── Init ────────────────────────────────────────────────────────────────
+
+(async function init() {
+  try {
+    const h = await api("/health");
+    document.getElementById("header-status").textContent = h.status || "ok";
+    document.getElementById("header-backend").textContent = h.backend || "sqlite";
+  } catch {
+    document.getElementById("header-status").textContent = "unreachable";
+  }
+  loadServers();
+  loadTools();
+  loadPrompts();
+  loadResources();
+  loadAudit();
+  loadSettings();
+  loadRuntimes();
+})();
+</script>
 </body>
 </html>
