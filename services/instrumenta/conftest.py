@@ -8,12 +8,10 @@ without real network calls.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from mcp import types
 from mcp.server.mcpserver import MCPServer
 
 from instrumenta.app import Config, create_app

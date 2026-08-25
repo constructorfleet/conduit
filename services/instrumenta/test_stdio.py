@@ -11,7 +11,6 @@ import asyncio
 import shutil
 
 import pytest
-from fastapi.testclient import TestClient
 
 from instrumenta.path_probe import probe_runtimes
 from instrumenta.stdio_supervisor import StdioSupervisor

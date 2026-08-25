@@ -489,7 +489,6 @@ async function loadServers() {
 async function loadTools() {
   const el = document.getElementById("tools-list");
   try {
-    const servers = await api("/servers");
     const statuses = await api("/upstreams");
     const items = [];
 

@@ -26,7 +26,7 @@ class _Child:
     command: str
     server_name: str
     process: asyncio.subprocess.Process | None = None
-    backoff: float = _INITIAL_BACKOFF
+    backoff: float = min(_INITIAL_BACKOFF, _MAX_BACKOFF)
     task: asyncio.Task[None] | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -81,7 +81,7 @@ class StdioSupervisor:
         await process.stdin.drain()
 
         line = await asyncio.wait_for(process.stdout.readline(), timeout=10.0)
-        init_response = json.loads(line.decode())
+        json.loads(line.decode())
 
         # Send initialized notification.
         initialized = {"jsonrpc": "2.0", "method": "notifications/initialized"}
