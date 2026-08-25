@@ -10,3 +10,11 @@ python-multipart>=0.0.9
 openwakeword>=0.6.0
 onnxruntime>=1.16
 numpy>=1.24
+# microWakeWord offline scoring (spec 0013). Hard dep in the image — one
+# image, one behavior, no per-engine variant. Marker only skips it on
+# dev hosts where tflite-runtime publishes no wheels (macOS); there the
+# adapter raises honestly instead of scoring.
+tflite-runtime>=2.14; sys_platform == "linux"
+# nanoWakeWord live detection + scoring (spec 0013). Pure Python on top of
+# onnxruntime; its preprocessing ONNX files download on first model load.
+nanowakeword>=0.1

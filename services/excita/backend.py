@@ -23,6 +23,52 @@ class Phrase:
     name: str
     display_label: str
     language: str
+    notes: str | None = None
+    deleted_at: str | None = None
+
+
+@dataclass(frozen=True)
+class Model:
+    """A trained wake-word model registered against a phrase.
+
+    `engine_phrase_key` is the engine-native tag the adapter reads from
+    the model's own output (ADR-0022) — e.g. openWakeWord's ONNX output
+    key or nanoWakeWord's artifact stem. Two models bound to the same
+    phrase may carry different keys; they are different files.
+    """
+
+    id: str
+    phrase_id: str
+    engine: str
+    version: str
+    engine_phrase_key: str | None
+    source: str  # 'upload' | 'filesystem'
+    filesystem_path: str | None  # relative to the scanner mount root
+    artifact_path: str
+    metrics_json: str  # {"envelope": {...}, "raw": {...}}
+    notes: str | None
+    file_mtime: str | None
+    file_size: int
+    created_at: str
+    deleted_at: str | None
+
+
+@dataclass(frozen=True)
+class DeployTarget:
+    """Where a packaged model gets published (spec 0011 §Configure & publish).
+
+    Publishing is a single row change (`current_model_id`) plus a push;
+    a failed push never rolls back the row (spec 0011, at-least-once).
+    """
+
+    id: str
+    kind: str  # 'file' | 'http_push' | 'linked_service_config'
+    config_json: str
+    current_model_id: str | None
+    last_publish_at: str | None
+    last_publish_status: str | None
+    last_publish_error: str | None
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -50,24 +96,109 @@ class Label:
 
 
 class Backend(Protocol):
-    async def close(self) -> None: ...
+    """Interface only — every body is a stub. CodeQL's no-effect rule is
+    satisfied with explicit `raise NotImplementedError` bodies rather than
+    bare `...`."""
 
-    def list_phrases(self) -> list[Phrase]: ...
-    def get_phrase(self, phrase_id: str) -> Phrase | None: ...
-    def insert_phrase(self, phrase: Phrase) -> None: ...
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    def list_phrases(self) -> list[Phrase]:
+        raise NotImplementedError
+
+    def get_phrase(self, phrase_id: str) -> Phrase | None:
+        raise NotImplementedError
+
+    def insert_phrase(self, phrase: Phrase) -> None:
+        raise NotImplementedError
 
     def list_clips(
         self,
         phrase_id: str | None = None,
         verdict: str | None = None,
         limit: int = 100,
-    ) -> list[Clip]: ...
-    def get_clip(self, clip_id: str) -> Clip | None: ...
-    def get_clip_by_sha256(self, phrase_id: str, sha256: str) -> Clip | None: ...
-    def insert_clip(self, clip: Clip) -> None: ...
+    ) -> list[Clip]:
+        raise NotImplementedError
 
-    def get_label(self, clip_id: str, labeller: str) -> Label | None: ...
-    def upsert_label(self, label: Label) -> None: ...
+    def get_clip(self, clip_id: str) -> Clip | None:
+        raise NotImplementedError
+
+    def get_clip_by_sha256(self, phrase_id: str, sha256: str) -> Clip | None:
+        raise NotImplementedError
+
+    def insert_clip(self, clip: Clip) -> None:
+        raise NotImplementedError
+
+    def get_label(self, clip_id: str, labeller: str) -> Label | None:
+        raise NotImplementedError
+
+    def upsert_label(self, label: Label) -> None:
+        raise NotImplementedError
+
+    def get_phrase_by_name(self, name: str) -> Phrase | None:
+        raise NotImplementedError
+
+    def list_models(
+        self,
+        phrase_id: str | None = None,
+        source: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[Model]:
+        raise NotImplementedError
+
+    def get_model(
+        self, model_id: str, include_deleted: bool = False
+    ) -> Model | None:
+        raise NotImplementedError
+
+    def get_filesystem_model(
+        self, filesystem_path: str, version: str
+    ) -> Model | None:
+        raise NotImplementedError
+
+    def get_model_by_version(
+        self, phrase_id: str, engine: str, version: str
+    ) -> Model | None:
+        raise NotImplementedError
+
+    def promote_upload_model(
+        self, model_id: str, filesystem_path: str, mtime: str, size: int
+    ) -> None:
+        raise NotImplementedError
+
+    def active_filesystem_paths(self) -> set[str]:
+        raise NotImplementedError
+
+    def insert_model(self, model: Model) -> None:
+        raise NotImplementedError
+
+    def touch_model(self, model_id: str, mtime: str, size: int) -> None:
+        raise NotImplementedError
+
+    def resurrect_model(self, model_id: str, mtime: str, size: int) -> None:
+        raise NotImplementedError
+
+    def soft_delete_model(self, model_id: str) -> None:
+        raise NotImplementedError
+
+    def list_deploy_targets(self) -> list[DeployTarget]:
+        raise NotImplementedError
+
+    def get_deploy_target(self, target_id: str) -> DeployTarget | None:
+        raise NotImplementedError
+
+    def insert_deploy_target(self, target: DeployTarget) -> None:
+        raise NotImplementedError
+
+    def record_publish(
+        self,
+        target_id: str,
+        current_model_id: str,
+        status: str,
+        error: str | None,
+        at: str,
+    ) -> None:
+        raise NotImplementedError
 
 
 _SCHEMA = """
@@ -104,7 +235,63 @@ CREATE TABLE IF NOT EXISTS labels (
     PRIMARY KEY (clip_id, labeller)
 );
 CREATE INDEX IF NOT EXISTS idx_labels_verdict ON labels(verdict);
+
+-- A trained model. Phrases are engine-agnostic (ADR-0022); models carry
+-- the engine. UNIQUE(phrase_id, engine, version): the same engine can't
+-- have two v3s of the same phrase.
+CREATE TABLE IF NOT EXISTS models (
+    id TEXT PRIMARY KEY,
+    phrase_id TEXT NOT NULL REFERENCES phrases(id),
+    engine TEXT NOT NULL,
+    version TEXT NOT NULL,
+    engine_phrase_key TEXT,
+    source TEXT NOT NULL CHECK (source IN ('upload', 'filesystem')),
+    filesystem_path TEXT,
+    artifact_path TEXT NOT NULL,
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    notes TEXT,
+    file_mtime TEXT,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    UNIQUE (phrase_id, engine, version)
+);
+CREATE INDEX IF NOT EXISTS idx_models_phrase ON models(phrase_id);
+CREATE INDEX IF NOT EXISTS idx_models_filesystem ON models(filesystem_path);
+
+-- Where packaged models get published. Three kinds (#213 §Deploy
+-- targets); the packaged bytes flow through any of them per engine.
+CREATE TABLE IF NOT EXISTS deploy_targets (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('file', 'http_push', 'linked_service_config')),
+    config_json TEXT NOT NULL,
+    current_model_id TEXT REFERENCES models(id),
+    last_publish_at TEXT,
+    last_publish_status TEXT,
+    last_publish_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+# Additive column migrations for databases created by earlier builds — an
+# existing openWakeWord install must keep working untouched (#213:
+# adopting µWW/nWW is additive, not a migration).
+_MIGRATIONS = {
+    "phrases": {
+        "notes": "TEXT",
+        "deleted_at": "TEXT",
+    },
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _MIGRATIONS.items():
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not present:
+            continue  # table doesn't exist yet; CREATE above handles it
+        for name, ddl in columns.items():
+            if name not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 class SqliteBackend:
@@ -121,6 +308,7 @@ class SqliteBackend:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        _migrate(self._conn)
         self._conn.commit()
 
     async def close(self) -> None:
@@ -128,16 +316,25 @@ class SqliteBackend:
 
     # --- phrases ---
 
+    _PHRASE_COLS = "id, name, display_label, language, notes, deleted_at"
+
     def list_phrases(self) -> list[Phrase]:
         rows = self._conn.execute(
-            "SELECT id, name, display_label, language FROM phrases ORDER BY name"
+            f"SELECT {self._PHRASE_COLS} FROM phrases ORDER BY name"
         ).fetchall()
         return [Phrase(*r) for r in rows]
 
     def get_phrase(self, phrase_id: str) -> Phrase | None:
         row = self._conn.execute(
-            "SELECT id, name, display_label, language FROM phrases WHERE id = ?",
+            f"SELECT {self._PHRASE_COLS} FROM phrases WHERE id = ?",
             (phrase_id,),
+        ).fetchone()
+        return Phrase(*row) if row else None
+
+    def get_phrase_by_name(self, name: str) -> Phrase | None:
+        row = self._conn.execute(
+            f"SELECT {self._PHRASE_COLS} FROM phrases WHERE name = ?",
+            (name,),
         ).fetchone()
         return Phrase(*row) if row else None
 
@@ -231,6 +428,180 @@ class SqliteBackend:
                 label.clip_id, label.verdict, label.labeller,
                 label.split, label.notes, label.labelled_at,
             ),
+        )
+        self._conn.commit()
+
+
+    # --- models ---
+
+    _MODEL_COLS = (
+        "id, phrase_id, engine, version, engine_phrase_key, source, "
+        "filesystem_path, artifact_path, metrics_json, notes, "
+        "file_mtime, file_size, created_at, deleted_at"
+    )
+
+    def list_models(
+        self,
+        phrase_id: str | None = None,
+        source: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[Model]:
+        where: list[str] = []
+        args: list[object] = []
+        if not include_deleted:
+            where.append("deleted_at IS NULL")
+        if phrase_id is not None:
+            where.append("phrase_id = ?")
+            args.append(phrase_id)
+        if source is not None:
+            where.append("source = ?")
+            args.append(source)
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        rows = self._conn.execute(
+            f"SELECT {self._MODEL_COLS} FROM models {where_sql} "
+            "ORDER BY created_at, version",
+            args,
+        ).fetchall()
+        return [Model(*r) for r in rows]
+
+    def get_model(self, model_id: str, include_deleted: bool = False) -> Model | None:
+        row = self._conn.execute(
+            f"SELECT {self._MODEL_COLS} FROM models WHERE id = ?"
+            + ("" if include_deleted else " AND deleted_at IS NULL"),
+            (model_id,),
+        ).fetchone()
+        return Model(*row) if row else None
+
+    def get_filesystem_model(self, filesystem_path: str, version: str) -> Model | None:
+        """Row for a scanner-managed file at a given sidecar version — any
+        deleted state, so a re-appearing file resurrects instead of
+        colliding with its own history."""
+        row = self._conn.execute(
+            f"SELECT {self._MODEL_COLS} FROM models "
+            "WHERE source = 'filesystem' AND filesystem_path = ? AND version = ?",
+            (filesystem_path, version),
+        ).fetchone()
+        return Model(*row) if row else None
+
+    def get_model_by_version(
+        self, phrase_id: str, engine: str, version: str
+    ) -> Model | None:
+        """Any-state lookup by the natural key — used when reconciling the
+        scanner mount against previously uploaded models."""
+        row = self._conn.execute(
+            f"SELECT {self._MODEL_COLS} FROM models "
+            "WHERE phrase_id = ? AND engine = ? AND version = ?",
+            (phrase_id, engine, version),
+        ).fetchone()
+        return Model(*row) if row else None
+
+    def promote_upload_model(
+        self, model_id: str, filesystem_path: str, mtime: str, size: int
+    ) -> None:
+        """An uploaded model copied into the scanner mount becomes a
+        filesystem-imported one in place — history preserved (#213
+        user story 15)."""
+        self._conn.execute(
+            "UPDATE models SET source = 'filesystem', filesystem_path = ?, "
+            "file_mtime = ?, file_size = ?, deleted_at = NULL WHERE id = ?",
+            (filesystem_path, mtime, size, model_id),
+        )
+        self._conn.commit()
+
+    def active_filesystem_paths(self) -> set[str]:
+        return {
+            r[0]
+            for r in self._conn.execute(
+                "SELECT DISTINCT filesystem_path FROM models "
+                "WHERE source = 'filesystem' AND deleted_at IS NULL"
+            )
+        }
+
+    def insert_model(self, model: Model) -> None:
+        self._conn.execute(
+            f"INSERT INTO models ({self._MODEL_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                model.id, model.phrase_id, model.engine, model.version,
+                model.engine_phrase_key, model.source, model.filesystem_path,
+                model.artifact_path, model.metrics_json, model.notes,
+                model.file_mtime, model.file_size, model.created_at,
+                model.deleted_at,
+            ),
+        )
+        self._conn.commit()
+
+    def touch_model(self, model_id: str, mtime: str, size: int) -> None:
+        """Update-in-place metadata refresh only — the version (and with it
+        the metrics/deploy history) is untouched (#213)."""
+        self._conn.execute(
+            "UPDATE models SET file_mtime = ?, file_size = ? WHERE id = ?",
+            (mtime, size, model_id),
+        )
+        self._conn.commit()
+
+    def resurrect_model(self, model_id: str, mtime: str, size: int) -> None:
+        self._conn.execute(
+            "UPDATE models SET deleted_at = NULL, file_mtime = ?, file_size = ? "
+            "WHERE id = ?",
+            (mtime, size, model_id),
+        )
+        self._conn.commit()
+
+    def soft_delete_model(self, model_id: str) -> None:
+        self._conn.execute(
+            "UPDATE models SET deleted_at = datetime('now') WHERE id = ?",
+            (model_id,),
+        )
+        self._conn.commit()
+
+    # --- deploy targets ---
+
+    _TARGET_COLS = (
+        "id, kind, config_json, current_model_id, last_publish_at, "
+        "last_publish_status, last_publish_error, created_at"
+    )
+
+    def list_deploy_targets(self) -> list[DeployTarget]:
+        rows = self._conn.execute(
+            f"SELECT {self._TARGET_COLS} FROM deploy_targets ORDER BY created_at"
+        ).fetchall()
+        return [DeployTarget(*r) for r in rows]
+
+    def get_deploy_target(self, target_id: str) -> DeployTarget | None:
+        row = self._conn.execute(
+            f"SELECT {self._TARGET_COLS} FROM deploy_targets WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        return DeployTarget(*row) if row else None
+
+    def insert_deploy_target(self, target: DeployTarget) -> None:
+        self._conn.execute(
+            f"INSERT INTO deploy_targets ({self._TARGET_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                target.id, target.kind, target.config_json,
+                target.current_model_id, target.last_publish_at,
+                target.last_publish_status, target.last_publish_error,
+                target.created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def record_publish(
+        self,
+        target_id: str,
+        current_model_id: str,
+        status: str,
+        error: str | None,
+        at: str,
+    ) -> None:
+        """The row change is the publish; push outcome is recorded beside it
+        and never rolls the selection back (spec 0011 §Configure & publish)."""
+        self._conn.execute(
+            "UPDATE deploy_targets SET current_model_id = ?, last_publish_at = ?, "
+            "last_publish_status = ?, last_publish_error = ? WHERE id = ?",
+            (current_model_id, at, status, error, target_id),
         )
         self._conn.commit()
 
