@@ -37,6 +37,50 @@ class UpstreamServer:
     timeout_seconds: int | None
 
 
+@dataclass(frozen=True)
+class ItemFlag:
+    """Row for `item_flags` — enable/disable a tool, prompt, or resource."""
+
+    origin: str
+    item_kind: str
+    item_name: str
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class LocalPrompt:
+    """Row for `local_prompts` — a locally-authored prompt template."""
+
+    id: str
+    name: str
+    template: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalResource:
+    """Row for `local_resources` — a locally-authored static resource."""
+
+    id: str
+    uri: str
+    name: str
+    mime_type: str | None = None
+    content: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditEntry:
+    """Row for `audit_log` — a recorded tool invocation."""
+
+    id: int
+    called_at: str
+    peer_id: str | None
+    tool_name: str
+    args_hash: str
+    duration_ms: int | None
+    outcome: str
+
+
 class Backend(Protocol):
     async def close(self) -> None:
         raise NotImplementedError
@@ -57,6 +101,67 @@ class Backend(Protocol):
         raise NotImplementedError
 
     def delete_upstream_server(self, server_id: str) -> bool:
+        raise NotImplementedError
+
+    # ── item_flags ──────────────────────────────────────────────────────
+
+    def list_item_flags(
+        self, *, origin: str | None = None, item_kind: str | None = None
+    ) -> list[ItemFlag]:
+        raise NotImplementedError
+
+    def upsert_item_flag(self, flag: ItemFlag) -> None:
+        raise NotImplementedError
+
+    def delete_item_flag(self, origin: str, item_kind: str, item_name: str) -> bool:
+        raise NotImplementedError
+
+    # ── local_prompts ───────────────────────────────────────────────────
+
+    def list_local_prompts(self) -> list[LocalPrompt]:
+        raise NotImplementedError
+
+    def get_local_prompt(self, prompt_id: str) -> LocalPrompt | None:
+        raise NotImplementedError
+
+    def insert_local_prompt(self, prompt: LocalPrompt) -> None:
+        raise NotImplementedError
+
+    def update_local_prompt(self, prompt: LocalPrompt) -> None:
+        raise NotImplementedError
+
+    def delete_local_prompt(self, prompt_id: str) -> bool:
+        raise NotImplementedError
+
+    # ── local_resources ─────────────────────────────────────────────────
+
+    def list_local_resources(self) -> list[LocalResource]:
+        raise NotImplementedError
+
+    def get_local_resource(self, resource_id: str) -> LocalResource | None:
+        raise NotImplementedError
+
+    def insert_local_resource(self, resource: LocalResource) -> None:
+        raise NotImplementedError
+
+    def update_local_resource(self, resource: LocalResource) -> None:
+        raise NotImplementedError
+
+    def delete_local_resource(self, resource_id: str) -> bool:
+        raise NotImplementedError
+
+    # ── audit_log ───────────────────────────────────────────────────────
+
+    def insert_audit_entry(self, entry: AuditEntry) -> None:
+        raise NotImplementedError
+
+    def list_audit_entries(
+        self,
+        *,
+        tool_name: str | None = None,
+        outcome: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditEntry]:
         raise NotImplementedError
 
 
@@ -118,6 +223,46 @@ def _row_to_server(row: sqlite3.Row) -> UpstreamServer:
         secret_ciphertext=row["secret_ciphertext"],
         enabled=bool(row["enabled"]),
         timeout_seconds=row["timeout_seconds"],
+    )
+
+
+def _row_to_flag(row: sqlite3.Row) -> ItemFlag:
+    return ItemFlag(
+        origin=row["origin"],
+        item_kind=row["item_kind"],
+        item_name=row["item_name"],
+        enabled=bool(row["enabled"]),
+    )
+
+
+def _row_to_prompt(row: sqlite3.Row) -> LocalPrompt:
+    return LocalPrompt(
+        id=row["id"],
+        name=row["name"],
+        template=row["template"],
+        description=row["description"],
+    )
+
+
+def _row_to_resource(row: sqlite3.Row) -> LocalResource:
+    return LocalResource(
+        id=row["id"],
+        uri=row["uri"],
+        name=row["name"],
+        mime_type=row["mime_type"],
+        content=row["content"],
+    )
+
+
+def _row_to_audit(row: sqlite3.Row) -> AuditEntry:
+    return AuditEntry(
+        id=row["id"],
+        called_at=row["called_at"],
+        peer_id=row["peer_id"],
+        tool_name=row["tool_name"],
+        args_hash=row["args_hash"],
+        duration_ms=row["duration_ms"],
+        outcome=row["outcome"],
     )
 
 
@@ -204,6 +349,150 @@ class SqliteBackend:
             "DELETE FROM upstream_servers WHERE id = ?", (server_id,)
         )
         return cur.rowcount > 0
+
+    # ── item_flags ──────────────────────────────────────────────────────
+
+    def list_item_flags(
+        self, *, origin: str | None = None, item_kind: str | None = None
+    ) -> list[ItemFlag]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if origin is not None:
+            clauses.append("origin = ?")
+            params.append(origin)
+        if item_kind is not None:
+            clauses.append("item_kind = ?")
+            params.append(item_kind)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        cur = self._conn.execute(
+            f"SELECT * FROM item_flags{where} ORDER BY origin, item_kind, item_name",
+            params,
+        )
+        return [_row_to_flag(row) for row in cur.fetchall()]
+
+    def upsert_item_flag(self, flag: ItemFlag) -> None:
+        self._conn.execute(
+            "INSERT INTO item_flags (origin, item_kind, item_name, enabled) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (origin, item_kind, item_name) DO UPDATE SET enabled = excluded.enabled",
+            (flag.origin, flag.item_kind, flag.item_name, 1 if flag.enabled else 0),
+        )
+
+    def delete_item_flag(self, origin: str, item_kind: str, item_name: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM item_flags WHERE origin = ? AND item_kind = ? AND item_name = ?",
+            (origin, item_kind, item_name),
+        )
+        return cur.rowcount > 0
+
+    # ── local_prompts ───────────────────────────────────────────────────
+
+    def list_local_prompts(self) -> list[LocalPrompt]:
+        cur = self._conn.execute(
+            "SELECT * FROM local_prompts ORDER BY name"
+        )
+        return [_row_to_prompt(row) for row in cur.fetchall()]
+
+    def get_local_prompt(self, prompt_id: str) -> LocalPrompt | None:
+        cur = self._conn.execute(
+            "SELECT * FROM local_prompts WHERE id = ?", (prompt_id,)
+        )
+        row = cur.fetchone()
+        return _row_to_prompt(row) if row else None
+
+    def insert_local_prompt(self, prompt: LocalPrompt) -> None:
+        self._conn.execute(
+            "INSERT INTO local_prompts (id, name, template, description) "
+            "VALUES (?, ?, ?, ?)",
+            (prompt.id, prompt.name, prompt.template, prompt.description),
+        )
+
+    def update_local_prompt(self, prompt: LocalPrompt) -> None:
+        self._conn.execute(
+            "UPDATE local_prompts SET name = ?, template = ?, description = ? "
+            "WHERE id = ?",
+            (prompt.name, prompt.template, prompt.description, prompt.id),
+        )
+
+    def delete_local_prompt(self, prompt_id: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM local_prompts WHERE id = ?", (prompt_id,)
+        )
+        return cur.rowcount > 0
+
+    # ── local_resources ─────────────────────────────────────────────────
+
+    def list_local_resources(self) -> list[LocalResource]:
+        cur = self._conn.execute(
+            "SELECT * FROM local_resources ORDER BY name"
+        )
+        return [_row_to_resource(row) for row in cur.fetchall()]
+
+    def get_local_resource(self, resource_id: str) -> LocalResource | None:
+        cur = self._conn.execute(
+            "SELECT * FROM local_resources WHERE id = ?", (resource_id,)
+        )
+        row = cur.fetchone()
+        return _row_to_resource(row) if row else None
+
+    def insert_local_resource(self, resource: LocalResource) -> None:
+        self._conn.execute(
+            "INSERT INTO local_resources (id, uri, name, mime_type, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (resource.id, resource.uri, resource.name, resource.mime_type, resource.content),
+        )
+
+    def update_local_resource(self, resource: LocalResource) -> None:
+        self._conn.execute(
+            "UPDATE local_resources SET uri = ?, name = ?, mime_type = ?, content = ? "
+            "WHERE id = ?",
+            (resource.uri, resource.name, resource.mime_type, resource.content, resource.id),
+        )
+
+    def delete_local_resource(self, resource_id: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM local_resources WHERE id = ?", (resource_id,)
+        )
+        return cur.rowcount > 0
+
+    # ── audit_log ───────────────────────────────────────────────────────
+
+    def insert_audit_entry(self, entry: AuditEntry) -> None:
+        self._conn.execute(
+            "INSERT INTO audit_log (called_at, peer_id, tool_name, args_hash, duration_ms, outcome) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                entry.called_at,
+                entry.peer_id,
+                entry.tool_name,
+                entry.args_hash,
+                entry.duration_ms,
+                entry.outcome,
+            ),
+        )
+
+    def list_audit_entries(
+        self,
+        *,
+        tool_name: str | None = None,
+        outcome: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditEntry]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if tool_name is not None:
+            clauses.append("tool_name = ?")
+            params.append(tool_name)
+        if outcome is not None:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cur = self._conn.execute(
+            f"SELECT * FROM audit_log{where} ORDER BY id DESC LIMIT ?",
+            params,
+        )
+        return [_row_to_audit(row) for row in cur.fetchall()]
 
     async def close(self) -> None:
         await asyncio.to_thread(self._conn.close)

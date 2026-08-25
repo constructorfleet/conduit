@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs the API server, Conduit Vox, Conduit Memoria, and the Operator Console together for local
-# development.
+# Runs the API server, Conduit Vox, Conduit Memoria, Conduit Instrumenta, and the Operator Console
+# together for local development.
 #
-# Three processes is the honest shape of the stack, but starting them by hand
+# Four processes is the honest shape of the stack, but starting them by hand
 # means remembering which port the Vite proxy expects and which authentication
 # mode the server refuses to start without. This is that trio, started once,
 # and stopped together: killing the script kills all three, so there is no orphaned
@@ -36,6 +36,7 @@ api_port=8080
 ops_port=9090
 vox_port=8091
 memoria_port=8092
+instrumenta_port=8085
 ui_port=5173
 # Empty means anonymous; a path means authenticate against that token file.
 tokens=""
@@ -46,7 +47,7 @@ dry_run=0
 
 usage() {
     cat <<USAGE
-${SELF} — run the Conduit API, Vox, Memoria, and Operator Console together
+${SELF} — run the Conduit API, Vox, Memoria, Instrumenta, and Operator Console together
 
 Usage: scripts/dev.sh [options]
 
@@ -61,11 +62,12 @@ Options:
   --ops-port PORT      Ops API port for /health, /ready, /metrics (default ${ops_port}).
   --vox-port PORT      Conduit Vox port (default ${vox_port}).
   --memoria-port PORT  Conduit Memoria port (default ${memoria_port}).
+  --instrumenta-port PORT  Conduit Instrumenta port (default ${instrumenta_port}).
   --ui-port PORT       Operator Console port (default ${ui_port}).
   --dry-run            Print what would run, start nothing.
   -h, --help           Show this help.
 
-All four processes bind loopback only. Ctrl-C stops the quartet.
+All five processes bind loopback only. Ctrl-C stops the quintet.
 USAGE
 }
 
@@ -139,6 +141,12 @@ while [[ $# -gt 0 ]]; do
             memoria_port="$2"
             shift 2
             ;;
+        --instrumenta-port)
+            require_value "$@"
+            require_port --instrumenta-port "$2"
+            instrumenta_port="$2"
+            shift 2
+            ;;
         --dry-run)
             dry_run=1
             shift
@@ -157,8 +165,8 @@ done
 
 # Distinct ports, or one listener wins and the other dies on bind with an error
 # that names an address rather than the flag that collided.
-if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${vox_port}" || "${api_port}" == "${memoria_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${vox_port}" || "${ops_port}" == "${memoria_port}" || "${ops_port}" == "${ui_port}" || "${vox_port}" == "${memoria_port}" || "${vox_port}" == "${ui_port}" || "${memoria_port}" == "${ui_port}" ]]; then
-    die "--api-port, --ops-port, --vox-port, --memoria-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${vox_port}, ${memoria_port}, ${ui_port})"
+if [[ "${api_port}" == "${ops_port}" || "${api_port}" == "${vox_port}" || "${api_port}" == "${memoria_port}" || "${api_port}" == "${instrumenta_port}" || "${api_port}" == "${ui_port}" || "${ops_port}" == "${vox_port}" || "${ops_port}" == "${memoria_port}" || "${ops_port}" == "${instrumenta_port}" || "${ops_port}" == "${ui_port}" || "${vox_port}" == "${memoria_port}" || "${vox_port}" == "${instrumenta_port}" || "${vox_port}" == "${ui_port}" || "${memoria_port}" == "${instrumenta_port}" || "${memoria_port}" == "${ui_port}" || "${instrumenta_port}" == "${ui_port}" ]]; then
+    die "--api-port, --ops-port, --vox-port, --memoria-port, --instrumenta-port, and --ui-port must differ (got ${api_port}, ${ops_port}, ${vox_port}, ${memoria_port}, ${instrumenta_port}, ${ui_port})"
 fi
 
 # Checked here rather than left to the server: a missing token file after a
@@ -220,12 +228,18 @@ export MEMORIA_DATA_DIR="${MEMORIA_DATA_DIR:-${memoria_dev_root}/data}"
 # origin so Conduit's reachability probe can hit the port dev.sh just started.
 export MEMORIA_BASE_URL="${MEMORIA_BASE_URL:-http://127.0.0.1:${memoria_port}}"
 
+instrumenta_dev_root="${ROOT}/output/dev/instrumenta"
+readonly instrumenta_dev_root
+export INSTRUMENTA_DATA_DIR="${INSTRUMENTA_DATA_DIR:-${instrumenta_dev_root}/data}"
+export INSTRUMENTA_BASE_URL="${INSTRUMENTA_BASE_URL:-http://127.0.0.1:${instrumenta_port}}"
+
 cat <<SUMMARY
 conduit dev
   api            http://127.0.0.1:${api_port}
   ops            http://127.0.0.1:${ops_port}
   vox            http://127.0.0.1:${vox_port}
   memoria        http://127.0.0.1:${memoria_port}
+  instrumenta    http://127.0.0.1:${instrumenta_port}
   console        http://127.0.0.1:${ui_port}
   access         ${auth_summary}
   providers      ${provider_summary}
@@ -246,9 +260,12 @@ if [[ "${dry_run}" -eq 1 ]]; then
   SPEAKER_ID_MODEL_DIR=${SPEAKER_ID_MODEL_DIR}
   MEMORIA_DATA_DIR=${MEMORIA_DATA_DIR}
   MEMORIA_BASE_URL=${MEMORIA_BASE_URL}
+  INSTRUMENTA_DATA_DIR=${INSTRUMENTA_DATA_DIR}
+  INSTRUMENTA_BASE_URL=${INSTRUMENTA_BASE_URL}
   cargo run ${cargo_args[*]}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${memoria_port}
+  .venv/bin/python3 -m uvicorn instrumenta.app:create_app --factory --host 127.0.0.1 --port ${instrumenta_port}
   npm run dev -- --port ${ui_port} --strictPort --host 127.0.0.1
 RESOLVED
     exit 0
@@ -269,7 +286,7 @@ fi
 # already holding it, and on a developer machine the answer is usually a tunnel
 # or a previous run. Skipped when `lsof` is missing rather than treated as free.
 if command -v lsof >/dev/null 2>&1; then
-    for port_pair in "api:${api_port}" "ops:${ops_port}" "vox:${vox_port}" "memoria:${memoria_port}" "console:${ui_port}"; do
+    for port_pair in "api:${api_port}" "ops:${ops_port}" "vox:${vox_port}" "memoria:${memoria_port}" "instrumenta:${instrumenta_port}" "console:${ui_port}"; do
         label="${port_pair%%:*}"
         port="${port_pair##*:}"
         if holder=$(lsof -nP -sTCP:LISTEN -iTCP:"${port}" 2>/dev/null | awk 'NR == 2 {print $1 " (pid " $2 ")"}') \
@@ -311,7 +328,7 @@ if ! "${vox_python}" -c "import conduit_link" >/dev/null 2>&1; then
     (cd "${vox_dir}" && "${vox_venv}/bin/pip" install -e "${ROOT}/packages/conduit-link")
 fi
 
-mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}" "${MEMORIA_DATA_DIR}"
+mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}" "${MEMORIA_DATA_DIR}" "${INSTRUMENTA_DATA_DIR}"
 
 # Compiled before either process starts, so a compile error is a compile error
 # and not a console proxying to a port nothing ever opened.
@@ -344,7 +361,7 @@ descendants() {
 stop() {
     trap - EXIT INT TERM
     local pid victim
-    for pid in "${ui_pid}" "${memoria_pid}" "${vox_pid}" "${api_pid}"; do
+    for pid in "${ui_pid}" "${instrumenta_pid}" "${memoria_pid}" "${vox_pid}" "${api_pid}"; do
         [[ -n "${pid}" ]] || continue
         for victim in $(descendants "${pid}"); do
             kill "${victim}" 2>/dev/null || true
@@ -390,6 +407,34 @@ printf 'starting Conduit Memoria\n'
 (cd "${memoria_dir}" && exec "${memoria_python}" -m uvicorn app:app --host 127.0.0.1 --port "${memoria_port}") &
 memoria_pid=$!
 
+instrumenta_dir="${ROOT}/services/instrumenta"
+readonly instrumenta_dir
+instrumenta_venv="${instrumenta_dir}/.venv"
+readonly instrumenta_venv
+instrumenta_python="${instrumenta_venv}/bin/python"
+readonly instrumenta_python
+
+if [[ ! -x "${instrumenta_python}" ]]; then
+    printf '\ncreating the Instrumenta virtualenv\n'
+    (cd "${instrumenta_dir}" && python3 -m venv .venv)
+fi
+if ! "${instrumenta_python}" -c "import fastapi, httpx, uvicorn" >/dev/null 2>&1; then
+    printf '\ninstalling Instrumenta dependencies\n'
+    (cd "${instrumenta_dir}" && "${instrumenta_venv}/bin/pip" install -q -r requirements.txt)
+fi
+if ! "${instrumenta_python}" -c "import modelcontextprotocol" >/dev/null 2>&1; then
+    printf '\ninstalling modelcontextprotocol into Instrumenta\n'
+    (cd "${instrumenta_dir}" && "${instrumenta_venv}/bin/pip" install -q modelcontextprotocol)
+fi
+if ! "${instrumenta_python}" -c "import conduit_link" >/dev/null 2>&1; then
+    printf '\ninstalling shared conduit-link module into Instrumenta\n'
+    (cd "${instrumenta_dir}" && "${instrumenta_venv}/bin/pip" install -q -e "${ROOT}/packages/conduit-link")
+fi
+
+printf 'starting Conduit Instrumenta\n'
+(cd "${instrumenta_dir}" && exec "${instrumenta_python}" -m uvicorn instrumenta.app:create_app --factory --host 127.0.0.1 --port "${instrumenta_port}") &
+instrumenta_pid=$!
+
 # `--host 127.0.0.1` because Vite otherwise resolves `localhost` to IPv6 only on
 # macOS, and the console would refuse the loopback address this script prints.
 printf 'starting the operator console\n\n'
@@ -400,17 +445,19 @@ ui_pid=$!
 # Polled rather than `wait -n`, which needs bash 4.3 and so is absent from the
 # bash macOS ships. Either process exiting takes the other down: a console
 # proxying to a dead server is a worse debugging experience than a clean stop.
-while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${vox_pid}" 2>/dev/null && kill -0 "${memoria_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
+while kill -0 "${api_pid}" 2>/dev/null && kill -0 "${vox_pid}" 2>/dev/null && kill -0 "${memoria_pid}" 2>/dev/null && kill -0 "${instrumenta_pid}" 2>/dev/null && kill -0 "${ui_pid}" 2>/dev/null; do
     sleep 1
 done
 
 if ! kill -0 "${api_pid}" 2>/dev/null; then
-    printf '\n%s: conduit-api exited; stopping Vox, Memoria, and the operator console\n' "${SELF}" >&2
+    printf '\n%s: conduit-api exited; stopping Vox, Memoria, Instrumenta, and the operator console\n' "${SELF}" >&2
 elif ! kill -0 "${vox_pid}" 2>/dev/null; then
-    printf '\n%s: Conduit Vox exited; stopping conduit-api, Memoria, and the operator console\n' "${SELF}" >&2
+    printf '\n%s: Conduit Vox exited; stopping conduit-api, Memoria, Instrumenta, and the operator console\n' "${SELF}" >&2
 elif ! kill -0 "${memoria_pid}" 2>/dev/null; then
-    printf '\n%s: Conduit Memoria exited; stopping conduit-api, Vox, and the operator console\n' "${SELF}" >&2
+    printf '\n%s: Conduit Memoria exited; stopping conduit-api, Vox, Instrumenta, and the operator console\n' "${SELF}" >&2
+elif ! kill -0 "${instrumenta_pid}" 2>/dev/null; then
+    printf '\n%s: Conduit Instrumenta exited; stopping conduit-api, Vox, Memoria, and the operator console\n' "${SELF}" >&2
 else
-    printf '\n%s: the operator console exited; stopping conduit-api, Vox, and Memoria\n' "${SELF}" >&2
+    printf '\n%s: the operator console exited; stopping conduit-api, Vox, Memoria, and Instrumenta\n' "${SELF}" >&2
 fi
 exit 1

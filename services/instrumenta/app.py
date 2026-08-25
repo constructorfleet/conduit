@@ -39,8 +39,11 @@ from conduit_link import (
 )
 
 from .aggregator import Aggregator, UpstreamStatus
+from .audit import make_audit_router
 from .backend import Backend, SqliteBackend
+from .items_router import make_items_router
 from .mcp_app import build_mcp_server
+from .path_probe import probe_runtimes
 from .secret_box import SecretBox, SecretKeyMissingError
 from .servers_router import make_servers_router
 
@@ -233,7 +236,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         return aggregator.statuses()
 
+    @app.get("/runtimes")
+    async def list_runtimes() -> dict[str, bool]:
+        """Boot-time PATH probe for stdio runtimes.
+
+        Read-only; reflects the system PATH at startup.
+        """
+        return probe_runtimes()
+
     app.include_router(make_servers_router())
+    app.include_router(make_items_router())
+    app.include_router(make_audit_router())
 
     # Mount the streamable-HTTP MCP transport at `/mcp`. The SDK's default
     # `streamable_http_path='/mcp'` combined with a mount would become
