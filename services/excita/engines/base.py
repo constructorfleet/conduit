@@ -9,7 +9,14 @@ from typing import Protocol
 class EngineKind(str, Enum):
     OPENWAKEWORD = "openwakeword"
     MICROWAKEWORD = "microwakeword"
+    NANOWAKEWORD = "nanowakeword"
     PORCUPINE = "porcupine"
+
+
+# The five cells an adapter can honestly advertise (#213 §Capability
+# contract). `feed` is only reachable through a loaded `Detector`, so it is
+# declared alongside `load` — no adapter supports one without the other.
+CAPABILITIES = ("load", "feed", "score", "train", "package")
 
 
 class NotSupportedError(RuntimeError):
@@ -36,11 +43,26 @@ class Detector(Protocol):
 
 class WakeWordEngine(Protocol):
     kind: EngineKind
+    # Capability advertisement (ADR-0020). Declared next to the methods that
+    # would raise `NotSupportedError` — the declaration and the behaviour live
+    # in the same file so they can't drift unnoticed.
+    capabilities: frozenset[str]
+    package_targets: tuple[str, ...]
 
     def load(self, model_ref: str, phrase_id: str) -> Detector: ...
     def score(self, audio: bytes, model_ref: str) -> list[float]: ...
     def train(self, dataset_snapshot_id: str, base: str | None) -> str: ...
     def package(self, model_ref: str, target_kind: str) -> bytes: ...
+
+
+def capability_view(engine: WakeWordEngine) -> dict[str, object]:
+    """Serialisation for `GET /engines` (#213 §Capability contract)."""
+    declared = getattr(engine, "capabilities", frozenset())
+    return {
+        "kind": engine.kind.value,
+        "capabilities": {c: c in declared for c in CAPABILITIES},
+        "package_targets": list(getattr(engine, "package_targets", ())),
+    }
 
 
 class NullEngine:
@@ -50,6 +72,10 @@ class NullEngine:
     kind and the operation. Wired at boot so the HTTP surface can be
     exercised end-to-end before a real adapter lands.
     """
+
+    kind: EngineKind
+    capabilities = frozenset[str]()
+    package_targets: tuple[str, ...] = ()
 
     def __init__(self, kind: EngineKind) -> None:
         self.kind = kind

@@ -2,6 +2,8 @@
 
 Draft. Excita is Conduit's **wake-word service**: one process that both **runs wake-word detection** on live audio and provides the **ops plane** (labelling, debugging, training, configuring) that makes the models it runs better over time. Ops and detection live together on purpose — they share the engine adapters, they share the model store, and unifying them is what closes the data loop without an operator shipping files by scp.
 
+> **Extended by [constructorfleet/conduit#213](https://github.com/constructorfleet/conduit/issues/213)** (Excita: microWakeWord + nanoWakeWord engines — capability contract, model import, deploy targets). Anchored by [ADR-0020](../adr/0020-wake-engine-adapters-are-partial.md), [ADR-0021](../adr/0021-filesystem-imported-models-are-read-only-in-ui.md), [ADR-0022](../adr/0022-phrase-is-engine-agnostic.md), [ADR-0023](../adr/0023-engine-capability-gaps-return-501.md); where the issue speaks, it supersedes the sketches below.
+
 Other runtimes still exist (openWakeWord baked into a satellite, microWakeWord on an ESPHome device, `crates/conduit-wake` in Conduit itself). Excita is one of them; it is *also* the tool that trains their models and, via a shared engine-agnostic package format, can publish updates to them.
 
 Anchors: [0005](0005-link-protocol.md) (link protocol), [0007](0007-excita-wake-events-side-channel.md) (`excita.wake-events` — Excita **is** the sender when it is the detector), [0010](0010-linked-service-lifecycle-and-dev.md) (linked-service lifecycle), [0004](0004-embedded-service-visual-consistency.md) (embedded panel visual consistency). Reference implementation shape: `services/instrumenta/`.
@@ -255,4 +257,4 @@ Follow-up PRs (each its own review):
 
 - **Multi-operator labelling.** The schema supports `(clip, labeller)` but the UI is single-operator for v1. Do we need reconciliation UX when two operators disagree? Deferred until a second operator exists.
 - **Clip retention beyond the delete window.** Legal-hold on a clip an operator wants to keep forever? Add a `pinned` boolean on `clip` when this comes up.
-- **Training compute.** In-process is fine for openWakeWord on a laptop. microWakeWord's TF training will not be. Escape hatch is `EXCITA_TRAIN_WORKER_URL` — punt to an external worker if set — but not built until asked.
+- **Training compute.** In-process is fine for openWakeWord on a laptop. microWakeWord's TF training will not be. Escape hatch is `EXCITA_TRAIN_WORKER_URL` — punt to an external worker if set — but not built until asked. **[#213](https://github.com/constructorfleet/conduit/issues/213)** lands µWW / nanoWakeWord with `train` → `NotSupportedError` pointing at that variable; the training worker protocol (queue semantics, artifact upload, credentials, cancellation) remains its own future spec.

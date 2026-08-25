@@ -94,6 +94,8 @@ class OpenWakeWordEngine:
     """
 
     kind = EngineKind.OPENWAKEWORD
+    capabilities = frozenset({"load", "feed", "score", "package"})
+    package_targets = ("onnx",)
 
     def __init__(
         self,
@@ -166,9 +168,14 @@ class OpenWakeWordEngine:
         raise NotSupportedError("openwakeword: train not implemented (see spec 0011)")
 
     def package(self, model_ref: str, target_kind: str) -> bytes:
-        # The trained model IS the package for openWakeWord's own runtime
-        # (single ONNX classifier). For microWakeWord/Porcupine targets a
-        # cross-engine conversion would live here — none exists yet.
-        raise NotSupportedError(
-            f"openwakeword: package for '{target_kind}' not implemented"
-        )
+        if target_kind != "onnx":
+            raise NotSupportedError(
+                f"openwakeword: package target '{target_kind}' not supported; "
+                "the only native target is 'onnx'"
+            )
+        if not Path(model_ref).exists():
+            raise FileNotFoundError(f"openwakeword model not found: {model_ref}")
+        # The trained ONNX classifier IS the package for openWakeWord's own
+        # runtime. For microWakeWord/Porcupine targets a cross-engine
+        # conversion would live here — none exists (#213 §Out of scope).
+        return Path(model_ref).read_bytes()
