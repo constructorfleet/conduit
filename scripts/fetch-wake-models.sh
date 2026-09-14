@@ -17,10 +17,10 @@ VERSION="v0.5.1"
 BASE="https://github.com/dscripka/openWakeWord/releases/download/${VERSION}"
 DESTINATION="${1:-crates/conduit-wake/tests/models}"
 
-# The two every installation shares, plus one phrase to score against. Pinned
-# checksums are the guard against a truncated download or an HTML error page
-# that `--fail` did not catch: either loads as an ONNX file and then scores
-# wrongly, and a wake detector that reports nothing looks like a quiet room.
+# The two every installation shares, plus one phrase to score against. A
+# truncated download or an HTML error page that `--fail` did not catch still
+# loads as an ONNX file and scores wrongly — and a wake detector that reports
+# nothing looks like a quiet room. Pinned checksums are the guard.
 #
 # Parallel arrays rather than an associative array: the macOS-shipped bash
 # (3.2) has no `declare -A`, and this needs to run there as well as in CI.

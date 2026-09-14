@@ -15,6 +15,11 @@
 # Leaves a verified file at <destination-file>. A cached file that already
 # matches is left alone and reported; anything else is (re)fetched, verified,
 # and on a mismatch retried exactly once before failing and naming the file.
+#
+# [retries] (default 5) controls only curl's `--retry` count for transient
+# HTTP/connection failures on a single download attempt. It has no effect on
+# the checksum-mismatch retry above, which is a separate, fixed one-time retry
+# regardless of this value.
 fetch_verified() {
     local destination="$1" url="$2" sha256="$3" retries="${4:-5}"
     local name attempt
