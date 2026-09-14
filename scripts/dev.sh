@@ -232,6 +232,10 @@ instrumenta_dev_root="${ROOT}/output/dev/instrumenta"
 readonly instrumenta_dev_root
 export INSTRUMENTA_DATA_DIR="${INSTRUMENTA_DATA_DIR:-${instrumenta_dev_root}/data}"
 export INSTRUMENTA_BASE_URL="${INSTRUMENTA_BASE_URL:-http://127.0.0.1:${instrumenta_port}}"
+# Cargo has no cache budget of its own. The dev loop touches the debug profile
+# constantly, so put a ceiling on that directory before it grows into an
+# archaeological layer.
+export CONDUIT_TARGET_MAX_BYTES="${CONDUIT_TARGET_MAX_BYTES:-53687091200}"
 
 cat <<SUMMARY
 conduit dev
@@ -262,6 +266,7 @@ if [[ "${dry_run}" -eq 1 ]]; then
   MEMORIA_BASE_URL=${MEMORIA_BASE_URL}
   INSTRUMENTA_DATA_DIR=${INSTRUMENTA_DATA_DIR}
   INSTRUMENTA_BASE_URL=${INSTRUMENTA_BASE_URL}
+  CONDUIT_TARGET_MAX_BYTES=${CONDUIT_TARGET_MAX_BYTES}
   cargo run ${cargo_args[*]}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${vox_port}
   .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port ${memoria_port}
@@ -332,6 +337,10 @@ mkdir -p "${SPEAKER_ID_DATA_DIR}" "${SPEAKER_ID_MODEL_DIR}" "${MEMORIA_DATA_DIR}
 
 # Compiled before either process starts, so a compile error is a compile error
 # and not a console proxying to a port nothing ever opened.
+"${ROOT}/scripts/prune-target.sh" \
+    --target-dir "${CARGO_TARGET_DIR:-${ROOT}/target}" \
+    --max-bytes "${CONDUIT_TARGET_MAX_BYTES}"
+
 printf '\nbuilding conduit-api\n'
 (cd "${ROOT}" && cargo build "${cargo_args[@]}")
 

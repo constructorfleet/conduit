@@ -95,6 +95,8 @@ emits "the default starts Vox on its own loopback port" \
     ".venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8091"
 emits "the default starts Memoria on its own loopback port" \
     ".venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8092"
+emits "the default caps the dev target directory" \
+    "CONDUIT_TARGET_MAX_BYTES=53687091200"
 
 # --- Authentication ----------------------------------------------------------
 

@@ -24,7 +24,9 @@ To see a change in the real stack, `scripts/dev.sh` runs the API and the
 Operator Console together and stops both on Ctrl-C. It defaults to an anonymous
 API on loopback with real providers; `--tokens FILE` authenticates instead,
 `--echo` builds the providers that need no speech engine, and `--help` lists the
-rest.
+rest. Before compiling, it checks `target/debug` and runs
+`cargo clean --profile dev` when that directory exceeds
+`CONDUIT_TARGET_MAX_BYTES`; the default is 50 GiB, and `0` disables the guard.
 
 ## Quality Gates
 
