@@ -17,6 +17,7 @@ from conduit_link import (
     ConduitLinkClient,
     HttpConduitLinkClient,
     LinkConfig,
+    LinkRecord,
     LinkRequest,
     LinkStore,
     LinkedServiceKind,
@@ -46,7 +47,7 @@ def _ext_to_dict(extension: VoxLinkExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: LinkRequest, existing: VoxLinkExtension | None
+    request: LinkRequest, existing: "LinkRecord[VoxLinkExtension] | None"
 ) -> Mapping[str, object]:
     return {
         "peer_name": request.peer_name,
@@ -56,12 +57,12 @@ def _build_create_body(
 
 def _build_extension(
     request: LinkRequest,
-    response: Mapping[str, str],
-    existing: VoxLinkExtension | None,
+    response: Mapping[str, object],
+    existing: "LinkRecord[VoxLinkExtension] | None",
 ) -> VoxLinkExtension:
     return VoxLinkExtension(
-        provider_definition_id=response["provider_definition_id"],
-        local_api_key=existing.local_api_key if existing else "generated",
+        provider_definition_id=str(response["provider_definition_id"]),
+        local_api_key=existing.extension.local_api_key if existing else "generated",
     )
 
 

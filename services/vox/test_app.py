@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import os
 import tempfile
 import uuid
@@ -30,7 +29,6 @@ from app import (
     ConduitSpeaker,
     MAX_LABEL_LENGTH,
     MODEL_SAMPLE_RATE,
-    LinkStore,
     NeMoEncoder,
     PyannoteEncoder,
     Roster,
@@ -45,12 +43,13 @@ from app import (
     create_app,
     hugging_face_token,
     resample,
+    vox_link_store,
 )
-from conduit_link import LinkedServicePanel, LinkState
+from conduit_link import LinkedServicePanel, LinkState, LinkStore
 
 
 def _save_test_link(
-    store: LinkStore,
+    store: LinkStore[VoxLinkExtension],
     *,
     conduit_url: str = "http://conduit.internal:8080",
     sync_token: str = "sync-token",
@@ -60,10 +59,8 @@ def _save_test_link(
     local_api_key: str = "local-key",
     linked_at: str = "2026-01-01T00:00:00+00:00",
 ) -> None:
-    """Compat helper — the legacy `LinkStore.save(**kwargs)` shape written by
-    tests before the migration onto `conduit_link.LinkStore[VoxLinkExtension]`.
-    Keeps the test call sites terse without threading LinkState/panel through
-    every fixture."""
+    """Terse helper so tests don't thread `LinkState`/panel through every
+    fixture that just needs a saved link on disk."""
     state = LinkState(
         conduit_url=conduit_url,
         peer_id=peer_id,
@@ -83,10 +80,14 @@ def _save_test_link(
 class RecordedConduitRequest:
     url: str
     bearer: str
-    body: dict[str, str]
+    body: dict[str, object]
 
 
 class FakeConduitClient:
+    """Speaks the shared `conduit_link.ConduitLinkClient` protocol — the
+    generic `/v1/linked-services` request/response shape, not a Vox-specific
+    one, since `app.py` no longer defines a Vox-flavoured adapter."""
+
     def __init__(self) -> None:
         self.create_requests: list[RecordedConduitRequest] = []
         self.delete_requests: list[tuple[str, str, str]] = []
@@ -95,14 +96,14 @@ class FakeConduitClient:
         self,
         conduit_url: str,
         operator_token: str,
-        body: dict[str, str],
-    ) -> dict[str, str]:
+        body: dict[str, object],
+    ) -> dict[str, object]:
         self.create_requests.append(
             RecordedConduitRequest(conduit_url, operator_token, body)
         )
         return {
             "sync_token": "sync-token-from-conduit",
-            "provider_definition_id": "vox-kitchen-vox-01",
+            "extension": {"provider_definition_id": "vox-kitchen-vox-01"},
         }
 
     def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None:
@@ -786,10 +787,11 @@ def test_linking_posts_to_conduit_and_persists_redacted_status(
     request = conduit.create_requests[0]
     assert request.url == "http://conduit.internal:8080"
     assert request.bearer == "operator-secret"
+    assert request.body["service_kind"] == "vox"
     assert request.body["peer_name"] == "Kitchen Vox"
     assert request.body["peer_id"] == body["peer_id"]
-    assert request.body["vox_base_url"] == "http://vox.internal:8081"
-    assert request.body["vox_api_key"] == body["local_api_key"]
+    assert request.body["peer_base_url"] == "http://vox.internal:8081"
+    assert request.body["extension"] == {"local_api_key": body["local_api_key"]}
     assert len(body["local_api_key"]) >= 32
 
     persisted = client.get("/link")
@@ -797,7 +799,6 @@ def test_linking_posts_to_conduit_and_persists_redacted_status(
     assert persisted.json() == public
     assert "sync_token" not in persisted.text
     assert "operator-secret" not in persisted.text
-    assert "vox_api_key" not in persisted.text
     assert "local_api_key" not in persisted.text
 
     mode = (tmp_path / LinkStore.FILENAME).stat().st_mode & 0o777
@@ -821,7 +822,7 @@ def test_link_generated_api_key_authorizes_vox_routes(tmp_path: Path) -> None:
             "peer_name": "Kitchen Vox",
         },
     )
-    generated_key = conduit.create_requests[0].body["vox_api_key"]
+    generated_key = conduit.create_requests[0].body["extension"]["local_api_key"]
 
     assert client.post("/identify", content=tone(440)).status_code == 401
     assert (
@@ -857,7 +858,10 @@ def test_configured_api_key_is_sent_to_conduit_and_keeps_env_precedence(
     )
 
     assert response.status_code == 200
-    assert conduit.create_requests[0].body["vox_api_key"] == "configured-key"
+    assert "local_api_key" not in response.json()
+    assert conduit.create_requests[0].body["extension"] == {
+        "local_api_key": "configured-key"
+    }
     assert client.post("/identify", content=tone(440)).status_code == 401
     assert (
         client.post(
@@ -961,7 +965,7 @@ def test_startup_sync_pulls_conduit_labels_into_the_local_roster(tmp_path: Path)
     local_only = uuid.uuid4()
     prints = VoicePrints(tmp_path)
     roster = Roster(tmp_path)
-    links = LinkStore(tmp_path)
+    links = vox_link_store(tmp_path)
     _save_test_link(links)
     prints.add(speaker, np.array([1.0, 0.0], dtype=np.float32))
     roster.touch(speaker, 1)
@@ -1003,7 +1007,7 @@ def test_startup_sync_pulls_conduit_labels_into_the_local_roster(tmp_path: Path)
 def test_syncer_retries_with_exponential_backoff_without_crashing(
     tmp_path: Path,
 ) -> None:
-    links = LinkStore(tmp_path)
+    links = vox_link_store(tmp_path)
     _save_test_link(links)
     conduit = FakeSpeakerClient(
         [
@@ -1037,7 +1041,7 @@ def test_syncer_retries_with_exponential_backoff_without_crashing(
 
 
 def test_a_saved_link_with_group_or_world_permissions_is_refused(tmp_path: Path) -> None:
-    store = LinkStore(tmp_path)
+    store = vox_link_store(tmp_path)
     _save_test_link(store)
     os.chmod(tmp_path / LinkStore.FILENAME, 0o644)
     client = TestClient(
@@ -1054,49 +1058,3 @@ def test_a_saved_link_with_group_or_world_permissions_is_refused(tmp_path: Path)
     assert status.status_code == 500
     assert "permissions" in status.json()["detail"]
     assert protected.status_code == 500
-
-
-def test_http_conduit_client_sends_the_expected_link_request() -> None:
-    from app import HttpConduitClient
-
-    seen: dict[str, object] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["url"] = str(request.url)
-        seen["authorization"] = request.headers["authorization"]
-        seen["body"] = json_body = json.loads(request.content)
-        # HttpConduitClient translates the Vox-shaped call arguments into the
-        # generic /v1/linked-services request shape: service_kind + panel +
-        # extension.local_api_key.
-        assert json_body["service_kind"] == "vox"
-        assert json_body["peer_base_url"] == "http://vox.internal:8081"
-        assert json_body["extension"] == {"local_api_key": "local-key"}
-        return httpx.Response(
-            201,
-            json={
-                "sync_token": "sync-token",
-                "extension": {"provider_definition_id": "vox-peer-1"},
-            },
-        )
-
-    client = HttpConduitClient(transport=httpx.MockTransport(handler))
-
-    response = client.create_link(
-        "http://conduit.internal:8080/",
-        "operator-secret",
-        {
-            "peer_name": "Kitchen Vox",
-            "peer_id": "peer-1",
-            "vox_base_url": "http://vox.internal:8081",
-            "vox_api_key": "local-key",
-        },
-    )
-
-    assert response == {
-        "sync_token": "sync-token",
-        "provider_definition_id": "vox-peer-1",
-    }
-    assert seen["method"] == "POST"
-    assert seen["url"] == "http://conduit.internal:8080/v1/linked-services"
-    assert seen["authorization"] == "Bearer operator-secret"

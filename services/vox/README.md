@@ -63,9 +63,10 @@ put a bearer in localStorage would hand it to every other page on the origin.
 | `GET /speakers` | — | `{"speakers": [{"uuid", "label", "samples", "created_at", "updated_at"}, …]}` |
 | `PATCH /speakers/{uuid}` | `{"label": "<name>" \| null}` | The updated entry; `404` if nobody was enrolled |
 | `DELETE /speakers/{uuid}` | — | `204`, or `404` if nobody was enrolled |
-| `GET /link` | — | Link status, redacted: `linked`, `unlinked`, or `config-managed` |
+| `GET /link` | — | Link status, redacted: `linked` or `unlinked` |
 | `POST /link` | `{"conduit_url", "operator_token", "peer_name", "force"?}` | Link status. If Vox generated a local API key, it is returned once for the current UI tab. The Conduit sync token and operator token are never returned. |
 | `DELETE /link` | — | `204` after best-effort Conduit revocation and local link removal |
+| `GET /link/health` | — | `{"status": "ok"}`, the target of Conduit's reachability probe (spec 0005) |
 | `POST /engine/reload` | `{"model": "<model name>"}` | Reloads the current engine with a new model and returns the same shape as `GET /health`. If prints already exist and the new model's embedding width would not compare, returns `409`. |
 | `GET /health` | — | `{"status": "ok", …}` |
 
@@ -172,7 +173,7 @@ nothing in this service will tell you that you did not.
 | `SPEAKER_ID_DATA_DIR` | `/data` | Voice prints, one `.npy` per speaker. |
 | `SPEAKER_ID_MODEL_DIR` | `/models` | Model cache, so a restart does not re-download it. |
 | `SPEAKER_ID_API_KEY` | unset | When set, every route except `/health` needs `Authorization: Bearer …`. |
-| `SPEAKER_ID_BASE_URL` | request base URL | Base URL Conduit should store for reaching Vox when linked. In Docker Compose this should be `http://vox:8080`, not the operator's browser URL. |
+| `SPEAKER_ID_BASE_URL` | `http://localhost:8080` | Base URL Conduit should store for reaching Vox when linked. In Docker Compose this should be `http://vox:8080` — set it explicitly, since the default is not reachable from another container. |
 | `SPEAKER_ID_SYNC_INTERVAL_SECONDS` | `300` | How often Vox refreshes labels from Conduit after a successful link. |
 | `SPEAKER_ID_SYNC_MAX_BACKOFF_SECONDS` | `900` | Ceiling for retry delay when the Conduit roster sync keeps failing. |
 

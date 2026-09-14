@@ -49,6 +49,7 @@ from conduit_link import (
     LinkConfig,
     LinkedServiceKind,
     LinkedServicePanel,
+    LinkRecord,
     LinkRequest as _SharedLinkRequest,
     LinkStore,
     make_link_router,
@@ -190,7 +191,9 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
     return {}
 
 
-def _build_create_body(request: _SharedLinkRequest, _existing: _NoExtension | None) -> dict[str, object]:
+def _build_create_body(
+    request: _SharedLinkRequest, _existing: "LinkRecord[_NoExtension] | None"
+) -> dict[str, object]:
     peer_id = request.peer_name.strip().lower().replace(" ", "-")
     return {
         "service_kind": "memoria",

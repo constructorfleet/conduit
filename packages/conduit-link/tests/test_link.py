@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from conduit_link import (
+    HttpConduitLinkClient,
     InMemoryConduitLinkClient,
     LinkConfig,
+    LinkRecord,
     LinkRequest,
     LinkStore,
     LinkStoreSecurityError,
@@ -42,22 +46,22 @@ def _ext_to(extension: FakeExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: LinkRequest, existing: FakeExtension | None
+    request: LinkRequest, existing: "LinkRecord[FakeExtension] | None"
 ) -> dict[str, object]:
     return {
         "peer_name": request.peer_name,
-        "peer_id": "test-peer",
+        "peer_id": existing.state.peer_id if existing else "test-peer",
         "peer_base_url": "http://peer.test",
     }
 
 
 def _build_extension(
     request: LinkRequest,
-    response: Mapping[str, str],
-    existing: FakeExtension | None,
+    response: Mapping[str, object],
+    existing: "LinkRecord[FakeExtension] | None",
 ) -> FakeExtension:
     return FakeExtension(
-        api_key=(existing.api_key if existing else "generated-key"),
+        api_key=(existing.extension.api_key if existing else "generated-key"),
         provider_id=response.get("provider_id", "auto-provisioned"),
     )
 
@@ -245,3 +249,79 @@ def test_extension_round_trips(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.state == state
     assert loaded.extension == ext
+
+
+def test_conduit_url_trailing_slash_is_stripped_from_the_stored_status(
+    tmp_path: Path,
+) -> None:
+    # A value round-tripped from GET /link back into POST /link (or compared
+    # by a caller) must not drift from what a client already stripped for its
+    # own request URL — see HttpConduitLinkClient.
+    client = _make_client(tmp_path)
+    response = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.test/",
+            "operator_token": "op-token",
+            "peer_name": "P",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["conduit_url"] == "http://conduit.test"
+
+
+def test_http_conduit_link_client_sends_the_spec_shaped_request(tmp_path: Path) -> None:
+    """`HttpConduitLinkClient` is the production `ConduitLinkClient`. Every
+    service wires it in directly (see services/vox and services/memoria); this
+    is the only place its wire behaviour is exercised against real HTTP
+    framing rather than the `InMemoryConduitLinkClient` test fake."""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers["authorization"]
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            201,
+            json={
+                "sync_token": "sync-token",
+                "extension": {"provider_definition_id": "vox-peer-1"},
+            },
+        )
+
+    client = HttpConduitLinkClient(transport=httpx.MockTransport(handler))
+
+    response = client.create_link(
+        "http://conduit.internal:8080/",
+        "operator-secret",
+        {
+            "service_kind": "vox",
+            "peer_id": "peer-1",
+            "peer_name": "Kitchen Vox",
+            "peer_base_url": "http://vox.internal:8081",
+            "panel": {"id": "vox", "label": "Vox", "icon": "users", "path": "/ui/"},
+            "extension": {"local_api_key": "local-key"},
+        },
+    )
+
+    assert response == {
+        "sync_token": "sync-token",
+        "extension": {"provider_definition_id": "vox-peer-1"},
+    }
+    assert seen["method"] == "POST"
+    assert seen["url"] == "http://conduit.internal:8080/v1/linked-services"
+    assert seen["authorization"] == "Bearer operator-secret"
+    assert seen["body"]["service_kind"] == "vox"
+    assert seen["body"]["extension"] == {"local_api_key": "local-key"}
+
+    def delete_handler(request: httpx.Request) -> httpx.Response:
+        seen["delete_url"] = str(request.url)
+        seen["delete_authorization"] = request.headers["authorization"]
+        return httpx.Response(204)
+
+    delete_client = HttpConduitLinkClient(transport=httpx.MockTransport(delete_handler))
+    delete_client.delete_link("http://conduit.internal:8080/", "peer-1", "sync-token")
+
+    assert seen["delete_url"] == "http://conduit.internal:8080/v1/linked-services/peer-1"
+    assert seen["delete_authorization"] == "Bearer sync-token"
