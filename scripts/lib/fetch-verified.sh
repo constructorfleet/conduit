@@ -17,7 +17,7 @@
 # and on a mismatch retried exactly once before failing and naming the file.
 fetch_verified() {
     local destination="$1" url="$2" sha256="$3" retries="${4:-5}"
-    local name
+    local name attempt
     name="$(basename "${destination}")"
 
     if [[ -s "${destination}" ]] && _fetch_verified_checksum_ok "${destination}" "${sha256}"; then
@@ -25,27 +25,23 @@ fetch_verified() {
         return 0
     fi
 
-    echo "fetching ${name}"
-    curl --fail --silent --show-error --location \
-        --retry "${retries}" --retry-all-errors \
-        --output "${destination}" "${url}"
+    for attempt in 1 2; do
+        echo "fetching ${name}"
+        curl --fail --silent --show-error --location \
+            --retry "${retries}" --retry-all-errors \
+            --output "${destination}" "${url}"
 
-    if _fetch_verified_checksum_ok "${destination}" "${sha256}"; then
-        return 0
-    fi
+        if _fetch_verified_checksum_ok "${destination}" "${sha256}"; then
+            return 0
+        fi
 
-    echo "${name} did not match the pinned checksum; retrying" >&2
-    rm -f "${destination}"
-    curl --fail --silent --show-error --location \
-        --retry "${retries}" --retry-all-errors \
-        --output "${destination}" "${url}"
-
-    if _fetch_verified_checksum_ok "${destination}" "${sha256}"; then
-        return 0
-    fi
+        if [[ "${attempt}" -eq 1 ]]; then
+            echo "${name} did not match the pinned checksum; retrying" >&2
+        fi
+        rm -f "${destination}"
+    done
 
     echo "${name} does not match the pinned checksum; refusing it" >&2
-    rm -f "${destination}"
     return 1
 }
 
