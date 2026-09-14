@@ -13,7 +13,7 @@ from .client import ConduitLinkClient
 from .config import LinkConfig
 from .errors import LinkStoreSecurityError
 from .models import LinkState
-from .store import LinkStore
+from .store import LinkRecord, LinkStore
 
 LOG = logging.getLogger(__name__)
 
@@ -43,14 +43,22 @@ def _trimmed(name: str, value: str) -> str:
     return trimmed
 
 
+def _trimmed_url(name: str, value: str) -> str:
+    trimmed = value.strip().rstrip("/")
+    if not trimmed:
+        raise HTTPException(status_code=422, detail=f"{name} must not be blank")
+    return trimmed
+
+
 def make_link_router(
     *,
     config: LinkConfig,
     store: "LinkStore[E]",
     client: ConduitLinkClient,
-    build_create_body: Callable[[LinkRequest, E | None], Mapping[str, object]],
-    build_extension: Callable[[LinkRequest, Mapping[str, str], E | None], E],
+    build_create_body: Callable[[LinkRequest, "LinkRecord[E] | None"], Mapping[str, object]],
+    build_extension: Callable[[LinkRequest, Mapping[str, object], "LinkRecord[E] | None"], E],
     public_response: Callable[[E], Mapping[str, object]],
+    created_response: Callable[[LinkRequest, "LinkRecord[E]"], Mapping[str, object]] | None = None,
 ) -> APIRouter:
     """Return an APIRouter exposing:
 
@@ -59,8 +67,17 @@ def make_link_router(
     - `DELETE /link` → best-effort unlink through `client.delete_link`
     - `GET /link/health` → 0005 §Reachability probe target
 
-    The three callbacks let each service inject its extension shape without
-    the module knowing service-specific keys. Upholds spec 0005 §Handshake.
+    The callbacks let each service inject its extension shape without the
+    module knowing service-specific keys. `build_create_body` and
+    `build_extension` both receive the full prior `LinkRecord` (not just its
+    extension) so a service can reuse the existing `peer_id` on a forced
+    relink, per spec 0005 §Identity ("re-linking a peer id replaces the prior
+    row"). `created_response` is optional and, when given, is spread only
+    into the `POST /link` response — never `GET /link` — for fields that
+    should surface exactly once at creation (e.g. a freshly generated local
+    secret the operator has to copy down, mirroring how Conduit returns
+    `sync_token` only from the create response). Upholds spec 0005
+    §Handshake.
     """
 
     router = APIRouter()
@@ -102,7 +119,11 @@ def make_link_router(
                 ),
             )
 
-        conduit_url = _trimmed("conduit_url", body.conduit_url)
+        # Stored and returned without a trailing slash so a value round-tripped
+        # from `GET /link` back into `POST /link` (or compared by a caller)
+        # doesn't drift from what a client already stripped for its own
+        # request URL (see `HttpConduitLinkClient`).
+        conduit_url = _trimmed_url("conduit_url", body.conduit_url)
         # operator_token is not trimmed-required: a Conduit with no auth
         # configured accepts an empty bearer, and forcing operators to invent
         # a token to link a fresh dev instance is friction with no security
@@ -110,7 +131,7 @@ def make_link_router(
         operator_token = body.operator_token.strip()
         peer_name = _trimmed("peer_name", body.peer_name)
 
-        create_body = dict(build_create_body(body, existing.extension if existing else None))
+        create_body = dict(build_create_body(body, existing))
 
         try:
             response = client.create_link(conduit_url, operator_token, create_body)
@@ -132,9 +153,7 @@ def make_link_router(
                 detail="peer_id missing from create body; service integration bug",
             )
 
-        extension = build_extension(
-            body, response, existing.extension if existing else None
-        )
+        extension = build_extension(body, response, existing)
         state = LinkState(
             conduit_url=conduit_url,
             peer_id=peer_id,
@@ -148,6 +167,7 @@ def make_link_router(
         LOG.info(
             "linked %s to Conduit peer=%s", config.service_kind.value, record.state.peer_id
         )
+        extra = created_response(body, record) if created_response is not None else {}
         return {
             "status": "linked",
             "peer_id": record.state.peer_id,
@@ -155,6 +175,7 @@ def make_link_router(
             "conduit_url": record.state.conduit_url,
             "linked_at": record.state.linked_at,
             **public_response(record.extension),
+            **extra,
         }
 
     @router.delete("/link")

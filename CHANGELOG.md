@@ -8,6 +8,24 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Vox no longer hand-rolls its `/link` surface: `LinkStore`, `LinkRequest`, the
+  `ConduitLinkClient` adapter, and the three `/link` handlers are gone from
+  `services/vox/app.py` in favour of `packages/conduit-link`'s
+  `make_link_router`, matching Memoria's earlier migration.
+  Vox also gains `GET /link/health`, the spec-0005 reachability probe target
+  it was missing. Two real gaps surfaced doing this for a second, non-trivial
+  consumer: `make_link_router`'s `build_create_body`/`build_extension`
+  callbacks now receive the full prior `LinkRecord` (not just its extension)
+  so a service can reuse the existing `peer_id` on a forced relink instead of
+  orphaning the old row on Conduit, and a new optional `created_response`
+  callback lets a service reveal a freshly generated secret on `POST /link`
+  without ever repeating it on `GET /link`. `SPEAKER_ID_BASE_URL` also drops
+  its request-derived fallback for a static default, matching Memoria's
+  `MEMORIA_BASE_URL`. `GET /link` also loses the `config-managed` status it
+  used to report when a deployment-wide `SPEAKER_ID_API_KEY` was set and no
+  link record existed; the shared router only distinguishes `linked` from
+  `unlinked`, so callers that branched on `config-managed` now see
+  `unlinked` instead.
 - [ADR-0015](docs/adr/0015-render-the-conduit-part-of-the-firmware.md) decides how the
   ESPHome firmware gets rendered from a pipeline: Conduit renders the `conduit_voice:`
   and `micro_wake_word:` blocks as an includable fragment, and renders **nothing** about
