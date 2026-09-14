@@ -5,7 +5,7 @@
 # file regardless, but only by downloading a second toolchain into every image
 # build. Matching the tag means the toolchain already in the image is the one
 # used.
-FROM rust:1.97.1-bookworm AS builder
+FROM rust:1.98.0-bookworm AS builder
 
 WORKDIR /src
 COPY . .
