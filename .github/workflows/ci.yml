@@ -244,6 +244,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Test scripts/dev.sh
         run: scripts/tests/dev_test.sh
+      - name: Test scripts/lib/fetch-verified.sh
+        run: scripts/tests/fetch_verified_test.sh
 
   # Conduit Vox — the reference speaker identification service — ships in this
   # repository and is published as an image, so its tests and its build are

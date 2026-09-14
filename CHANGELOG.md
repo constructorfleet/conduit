@@ -8,6 +8,13 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- `scripts/fetch-wake-models.sh` now retries a transient download and verifies each
+  openWakeWord model against a pinned SHA-256, matching `scripts/fetch-vad-model.sh`
+  (which gains the retry it was missing). A cached file that fails the checksum is
+  re-fetched rather than trusted, and a mismatch that survives the retry fails the
+  job naming the model instead of silently caching corrupt bytes. The shared
+  retry-and-checksum logic lives in `scripts/lib/fetch-verified.sh`, sourced by both
+  scripts.
 - [ADR-0015](docs/adr/0015-render-the-conduit-part-of-the-firmware.md) decides how the
   ESPHome firmware gets rendered from a pipeline: Conduit renders the `conduit_voice:`
   and `micro_wake_word:` blocks as an includable fragment, and renders **nothing** about
