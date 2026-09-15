@@ -59,7 +59,6 @@ import type {
   TurnSnapshot,
   TransformRule,
   LinkedServiceView,
-  VoxLinkView,
   WakeRuntime,
 } from "./contracts/client";
 import {
@@ -415,7 +414,6 @@ function OperatorWorkspace({
   const [linkedServices, setLinkedServices] = useState<
     readonly LinkedServiceView[]
   >([]);
-  const [voxLinks, setVoxLinks] = useState<readonly VoxLinkView[]>([]);
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const eventPlan = useMemo(() => {
     const plan = initialEventStreamPlan();
@@ -580,9 +578,11 @@ function OperatorWorkspace({
     await refreshSnapshotFromApi();
   }
 
-  async function deleteVoxLink(peerId: string): Promise<void> {
-    await snapshotClient.deleteVoxLink(peerId);
-    setVoxLinks((current) => current.filter((link) => link.peer_id !== peerId));
+  async function deleteLinkedService(peerId: string): Promise<void> {
+    await snapshotClient.deleteLinkedService(peerId);
+    setLinkedServices((current) =>
+      current.filter((service) => service.peer_id !== peerId),
+    );
   }
 
   /// Renders a device's fragment, bound to whichever client this workspace has.
@@ -638,7 +638,6 @@ function OperatorWorkspace({
           loadedComponentCatalog,
           loadedProviderDefinitionViews,
           loadedLinkedServices,
-          loadedVoxLinks,
           loadedTurns,
         ] = await Promise.all([
           snapshotClient.loadSnapshot(),
@@ -655,7 +654,6 @@ function OperatorWorkspace({
             ? Promise.resolve([...initialProviderDefinitions])
             : snapshotClient.loadProviderDefinitions(),
           snapshotClient.loadLinkedServices(),
-          snapshotClient.loadVoxLinks(),
           initialEvents
             ? Promise.resolve({ turns: [] })
             : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
@@ -726,7 +724,6 @@ function OperatorWorkspace({
         setPipelineViews(nextPipelineViews);
         setComponentCatalog(baseComponentCatalog);
         setLinkedServices(loadedLinkedServices);
-        setVoxLinks(loadedVoxLinks);
         setProviderDefinitions((current) =>
           mergeProviderDefinitions(loadedProviderDefinitions, current),
         );
@@ -741,7 +738,6 @@ function OperatorWorkspace({
         setPipelineViews(initialPipelineViews ?? []);
         setComponentCatalog(initialComponentCatalog ?? { components: [] });
         setLinkedServices([]);
-        setVoxLinks([]);
         setSnapshotState("error");
         setLoadError(
           caught instanceof Error
@@ -783,15 +779,11 @@ function OperatorWorkspace({
 
     async function refreshLinkedServices() {
       try {
-        const [nextLinkedServices, nextVoxLinks] = await Promise.all([
-          snapshotClient.loadLinkedServices(),
-          snapshotClient.loadVoxLinks(),
-        ]);
+        const nextLinkedServices = await snapshotClient.loadLinkedServices();
         if (cancelled) {
           return;
         }
         setLinkedServices(nextLinkedServices);
-        setVoxLinks(nextVoxLinks);
       } catch {
         // A refresh that fails is not worth surfacing: the next successful
         // link/unlink event will retry, and manual reload still works.
@@ -931,7 +923,6 @@ function OperatorWorkspace({
         <SectionPanel
           section={activeSection}
           linkedServices={linkedServices}
-          voxLinks={voxLinks}
           onFirmwareRender={renderFirmware}
           onFirmwareFlash={flashFirmware}
           events={initialEvents ?? eventEnvelopeFixtures}
@@ -958,7 +949,7 @@ function OperatorWorkspace({
           onProviderPhrases={onProviderPhrases ?? loadProviderPhrases}
           onProviderDefinitionSave={saveProviderDefinition}
           onProviderDefinitionDelete={deleteProviderDefinition}
-          onVoxLinkDelete={deleteVoxLink}
+          onLinkedServiceDelete={deleteLinkedService}
           onPipelineStored={storePipelineGraph}
           onPipelineDelete={deletePipeline}
         />
@@ -974,7 +965,6 @@ function defaultDataMode(): OperatorDataMode {
 function SectionPanel({
   section,
   linkedServices,
-  voxLinks,
   onFirmwareRender,
   onFirmwareFlash,
   events,
@@ -997,11 +987,10 @@ function SectionPanel({
   onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
-  onVoxLinkDelete,
+  onLinkedServiceDelete,
 }: {
   section: SectionId;
   linkedServices: readonly LinkedServiceView[];
-  voxLinks: readonly VoxLinkView[];
   onFirmwareRender: FirmwareRenderer;
   onFirmwareFlash: FirmwareFlasher;
   events: readonly EventEnvelope[];
@@ -1030,7 +1019,7 @@ function SectionPanel({
     previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
-  onVoxLinkDelete: (peerId: string) => Promise<void>;
+  onLinkedServiceDelete: (peerId: string) => Promise<void>;
 }) {
   if (loadError) {
     return (
@@ -1117,12 +1106,12 @@ function SectionPanel({
         pipelineViews={pipelineViews}
         providerDefinitions={providerDefinitions}
         providers={snapshot?.providers ?? []}
-        voxLinks={voxLinks}
+        linkedServices={linkedServices}
         onProviderTest={onProviderTest}
         onProviderPhrases={onProviderPhrases}
         onProviderDefinitionSave={onProviderDefinitionSave}
         onProviderDefinitionDelete={onProviderDefinitionDelete}
-        onVoxLinkDelete={onVoxLinkDelete}
+        onLinkedServiceDelete={onLinkedServiceDelete}
       />
     );
   }
@@ -1226,18 +1215,18 @@ function ProvidersPanel({
   pipelineViews,
   providerDefinitions,
   providers,
-  voxLinks,
+  linkedServices,
   onProviderTest,
   onProviderPhrases,
   onProviderDefinitionSave,
   onProviderDefinitionDelete,
-  onVoxLinkDelete,
+  onLinkedServiceDelete,
 }: {
   componentCatalog: ProviderComponentCatalog;
   pipelineViews: readonly PipelineView[];
   providerDefinitions: readonly ProviderDefinition[];
   providers: readonly ProviderStatus[];
-  voxLinks: readonly VoxLinkView[];
+  linkedServices: readonly LinkedServiceView[];
   onProviderTest: ProviderTester;
   onProviderPhrases: PhraseLoader;
   /// Saves a definition. `previousId` is the id it was stored under, when it
@@ -1248,7 +1237,7 @@ function ProvidersPanel({
     previousId?: string,
   ) => Promise<ProviderDefinition>;
   onProviderDefinitionDelete: (id: string) => Promise<void>;
-  onVoxLinkDelete: (peerId: string) => Promise<void>;
+  onLinkedServiceDelete: (peerId: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
@@ -1376,6 +1365,9 @@ function ProvidersPanel({
         (component) => component.kind === selectedKindCapability,
       )
     : [];
+  const voxLinkedServices = linkedServices.filter(
+    (service) => service.service_kind === "vox",
+  );
 
   function startNewProvider(component: ProviderComponentDescriptor) {
     const kind = providerKindForCapability(component.kind);
@@ -1588,9 +1580,9 @@ function ProvidersPanel({
     }
   }
 
-  async function revokeVoxLink(link: VoxLinkView) {
+  async function revokeVoxLink(link: LinkedServiceView) {
     try {
-      await onVoxLinkDelete(link.peer_id);
+      await onLinkedServiceDelete(link.peer_id);
       setProviderNotices((current) => ({
         ...current,
         [`vox-link-${link.peer_id}`]: `Vox link ${link.peer_id} revoked`,
@@ -1673,7 +1665,7 @@ function ProvidersPanel({
             </p>
           </div>
         </div>
-        {voxLinks.length === 0 ? (
+        {voxLinkedServices.length === 0 ? (
           <p className="panel-notice">
             No Vox peer linked. Complete the Vox link flow before loading the
             embedded UI.
@@ -1684,7 +1676,6 @@ function ProvidersPanel({
               <tr>
                 <th scope="col">Service</th>
                 <th scope="col">Base URL</th>
-                <th scope="col">Provider</th>
                 <th scope="col">Granted by</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
@@ -1692,7 +1683,7 @@ function ProvidersPanel({
               </tr>
             </thead>
             <tbody>
-              {voxLinks.map((link) => (
+              {voxLinkedServices.map((link) => (
                 <tr className="provider-row" key={link.peer_id}>
                   <td>
                     <div className="provider-name">
@@ -1701,7 +1692,6 @@ function ProvidersPanel({
                     </div>
                   </td>
                   <td>{link.peer_base_url}</td>
-                  <td>{link.provider_definition_id}</td>
                   <td>{link.granted_by}</td>
                   <td className="provider-row-actions">
                     <button

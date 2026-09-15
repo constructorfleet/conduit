@@ -3523,16 +3523,6 @@ describe("Vox workspace", () => {
           granted_at: "2026-08-09T12:00:00Z",
         },
       ],
-      voxLinks: [
-        {
-          peer_id: "kitchen",
-          peer_name: "Kitchen Vox",
-          peer_base_url: "http://vox.internal:8081",
-          provider_definition_id: "vox-kitchen",
-          granted_by: "Operator Console",
-          granted_at: "2026-08-09T12:00:00Z",
-        },
-      ],
     });
     render(<App />);
 
@@ -3542,14 +3532,13 @@ describe("Vox workspace", () => {
       await screen.findByRole("heading", { name: "Linked services" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Kitchen Vox")).toBeInTheDocument();
-    expect(screen.getByText("vox-kitchen")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Revoke kitchen" }));
 
     expect(
       await screen.findByText("Vox link kitchen revoked"),
     ).toBeInTheDocument();
-    expect(api.voxLinks.size).toBe(0);
+    expect(api.linkedServices.size).toBe(0);
   });
 });
 
@@ -4117,7 +4106,6 @@ function mockOperatorApi({
   componentCatalog: catalog = componentCatalog(),
   providerDefinitions = [],
   linkedServices = [],
-  voxLinks = [],
   updateSnapshotOnPipelineSave = true,
 }: {
   snapshot?: OperatorStatusSnapshot;
@@ -4131,15 +4119,6 @@ function mockOperatorApi({
     peer_name: string;
     peer_base_url: string;
     panel: { id: string; label: string; icon: string; path: string };
-    granted_by: string;
-    granted_at: string;
-    last_seen?: string | null;
-  }[];
-  voxLinks?: {
-    peer_id: string;
-    peer_name: string;
-    peer_base_url: string;
-    provider_definition_id: string;
     granted_by: string;
     granted_at: string;
     last_seen?: string | null;
@@ -4159,7 +4138,6 @@ function mockOperatorApi({
   const storedLinkedServices = new Map(
     linkedServices.map((service) => [service.peer_id, service]),
   );
-  const storedVoxLinks = new Map(voxLinks.map((link) => [link.peer_id, link]));
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof URL ? input : new URL(input.toString());
@@ -4171,17 +4149,13 @@ function mockOperatorApi({
         return jsonResponse(currentSnapshot);
       }
 
-      if (route === "/v1/vox/links" && method === "GET") {
-        return jsonResponse([...storedVoxLinks.values()]);
-      }
-
       if (route === "/v1/linked-services" && method === "GET") {
         return jsonResponse([...storedLinkedServices.values()]);
       }
 
-      if (route.startsWith("/v1/vox/links/") && method === "DELETE") {
-        const peerId = route.slice("/v1/vox/links/".length);
-        storedVoxLinks.delete(peerId);
+      if (route.startsWith("/v1/linked-services/") && method === "DELETE") {
+        const peerId = route.slice("/v1/linked-services/".length);
+        storedLinkedServices.delete(peerId);
         return new Response(null, { status: 204 });
       }
 
@@ -4333,7 +4307,7 @@ function mockOperatorApi({
   );
 
   vi.stubGlobal("fetch", fetchMock);
-  return Object.assign(fetchMock, { voxLinks: storedVoxLinks });
+  return Object.assign(fetchMock, { linkedServices: storedLinkedServices });
 }
 
 /// Points a node's provider reference at `to` when it named `from`, returning

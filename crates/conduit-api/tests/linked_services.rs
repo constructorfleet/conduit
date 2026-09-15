@@ -57,6 +57,18 @@ fn delete(uri: &str) -> Request<Body> {
         .expect("request")
 }
 
+#[tokio::test]
+async fn legacy_vox_link_routes_are_removed() {
+    let state = AppState::new(EventBus::default());
+    let legacy_route = concat!("/v1/vox", "/links");
+
+    let (status, _) = call(&state, post(legacy_route, serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = call(&state, delete(&format!("{legacy_route}/kitchen-vox"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 fn link_body() -> serde_json::Value {
     serde_json::json!({
         "service_kind": "memoria",
@@ -212,7 +224,7 @@ async fn linking_a_vox_peer_over_an_existing_provider_is_refused() {
     // First link succeeds and writes vox-kitchen-vox.
     call(&state, post("/v1/linked-services", vox_link_body())).await;
     // A retry without unlinking hits the row's own uniqueness first (409),
-    // which is the same guard the pre-migration /v1/vox/links path had.
+    // which is the same guard the pre-migration Vox-specific path had.
     let (status, _) = call(&state, post("/v1/linked-services", vox_link_body())).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
