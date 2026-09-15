@@ -68,9 +68,11 @@ pub enum Permission {
     /// deployment nothing is listening to — no device has called
     /// `Confirmations::listen` — cannot ask anyone, so the call is refused
     /// immediately rather than left waiting on a question nobody will ever
-    /// see. An unanswered question also refuses once the turn's idle deadline
-    /// gives up on it: a lock or a purchase must never go through on the
-    /// strength of silence.
+    /// see. A question that *is* heard but never answered is different: there
+    /// is no tool-specific refusal for it. The call simply waits until the
+    /// turn's overall idle deadline gives up and abandons the whole turn — not
+    /// just this call. Either way a lock or a purchase never goes through on
+    /// the strength of silence.
     ///
     /// This is the whole reason the variant is not called `Allow`: an unasked
     /// or unanswered question that ran anyway would be more dangerous than

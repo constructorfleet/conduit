@@ -138,6 +138,15 @@ async fn run_one(
                      another way."
                 );
                 tracing::info!(tool = %name, "tool call refused pending confirmation");
+                // A refusal is terminal, and must be emitted as one. Without
+                // this the call is stuck at `AwaitingConfirmation` forever in
+                // the turn snapshot and never counted in the refused-outcome
+                // metric — worse than a call that was asked and denied. The
+                // event that carries "refused" is the same one a device denial
+                // produces, which is what the docs on
+                // `Event::ToolConfirmationRequested` and
+                // `ToolCallStatus::AwaitingConfirmation` promise.
+                emitter.emit(Event::ToolConfirmationDenied { call: id.clone() });
                 return Outcome { id, content, spoken: None };
             }
 
