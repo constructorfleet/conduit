@@ -23,7 +23,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -31,9 +31,10 @@ from pydantic import BaseModel
 from conduit_link import (
     HttpConduitLinkClient,
     LinkConfig,
+    LinkCreateContext,
+    LinkExtensionContext,
     LinkedServiceKind,
     LinkedServicePanel,
-    LinkRequest as _SharedLinkRequest,
     LinkStore,
     make_link_router,
 )
@@ -64,17 +65,15 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
     return {}
 
 
-def _build_create_body(
-    request: _SharedLinkRequest,
-    _existing: _NoExtension | None,
-    _http_request: Request,
-    existing_peer_id: str | None,
-) -> dict[str, object]:
-    peer_id = existing_peer_id or request.peer_name.strip().lower().replace(" ", "-")
+def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, object]:
+    peer_id = (
+        context.existing_peer_id
+        or context.request.peer_name.strip().lower().replace(" ", "-")
+    )
     base_url = os.getenv("INSTRUMENTA_BASE_URL", f"http://localhost:{DEFAULT_PORT}")
     return {
         "service_kind": LinkedServiceKind.INSTRUMENTA.value,
-        "peer_name": request.peer_name,
+        "peer_name": context.request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": base_url,
         "panel": {
@@ -86,7 +85,7 @@ def _build_create_body(
     }
 
 
-def _build_extension(_request, _response, _existing, _create_body) -> _NoExtension:
+def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtension:
     return _NoExtension()
 
 

@@ -20,7 +20,13 @@ from .models import (
     LinkStatus,
     Reachability,
 )
-from .router import LinkRequest, make_link_router, trim_url
+from .router import (
+    LinkCreateContext,
+    LinkExtensionContext,
+    LinkRequest,
+    make_link_router,
+    trim_url,
+)
 from .store import LinkRecord, LinkStore
 
 __all__ = [
@@ -29,6 +35,8 @@ __all__ = [
     "InMemoryConduitLinkClient",
     "LinkConfig",
     "LinkConflict",
+    "LinkCreateContext",
+    "LinkExtensionContext",
     "LinkNotFound",
     "LinkRecord",
     "LinkRequest",
