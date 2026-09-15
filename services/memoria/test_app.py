@@ -1,14 +1,30 @@
 """Tests for Memoria service."""
 
+import os
+import tempfile
+from pathlib import Path
+
 import pytest
-import httpx
-from datetime import datetime, timezone
+from fastapi.testclient import TestClient
+
+_MODULE_DATA_DIR = tempfile.mkdtemp(prefix="conduit-memoria-tests-")
+
+os.environ.setdefault("MEMORIA_DATA_DIR", _MODULE_DATA_DIR)
+os.environ.setdefault("MEMORIA_METRICS_BIND", "127.0.0.1:0")
+
+from app import app
 
 
 @pytest.fixture
-def client():
-    """Create a test HTTP client."""
-    return httpx.Client(base_url="http://localhost:8080", timeout=30.0)
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Create an in-process test HTTP client with isolated storage."""
+    monkeypatch.setenv("MEMORIA_BACKEND", "builtin")
+    monkeypatch.setenv("MEMORIA_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("MEMORIA_API_KEY", raising=False)
+    monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
+
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
@@ -64,8 +80,6 @@ class TestEngrams:
         assert "created_at" in data
         assert "updated_at" in data
 
-        return data["id"]
-
     def test_store_speaker_engram(self, client, headers):
         """Test storing a speaker-specific engram."""
         engram_data = {
@@ -82,8 +96,6 @@ class TestEngrams:
         assert data["speaker_id"] == engram_data["speaker_id"]
         assert data["scope"] == engram_data["scope"]
         assert data["conversation_id"] == engram_data["conversation_id"]
-
-        return data["id"]
 
     def test_get_engram(self, client, headers):
         """Test retrieving a specific engram."""
@@ -334,6 +346,9 @@ class TestLinking:
 
     def test_create_link_requires_conduit(self, client, headers):
         """Test that linking requires a running Conduit instance."""
+        if os.getenv("MEMORIA_RUN_INTEGRATION_TESTS") != "1":
+            pytest.skip("requires a live Conduit service")
+
         link_data = {
             "conduit_url": "http://localhost:8081",
             "operator_token": "test-token",
@@ -348,14 +363,16 @@ class TestLinking:
 class TestAuthentication:
     """Authentication tests."""
 
-    def test_unauthenticated_request(self, client):
+    def test_unauthenticated_request(self, tmp_path, monkeypatch):
         """Test that requests fail without authentication when API key is set."""
-        import os
+        monkeypatch.setenv("MEMORIA_BACKEND", "builtin")
+        monkeypatch.setenv("MEMORIA_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("MEMORIA_API_KEY", "test-key")
+        monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
-        if not os.getenv("MEMORIA_API_KEY"):
-            pytest.skip("No API key configured")
+        with TestClient(app) as client:
+            response = client.get("/engrams")
 
-        response = client.get("/engrams")
         assert response.status_code == 401
 
     def test_health_without_auth(self, client):

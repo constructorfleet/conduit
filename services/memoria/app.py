@@ -56,6 +56,7 @@ from conduit_link import (
 )
 
 LOG = logging.getLogger("memoria")
+SERVICE_DIR = Path(__file__).resolve().parent
 
 # Configuration defaults
 DEFAULT_SEARCH_LIMIT = 10
@@ -513,7 +514,7 @@ async def get_conversation_engrams(conversation_id: str, limit: int = 100) -> li
 
 
 # Serve static UI
-app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
+app.mount("/ui", StaticFiles(directory=SERVICE_DIR / "static", html=True), name="ui")
 
 @app.get("/")
 async def root():
