@@ -128,11 +128,18 @@ async fn run(
     status: RuntimeStatus,
 ) {
     let (mut outgoing, incoming) = socket.split();
-    let (audio, captured, stopped) = capture(incoming);
+    let Captured { audio, task: captured, stopped, mut answered } = capture(incoming);
 
     // Every event this turn publishes carries the device, which is what lets an
     // operator filter the event stream by satellite.
     let conversation = runner.run_for_device(device.id, audio);
+
+    // Registered immediately, before any `.await`: the turn is spawned and may
+    // already be running by the time `run_for_device` returns, so a tool's
+    // first confirmation check must never be able to run before something is
+    // listening for the answer.
+    let _listening = conversation.confirmations.listen();
+
     // The upgrade is logged before the conversation exists, so this is what
     // ties a socket to the id every turn event and every close below carries.
     tracing::info!(
@@ -143,14 +150,35 @@ async fn run(
     );
     status.connect_satellite(device.id, device.name.clone(), pipeline, conversation.id).await;
 
-    // The reader cannot hold the turn's stop handle, because the turn needs the
-    // audio the reader produces to exist first. So it signals, and this relays.
-    // Ends by itself when the reader stops: the sender drops, and the receiver
-    // resolves with an error.
+    // The reader cannot hold the turn's stop handle or its confirmations, because
+    // the turn needs the audio the reader produces to exist first. So it signals,
+    // and this relays. Ends by itself when the reader stops: both senders drop,
+    // and the receivers resolve with nothing left to read.
     let stop = conversation.stop.clone();
+    let confirmations = conversation.confirmations.clone();
     let relay = tokio::spawn(async move {
-        if stopped.await.is_ok() {
-            stop.request();
+        let mut stopped = std::pin::pin!(stopped);
+        loop {
+            // Biased so a stop is never lost to the race it has with the
+            // reader task ending: a `Stop` command makes both `stopped` ready
+            // and, moments later, drops `answered`'s sender in the same
+            // breath, and an unbiased choice between two branches that are
+            // ready together could pick the closed channel and miss the stop.
+            tokio::select! {
+                biased;
+                result = &mut stopped => {
+                    if result.is_ok() {
+                        stop.request();
+                    }
+                    break;
+                }
+                answer = answered.recv() => {
+                    match answer {
+                        Some((call, allowed)) => confirmations.answer(call, allowed),
+                        None => break,
+                    }
+                }
+            }
         }
     });
 
@@ -245,20 +273,35 @@ async fn run(
     status.disconnect_satellite(device.id).await;
 }
 
-/// Turns incoming frames into an audio stream, watching for a stop.
+/// A confirmation answer, as the device sent it: the call it names and
+/// whether it was allowed.
+type Answer = (conduit_core::id::ToolCallId, bool);
+
+/// What reading incoming frames produces.
+struct Captured {
+    /// Audio decoded from binary frames, for the turn to consume.
+    audio: ChunkStream<AudioChunk>,
+    /// Handle to the reader task, so the caller can stop it once the turn is over.
+    task: tokio::task::AbortHandle,
+    /// Resolves if the client asks the turn to stop.
+    stopped: tokio::sync::oneshot::Receiver<()>,
+    /// Every confirmation the client answers.
+    answered: mpsc::Receiver<Answer>,
+}
+
+/// Turns incoming frames into an audio stream, watching for control messages.
 ///
 /// Returns the audio, a handle to the task filling it so the caller can stop
-/// reading once the turn is over, and a receiver that resolves if the client
-/// asks the turn to stop.
+/// reading once the turn is over, a receiver that resolves if the client asks
+/// the turn to stop, and a receiver of every confirmation the client answers.
 ///
-/// Reading continues past the end of the utterance, because a stop is most
-/// useful while the assistant is already talking — a reader that finished with
-/// the audio would never see one.
-fn capture(
-    mut incoming: futures_util::stream::SplitStream<WebSocket>,
-) -> (ChunkStream<AudioChunk>, tokio::task::AbortHandle, tokio::sync::oneshot::Receiver<()>) {
+/// Reading continues past the end of the utterance, because a stop — and an
+/// answer to a tool's question — is most useful while the assistant is already
+/// talking; a reader that finished with the audio would never see either.
+fn capture(mut incoming: futures_util::stream::SplitStream<WebSocket>) -> Captured {
     let (sender, receiver) = mpsc::channel(CAPTURE_BUFFER);
     let (stopped, on_stop) = tokio::sync::oneshot::channel();
+    let (answer, on_answer) = mpsc::channel(CAPTURE_BUFFER);
 
     let task = tokio::spawn(async move {
         let mut sequence = 0_u64;
@@ -292,6 +335,12 @@ fn capture(
                         let _ = stopped.send(());
                         break;
                     }
+                    Ok(Command::Answer { call, allowed }) => {
+                        tracing::debug!(%call, allowed, "device answered a confirmation");
+                        if answer.send((call, allowed)).await.is_err() {
+                            break;
+                        }
+                    }
                     // `Command` is non-exhaustive: a newer client may send
                     // something this server predates.
                     Ok(unknown) => {
@@ -308,7 +357,12 @@ fn capture(
         }
     });
 
-    (Box::pin(ReceiverStream::new(receiver)), task.abort_handle(), on_stop)
+    Captured {
+        audio: Box::pin(ReceiverStream::new(receiver)),
+        task: task.abort_handle(),
+        stopped: on_stop,
+        answered: on_answer,
+    }
 }
 
 /// Sends one control frame.

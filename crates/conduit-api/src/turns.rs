@@ -333,6 +333,11 @@ impl TurnSnapshot {
                 tool.error = Some(error.clone());
                 tool.evidence.push(envelope.id);
             }
+            Event::ToolConfirmationDenied { call } => {
+                let tool = self.tool_call_mut(call);
+                tool.status = ToolCallStatus::Refused;
+                tool.evidence.push(envelope.id);
+            }
             Event::StageFailed { recovered, .. } => {
                 if *recovered {
                     self.status = TurnStatus::Degraded;
@@ -529,8 +534,21 @@ pub enum ToolCallStatus {
     Failed,
     /// The call was denied by policy.
     Denied,
-    /// The call required confirmation the runtime could not collect.
+    /// The call is blocked on a speaker's confirmation.
+    ///
+    /// Not necessarily final: [`ToolCallStatus::Running`] follows if a device
+    /// confirms it, and [`ToolCallStatus::Refused`] follows if a device
+    /// refuses it or nothing could ask in the first place. If a device is
+    /// listening but never answers, none of that happens: the call simply
+    /// stays here until the turn's overall idle deadline abandons the whole
+    /// turn, not just this call, and no further status for the call is ever
+    /// reported.
     AwaitingConfirmation,
+    /// A speaker refused a call that asked for confirmation.
+    ///
+    /// Distinct from [`ToolCallStatus::Failed`] so an operator can tell a
+    /// human's decision from an ordinary error.
+    Refused,
 }
 
 /// Raw event evidence response.

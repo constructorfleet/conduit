@@ -23,6 +23,7 @@ use conduit_provider::stt::{AudioChunk, TranscribeOptions};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest};
 use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 
 use crate::confirm::Confirmations;
@@ -456,8 +457,11 @@ impl Turn {
             model_round,
         });
 
-        // Built before the borrow below so the tool future owns everything it
-        // needs and the two halves can run concurrently.
+        // A tool that needs confirming sends its prompt here rather than
+        // calling back into `self` directly: tools run concurrently with each
+        // other, and only one place may hold `self` to speak at a time.
+        let (prompts_tx, mut prompts_rx) = mpsc::unbounded_channel();
+
         let running = tools::execute(
             Arc::clone(&self.plan),
             self.emitter.clone(),
@@ -465,14 +469,26 @@ impl Turn {
             self.emitter.conversation(),
             self.speaker,
             round.requests.clone(),
+            prompts_tx,
         );
 
+        // One future, so `tokio::join!` below drives both the preamble and
+        // every prompt a tool sends without ever cancelling a partial speak
+        // the way selecting between them on each item would. The loop ends
+        // when the channel closes, which happens exactly when every tool in
+        // this batch has finished sending its own clone of the sender.
         let speaking = async {
-            if preamble.is_empty() {
-                true
-            } else {
-                self.speak(preamble, UtteranceSegmentRole::AssistantPreamble).await
+            if !preamble.is_empty()
+                && !self.speak(preamble, UtteranceSegmentRole::AssistantPreamble).await
+            {
+                return false;
             }
+            while let Some(prompt) = prompts_rx.recv().await {
+                if !self.speak(prompt, UtteranceSegmentRole::ConfirmationPrompt).await {
+                    return false;
+                }
+            }
+            true
         };
 
         let (outcomes, spoke) = tokio::join!(running, speaking);

@@ -235,7 +235,7 @@ async fn a_confirmed_tool_runs() {
     let call = ToolCallId::new("call_abc123");
     let llm = talkative_model(call.clone());
     let tool = FakeTool::new("search", serde_json::json!({}))
-        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
         .with_llm(llm.clone())
@@ -261,11 +261,48 @@ async fn a_confirmed_tool_runs() {
 }
 
 #[tokio::test]
+async fn the_prompt_is_spoken_once_something_can_answer_it() {
+    // #6 stopped speaking a question nobody could answer; now that a device
+    // can, asking out loud is the whole point of the feature.
+    let call = ToolCallId::new("call_abc123");
+    let tts = FakeTts::new();
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(tts.clone());
+
+    let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())
+        .expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, true);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    assert!(
+        tts.spoken().iter().any(|spoken| spoken == "Turn off the oven?"),
+        "the question must be spoken: {:?}",
+        tts.spoken()
+    );
+}
+
+#[tokio::test]
 async fn a_refused_tool_does_not_run_and_the_model_is_told_so() {
     let call = ToolCallId::new("call_abc123");
     let llm = talkative_model(call.clone());
     let tool = FakeTool::new("search", serde_json::json!({}))
-        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
         .with_llm(llm.clone())
@@ -294,6 +331,52 @@ async fn a_refused_tool_does_not_run_and_the_model_is_told_so() {
 }
 
 #[tokio::test]
+async fn a_refusal_is_reported_as_its_own_event_not_a_generic_failure() {
+    // A dashboard needs to tell "a human said no" apart from an ordinary tool
+    // error, which is exactly what `Event::ToolFailed` cannot say on its own.
+    let bus = EventBus::default();
+    let mut subscription = bus.subscribe();
+    let call = ToolCallId::new("call_abc123");
+    let llm = talkative_model(call.clone());
+    let tool = FakeTool::new("search", serde_json::json!({}))
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
+    let providers = Providers::new()
+        .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
+        .with_llm(llm.clone())
+        .with_tool(tool.clone())
+        .with_tts(FakeTts::new());
+
+    let runner =
+        Runner::prepare(&graph_with_tool(), &providers, bus).expect("graph is executable");
+    let conversation = runner.run(audio_of(&["a"]));
+    let listening = conversation.confirmations.listen();
+    let answering = conversation.confirmations.clone();
+    let answered = call.clone();
+    tokio::spawn(async move {
+        answering.answer(answered, false);
+    });
+    let _: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), conversation.speech().collect::<Vec<_>>())
+            .await
+            .expect("turn completes");
+    drop(listening);
+
+    let events = drain(&mut subscription).await;
+    assert!(
+        events.iter().any(
+            |event| matches!(event, Event::ToolConfirmationDenied { call: id } if *id == call)
+        ),
+        "expected a confirmation-denied event: {:?}",
+        names(&events)
+    );
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::ToolFailed { .. })),
+        "a refusal is not a generic failure: {:?}",
+        names(&events)
+    );
+}
+
+#[tokio::test]
 async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
     // The dangerous failure this guards against: a model told something
     // ambiguous about a lock or a purchase, deciding it succeeded, and saying
@@ -308,7 +391,7 @@ async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
     let llm = talkative_model(call.clone());
     let tts = FakeTts::new();
     let tool = FakeTool::new("search", serde_json::json!({}))
-        .permitted(Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() });
+        .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() });
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
         .with_llm(llm.clone())
@@ -345,6 +428,19 @@ async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
         "expected a confirmation event: {:?}",
         names(&events)
     );
+
+    // And the refusal is terminal: without a following event the call is
+    // stuck at `AwaitingConfirmation` in the snapshot and never counted as
+    // refused. Nothing could ask, so the terminating event is the same one a
+    // device denial produces.
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmationDenied { call: id } if *id == call
+        )),
+        "an unanswerable confirmation must terminate as refused: {:?}",
+        names(&events)
+    );
 }
 
 #[tokio::test]
@@ -355,9 +451,10 @@ async fn the_model_still_answers_after_a_confirmation_refusal() {
     let providers = Providers::new()
         .with_stt(FakeStt::new(vec![Transcript::final_text("turn off the oven")]))
         .with_llm(talkative_model(call.clone()))
-        .with_tool(FakeTool::new("search", serde_json::json!({})).permitted(
-            Permission::DenyUntilConfirmed { prompt: "Turn off the oven?".to_owned() },
-        ))
+        .with_tool(
+            FakeTool::new("search", serde_json::json!({}))
+                .permitted(Permission::Confirm { prompt: "Turn off the oven?".to_owned() }),
+        )
         .with_tts(tts.clone());
 
     let runner = Runner::prepare(&graph_with_tool(), &providers, EventBus::default())

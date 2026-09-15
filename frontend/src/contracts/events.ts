@@ -16,7 +16,8 @@ export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
 export type UtteranceSegmentRole =
   | "assistant_preamble"
   | "tool_output"
-  | "assistant_response";
+  | "assistant_response"
+  | "confirmation_prompt";
 export type Modality = "audio" | "text" | "utterance";
 
 export interface AudioFormat {
@@ -62,6 +63,7 @@ export type Event =
   | { type: "ToolConfirmationRequested"; call: ToolCallId; prompt: string }
   | { type: "ToolCompleted"; call: ToolCallId; duration_ms: number }
   | { type: "ToolFailed"; call: ToolCallId; error: string }
+  | { type: "ToolConfirmationDenied"; call: ToolCallId }
   | { type: "TtsStarted"; voice: string }
   | {
       type: "UtteranceSegmentStarted";
@@ -362,14 +364,26 @@ export const eventEnvelopeFixtures = [
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
     "event": {
-      "type": "TtsStarted",
-      "voice": "alloy"
+      "type": "ToolConfirmationDenied",
+      "call": "call_contract"
     }
   },
   {
     "id": "00000000-0000-0000-0000-00000000007a",
     "trace": "00000000-0000-0000-0000-0000000000c8",
     "at": "2026-08-01T02:00:22Z",
+    "device": "00000000-0000-0000-0000-0000000000c9",
+    "conversation": "00000000-0000-0000-0000-0000000000ca",
+    "pipeline": "kitchen",
+    "event": {
+      "type": "TtsStarted",
+      "voice": "alloy"
+    }
+  },
+  {
+    "id": "00000000-0000-0000-0000-00000000007b",
+    "trace": "00000000-0000-0000-0000-0000000000c8",
+    "at": "2026-08-01T02:00:23Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -382,9 +396,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-00000000007b",
+    "id": "00000000-0000-0000-0000-00000000007c",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:23Z",
+    "at": "2026-08-01T02:00:24Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -397,9 +411,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-00000000007c",
+    "id": "00000000-0000-0000-0000-00000000007d",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:24Z",
+    "at": "2026-08-01T02:00:25Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -410,9 +424,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-00000000007d",
+    "id": "00000000-0000-0000-0000-00000000007e",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:25Z",
+    "at": "2026-08-01T02:00:26Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -422,9 +436,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-00000000007e",
+    "id": "00000000-0000-0000-0000-00000000007f",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:26Z",
+    "at": "2026-08-01T02:00:27Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -436,9 +450,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-00000000007f",
+    "id": "00000000-0000-0000-0000-000000000080",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:27Z",
+    "at": "2026-08-01T02:00:28Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
@@ -450,9 +464,9 @@ export const eventEnvelopeFixtures = [
     }
   },
   {
-    "id": "00000000-0000-0000-0000-000000000080",
+    "id": "00000000-0000-0000-0000-000000000081",
     "trace": "00000000-0000-0000-0000-0000000000c8",
-    "at": "2026-08-01T02:00:28Z",
+    "at": "2026-08-01T02:00:29Z",
     "device": "00000000-0000-0000-0000-0000000000c9",
     "conversation": "00000000-0000-0000-0000-0000000000ca",
     "pipeline": "kitchen",
