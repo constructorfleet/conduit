@@ -428,6 +428,19 @@ async fn a_tool_needing_confirmation_is_refused_when_nothing_can_be_asked() {
         "expected a confirmation event: {:?}",
         names(&events)
     );
+
+    // And the refusal is terminal: without a following event the call is
+    // stuck at `AwaitingConfirmation` in the snapshot and never counted as
+    // refused. Nothing could ask, so the terminating event is the same one a
+    // device denial produces.
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmationDenied { call: id } if *id == call
+        )),
+        "an unanswerable confirmation must terminate as refused: {:?}",
+        names(&events)
+    );
 }
 
 #[tokio::test]
