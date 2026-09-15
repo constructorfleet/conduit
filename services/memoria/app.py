@@ -229,7 +229,8 @@ def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, ob
         "peer_id": peer_id,
         "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://localhost:8080"),
         "panel": {
-            "title": "Memoria",
+            "id": "memoria",
+            "label": "Memoria",
             "icon": "brain",
             "path": "/ui/",
         },

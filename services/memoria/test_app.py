@@ -22,6 +22,25 @@ class _ConduitLinkHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("content-length", "0"))
         body = json.loads(self.rfile.read(length))
+        required_panel = {
+            "id": "memoria",
+            "label": "Memoria",
+            "icon": "brain",
+            "path": "/ui/",
+        }
+        if body.get("panel") != required_panel:
+            self.send_response(422)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "error": "panel must use Conduit LinkedServicePanel fields",
+                        "expected": required_panel,
+                    }
+                ).encode()
+            )
+            return
         self.requests.append(
             {
                 "method": "POST",
@@ -492,9 +511,10 @@ class TestLinking:
                     "peer_id": "household-memory",
                     "peer_base_url": "http://localhost:8080",
                     "panel": {
-                        "title": "Memoria",
-                        "path": "/ui/",
+                        "id": "memoria",
+                        "label": "Memoria",
                         "icon": "brain",
+                        "path": "/ui/",
                     },
                 },
             }
