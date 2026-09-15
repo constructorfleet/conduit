@@ -57,9 +57,10 @@ from conduit_link import (
     ConduitLinkClient,
     HttpConduitLinkClient as _HttpConduitLinkClient,
     LinkConfig,
+    LinkCreateContext,
+    LinkExtensionContext,
     LinkedServiceKind,
     LinkedServicePanel,
-    LinkRequest,
     LinkStore as _SharedLinkStore,
     LinkStoreSecurityError as _SharedLinkStoreSecurityError,
     make_link_router,
@@ -1139,35 +1140,31 @@ def create_app(
         return health()
 
     def build_link_create_body(
-        request: LinkRequest,
-        existing: VoxLinkExtension | None,
-        http_request: Request,
-        existing_peer_id: str | None,
+        context: LinkCreateContext[VoxLinkExtension],
     ) -> dict[str, object]:
-        peer_id = existing_peer_id or str(uuid.uuid4())
+        peer_id = context.existing_peer_id or str(uuid.uuid4())
         local_api_key = api_key or (
-            existing.local_api_key if existing is not None else secrets.token_urlsafe(32)
+            context.existing.local_api_key
+            if context.existing is not None
+            else secrets.token_urlsafe(32)
         )
         vox_base_url = trim_url(
             "SPEAKER_ID_BASE_URL",
-            os.environ.get("SPEAKER_ID_BASE_URL") or str(http_request.base_url),
+            os.environ.get("SPEAKER_ID_BASE_URL") or str(context.http_request.base_url),
         )
         return {
-            "peer_name": request.peer_name,
+            "peer_name": context.request.peer_name,
             "peer_id": peer_id,
             "vox_base_url": vox_base_url,
             "vox_api_key": local_api_key,
         }
 
     def build_link_extension(
-        request: LinkRequest,
-        response: dict[str, object],
-        existing: VoxLinkExtension | None,
-        create_body: Mapping[str, object],
+        context: LinkExtensionContext[VoxLinkExtension],
     ) -> VoxLinkExtension:
         return VoxLinkExtension(
-            provider_definition_id=str(response["provider_definition_id"]),
-            local_api_key=str(create_body["vox_api_key"]),
+            provider_definition_id=str(context.response["provider_definition_id"]),
+            local_api_key=str(context.create_body["vox_api_key"]),
         )
 
     def public_link_response(extension: VoxLinkExtension) -> dict[str, object]:

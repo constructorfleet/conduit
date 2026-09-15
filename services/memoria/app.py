@@ -38,7 +38,7 @@ from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -47,9 +47,10 @@ from pydantic import BaseModel, Field
 from conduit_link import (
     HttpConduitLinkClient,
     LinkConfig,
+    LinkCreateContext,
+    LinkExtensionContext,
     LinkedServiceKind,
     LinkedServicePanel,
-    LinkRequest as _SharedLinkRequest,
     LinkStore,
     make_link_router,
 )
@@ -190,16 +191,14 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
     return {}
 
 
-def _build_create_body(
-    request: _SharedLinkRequest,
-    _existing: _NoExtension | None,
-    _http_request: Request,
-    existing_peer_id: str | None,
-) -> dict[str, object]:
-    peer_id = existing_peer_id or request.peer_name.strip().lower().replace(" ", "-")
+def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, object]:
+    peer_id = (
+        context.existing_peer_id
+        or context.request.peer_name.strip().lower().replace(" ", "-")
+    )
     return {
         "service_kind": "memoria",
-        "peer_name": request.peer_name,
+        "peer_name": context.request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://localhost:8080"),
         "panel": {
@@ -211,7 +210,7 @@ def _build_create_body(
     }
 
 
-def _build_extension(_request, _response, _existing, _create_body) -> _NoExtension:
+def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtension:
     return _NoExtension()
 
 

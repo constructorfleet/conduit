@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Generic, Mapping, TypeVar
 
@@ -30,6 +31,26 @@ class LinkRequest(BaseModel):
     operator_token: str = ""
     peer_name: str
     force: bool = False
+
+
+@dataclass(frozen=True)
+class LinkCreateContext(Generic[E]):
+    """Inputs a service needs to build Conduit's link-create payload."""
+
+    request: LinkRequest
+    existing: E | None
+    http_request: Request
+    existing_peer_id: str | None
+
+
+@dataclass(frozen=True)
+class LinkExtensionContext(Generic[E]):
+    """Inputs a service needs to persist its link extension."""
+
+    request: LinkRequest
+    response: Mapping[str, object]
+    existing: E | None
+    create_body: Mapping[str, object]
 
 
 def _now_iso() -> str:
@@ -63,12 +84,8 @@ def make_link_router(
     config: LinkConfig,
     store: "LinkStore[E]",
     client: ConduitLinkClient,
-    build_create_body: Callable[
-        [LinkRequest, E | None, Request, str | None], Mapping[str, object]
-    ],
-    build_extension: Callable[
-        [LinkRequest, Mapping[str, object], E | None, Mapping[str, object]], E
-    ],
+    build_create_body: Callable[[LinkCreateContext[E]], Mapping[str, object]],
+    build_extension: Callable[[LinkExtensionContext[E]], E],
     public_response: Callable[[E], Mapping[str, object]],
     create_response: Callable[[E], Mapping[str, object]] | None = None,
     unlinked_response: Callable[[], Mapping[str, object]] | None = None,
@@ -82,7 +99,8 @@ def make_link_router(
 
     The callbacks let each service inject its extension shape without the
     module knowing service-specific keys. Upholds spec 0005 §Handshake.
-    `build_create_body` receives the inbound `Request` so a service can derive
+    `build_create_body` receives a `LinkCreateContext`, including the inbound
+    `Request`, so a service can derive
     its own reachable base URL (e.g. Vox's `vox_base_url`) from the request
     that reached it when no override was configured, and the existing peer id
     (when re-linking with `force=True`) so the body it sends Conduit names the
@@ -95,7 +113,8 @@ def make_link_router(
     case (default `{"status": "unlinked"}`) — e.g. Vox reports
     `config-managed` when a deployment-set API key means the UI handshake can
     never complete.
-    `build_extension` also receives the same `create_body` that was sent to
+    `build_extension` receives a `LinkExtensionContext`, including the same
+    `create_body` that was sent to
     Conduit, so a service can echo back a value it generated locally (e.g.
     Vox's freshly generated API key) without re-deriving it from Conduit's
     response.
@@ -153,7 +172,12 @@ def make_link_router(
         existing_peer_id = existing.state.peer_id if existing else None
         create_body = dict(
             build_create_body(
-                body, existing.extension if existing else None, request, existing_peer_id
+                LinkCreateContext(
+                    request=body,
+                    existing=existing.extension if existing else None,
+                    http_request=request,
+                    existing_peer_id=existing_peer_id,
+                )
             )
         )
 
@@ -178,7 +202,12 @@ def make_link_router(
             )
 
         extension = build_extension(
-            body, response, existing.extension if existing else None, create_body
+            LinkExtensionContext(
+                request=body,
+                response=response,
+                existing=existing.extension if existing else None,
+                create_body=create_body,
+            )
         )
         state = LinkState(
             conduit_url=conduit_url,

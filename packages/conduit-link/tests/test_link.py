@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Mapping
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from conduit_link import (
     InMemoryConduitLinkClient,
     LinkConfig,
-    LinkRequest,
+    LinkCreateContext,
+    LinkExtensionContext,
     LinkStore,
     LinkStoreSecurityError,
     LinkedServiceKind,
@@ -41,28 +42,18 @@ def _ext_to(extension: FakeExtension) -> dict[str, object]:
     return {"api_key": extension.api_key, "provider_id": extension.provider_id}
 
 
-def _build_create_body(
-    request: LinkRequest,
-    existing: FakeExtension | None,
-    http_request: Request,
-    existing_peer_id: str | None,
-) -> dict[str, object]:
+def _build_create_body(context: LinkCreateContext[FakeExtension]) -> dict[str, object]:
     return {
-        "peer_name": request.peer_name,
-        "peer_id": existing_peer_id or "test-peer",
-        "peer_base_url": str(http_request.base_url),
+        "peer_name": context.request.peer_name,
+        "peer_id": context.existing_peer_id or "test-peer",
+        "peer_base_url": str(context.http_request.base_url),
     }
 
 
-def _build_extension(
-    request: LinkRequest,
-    response: Mapping[str, object],
-    existing: FakeExtension | None,
-    create_body: Mapping[str, object],
-) -> FakeExtension:
+def _build_extension(context: LinkExtensionContext[FakeExtension]) -> FakeExtension:
     return FakeExtension(
-        api_key=(existing.api_key if existing else "generated-key"),
-        provider_id=str(response.get("provider_id", "auto-provisioned")),
+        api_key=(context.existing.api_key if context.existing else "generated-key"),
+        provider_id=str(context.response.get("provider_id", "auto-provisioned")),
     )
 
 

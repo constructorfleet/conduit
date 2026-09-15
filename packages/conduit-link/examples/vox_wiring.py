@@ -12,13 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
 from conduit_link import (
     ConduitLinkClient,
     HttpConduitLinkClient,
     LinkConfig,
-    LinkRequest,
+    LinkCreateContext,
+    LinkExtensionContext,
     LinkStore,
     LinkedServiceKind,
     LinkedServicePanel,
@@ -47,28 +48,24 @@ def _ext_to_dict(extension: VoxLinkExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: LinkRequest,
-    existing: VoxLinkExtension | None,
-    http_request: Request,
-    existing_peer_id: str | None,
+    context: LinkCreateContext[VoxLinkExtension],
 ) -> Mapping[str, object]:
     return {
-        "peer_name": request.peer_name,
-        "peer_id": existing_peer_id or str(uuid.uuid4()),
-        "vox_base_url": str(http_request.base_url).rstrip("/"),
-        "vox_api_key": existing.local_api_key if existing else "generated",
+        "peer_name": context.request.peer_name,
+        "peer_id": context.existing_peer_id or str(uuid.uuid4()),
+        "vox_base_url": str(context.http_request.base_url).rstrip("/"),
+        "vox_api_key": context.existing.local_api_key
+        if context.existing
+        else "generated",
     }
 
 
 def _build_extension(
-    request: LinkRequest,
-    response: Mapping[str, object],
-    existing: VoxLinkExtension | None,
-    create_body: Mapping[str, object],
+    context: LinkExtensionContext[VoxLinkExtension],
 ) -> VoxLinkExtension:
     return VoxLinkExtension(
-        provider_definition_id=str(response["provider_definition_id"]),
-        local_api_key=str(create_body["vox_api_key"]),
+        provider_definition_id=str(context.response["provider_definition_id"]),
+        local_api_key=str(context.create_body["vox_api_key"]),
     )
 
 
