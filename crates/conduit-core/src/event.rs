@@ -22,6 +22,11 @@ pub enum UtteranceSegmentRole {
     ToolOutput,
     /// Assistant text emitted as the final answer for a turn.
     AssistantResponse,
+    /// A question a tool needs answered before it may run.
+    ///
+    /// Spoken only when something can hear the reply — a prompt nobody could
+    /// answer is never emitted at all, let alone spoken.
+    ConfirmationPrompt,
 }
 
 /// An event plus the metadata needed to correlate and route it.
@@ -217,15 +222,24 @@ pub enum Event {
         /// The invocation being started.
         call: ToolCallId,
     },
-    /// A tool required a speaker's confirmation, and so was not run.
+    /// A tool requires a speaker's confirmation before it can run.
     ///
-    /// Nothing collects an answer yet, so this is where the call ends: the
-    /// runtime refuses it and tells the model. Read it as "a tool was blocked
-    /// on a human", not as a question awaiting a reply.
+    /// Not terminal: if something is listening for an answer, the call is
+    /// still pending after this, and either [`Event::ToolStarted`] (confirmed)
+    /// or [`Event::ToolConfirmationDenied`] (refused) follows. If nothing is
+    /// listening, the call is refused immediately and one of those two events
+    /// still follows. If something is listening but never answers, there is
+    /// no tool-specific refusal at all: the call simply waits, bounded only
+    /// by the turn's overall idle deadline. When that deadline fires it
+    /// abandons the whole turn — [`Event::ConversationCancelled`] with
+    /// [`CancelReason::IdleTimeout`] and an [`crate::Error::Timeout`] to the
+    /// client — not just this call, and neither [`Event::ToolStarted`] nor
+    /// [`Event::ToolConfirmationDenied`] is emitted. Read it as "a tool is
+    /// blocked on a human", not as a foregone refusal.
     ToolConfirmationRequested {
-        /// The invocation that was refused.
+        /// The invocation waiting on an answer.
         call: ToolCallId,
-        /// The question a speaker would have had to answer.
+        /// The question a speaker must answer.
         prompt: String,
     },
     /// A tool returned successfully.
@@ -241,6 +255,15 @@ pub enum Event {
         call: ToolCallId,
         /// Human-readable failure description.
         error: String,
+    },
+    /// A speaker refused a tool that asked for confirmation.
+    ///
+    /// Distinct from [`Event::ToolFailed`] so a dashboard can tell "a human
+    /// said no" from an ordinary error: both mean the tool did not run, but
+    /// only one of them is a person's decision.
+    ToolConfirmationDenied {
+        /// The invocation that was refused.
+        call: ToolCallId,
     },
 
     // ---- synthesis -------------------------------------------------------
@@ -364,6 +387,7 @@ impl Event {
                 call: ToolCallId::new("call_contract"),
                 error: "permission denied".to_owned(),
             },
+            Self::ToolConfirmationDenied { call: ToolCallId::new("call_contract") },
             Self::TtsStarted { voice: "alloy".to_owned() },
             Self::UtteranceSegmentStarted {
                 segment: "assistant-response-1".to_owned(),
@@ -420,6 +444,7 @@ impl Event {
             Self::ToolConfirmationRequested { .. } => "ToolConfirmationRequested",
             Self::ToolCompleted { .. } => "ToolCompleted",
             Self::ToolFailed { .. } => "ToolFailed",
+            Self::ToolConfirmationDenied { .. } => "ToolConfirmationDenied",
             Self::TtsStarted { .. } => "TtsStarted",
             Self::UtteranceSegmentStarted { .. } => "UtteranceSegmentStarted",
             Self::AudioStreaming { .. } => "AudioStreaming",
@@ -454,7 +479,8 @@ impl Event {
             | Self::ToolStarted { .. }
             | Self::ToolConfirmationRequested { .. }
             | Self::ToolCompleted { .. }
-            | Self::ToolFailed { .. } => Stage::Tools,
+            | Self::ToolFailed { .. }
+            | Self::ToolConfirmationDenied { .. } => Stage::Tools,
             Self::TtsStarted { .. }
             | Self::UtteranceSegmentStarted { .. }
             | Self::AudioStreaming { .. }

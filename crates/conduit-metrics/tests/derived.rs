@@ -242,9 +242,10 @@ async fn requested_tool_calls_are_counted_separately_from_their_outcomes() {
 }
 
 #[tokio::test]
-async fn a_tool_call_awaiting_confirmation_is_an_outcome() {
-    // The runtime answers the model and stops when a tool needs confirmation,
-    // so this is where the call ends unless a human resumes it.
+async fn a_confirmation_request_is_counted_separately_from_its_outcome() {
+    // Asking is not itself an outcome: a confirmed or refused call still
+    // follows, so a confirmation request gets its own series rather than an
+    // `outcome` label that would double count the call once it resolves.
     let call = ToolCallId::new("call_1");
     let body = scrape(vec![
         Event::ConversationStarted,
@@ -253,10 +254,29 @@ async fn a_tool_call_awaiting_confirmation_is_an_outcome() {
     ])
     .await;
 
+    assert!(body.contains("conduit_tool_confirmations_requested_total 1"), "{body}");
     assert!(
-        body.contains("conduit_tool_calls_total{outcome=\"awaiting_confirmation\"} 1"),
+        !body.contains("conduit_tool_calls_total{outcome=\"awaiting_confirmation\"}"),
         "{body}"
     );
+}
+
+#[tokio::test]
+async fn a_refused_confirmation_is_a_distinct_outcome_from_a_generic_failure() {
+    // A dashboard needs to tell "a human said no" apart from an ordinary tool
+    // error, which is why refusal has its own outcome label rather than
+    // sharing one with `ToolFailed`.
+    let call = ToolCallId::new("call_1");
+    let body = scrape(vec![
+        Event::ConversationStarted,
+        Event::ToolRequested { call: call.clone(), name: "unlock".into() },
+        Event::ToolConfirmationRequested { call: call.clone(), prompt: "unlock?".into() },
+        Event::ToolConfirmationDenied { call },
+    ])
+    .await;
+
+    assert!(body.contains("conduit_tool_calls_total{outcome=\"refused\"} 1"), "{body}");
+    assert!(!body.contains("conduit_tool_calls_total{outcome=\"failed\"}"), "{body}");
 }
 
 #[tokio::test]

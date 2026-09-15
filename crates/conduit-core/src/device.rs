@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::ConversationId;
+use crate::id::{ConversationId, ToolCallId};
 
 /// What a client can say that is not audio.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -26,6 +26,23 @@ pub enum Command {
     /// [`CancelReason::UserRequested`]: crate::event::CancelReason::UserRequested
     /// [`CancelReason::Disconnected`]: crate::event::CancelReason::Disconnected
     Stop,
+    /// Answers a tool call that asked to be confirmed.
+    ///
+    /// `call` names the invocation from the matching
+    /// [`ToolConfirmationRequested`] event, not the turn, because a turn may
+    /// have more than one pending question and an answer to one must not
+    /// resolve another. Arriving for a call nothing is waiting on — already
+    /// answered, or never asked — is silently ignored: a device cannot know
+    /// exactly when the runtime stopped listening, and an answer that lost
+    /// that race is not an error.
+    ///
+    /// [`ToolConfirmationRequested`]: crate::event::Event::ToolConfirmationRequested
+    Answer {
+        /// The invocation this answers.
+        call: ToolCallId,
+        /// Whether the speaker allowed the call to run.
+        allowed: bool,
+    },
 }
 
 /// What the server says that is not audio.
@@ -62,6 +79,15 @@ mod tests {
         let json = serde_json::to_string(&Command::Stop).expect("serializes");
         assert_eq!(json, r#"{"type":"stop"}"#);
         assert_eq!(serde_json::from_str::<Command>(&json).expect("parses"), Command::Stop);
+    }
+
+    #[test]
+    fn answer_command_matches_the_wire_protocol() {
+        let command =
+            Command::Answer { call: crate::id::ToolCallId::new("call_1"), allowed: true };
+        let json = serde_json::to_string(&command).expect("serializes");
+        assert_eq!(json, r#"{"type":"answer","call":"call_1","allowed":true}"#);
+        assert_eq!(serde_json::from_str::<Command>(&json).expect("parses"), command);
     }
 
     #[test]

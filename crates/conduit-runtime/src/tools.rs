@@ -11,6 +11,7 @@ use conduit_core::event::Event;
 use conduit_core::id::{ConversationId, SpeakerId, ToolCallId};
 use conduit_provider::tool::{Permission, ToolContext};
 use futures_util::future::join_all;
+use tokio::sync::mpsc;
 use tracing::Instrument;
 
 use crate::emit::Emitter;
@@ -52,20 +53,23 @@ pub async fn execute(
     conversation: ConversationId,
     speaker: Option<SpeakerId>,
     requests: Vec<Request>,
+    prompts: mpsc::UnboundedSender<String>,
 ) -> Vec<Outcome> {
     let calls = requests.into_iter().map(|request| {
         let plan = Arc::clone(&plan);
         let emitter = emitter.clone();
         let confirmations = confirmations.clone();
+        let prompts = prompts.clone();
         let span = tracing::info_span!(
             "conduit.tool",
             call = %request.id,
             tool = %request.name
         );
         async move {
-            run_one(&plan, &emitter, &confirmations, conversation, speaker, request).await
+            run_one(&plan, &emitter, &confirmations, conversation, speaker, request, &prompts)
+                .await
         }
-            .instrument(span)
+        .instrument(span)
     });
     join_all(calls).await
 }
@@ -78,6 +82,7 @@ async fn run_one(
     conversation: ConversationId,
     speaker: Option<SpeakerId>,
     request: Request,
+    prompts: &mpsc::UnboundedSender<String>,
 ) -> Outcome {
     let Request { id, name, arguments } = request;
     emitter.emit(Event::ToolRequested { call: id.clone(), name: name.clone() });
@@ -100,9 +105,7 @@ async fn run_one(
     // itself would have allowed the call: the operator's policy is about this
     // pipeline, and the tool cannot know about it.
     let permission = match bound.confirm {
-        ConfirmPolicy::Always => {
-            Permission::DenyUntilConfirmed { prompt: format!("Run `{name}`?") }
-        }
+        ConfirmPolicy::Always => Permission::Confirm { prompt: format!("Run `{name}`?") },
         ConfirmPolicy::Never => tool.permission(&arguments, &context).await,
     };
     match permission {
@@ -113,7 +116,7 @@ async fn run_one(
             emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
             return Outcome { id, content, spoken: None };
         }
-        Permission::DenyUntilConfirmed { prompt } => {
+        Permission::Confirm { prompt } => {
             emitter.emit(Event::ToolConfirmationRequested {
                 call: id.clone(),
                 prompt: prompt.clone(),
@@ -138,6 +141,11 @@ async fn run_one(
                 return Outcome { id, content, spoken: None };
             }
 
+            // Only worth asking now that something can hear the reply. The
+            // turn speaks it while every other tool in this batch keeps
+            // running, the same way a preamble does.
+            let _ = prompts.send(prompt.clone());
+
             tracing::info!(tool = %name, "waiting for confirmation");
             if !confirmations.wait(&id).await {
                 let content = format!(
@@ -145,7 +153,7 @@ async fn run_one(
                      action was not performed."
                 );
                 tracing::info!(tool = %name, "tool call refused by the user");
-                emitter.emit(Event::ToolFailed { call: id.clone(), error: content.clone() });
+                emitter.emit(Event::ToolConfirmationDenied { call: id.clone() });
                 return Outcome { id, content, spoken: None };
             }
             tracing::info!(tool = %name, "tool call confirmed");
