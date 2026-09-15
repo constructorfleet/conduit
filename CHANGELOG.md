@@ -8,6 +8,10 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Breaking change: the historical Vox alias `POST /v1/vox/links` and
+  `DELETE /v1/vox/links/{peer_id}` is removed. Vox peers now use
+  `/v1/linked-services` and `/v1/linked-services/{peer_id}` as specified in
+  [spec 0005](docs/specs/0005-link-protocol.md).
 - [ADR-0015](docs/adr/0015-render-the-conduit-part-of-the-firmware.md) decides how the
   ESPHome firmware gets rendered from a pipeline: Conduit renders the `conduit_voice:`
   and `micro_wake_word:` blocks as an includable fragment, and renders **nothing** about

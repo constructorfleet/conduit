@@ -45,7 +45,7 @@ pub struct LinkedService {
     /// Base URL Conduit reaches the peer at (`/vox/*` reverse proxy target).
     pub peer_base_url: String,
     /// Hex-encoded SHA-256 of the minted sync token. The raw token is
-    /// returned to the caller of `POST /v1/vox/links` and never stored.
+    /// returned to the caller of `POST /v1/linked-services` and never stored.
     pub sync_token_hash: String,
     /// Provider definition id auto-provisioned for this peer.
     ///

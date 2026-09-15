@@ -97,8 +97,6 @@ pub fn router(state: AppState) -> Router {
                 // recording short.
                 .layer(DefaultBodyLimit::max(speakers::ENROLLMENT_BODY_LIMIT_BYTES)),
         )
-        .route("/v1/vox/links", get(vox::list).post(vox::create))
-        .route("/v1/vox/links/{peer_id}", axum::routing::delete(vox::delete))
         .route("/vox", any(vox::proxy))
         .route("/vox/{*path}", any(vox::proxy))
         .route("/linked-services/{peer_id}", any(linked_services::proxy))

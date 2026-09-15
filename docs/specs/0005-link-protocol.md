@@ -278,9 +278,9 @@ paths. Additive changes (new optional `LinkedServicePanel` field, new
 existing peers thanks to serde defaults. Breaking changes (removed field,
 renamed endpoint) require a coordinated rollout and a spec revision.
 
-Deprecated shim: `POST /v1/vox/links` is retained temporarily to keep
-un-upgraded Vox peers linking during rollout; it is removed once all Vox
-callers use `/v1/linked-services`.
+The earlier Vox-specific link shim has been removed. Vox peers use
+`POST /v1/linked-services` for creation and
+`DELETE /v1/linked-services/{peer_id}` for peer revoke.
 
 ## Endpoint summary
 
