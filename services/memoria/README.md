@@ -66,9 +66,10 @@ The UI is served without authentication so an operator with the key in their hea
 | `GET /engrams/speakers/{speaker_id}` | — | Engrams for speaker |
 | `GET /engrams/conversations/{conversation_id}` | — | Engrams for conversation |
 | `GET /health` | — | Service health |
-| `GET /link` | — | Link status |
-| `POST /link` | `{"conduit_url", "operator_token", "peer_name"?, "force"?}` | Link status |
+| `GET /link` | — | `{"status":"unlinked"}` or linked status with `conduit_url`, `peer_id`, `peer_name`, and `linked_at`; API-key-managed deployments add `config_managed: true` |
+| `POST /link` | `{"conduit_url", "operator_token", "peer_name", "force"?}` | Linked status |
 | `DELETE /link` | — | `204` after unlink |
+| `GET /link/health` | — | `{"status":"ok"}` for Conduit reachability probes |
 
 ## The MCP Interface
 
