@@ -62,24 +62,25 @@ impl ToolOutput {
 pub enum Permission {
     /// Run without asking.
     Allow,
-    /// Refuse until the speaker confirms — which, today, means refuse.
+    /// Ask the speaker before running, if anything can hear the answer.
     ///
-    /// Conduit has no way to put a question to a speaker mid-turn and collect
-    /// the answer, so the runtime treats this as a denial: the tool does not
-    /// run, and the model is told plainly that nothing happened and why. That
-    /// is the whole point of the name. A variant that promised to ask would be
-    /// more dangerous than [`Permission::Deny`] for exactly the tools that
-    /// need it most, because an unasked question reads to a model like a
-    /// granted one, and it will cheerfully report a lock opened or a purchase
-    /// made.
+    /// The runtime publishes `prompt` and waits for a device to answer it. A
+    /// deployment nothing is listening to — no device has called
+    /// `Confirmations::listen` — cannot ask anyone, so the call is refused
+    /// immediately rather than left waiting on a question nobody will ever
+    /// see. An unanswered question also refuses once the turn's idle deadline
+    /// gives up on it: a lock or a purchase must never go through on the
+    /// strength of silence.
     ///
-    /// Use it anyway for anything that genuinely needs a human in the loop.
-    /// It is refused now and asks later, once a mid-turn control channel and a
-    /// bounded wait exist; a tool marked [`Permission::Allow`] to work around
-    /// this would then run unconfirmed forever.
-    DenyUntilConfirmed {
-        /// The question a speaker would have to answer, published on the bus
-        /// and reported to the model so it can say what was blocked.
+    /// This is the whole reason the variant is not called `Allow`: an unasked
+    /// or unanswered question that ran anyway would be more dangerous than
+    /// [`Permission::Deny`] for exactly the tools that need it most, because a
+    /// model told nothing happened will not report a lock opened or a
+    /// purchase made — one told it ran will.
+    Confirm {
+        /// The question a speaker must answer, published on the bus, spoken
+        /// to whichever device can answer it, and reported to the model so it
+        /// can say what was blocked if nothing does.
         prompt: String,
     },
     /// Refuse.

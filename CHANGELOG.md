@@ -8,6 +8,23 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- A tool that asks for confirmation can now actually ask, instead of always
+  refusing. A device that calls `Confirmations::listen` (wired in on every
+  conversation socket) can hear the question spoken aloud and answer it with a
+  new `answer` control message correlated to the tool call id; a `yes` runs
+  the tool and a `no` refuses it, both now distinct outcomes
+  (`Event::ToolConfirmationDenied`, `ToolCallStatus::Refused`,
+  `conduit_tool_calls_total{outcome="refused"}`) from an ordinary failure. A
+  call that nothing can ask still refuses immediately, as before. A call that
+  something is listening for but never answers has no tool-specific refusal
+  at all: it is bounded only by the turn's existing idle deadline, which
+  abandons the whole turn rather than just that call — there is deliberately
+  no second, call-scoped timeout. `Permission::DenyUntilConfirmed` is renamed
+  `Permission::Confirm` to match
+  what it now does. Breaking change: `conduit_tool_calls_total` no longer
+  carries an `outcome="awaiting_confirmation"` series, since that state is no
+  longer a call outcome; confirmation requests are now counted separately by
+  a new `conduit_tool_confirmations_requested_total` counter.
 - Breaking change: the historical Vox alias `POST /v1/vox/links` and
   `DELETE /v1/vox/links/{peer_id}` is removed. Vox peers now use
   `/v1/linked-services` and `/v1/linked-services/{peer_id}` as specified in

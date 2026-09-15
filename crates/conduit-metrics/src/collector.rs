@@ -53,6 +53,7 @@ pub struct Metrics {
     time_to_speech: Arc<Histogram>,
     tool_calls: Arc<Counter>,
     tool_requests: Arc<Counter>,
+    tool_confirmations_requested: Arc<Counter>,
     tool_duration: Arc<Histogram>,
     stage_failures: Arc<Counter>,
     tokens: Arc<Counter>,
@@ -109,6 +110,15 @@ impl Metrics {
             tool_requests: registry.counter(
                 "conduit_tool_calls_requested_total",
                 "Tool calls the model asked for.",
+            ),
+            // A confirmation request is not an outcome the way completed or
+            // failed are: whether it resolves is exactly the open question,
+            // so it gets its own series rather than an `outcome` label on
+            // `conduit_tool_calls_total`, the same reasoning that keeps
+            // `tool_requests` off that counter too.
+            tool_confirmations_requested: registry.counter(
+                "conduit_tool_confirmations_requested_total",
+                "Tool calls that asked a speaker to confirm them.",
             ),
             tool_duration: registry.histogram(
                 "conduit_tool_duration_seconds",
@@ -227,11 +237,13 @@ impl Collector {
                 self.metrics.tool_calls.increment(labels(&[("outcome", "failed")]));
             }
             Event::ToolConfirmationRequested { .. } => {
-                // The runtime answers the model and stops here, so this is where
-                // the call ends unless something resumes it.
-                self.metrics
-                    .tool_calls
-                    .increment(labels(&[("outcome", "awaiting_confirmation")]));
+                // Not terminal — a completed, failed, or refused outcome may
+                // still follow — so this is its own counter rather than an
+                // `outcome` label that would double count the call.
+                self.metrics.tool_confirmations_requested.increment(Vec::new());
+            }
+            Event::ToolConfirmationDenied { .. } => {
+                self.metrics.tool_calls.increment(labels(&[("outcome", "refused")]));
             }
             Event::StageFailed { node, recovered, .. } => {
                 self.metrics.stage_failures.increment(labels(&[

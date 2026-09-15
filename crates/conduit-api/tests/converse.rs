@@ -9,14 +9,120 @@ use std::time::Duration;
 use conduit_api::{router, AppState};
 use conduit_core::audio::{AudioFormat, Encoding};
 use conduit_core::bus::EventBus;
+use conduit_core::event::FinishReason;
 use conduit_core::graph::{Edge, Node, PipelineGraph};
+use conduit_core::id::ToolCallId;
+use conduit_provider::llm::{Completion, CompletionRequest, LanguageModel, Role, Usage};
 use conduit_provider::stt::{AudioChunk, SpeechToText, TranscribeOptions, Transcript};
 use conduit_provider::testing::{EchoLlm, EchoStt, EchoTts};
+use conduit_provider::tool::{Permission, Tool, ToolContext, ToolOutput};
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest, TextToSpeech};
 use conduit_provider::{ChunkStream, Provider};
 use conduit_runtime::Providers;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
+
+/// A model that asks for `confirming-tool` once, then finishes.
+#[derive(Debug, Clone, Default)]
+struct ConfirmingLlm;
+
+impl Provider for ConfirmingLlm {
+    fn descriptor(&self) -> &conduit_provider::Descriptor {
+        static DESCRIPTOR: std::sync::OnceLock<conduit_provider::Descriptor> =
+            std::sync::OnceLock::new();
+        DESCRIPTOR.get_or_init(|| {
+            conduit_provider::Descriptor::new(
+                "confirming-llm",
+                conduit_provider::Capability::Llm,
+            )
+            .with_metadata(
+                conduit_provider::Metadata::default()
+                    .with_models(vec!["confirming-model".to_owned()])
+                    .with_tools(),
+            )
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ConfirmingLlm {
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> conduit_core::Result<ChunkStream<Completion>> {
+        let already_ran = request.messages.iter().any(|message| message.role == Role::Tool);
+        let usage = Usage { prompt_tokens: None, completion_tokens: None };
+        let items = if already_ran {
+            vec![
+                Completion::Token { delta: "Done.".to_owned() },
+                Completion::Finished { reason: FinishReason::Stop, usage },
+            ]
+        } else {
+            vec![
+                Completion::ToolCall {
+                    id: ToolCallId::new("call_confirm"),
+                    name: "confirming-tool".to_owned(),
+                    arguments: serde_json::json!({}),
+                },
+                Completion::Finished { reason: FinishReason::ToolUse, usage },
+            ]
+        };
+        Ok(Box::pin(futures_util::stream::iter(items.into_iter().map(Ok))))
+    }
+}
+
+/// A tool that always asks a speaker to confirm it before it runs.
+#[derive(Debug, Clone, Default)]
+struct ConfirmingTool {
+    invocations: Arc<Mutex<u32>>,
+}
+
+impl ConfirmingTool {
+    fn invocations(&self) -> u32 {
+        *self.invocations.lock().expect("lock")
+    }
+}
+
+impl Provider for ConfirmingTool {
+    conduit_provider::stub_descriptor!("confirming-tool", conduit_provider::Capability::Tool);
+}
+
+#[async_trait::async_trait]
+impl Tool for ConfirmingTool {
+    fn spec(&self) -> conduit_provider::llm::ToolSpec {
+        conduit_provider::llm::ToolSpec {
+            name: "confirming-tool".to_owned(),
+            description: "a tool that asks first".to_owned(),
+            parameters: serde_json::json!({ "type": "object" }),
+        }
+    }
+
+    async fn permission(
+        &self,
+        _arguments: &serde_json::Value,
+        _context: &ToolContext,
+    ) -> Permission {
+        Permission::Confirm { prompt: "Turn off the oven?".to_owned() }
+    }
+
+    async fn invoke(
+        &self,
+        _arguments: serde_json::Value,
+        _context: ToolContext,
+    ) -> conduit_core::Result<ToolOutput> {
+        *self.invocations.lock().expect("lock") += 1;
+        Ok(ToolOutput::new(serde_json::json!({ "off": true })))
+    }
+}
+
+fn confirm_graph() -> PipelineGraph {
+    conduit_core::testing::voice_graph("confirm")
+        .stt("echo-stt")
+        .core("confirming-llm")
+        .tool("confirming-tool")
+        .tts("echo-tts")
+        .build()
+}
 
 /// A synthesizer that speaks the text a syllable at a time, slowly.
 ///
@@ -757,4 +863,100 @@ async fn an_anonymous_server_still_tags_its_events_with_a_device() {
         .expect("an event")
         .expect("bus open");
     assert!(envelope.device.is_some(), "every conversation belongs to some device");
+}
+
+#[tokio::test]
+async fn a_device_answers_the_confirmation_it_is_asked_for() {
+    // The point of the whole feature: a device that can hear the question can
+    // also answer it, and a yes lets the tool run.
+    let tool = ConfirmingTool::default();
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(EchoStt)
+            .with_llm(ConfirmingLlm)
+            .with_tool(tool.clone())
+            .with_tts(EchoTts),
+    );
+    state.put_pipeline("confirm", confirm_graph()).await.expect("stores");
+    let server = Server::start(state).await;
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/confirm/converse"))
+            .await
+            .expect("connects");
+    socket.send(Message::Binary(b"turn off the oven".to_vec().into())).await.expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+    socket
+        .send(Message::Text(r#"{"type":"answer","call":"call_confirm","allowed":true}"#.into()))
+        .await
+        .expect("sends the answer");
+
+    let collect = async {
+        let mut frames = Vec::new();
+        while let Some(frame) = socket.next().await {
+            match frame.expect("frame") {
+                Message::Close(_) => break,
+                message => frames.push(message),
+            }
+        }
+        frames
+    };
+    let frames = tokio::time::timeout(Duration::from_secs(10), collect).await.expect("replies");
+
+    let heard = spoken(&frames);
+    assert!(heard.contains("Turn off the oven?"), "the question must be spoken: {heard}");
+    assert!(heard.contains("Done."), "the model must carry on once confirmed: {heard}");
+    assert_eq!(tool.invocations(), 1, "a confirmed tool must run");
+}
+
+#[tokio::test]
+async fn a_device_refusing_a_confirmation_stops_the_tool_from_running() {
+    let tool = ConfirmingTool::default();
+    let state = AppState::new(EventBus::default()).with_providers(
+        Providers::new()
+            .with_stt(EchoStt)
+            .with_llm(ConfirmingLlm)
+            .with_tool(tool.clone())
+            .with_tts(EchoTts),
+    );
+    state.put_pipeline("confirm", confirm_graph()).await.expect("stores");
+    conduit_metrics::Collector::spawn(state.metrics(), &state.bus);
+    let server = Server::start(state).await;
+
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(server.ws_url("/v1/pipelines/confirm/converse"))
+            .await
+            .expect("connects");
+    socket.send(Message::Binary(b"turn off the oven".to_vec().into())).await.expect("sends");
+    socket.send(Message::Text(r#"{"type":"end"}"#.into())).await.expect("sends end");
+    socket
+        .send(Message::Text(
+            r#"{"type":"answer","call":"call_confirm","allowed":false}"#.into(),
+        ))
+        .await
+        .expect("sends the answer");
+
+    let collect = async {
+        let mut frames = Vec::new();
+        while let Some(frame) = socket.next().await {
+            match frame.expect("frame") {
+                Message::Close(_) => break,
+                message => frames.push(message),
+            }
+        }
+        frames
+    };
+    let frames = tokio::time::timeout(Duration::from_secs(10), collect).await.expect("replies");
+    let heard = spoken(&frames);
+    assert!(heard.contains("Turn off the oven?"), "the question must still be spoken: {heard}");
+    assert_eq!(tool.invocations(), 0, "a refused tool must never run");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let body = reqwest::get(server.ops_url("/metrics"))
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains("conduit_tool_calls_total{outcome=\"refused\"} 1"), "{body}");
 }
