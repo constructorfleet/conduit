@@ -1,130 +1,227 @@
-"""In-process asyncio supervisor for stdio upstream MCP servers.
+"""Supervisor for stdio upstream MCP servers.
 
-Spawns child processes, connects via stdin/stdout as MCP clients, and
-autorestarts with capped exponential backoff on failure. The backoff
-ramp is 1s → 2s → 4s → … → 30s (cap), resetting on a successful
-connection.
+Each enabled stdio upstream is driven by one long-lived supervise task. The
+task connects to the child through the `mcp` SDK's own stdio client transport
+— `stdio_client` spawns the subprocess and bridges its pipes, and a
+`ClientSession` owns request/response correlation and a cancellation-safe
+shutdown. Instrumenta does not hand-roll JSON-RPC framing, request-id
+bookkeeping, or a stdin write lock; the vendored transport already provides
+all of it, the same abstraction `aggregator.py` uses for HTTP upstreams.
+
+On a connection that fails or a child that dies, the task retries with capped
+exponential backoff (1s → 2s → … → 30s, reset on success). Forwarding tools
+are registered the first time a connection *succeeds*, not the first time one
+is *attempted*: a stdio upstream whose very first connect loses a boot race
+still has its tools registered once a later retry connects, without an
+Instrumenta restart. Reconnections after that swap the live client in place
+through a shared holder, so already-registered forwarders keep working.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
+
+from mcp import types
+from mcp.client import Client
+from mcp.client.stdio import StdioServerParameters, stdio_client
+
+from .backend import UpstreamServer
 
 LOG = logging.getLogger("instrumenta.stdio")
 
-_MAX_BACKOFF = 30.0
 _INITIAL_BACKOFF = 1.0
+_MAX_BACKOFF = 30.0
+# How often a held-open connection is probed for liveness so a crashed child
+# becomes visible on `/upstreams` and triggers a reconnect, rather than only
+# surfacing on the next tool call.
+_LIVENESS_POLL = 5.0
+
+
+class ClientHolder:
+    """Mutable handle to the current live client for one upstream.
+
+    A forwarding tool closes over the holder rather than a specific `Client`
+    so a reconnect can swap the client in place. `client` is `None` while the
+    upstream is down; a forward attempted then fails loud instead of calling
+    a dead transport.
+    """
+
+    __slots__ = ("client",)
+
+    def __init__(self) -> None:
+        self.client: Client | None = None
+
+
+# Callback that registers forwarding tools for a freshly connected upstream.
+# Invoked once, on the first successful connection, with the holder the
+# forwarders should read their live client from.
+RegisterTools = Callable[[UpstreamServer, list[types.Tool], ClientHolder], None]
 
 
 @dataclass
 class _Child:
-    """State for one managed child process."""
+    """Supervised state for one stdio upstream."""
 
-    command: str
-    server_name: str
-    process: asyncio.subprocess.Process | None = None
-    backoff: float = min(_INITIAL_BACKOFF, _MAX_BACKOFF)
-    task: asyncio.Task[None] | None = None
+    server: UpstreamServer
+    holder: ClientHolder = field(default_factory=ClientHolder)
+    reachable: bool = False
+    registered: bool = False
+    tool_count: int = 0
+    last_error: str | None = None
+    backoff: float = _INITIAL_BACKOFF
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task[None] | None = None
 
 
 class StdioSupervisor:
-    """Manages stdio upstream child processes.
+    """Owns the supervise tasks for stdio upstreams.
 
-    Each child is spawned with its stdin/stdout connected to an MCP client.
-    On crash, the child is restarted with exponential backoff up to
-    `_MAX_BACKOFF` seconds. On successful connection, backoff resets.
+    Construct with the callback that registers forwarding tools on the local
+    MCP server, `add()` each enabled stdio upstream, then `start()` to launch
+    supervision. `statuses()` feeds `/upstreams`; `close()` tears every child
+    down cleanly.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        register_tools: RegisterTools | None = None,
+        *,
+        initial_backoff: float = _INITIAL_BACKOFF,
+        max_backoff: float = _MAX_BACKOFF,
+        liveness_poll: float = _LIVENESS_POLL,
+    ) -> None:
+        self._register_tools = register_tools
+        self._initial_backoff = initial_backoff
+        self._max_backoff = max_backoff
+        self._liveness_poll = liveness_poll
         self._children: dict[str, _Child] = {}
 
-    async def spawn_and_list_tools(
-        self,
-        command: str,
-        server_name: str,
-    ) -> list[dict[str, Any]]:
-        """Spawn a child, perform MCP handshake, list tools, return them.
+    def add(self, server: UpstreamServer) -> None:
+        """Register a stdio upstream to be supervised once `start()` runs."""
+        child = _Child(server=server, backoff=self._initial_backoff)
+        self._children[server.id] = child
 
-        Each tool name is prefixed with `<server_name>.` to match the
-        HTTP aggregator convention.
+    async def start(self, first_attempt_timeout: float = 5.0) -> None:
+        """Launch one supervise task per child.
+
+        Waits until each child has settled its first connection attempt (up to
+        `first_attempt_timeout`) so tools registered at boot are present in the
+        first `tools/list`. A child still connecting after the timeout keeps
+        going in the background and its tools appear when it connects.
         """
-        import shlex
-
-        parts = shlex.split(command)
-        process = await asyncio.create_subprocess_exec(
-            *parts,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        assert process.stdin is not None
-        assert process.stdout is not None
-
-        # MCP initialize handshake.
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "instrumenta", "version": "0.1.0"},
-            },
-        }
-        import json
-
-        process.stdin.write((json.dumps(init_request) + "\n").encode())
-        await process.stdin.drain()
-
-        line = await asyncio.wait_for(process.stdout.readline(), timeout=10.0)
-        json.loads(line.decode())
-
-        # Send initialized notification.
-        initialized = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-        process.stdin.write((json.dumps(initialized) + "\n").encode())
-        await process.stdin.drain()
-
-        # List tools.
-        list_request = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-        process.stdin.write((json.dumps(list_request) + "\n").encode())
-        await process.stdin.drain()
-
-        line = await asyncio.wait_for(process.stdout.readline(), timeout=10.0)
-        list_response = json.loads(line.decode())
-
-        tools = list_response.get("result", {}).get("tools", [])
-        # Prefix tool names with server_name.
-        prefixed = [
-            {"name": f"{server_name}.{t['name']}", "description": t.get("description", "")}
-            for t in tools
-        ]
-
-        child = _Child(command=command, server_name=server_name, process=process)
-        self._children[server_name] = child
-
-        return prefixed
-
-    def close_all(self) -> None:
-        """Terminate all managed child processes."""
         for child in self._children.values():
-            child.stop_event.set()
-            if child.task is not None:
-                child.task.cancel()
-            if child.process is not None and child.process.returncode is None:
-                child.process.kill()
+            child.task = asyncio.ensure_future(self._supervise(child))
+
+        if not self._children:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(c.ready.wait() for c in self._children.values())),
+                timeout=first_attempt_timeout,
+            )
+        except asyncio.TimeoutError:
+            LOG.warning("some stdio upstreams had not connected within boot window")
+
+    async def _supervise(self, child: _Child) -> None:
+        name = child.server.name
+        parts = shlex.split(child.server.command or "")
+        if not parts:
+            child.last_error = "empty command"
+            child.ready.set()
+            return
+        params = StdioServerParameters(command=parts[0], args=parts[1:])
+
+        while not child.stop_event.is_set():
+            try:
+                client = Client(stdio_client(params), raise_exceptions=True)
+                async with client:
+                    listed = await client.list_tools()
+                    child.holder.client = client
+                    child.reachable = True
+                    child.last_error = None
+                    child.tool_count = len(listed.tools)
+                    child.backoff = self._initial_backoff
+                    if not child.registered:
+                        if self._register_tools is not None:
+                            self._register_tools(child.server, listed.tools, child.holder)
+                        child.registered = True
+                        LOG.info(
+                            "stdio upstream %s connected; %d tool(s) registered",
+                            name,
+                            child.tool_count,
+                        )
+                    child.ready.set()
+                    await self._hold_until_stop_or_crash(child, client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — any connect/child failure retries
+                child.last_error = str(exc)
+                LOG.warning("stdio upstream %s connection failed: %s", name, exc)
+            finally:
+                child.reachable = False
+                child.holder.client = None
+                # A failed first attempt must still release boot; recovery is
+                # what re-registers the tools, not the initial attempt.
+                child.ready.set()
+
+            if child.stop_event.is_set():
+                break
+            await self._sleep_backoff(child)
+
+    async def _hold_until_stop_or_crash(self, child: _Child, client: Client) -> None:
+        """Keep the connection open until stop is requested or the child dies.
+
+        Probes liveness on an interval with an ordinary `list_tools` so a
+        crashed child surfaces on `/upstreams` and triggers a reconnect
+        instead of lying reachable until the next forwarded call.
+        """
+        while not child.stop_event.is_set():
+            try:
+                await asyncio.wait_for(child.stop_event.wait(), timeout=self._liveness_poll)
+                return
+            except asyncio.TimeoutError:
+                # Raises if the child has died; propagates to the reconnect loop.
+                await client.list_tools()
+
+    async def _sleep_backoff(self, child: _Child) -> None:
+        delay = child.backoff
+        try:
+            await asyncio.wait_for(child.stop_event.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+        child.backoff = min(child.backoff * 2, self._max_backoff)
 
     def statuses(self) -> list[dict[str, Any]]:
-        """Return status of all managed children."""
-        result = []
-        for name, child in self._children.items():
-            running = child.process is not None and child.process.returncode is None
-            result.append({
-                "server_name": name,
-                "running": running,
-                "command": child.command,
-            })
-        return result
+        """Per-upstream snapshot for `/upstreams`, one row per stdio child."""
+        rows = []
+        for child in self._children.values():
+            rows.append(
+                {
+                    "id": child.server.id,
+                    "name": child.server.name,
+                    "url": None,
+                    "enabled": child.server.enabled,
+                    "reachable": child.reachable,
+                    "tool_count": child.tool_count,
+                    "last_error": child.last_error,
+                }
+            )
+        return rows
+
+    async def close(self) -> None:
+        """Stop every supervise task and let each exit its client context."""
+        for child in self._children.values():
+            child.stop_event.set()
+        tasks = [c.task for c in self._children.values() if c.task is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
