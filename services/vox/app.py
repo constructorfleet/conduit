@@ -42,7 +42,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Mapping, Protocol
 
 import httpx
 import numpy as np
@@ -54,13 +54,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from conduit_link import (
-    ConduitLinkClient as _SharedConduitLinkClient,
+    ConduitLinkClient,
     HttpConduitLinkClient as _HttpConduitLinkClient,
+    LinkConfig,
+    LinkedServiceKind,
     LinkedServicePanel,
-    LinkRecord,
-    LinkState,
+    LinkRequest,
     LinkStore as _SharedLinkStore,
     LinkStoreSecurityError as _SharedLinkStoreSecurityError,
+    make_link_router,
+    trim_url,
 )
 
 LOG = logging.getLogger("vox")
@@ -759,51 +762,8 @@ class LinkStore(_SharedLinkStore[VoxLinkExtension]):
         )
 
 
-def _public_link(record: LinkRecord[VoxLinkExtension]) -> dict[str, str]:
-    """Vox's redacted view of a linked state. Mirrors the legacy shape."""
-    return {
-        "status": "linked",
-        "conduit_url": record.state.conduit_url,
-        "peer_id": record.state.peer_id,
-        "peer_name": record.state.peer_name,
-        "provider_definition_id": record.extension.provider_definition_id,
-        "linked_at": record.state.linked_at,
-    }
-
-
-class LinkRequest(BaseModel):
-    conduit_url: str
-    # Optional so operators of anonymous (no-auth) Conduit deployments can
-    # link without inventing a token. Handler strips whitespace and sends the
-    # result as-is to Conduit, which falls back to "anonymous" caller when
-    # no bearer was required.
-    operator_token: str = ""
-    peer_name: str
-    force: bool = False
-
-
 class ReloadRequest(BaseModel):
     model: str
-
-
-class ConduitLinkClient(Protocol):
-    """Vox-shaped view of the peer→Conduit link handshake.
-
-    Tests may pass a fake that records what Vox tried to send. Production code
-    uses `HttpConduitClient`, a thin adapter over `conduit_link`'s shared
-    HTTP client that translates Vox's flat call arguments (`peer_id`,
-    `vox_base_url`, `vox_api_key`) into the generic `/v1/linked-services`
-    request body.
-    """
-
-    def create_link(
-        self,
-        conduit_url: str,
-        operator_token: str,
-        body: dict[str, str],
-    ) -> dict[str, str]: ...
-
-    def delete_link(self, conduit_url: str, peer_id: str, sync_token: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -834,7 +794,7 @@ class HttpConduitClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._inner: _SharedConduitLinkClient = _HttpConduitLinkClient(
+        self._inner: ConduitLinkClient = _HttpConduitLinkClient(
             timeout=timeout, transport=transport
         )
 
@@ -999,13 +959,6 @@ class Syncer:
                 )
                 delay = retry_in
                 failure_delay = min(retry_in * 2, self.max_backoff_seconds)
-
-
-def _trimmed_url(value: str, name: str) -> str:
-    trimmed = value.strip().rstrip("/")
-    if not trimmed:
-        raise HTTPException(status_code=422, detail=f"{name} cannot be empty")
-    return trimmed
 
 
 def _trimmed_field(value: str, name: str) -> str:
@@ -1185,105 +1138,76 @@ def create_app(
         LOG.info("reloaded Vox encoder: engine=%s model=%s", engine, model)
         return health()
 
-    @app.get("/link")
-    def link_status() -> dict[str, str]:
-        try:
-            record = links.load()
-        except LinkStoreSecurityError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-        if record is None:
-            if api_key is not None:
-                return {"status": "config-managed"}
-            return {"status": "unlinked"}
-        return _public_link(record)
-
-    @app.post("/link")
-    def link(request: Request, body: LinkRequest) -> dict[str, str]:
-        try:
-            existing = links.load()
-        except LinkStoreSecurityError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-        if existing is not None and not body.force:
-            raise HTTPException(
-                status_code=409,
-                detail="Vox is already linked; unlink first or pass force=true",
-            )
-
-        conduit_url = _trimmed_url(body.conduit_url, "conduit_url")
-        peer_name = _trimmed_field(body.peer_name, "peer_name")
-        # A Conduit with no auth configured accepts an empty bearer, so an
-        # operator linking a fresh dev instance should not be forced to invent
-        # a token here. Kept as a plain strip rather than _trimmed_field so
-        # the field is optional but never sent as whitespace.
-        operator_token = body.operator_token.strip()
-        peer_id = (
-            existing.state.peer_id if existing is not None else str(uuid.uuid4())
-        )
+    def build_link_create_body(
+        request: LinkRequest,
+        existing: VoxLinkExtension | None,
+        http_request: Request,
+        existing_peer_id: str | None,
+    ) -> dict[str, object]:
+        peer_id = existing_peer_id or str(uuid.uuid4())
         local_api_key = api_key or (
-            existing.extension.local_api_key
-            if existing is not None
-            else secrets.token_urlsafe(32)
+            existing.local_api_key if existing is not None else secrets.token_urlsafe(32)
         )
-        vox_base_url = _trimmed_url(
-            os.environ.get("SPEAKER_ID_BASE_URL") or str(request.base_url),
+        vox_base_url = trim_url(
             "SPEAKER_ID_BASE_URL",
+            os.environ.get("SPEAKER_ID_BASE_URL") or str(http_request.base_url),
+        )
+        return {
+            "peer_name": request.peer_name,
+            "peer_id": peer_id,
+            "vox_base_url": vox_base_url,
+            "vox_api_key": local_api_key,
+        }
+
+    def build_link_extension(
+        request: LinkRequest,
+        response: dict[str, object],
+        existing: VoxLinkExtension | None,
+        create_body: Mapping[str, object],
+    ) -> VoxLinkExtension:
+        return VoxLinkExtension(
+            provider_definition_id=str(response["provider_definition_id"]),
+            local_api_key=str(create_body["vox_api_key"]),
         )
 
-        try:
-            created = conduit.create_link(
-                conduit_url,
-                operator_token,
-                {
-                    "peer_name": peer_name,
-                    "peer_id": peer_id,
-                    "vox_base_url": vox_base_url,
-                    "vox_api_key": local_api_key,
-                },
-            )
-        except httpx.HTTPError as error:
-            raise HTTPException(
-                status_code=502, detail=f"could not reach Conduit: {error}"
-            ) from error
+    def public_link_response(extension: VoxLinkExtension) -> dict[str, object]:
+        return {"provider_definition_id": extension.provider_definition_id}
 
-        state = LinkState(
-            conduit_url=conduit_url,
-            peer_id=peer_id,
-            peer_name=peer_name,
-            sync_token=created["sync_token"],
-            panel=LinkedServicePanel(title="Vox", path="/ui/", icon="users"),
-            linked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-        extension = VoxLinkExtension(
-            provider_definition_id=created["provider_definition_id"],
-            local_api_key=local_api_key,
-        )
-        record = links.save(state, extension)
-        LOG.info(
-            "linked Vox to Conduit peer=%s provider=%s",
-            peer_id,
-            record.extension.provider_definition_id,
-        )
-        response = _public_link(record)
+    def create_link_response(extension: VoxLinkExtension) -> dict[str, object]:
+        response = public_link_response(extension)
+        # Learnable only here: a deployment that did not set SPEAKER_ID_API_KEY
+        # generates one at link time, and this is the only response that ever
+        # repeats it back.
         if api_key is None:
-            response["local_api_key"] = local_api_key
+            response["local_api_key"] = extension.local_api_key
         return response
 
-    @app.delete("/link")
-    def unlink() -> Response:
-        try:
-            record = links.load()
-        except LinkStoreSecurityError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-        if record is None:
-            return Response(status_code=204)
-        conduit.delete_link(
-            record.state.conduit_url,
-            record.state.peer_id,
-            record.state.sync_token,
+    def unlinked_link_response() -> dict[str, object]:
+        # A deployment-set API key means the operator can never complete the
+        # handshake through Vox's own UI, so the status reads differently from
+        # a service that is simply not linked yet.
+        if api_key is not None:
+            return {"status": "config-managed"}
+        return {"status": "unlinked"}
+
+    app.include_router(
+        make_link_router(
+            config=LinkConfig(
+                service_kind=LinkedServiceKind.VOX,
+                peer_name="vox",
+                peer_base_url=os.environ.get("SPEAKER_ID_BASE_URL", ""),
+                panel=LinkedServicePanel(title="Vox", path="/ui/", icon="users"),
+                storage_dir=store.directory,
+            ),
+            store=links,
+            client=conduit,
+            build_create_body=build_link_create_body,
+            build_extension=build_link_extension,
+            public_response=public_link_response,
+            create_response=create_link_response,
+            unlinked_response=unlinked_link_response,
         )
-        links.remove()
-        LOG.info("unlinked Vox from Conduit peer=%s", record.state.peer_id)
-        return Response(status_code=204)
+    )
 
     @app.get("/speakers")
     def list_speakers(_: None = Depends(authorize)) -> dict[str, object]:

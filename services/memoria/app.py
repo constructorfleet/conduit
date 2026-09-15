@@ -190,8 +190,13 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
     return {}
 
 
-def _build_create_body(request: _SharedLinkRequest, _existing: _NoExtension | None) -> dict[str, object]:
-    peer_id = request.peer_name.strip().lower().replace(" ", "-")
+def _build_create_body(
+    request: _SharedLinkRequest,
+    _existing: _NoExtension | None,
+    _http_request: Request,
+    existing_peer_id: str | None,
+) -> dict[str, object]:
+    peer_id = existing_peer_id or request.peer_name.strip().lower().replace(" ", "-")
     return {
         "service_kind": "memoria",
         "peer_name": request.peer_name,
@@ -206,7 +211,7 @@ def _build_create_body(request: _SharedLinkRequest, _existing: _NoExtension | No
     }
 
 
-def _build_extension(_request, _response, _existing) -> _NoExtension:
+def _build_extension(_request, _response, _existing, _create_body) -> _NoExtension:
     return _NoExtension()
 
 
