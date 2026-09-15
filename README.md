@@ -550,8 +550,8 @@ cargo test --workspace --all-features
 cargo audit
 ```
 
-`cargo audit` is configured by [.cargo/audit.toml](.cargo/audit.toml). One
-advisory is ignored there, with a command anyone can run to re-check that the
+`cargo audit` is configured by [.cargo/audit.toml](.cargo/audit.toml). Ignored
+advisories are tracked there with commands anyone can run to re-check that the
 reason still holds.
 
 ## Providers

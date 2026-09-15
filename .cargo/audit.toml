@@ -3,12 +3,22 @@
 # Each entry needs a reason that someone can re-check, because an ignore that
 # outlives its justification is how a real vulnerability gets missed.
 #
-# There are none right now. RUSTSEC-2023-0071 (Marvin timing sidechannel in
-# `rsa`) lived here while `rsa` was a resolvable-but-never-compiled dependency
-# behind `sqlx`'s optional `mysql` feature. sqlx 0.9 dropped `rsa` from its
-# MySQL driver, so the crate is no longer in Cargo.lock at all and the ignore
-# was removed rather than re-justified, as its own note required. Verified with:
+# RUSTSEC-2026-0249 is ignored while Rhai 1.26.1 still pulls smartstring 1.0.1
+# through the `std` feature required by conduit-script's scripting contract.
+# Re-check before carrying this forward:
+#
+#     cargo tree -i smartstring
+#
+# If Rhai stops depending on smartstring, or exposes a feature set that keeps
+# the current sandboxed script contract without it, remove the ignore instead
+# of carrying a stale justification forward.
+#
+# RUSTSEC-2023-0071 (Marvin timing sidechannel in `rsa`) lived here while `rsa`
+# was a resolvable-but-never-compiled dependency behind `sqlx`'s optional
+# `mysql` feature. sqlx 0.9 dropped `rsa` from its MySQL driver, so the crate is
+# no longer in Cargo.lock at all and the ignore was removed rather than
+# re-justified, as its own note required. Verified with:
 #
 #     grep -c '^name = "rsa"' Cargo.lock   # expect 0
 [advisories]
-ignore = []
+ignore = ["RUSTSEC-2026-0249"]

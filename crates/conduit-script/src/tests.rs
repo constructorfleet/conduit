@@ -26,6 +26,49 @@ async fn rewritten(source: &str, segment: &str) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Dependency policy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rhai_smartstring_advisory_is_tracked_until_rhai_stops_pulling_it() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("conduit-script lives under crates/");
+    let lockfile = std::fs::read_to_string(workspace.join("Cargo.lock")).expect("Cargo.lock");
+    let audit_policy =
+        std::fs::read_to_string(workspace.join(".cargo/audit.toml")).expect("audit.toml");
+
+    assert!(
+        lockfile.contains(
+            r#"name = "rhai"
+version = "1.26.1""#
+        ),
+        "refresh this audit-policy test when Rhai changes"
+    );
+    assert!(
+        lockfile.contains(
+            r#"name = "smartstring"
+version = "1.0.1""#
+        ),
+        "refresh this audit-policy test when smartstring changes"
+    );
+
+    for required in [
+        "RUSTSEC-2026-0249",
+        "Rhai 1.26.1",
+        "smartstring 1.0.1",
+        "std",
+        "cargo tree -i smartstring",
+    ] {
+        assert!(
+            audit_policy.contains(required),
+            "audit policy must track the Rhai smartstring exception with `{required}`"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Behaviour
 // ---------------------------------------------------------------------------
 
