@@ -49,6 +49,8 @@ from conduit_link import (
     LinkConfig,
     LinkCreateContext,
     LinkExtensionContext,
+    LinkRecord,
+    LinkState,
     LinkedServiceKind,
     LinkedServicePanel,
     LinkStore,
@@ -56,6 +58,7 @@ from conduit_link import (
 )
 
 LOG = logging.getLogger("memoria")
+SERVICE_DIR = Path(__file__).resolve().parent
 
 # Configuration defaults
 DEFAULT_SEARCH_LIMIT = 10
@@ -181,6 +184,30 @@ class _NoExtension:
     """Placeholder extension for Memoria — no service-specific link state."""
 
     __slots__: tuple[()] = ()
+
+
+class _AppStateLinkStore:
+    """Delegate link persistence to the store created by the app lifespan."""
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    def _store(self) -> LinkStore[_NoExtension]:
+        store = getattr(self._app.state, "link_store", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Link store not initialized")
+        return store
+
+    def load(self) -> LinkRecord[_NoExtension] | None:
+        return self._store().load()
+
+    def save(
+        self, state: LinkState, extension: _NoExtension
+    ) -> LinkRecord[_NoExtension]:
+        return self._store().save(state, extension)
+
+    def remove(self) -> None:
+        self._store().remove()
 
 
 def _ext_from(_payload: dict[str, object]) -> _NoExtension:
@@ -321,7 +348,7 @@ app.add_middleware(PrometheusMiddleware)
 start_metrics_server()
 
 
-def _make_link_router():
+def _make_link_router(app: FastAPI):
     """Router factory delegating to conduit_link's shared implementation.
 
     Called at module import so route registration happens once. The store is
@@ -329,12 +356,6 @@ def _make_link_router():
     creation.
     """
     data_dir = Path(os.getenv("MEMORIA_DATA_DIR", "/data"))
-    data_dir.mkdir(parents=True, exist_ok=True)
-    store = LinkStore(
-        data_dir,
-        extension_from_dict=_ext_from,
-        extension_to_dict=_ext_to,
-    )
     config = LinkConfig(
         service_kind=LinkedServiceKind.MEMORIA,
         peer_name="memoria",
@@ -344,7 +365,7 @@ def _make_link_router():
     )
     return make_link_router(
         config=config,
-        store=store,
+        store=_AppStateLinkStore(app),
         client=HttpConduitLinkClient(),
         build_create_body=_build_create_body,
         build_extension=_build_extension,
@@ -352,7 +373,7 @@ def _make_link_router():
     )
 
 
-app.include_router(_make_link_router())
+app.include_router(_make_link_router(app))
 
 
 async def background_sync() -> None:
@@ -513,7 +534,7 @@ async def get_conversation_engrams(conversation_id: str, limit: int = 100) -> li
 
 
 # Serve static UI
-app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
+app.mount("/ui", StaticFiles(directory=SERVICE_DIR / "static", html=True), name="ui")
 
 @app.get("/")
 async def root():

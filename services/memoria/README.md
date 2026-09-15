@@ -198,12 +198,19 @@ docker compose --profile memoria-qdrant up
 
 ## Tests
 
-The tests use mock encoders and storage, so they download no models:
+The default tests run the FastAPI app in process with the builtin storage backend
+and an isolated temporary data directory:
 
 ```bash
+cd services/memoria
 python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
+
+Network-dependent link checks are skipped by default. Set
+`MEMORIA_RUN_INTEGRATION_TESTS=1` to include the unreachable-peer regression
+that verifies Memoria reports a `502` when it cannot contact the configured
+Conduit URL.
 
 ## Conduit Integration
 
