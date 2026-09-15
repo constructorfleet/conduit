@@ -207,8 +207,10 @@ python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-Tests that require a live Conduit service are skipped by default. Set
-`MEMORIA_RUN_INTEGRATION_TESTS=1` to include them.
+Network-dependent link checks are skipped by default. Set
+`MEMORIA_RUN_INTEGRATION_TESTS=1` to include the unreachable-peer regression
+that verifies Memoria reports a `502` when it cannot contact the configured
+Conduit URL.
 
 ## Conduit Integration
 
