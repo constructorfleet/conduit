@@ -229,8 +229,7 @@ def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, ob
         "peer_id": peer_id,
         "peer_base_url": os.getenv("MEMORIA_BASE_URL", "http://localhost:8080"),
         "panel": {
-            "id": "memoria",
-            "label": "Memoria",
+            "title": "Memoria",
             "icon": "brain",
             "path": "/ui/",
         },
@@ -242,7 +241,15 @@ def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtensi
 
 
 def _public(_extension: _NoExtension) -> dict[str, object]:
+    if api_key is not None:
+        return {"config_managed": True}
     return {}
+
+
+def _unlinked_response() -> dict[str, object]:
+    if api_key is not None:
+        return {"status": "unlinked", "config_managed": True}
+    return {"status": "unlinked"}
 
 
 # Global state
@@ -370,6 +377,7 @@ def _make_link_router(app: FastAPI):
         build_create_body=_build_create_body,
         build_extension=_build_extension,
         public_response=_public,
+        unlinked_response=_unlinked_response,
     )
 
 

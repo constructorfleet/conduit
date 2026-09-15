@@ -3,7 +3,10 @@
 import json
 import os
 import stat
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +14,55 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
 from app import app
+
+
+class _ConduitLinkHandler(BaseHTTPRequestHandler):
+    requests: list[dict[str, Any]] = []
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("content-length", "0"))
+        body = json.loads(self.rfile.read(length))
+        self.requests.append(
+            {
+                "method": "POST",
+                "path": self.path,
+                "authorization": self.headers.get("authorization"),
+                "body": body,
+            }
+        )
+        self.send_response(201)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"sync_token": "sync-token-from-conduit"}).encode())
+
+    def do_DELETE(self) -> None:
+        self.requests.append(
+            {
+                "method": "DELETE",
+                "path": self.path,
+                "authorization": self.headers.get("authorization"),
+            }
+        )
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
+@pytest.fixture
+def conduit_server():
+    """Run a tiny Conduit-compatible link endpoint for Memoria link tests."""
+    _ConduitLinkHandler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ConduitLinkHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", _ConduitLinkHandler.requests
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 @pytest.fixture
@@ -366,22 +418,117 @@ class TestLinking:
     """Conduit linking functionality tests."""
 
     def test_get_link_status(self, client):
-        """Test getting link status."""
+        """Test getting unlinked status in the shared router shape."""
         response = client.get("/link")
         assert response.status_code == 200
 
-        data = response.json()
-        assert "status" in data
-        assert data["status"] in ["linked", "unlinked", "config-managed"]
+        assert response.json() == {"status": "unlinked"}
+
+    def test_get_link_health(self, client):
+        """Test shared link reachability probe endpoint."""
+        response = client.get("/link/health")
+        assert response.status_code == 200
+
+        assert response.json() == {"status": "ok"}
 
     def test_get_link_status_uses_isolated_test_storage(self, linked_client):
-        """Test link status reads the same isolated storage as the app lifespan."""
+        """Test linked status reads the shared link store."""
         response = linked_client.get("/link")
         assert response.status_code == 200
 
-        data = response.json()
-        assert data["status"] == "linked"
-        assert data["peer_id"] == "memoria-test-peer"
+        assert response.json() == {
+            "status": "linked",
+            "conduit_url": "http://conduit.example.test",
+            "peer_id": "memoria-test-peer",
+            "peer_name": "fixture-memoria",
+            "linked_at": "2026-09-14T12:00:00+00:00",
+        }
+
+    def test_api_key_managed_service_keeps_spec_status_shape(self, tmp_path, monkeypatch):
+        """Test config-managed is a field instead of an alternate status value."""
+        monkeypatch.setenv("MEMORIA_BACKEND", "builtin")
+        monkeypatch.setenv("MEMORIA_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("MEMORIA_API_KEY", "configured-key")
+        monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
+
+        with TestClient(app) as client:
+            response = client.get("/link")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "unlinked", "config_managed": True}
+
+    def test_create_link_posts_spec_payload_and_persists_status(
+        self, client, conduit_server
+    ):
+        """Test Memoria links through the shared router and generic Conduit API."""
+        conduit_url, requests = conduit_server
+
+        response = client.post(
+            "/link",
+            json={
+                "conduit_url": f"{conduit_url}/",
+                "operator_token": "operator-token",
+                "peer_name": "Household Memory",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body == {
+            "status": "linked",
+            "conduit_url": conduit_url,
+            "peer_id": "household-memory",
+            "peer_name": "Household Memory",
+            "linked_at": body["linked_at"],
+        }
+        assert requests == [
+            {
+                "method": "POST",
+                "path": "/v1/linked-services",
+                "authorization": "Bearer operator-token",
+                "body": {
+                    "service_kind": "memoria",
+                    "peer_name": "Household Memory",
+                    "peer_id": "household-memory",
+                    "peer_base_url": "http://localhost:8080",
+                    "panel": {
+                        "title": "Memoria",
+                        "path": "/ui/",
+                        "icon": "brain",
+                    },
+                },
+            }
+        ]
+
+        persisted = client.get("/link")
+        assert persisted.status_code == 200
+        assert persisted.json() == body
+        assert "sync-token-from-conduit" not in persisted.text
+        assert "operator-token" not in persisted.text
+
+    def test_delete_link_revokes_conduit_and_returns_to_unlinked(
+        self, client, conduit_server
+    ):
+        """Test unlinking delegates revoke to the shared router."""
+        conduit_url, requests = conduit_server
+        linked = client.post(
+            "/link",
+            json={
+                "conduit_url": conduit_url,
+                "operator_token": "operator-token",
+                "peer_name": "Household Memory",
+            },
+        ).json()
+
+        response = client.delete("/link")
+
+        assert response.status_code == 204
+        assert requests[-1] == {
+            "method": "DELETE",
+            "path": f"/v1/linked-services/{linked['peer_id']}",
+            "authorization": "Bearer sync-token-from-conduit",
+        }
+        assert client.get("/link").json() == {"status": "unlinked"}
 
     def test_create_link_reports_unreachable_conduit(self, client, headers):
         """Test network-dependent link creation reports unreachable Conduit."""
