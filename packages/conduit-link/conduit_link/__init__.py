@@ -20,7 +20,7 @@ from .models import (
     LinkStatus,
     Reachability,
 )
-from .router import LinkRequest, make_link_router
+from .router import LinkRequest, make_link_router, trim_url
 from .store import LinkRecord, LinkStore
 
 __all__ = [
@@ -40,4 +40,5 @@ __all__ = [
     "LinkedServicePanel",
     "Reachability",
     "make_link_router",
+    "trim_url",
 ]

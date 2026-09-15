@@ -748,6 +748,23 @@ def test_link_status_is_unlinked_without_a_saved_link(tmp_path: Path) -> None:
     assert response.json() == {"status": "unlinked"}
 
 
+def test_link_status_is_config_managed_when_an_api_key_is_set(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # A deployment that set SPEAKER_ID_API_KEY can never complete the /link
+    # handshake through Vox's own UI (there is no generated key to hand back),
+    # so the status reads differently from "unlinked" to say so.
+    monkeypatch.setenv("SPEAKER_ID_API_KEY", "configured-key")
+    client = TestClient(
+        create_app(encoder=ToneEncoder(), prints=VoicePrints(tmp_path))
+    )
+
+    response = client.get("/link")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "config-managed"}
+
+
 def test_linking_posts_to_conduit_and_persists_redacted_status(
     monkeypatch, tmp_path: Path
 ) -> None:

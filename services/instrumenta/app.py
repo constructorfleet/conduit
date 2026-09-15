@@ -23,7 +23,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -65,9 +65,12 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: _SharedLinkRequest, _existing: _NoExtension | None
+    request: _SharedLinkRequest,
+    _existing: _NoExtension | None,
+    _http_request: Request,
+    existing_peer_id: str | None,
 ) -> dict[str, object]:
-    peer_id = request.peer_name.strip().lower().replace(" ", "-")
+    peer_id = existing_peer_id or request.peer_name.strip().lower().replace(" ", "-")
     base_url = os.getenv("INSTRUMENTA_BASE_URL", f"http://localhost:{DEFAULT_PORT}")
     return {
         "service_kind": LinkedServiceKind.INSTRUMENTA.value,
@@ -83,7 +86,7 @@ def _build_create_body(
     }
 
 
-def _build_extension(_request, _response, _existing) -> _NoExtension:
+def _build_extension(_request, _response, _existing, _create_body) -> _NoExtension:
     return _NoExtension()
 
 

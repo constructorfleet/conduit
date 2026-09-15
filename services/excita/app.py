@@ -89,9 +89,12 @@ def _ext_to(_extension: _NoExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: _SharedLinkRequest, _existing: _NoExtension | None
+    request: _SharedLinkRequest,
+    _existing: _NoExtension | None,
+    _http_request: Request,
+    existing_peer_id: str | None,
 ) -> dict[str, object]:
-    peer_id = request.peer_name.strip().lower().replace(" ", "-")
+    peer_id = existing_peer_id or request.peer_name.strip().lower().replace(" ", "-")
     base_url = os.getenv("EXCITA_BASE_URL", f"http://localhost:{DEFAULT_PORT}")
     return {
         "service_kind": LinkedServiceKind.EXCITA.value,
@@ -107,7 +110,7 @@ def _build_create_body(
     }
 
 
-def _build_extension(_request, _response, _existing) -> _NoExtension:
+def _build_extension(_request, _response, _existing, _create_body) -> _NoExtension:
     return _NoExtension()
 
 

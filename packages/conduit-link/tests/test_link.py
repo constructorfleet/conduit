@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from conduit_link import (
@@ -42,23 +42,27 @@ def _ext_to(extension: FakeExtension) -> dict[str, object]:
 
 
 def _build_create_body(
-    request: LinkRequest, existing: FakeExtension | None
+    request: LinkRequest,
+    existing: FakeExtension | None,
+    http_request: Request,
+    existing_peer_id: str | None,
 ) -> dict[str, object]:
     return {
         "peer_name": request.peer_name,
-        "peer_id": "test-peer",
-        "peer_base_url": "http://peer.test",
+        "peer_id": existing_peer_id or "test-peer",
+        "peer_base_url": str(http_request.base_url),
     }
 
 
 def _build_extension(
     request: LinkRequest,
-    response: Mapping[str, str],
+    response: Mapping[str, object],
     existing: FakeExtension | None,
+    create_body: Mapping[str, object],
 ) -> FakeExtension:
     return FakeExtension(
         api_key=(existing.api_key if existing else "generated-key"),
-        provider_id=response.get("provider_id", "auto-provisioned"),
+        provider_id=str(response.get("provider_id", "auto-provisioned")),
     )
 
 
@@ -139,12 +143,83 @@ def test_link_creates_and_persists(tmp_path: Path) -> None:
     assert fake.last_create_body == {
         "peer_name": "My Peer",
         "peer_id": "test-peer",
-        "peer_base_url": "http://peer.test",
+        "peer_base_url": str(client.base_url) + "/",
     }
 
     persisted = tmp_path / "link.json"
     assert persisted.exists()
     assert persisted.stat().st_mode & 0o777 == 0o600, "link.json must be 0600"
+
+
+def test_create_response_can_expose_fields_the_status_response_omits(
+    tmp_path: Path,
+) -> None:
+    # Vox returns a freshly generated local API key from POST /link (the only
+    # time the caller can learn it) but never again from GET /link. The router
+    # must let a service distinguish the two responses rather than forcing one
+    # shared `public_response` callback onto both.
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    fake = InMemoryConduitLinkClient(extra_response_fields={"provider_id": "auto-42"})
+    app = FastAPI()
+    app.include_router(
+        make_link_router(
+            config=config,
+            store=store,
+            client=fake,
+            build_create_body=_build_create_body,
+            build_extension=_build_extension,
+            public_response=_public,
+            create_response=lambda extension: {
+                **_public(extension),
+                "api_key": extension.api_key,
+            },
+        )
+    )
+    client = TestClient(app)
+
+    created = client.post(
+        "/link",
+        json={
+            "conduit_url": "http://conduit.test",
+            "operator_token": "op-token",
+            "peer_name": "My Peer",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["api_key"] == "generated-key"
+
+    status = client.get("/link")
+    assert status.status_code == 200
+    assert "api_key" not in status.json()
+
+
+def test_unlinked_response_can_be_overridden(tmp_path: Path) -> None:
+    # Vox reports "config-managed" instead of "unlinked" when the deployment
+    # set SPEAKER_ID_API_KEY, since that operator can never complete the
+    # handshake through the UI. The router must let a service override the
+    # default unlinked payload without owning the whole status route.
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    fake = InMemoryConduitLinkClient(extra_response_fields={"provider_id": "auto-42"})
+    app = FastAPI()
+    app.include_router(
+        make_link_router(
+            config=config,
+            store=store,
+            client=fake,
+            build_create_body=_build_create_body,
+            build_extension=_build_extension,
+            public_response=_public,
+            unlinked_response=lambda: {"status": "config-managed"},
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get("/link")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "config-managed"}
 
 
 def test_link_accepts_missing_operator_token(tmp_path: Path) -> None:
