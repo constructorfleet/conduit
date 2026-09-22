@@ -20,7 +20,14 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from instrumenta.app import Config, create_app
-from instrumenta.backend import SqliteBackend
+from instrumenta.backend import TRANSPORTS, SqliteBackend
+from instrumenta.transports_router import TRANSPORT_MOUNTS
+
+
+class TestTransportMountTable:
+    def test_every_backend_transport_has_exactly_one_mount(self) -> None:
+        assert set(TRANSPORT_MOUNTS) == set(TRANSPORTS)
+        assert TRANSPORT_MOUNTS == {"http": "/mcp/http", "sse": "/mcp/sse"}
 
 
 class TestBackendTransportFlags:

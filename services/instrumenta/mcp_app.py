@@ -1,12 +1,11 @@
 """MCP server construction for Instrumenta.
 
 Builds an `MCPServer` from the `mcp` SDK with the four built-in tools
-registered. `app.py` mounts it twice on the FastAPI app — streamable-HTTP at
-`/mcp/http` and SSE at `/mcp/sse` — behind per-transport toggles.
+registered. `app.py` mounts it at `/mcp/http` (streamable-HTTP, also aliased
+at `/mcp`) and `/mcp/sse` (SSE), each behind a per-transport toggle.
 
-Aggregator wiring (upstream MCP clients contributing tools/prompts/resources)
-lands in the next PR and registers additional tools on the same server
-instance.
+The aggregator (`aggregator.py`) registers upstream tools/prompts/resources on
+the same server instance at startup.
 """
 
 from __future__ import annotations

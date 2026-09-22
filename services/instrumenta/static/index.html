@@ -666,7 +666,7 @@ async function loadTransports() {
       <tbody>${transports.map(t => `
         <tr>
           <td>${esc(t.transport)}</td>
-          <td style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px">${esc(t.path)}</td>
+          <td class="mono">${esc(t.path)}</td>
           <td><input type="checkbox" class="toggle" data-transport="${esc(t.transport)}" ${t.enabled ? "checked" : ""} aria-label="Enable ${esc(t.transport)} transport"></td>
         </tr>`).join("")}
       </tbody>

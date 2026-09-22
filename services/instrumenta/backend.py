@@ -210,8 +210,10 @@ CREATE TABLE IF NOT EXISTS item_flags (
     PRIMARY KEY (origin, item_kind, item_name)
 );
 
+-- No CHECK on `transport`: the name set is `TRANSPORTS` (validated by the only
+-- writer, transports_router), and a CHECK would freeze it in existing databases.
 CREATE TABLE IF NOT EXISTS transport_flags (
-    transport TEXT PRIMARY KEY CHECK (transport IN ('http', 'sse')),
+    transport TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 1
 );
 
