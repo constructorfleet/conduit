@@ -304,8 +304,10 @@ impl Scorer {
 /// window into confident speech, so a trimmer built on the wrong convention
 /// forwards everything and looks like it is working.
 pub(crate) fn samples_from_pcm(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(2)
-        .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0)
+    data.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32_768.0)
         .collect()
 }
 

@@ -127,9 +127,13 @@ impl Resampler {
         }
 
         let frames = bytes.len() / 2;
-        self.pending.extend(bytes.chunks_exact(2).map(|sample| {
-            f32::from(i16::from_le_bytes([sample[0], sample[1]])) / f32::from(i16::MAX)
-        }));
+        self.pending.extend(
+            bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|sample| f32::from(i16::from_le_bytes(*sample)) / f32::from(i16::MAX)),
+        );
         self.speech += frames as u64;
 
         let out = self.drain_blocks()?;

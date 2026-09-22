@@ -14,7 +14,7 @@
 # from GCC 14 on. Trixie ships GCC 14. CI checks that the runtime stage below
 # names the same release, because the linked binary needs that libstdc++ at
 # run time too.
-FROM rust:1.97.1-trixie AS builder
+FROM rust:1.98.0-trixie AS builder
 
 WORKDIR /src
 COPY . .

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use tokio::sync::Mutex;
@@ -291,16 +291,16 @@ async fn embeddings(
 /// A server that is refusing requests or has gone quiet does so here too — a
 /// health check that answers while every real request stalls would report a
 /// broken server as healthy.
-async fn models(State(state): State<AppState>) -> Result<Json<serde_json::Value>, Response> {
+async fn models(State(state): State<AppState>) -> Response {
     match state.reply {
-        Reply::Stall => Err(never().await),
+        Reply::Stall => never().await,
         Reply::Status(status, message) | Reply::StatusRetryAfter(status, message, _) => {
-            Err(Response::builder()
+            Response::builder()
                 .status(StatusCode::from_u16(status).expect("valid status"))
                 .body(Body::from(message))
-                .expect("response"))
+                .expect("response")
         }
-        _ => Ok(Json(serde_json::json!({ "data": [{ "id": "gpt-test" }] }))),
+        _ => Json(serde_json::json!({ "data": [{ "id": "gpt-test" }] })).into_response(),
     }
 }
 
