@@ -403,16 +403,35 @@ jobs:
       - name: Check Dockerfile matches rust-toolchain.toml
         run: |
           pinned=$(sed -ne 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
-          image=$(sed -ne 's/^FROM rust:\([^-]*\)-bookworm AS builder$/\1/p' Dockerfile)
+          image=$(sed -ne 's/^FROM rust:\([^-]*\)-[a-z]* AS builder$/\1/p' Dockerfile)
           if [ -z "${pinned}" ] || [ -z "${image}" ]; then
             echo "could not read both toolchain pins (file='${pinned}' image='${image}')" >&2
             exit 1
           fi
           if [ "${pinned}" != "${image}" ]; then
-            echo "rust-toolchain.toml pins ${pinned} but Dockerfile builds on rust:${image}-bookworm" >&2
+            echo "rust-toolchain.toml pins ${pinned} but Dockerfile builds on rust:${image}" >&2
             exit 1
           fi
           echo "both pin Rust ${pinned}"
+      # The builder and runtime stages must share a Debian release. The static
+      # onnxruntime that `ort-sys` links needs GCC 14's libstdc++ (#258), so the
+      # builder cannot be older than trixie, and the binary then needs that same
+      # libstdc++ at run time, so the runtime image cannot be older than the
+      # builder. Comparing the two names catches a bump to one and not the other
+      # before the image is even built.
+      - name: Check builder and runtime stages share a Debian release
+        run: |
+          builder=$(sed -ne 's/^FROM rust:[^-]*-\([a-z]*\) AS builder$/\1/p' Dockerfile)
+          runtime=$(sed -ne 's/^FROM debian:\([a-z]*\)-slim AS runtime$/\1/p' Dockerfile)
+          if [ -z "${builder}" ] || [ -z "${runtime}" ]; then
+            echo "could not read both Debian releases (builder='${builder}' runtime='${runtime}')" >&2
+            exit 1
+          fi
+          if [ "${builder}" != "${runtime}" ]; then
+            echo "builder stage is Debian ${builder} but runtime stage is Debian ${runtime}" >&2
+            exit 1
+          fi
+          echo "both stages are Debian ${builder}"
       - uses: docker/setup-buildx-action@v4
         if: github.event_name != 'pull_request'
       # Deliberately uncached. A `type=gha,mode=max` cache of a Rust release
@@ -424,6 +443,29 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: conduit:ci
+      # A build that links is not yet an image that runs: the binary loads
+      # libstdc++ and glibc from the runtime stage, and a mismatch there only
+      # shows at start-up. Starting the container and reading /health is the
+      # cheapest proof that the two stages agree.
+      - name: Check the built image starts
+        if: github.event_name != 'pull_request'
+        run: |
+          docker run --detach --name conduit-ci --publish 9090:9090 \
+            --env CONDUIT_ALLOW_ANONYMOUS=true conduit:ci
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:9090/health; then
+              echo
+              docker rm --force conduit-ci >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "conduit-api did not answer /health within 30s" >&2
+          docker logs conduit-ci >&2
+          docker rm --force conduit-ci >/dev/null
+          exit 1
 
   # Advisories change without any commit of ours, so this runs on a schedule
   # as well as per change, and is kept separate to distinguish "this pull

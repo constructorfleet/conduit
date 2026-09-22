@@ -8,6 +8,14 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The root `Dockerfile` builds again. Its builder and runtime stages move from
+  Debian bookworm to trixie, because the prebuilt static onnxruntime that
+  `ort-sys` downloads for `conduit-vad` is compiled with GCC 14 and linking it
+  against bookworm's GCC 12 libstdc++ failed with thousands of undefined
+  references (`std::string::_M_replace_cold`, `__cxa_call_terminate`). The CI
+  `docker` job now checks that both stages name the same Debian release, and on
+  merges starts the built image and reads `/health` from it, so a builder and
+  runtime that drift apart fail there rather than at deployment.
 - Markdown outside `frontend/` (README, CHANGELOG, `docs/`, crate READMEs) is
   now explicitly excluded from Prettier by a root `.prettierignore`. It is
   hand-written prose that was never Prettier-formatted, so `prettier --check`

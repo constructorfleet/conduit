@@ -5,13 +5,26 @@
 # file regardless, but only by downloading a second toolchain into every image
 # build. Matching the tag means the toolchain already in the image is the one
 # used.
-FROM rust:1.97.1-bookworm AS builder
+#
+# The Debian release is trixie, not bookworm, because of `ort`: `conduit-vad`
+# links the prebuilt static onnxruntime that `ort-sys` downloads, and those
+# objects are compiled with GCC 14. Linking them against bookworm's libstdc++
+# (GCC 12) fails with thousands of undefined references to symbols such as
+# `std::string::_M_replace_cold` and `__cxa_call_terminate`, which only exist
+# from GCC 14 on. Trixie ships GCC 14. CI checks that the runtime stage below
+# names the same release, because the linked binary needs that libstdc++ at
+# run time too.
+FROM rust:1.97.1-trixie AS builder
 
 WORKDIR /src
 COPY . .
 RUN cargo build --locked --release -p conduit-api
 
-FROM debian:bookworm-slim AS runtime
+# Same Debian release as the builder, and not by habit: the binary loads the
+# libstdc++ it was linked against, so an older runtime image would fail at
+# start-up with a missing `GLIBCXX_3.4.33`, which is the same mismatch as the
+# build failure above, deferred until nobody is watching.
+FROM debian:trixie-slim AS runtime
 
 # No ca-certificates package is installed on purpose: reqwest is built with
 # `rustls-tls` and sqlx with `tls-rustls-ring`, both of which compile Mozilla's
