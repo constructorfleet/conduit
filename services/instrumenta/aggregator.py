@@ -25,6 +25,7 @@ upstream stay advertised; the call fails loud with the upstream's error.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import keyword
 import logging
@@ -195,10 +196,24 @@ class Aggregator:
         self._stdio = StdioSupervisor(self._register_stdio_tools)
         self._stdio_mcp_server: MCPServer | None = None
 
+    #: Seconds to wait for an upstream that has no `timeout_seconds` of its own
+    #: before giving up on the attach. Not a read timeout -- it only bounds the
+    #: connect-and-list at boot, so an upstream that accepts the connection and
+    #: then goes quiet cannot hold up every other upstream behind it.
+    DEFAULT_ATTACH_TIMEOUT = 30.0
+
     @staticmethod
     def _default_client_factory(server: UpstreamServer) -> Client:
         assert server.url is not None
-        return Client(server.url, raise_exceptions=True)
+        # The row's timeout is what the operator asked for; dropping it left
+        # reads from a hung upstream unbounded.
+        return Client(
+            server.url,
+            raise_exceptions=True,
+            read_timeout_seconds=(
+                None if server.timeout_seconds is None else float(server.timeout_seconds)
+            ),
+        )
 
     async def start(self, mcp_server: MCPServer) -> None:
         """Connect to every enabled HTTP upstream, register its tools/prompts/resources."""
@@ -238,10 +253,32 @@ class Aggregator:
         self, server: UpstreamServer, mcp_server: MCPServer
     ) -> None:
         assert self._exit_stack is not None
+        # `read_timeout_seconds` only bounds reads once a session exists. An
+        # upstream that accepts the connection and never answers would hang
+        # the attach itself, and `start()` runs these one after another, so
+        # one hung upstream would stall the whole boot.
+        budget = float(server.timeout_seconds or self.DEFAULT_ATTACH_TIMEOUT)
+        client = None
         try:
             client = self._client_factory(server)
-            await self._exit_stack.enter_async_context(client)
-            listed_tools = await client.list_tools()
+            async with asyncio.timeout(budget):
+                await self._exit_stack.enter_async_context(client)
+                listed_tools = await client.list_tools()
+        except TimeoutError:
+            LOG.warning(
+                "upstream %s did not answer within %ss; detaching", server.name, budget
+            )
+            await self._discard_client(server, client)
+            self._statuses[server.id] = UpstreamStatus(
+                id=server.id,
+                name=server.name,
+                url=server.url,
+                enabled=True,
+                reachable=False,
+                tool_count=0,
+                last_error=f"timed out after {budget:g}s",
+            )
+            return
         except Exception as exc:  # noqa: BLE001 — surface any client error
             LOG.warning("upstream %s unreachable: %s", server.name, exc)
             self._statuses[server.id] = UpstreamStatus(
@@ -298,6 +335,24 @@ class Aggregator:
             resource_count=resource_count,
             last_error=None,
         )
+
+    @staticmethod
+    async def _discard_client(server: UpstreamServer, client: Client | None) -> None:
+        """Close a client whose attach timed out.
+
+        The exit stack only owns what `enter_async_context` returned, and a
+        timeout means it may not have returned, so the half-open client is
+        closed here or it leaks for the life of the process. Best-effort: a
+        client that hung on connect may well hang on close, so the shutdown
+        gets its own short bound.
+        """
+        if client is None:
+            return
+        try:
+            async with asyncio.timeout(5):
+                await client.__aexit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001 -- teardown must not mask the timeout
+            LOG.debug("discarding hung upstream %s raised: %s", server.name, exc)
 
     def _register_forwarding_tool(
         self,

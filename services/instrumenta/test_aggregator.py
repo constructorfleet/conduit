@@ -248,3 +248,91 @@ def test_forwarder_maps_non_identifier_names_collision_safely() -> None:
     # Every parameter maps back to its real upstream name on forward.
     asyncio.run(forward(**{p: "v" for p in param_names}))
     assert set(calls["args"].keys()) == {"weird_name", "weird-name"}
+
+
+# ── Upstream timeouts (#276) ────────────────────────────────────────────
+
+
+def test_default_client_factory_passes_the_configured_timeout() -> None:
+    """A configured `timeout_seconds` must reach the MCP client.
+
+    The row carried the value and the factory dropped it, so a hanging (as
+    opposed to refusing) upstream stalled every read with no bound at all.
+    """
+    server = UpstreamServer(
+        id=str(uuid.uuid4()),
+        name="slow",
+        transport="http",
+        url="http://upstream.invalid/mcp",
+        command=None,
+        secret_ciphertext=None,
+        enabled=True,
+        timeout_seconds=7,
+    )
+
+    client = Aggregator._default_client_factory(server)
+
+    assert client.read_timeout_seconds == 7.0
+
+
+def test_default_client_factory_without_a_timeout_sets_none() -> None:
+    """No configured timeout stays no timeout; the default is not invented."""
+    server = UpstreamServer(
+        id=str(uuid.uuid4()),
+        name="unbounded",
+        transport="http",
+        url="http://upstream.invalid/mcp",
+        command=None,
+        secret_ciphertext=None,
+        enabled=True,
+        timeout_seconds=None,
+    )
+
+    client = Aggregator._default_client_factory(server)
+
+    assert client.read_timeout_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_hanging_upstream_is_detached_rather_than_stalling_boot(
+    backend: SqliteBackend, secret_box: SecretBox
+) -> None:
+    """A hung upstream must be given up on, not waited on forever.
+
+    `timeout_seconds` bounds reads once a session exists, but an upstream that
+    accepts the connection and never answers would hang the attach itself, and
+    with it the whole boot.
+    """
+    backend.insert_upstream_server(
+        UpstreamServer(
+            id=str(uuid.uuid4()),
+            name="hangs",
+            transport="http",
+            url="http://placeholder.invalid",
+            command=None,
+            secret_ciphertext=None,
+            enabled=True,
+            timeout_seconds=1,
+        )
+    )
+
+    class _HangingClient:
+        async def __aenter__(self):
+            await asyncio.sleep(3600)
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    aggregator = Aggregator(
+        backend, secret_box, client_factory=lambda _server: _HangingClient()
+    )
+    # Bounded by the test as well as by the code: a regression here would
+    # otherwise hang the suite instead of failing it.
+    await asyncio.wait_for(aggregator.start(build_mcp_server()), timeout=30)
+    try:
+        [status] = aggregator.statuses()
+        assert status.reachable is False
+        assert "timed out" in (status.last_error or "")
+    finally:
+        await aggregator.close()
