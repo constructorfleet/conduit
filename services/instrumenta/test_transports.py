@@ -7,10 +7,19 @@ and the choice persists across restarts.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+import uvicorn
 from fastapi.testclient import TestClient
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
+from instrumenta.app import Config, create_app
 from instrumenta.backend import SqliteBackend
 
 
@@ -70,3 +79,43 @@ class TestStreamableHttpMount:
         response = client.post("/mcp/", json=_INITIALIZE, headers=_MCP_HEADERS)
         assert response.status_code == 200, response.text
         assert "mcp-session-id" in response.headers
+
+
+@pytest.fixture
+def live_server(config: Config) -> Iterator[str]:
+    """Instrumenta on a real socket.
+
+    SSE is a long-lived GET; `TestClient` and httpx's ASGI transport both
+    buffer the whole response, so the SSE transport can only be exercised
+    against a live server with the SDK's own client.
+    """
+
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(config), host="127.0.0.1", port=0, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started:
+        assert time.monotonic() < deadline, "uvicorn did not start"
+        time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+async def _list_tools_over_sse(base_url: str) -> set[str]:
+    async with sse_client(f"{base_url}/mcp/sse/") as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.list_tools()
+            return {tool.name for tool in result.tools}
+
+
+class TestSseMount:
+    def test_mcp_sse_serves_the_builtin_tools(self, live_server: str) -> None:
+        tool_names = asyncio.run(_list_tools_over_sse(live_server))
+        assert tool_names == {"http.fetch", "time.now", "math.eval", "text.regex"}
