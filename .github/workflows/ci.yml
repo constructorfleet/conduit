@@ -482,6 +482,7 @@ jobs:
           docker compose --profile vox config --quiet
           # The legacy profile name is kept for one release cycle; verify it too.
           docker compose --profile speaker-id config --quiet
+          docker compose --profile instrumenta-postgres config --quiet
           docker compose --profile wyoming-asr config --quiet
           # The default `up` must not need the optional profile, or the
           # smallest thing that runs is not the default.

@@ -14,7 +14,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from instrumenta.app import Config, create_app
+from instrumenta.app import Config, _make_backend, create_app
 from instrumenta.backend import SqliteBackend
 from instrumenta.secret_box import SecretBox, SecretKeyMissingError
 
@@ -38,6 +38,27 @@ def config(data_dir: Path, secret_key: str) -> Config:
         base_url="http://localhost:8085",
         secret_key=secret_key,
     )
+
+
+def test_postgres_backend_is_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config(
+        data_dir=Path("/tmp/instrumenta-test"),
+        backend_type="postgres",
+        database_url="postgresql://example.invalid/instrumenta",
+        api_key=None,
+        base_url="http://localhost:8085",
+        secret_key=None,
+    )
+    selected: list[str] = []
+
+    class FakePostgresBackend:
+        def __init__(self, database_url: str) -> None:
+            selected.append(database_url)
+
+    monkeypatch.setattr("instrumenta.app.PostgresBackend", FakePostgresBackend)
+    backend = _make_backend(config)
+    assert isinstance(backend, FakePostgresBackend)
+    assert selected == ["postgresql://example.invalid/instrumenta"]
 
 
 @pytest.fixture
