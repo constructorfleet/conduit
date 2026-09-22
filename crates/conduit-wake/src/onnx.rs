@@ -432,7 +432,7 @@ pub(crate) fn thresholds_for(
 /// openWakeWord was trained on raw `int16` magnitudes rather than on samples
 /// normalized to `-1.0..=1.0`, so this scales nothing.
 pub(crate) fn samples_from_pcm(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(2).map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]]))).collect()
+    data.as_chunks::<2>().0.iter().map(|pair| f32::from(i16::from_le_bytes(*pair))).collect()
 }
 
 #[cfg(test)]

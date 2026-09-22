@@ -65,7 +65,7 @@ pub fn to_interchange(format: AudioFormat, samples: Vec<u8>) -> Result<Vec<u8>> 
 
 /// Reads little-endian 16-bit samples, dropping a trailing half sample.
 fn from_s16(samples: &[u8]) -> Vec<i16> {
-    samples.chunks_exact(2).map(|pair| i16::from_le_bytes([pair[0], pair[1]])).collect()
+    samples.as_chunks::<2>().0.iter().map(|pair| i16::from_le_bytes(*pair)).collect()
 }
 
 /// Reads little-endian floats and scales them into 16-bit.
@@ -75,9 +75,11 @@ fn from_s16(samples: &[u8]) -> Vec<i16> {
 /// which is audible as a click and disastrous for an embedding.
 fn from_f32(samples: &[u8]) -> Vec<i16> {
     samples
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|quad| {
-            let sample = f32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]);
+            let sample = f32::from_le_bytes(*quad);
             (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16
         })
         .collect()
