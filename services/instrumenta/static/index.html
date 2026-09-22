@@ -489,39 +489,60 @@ async function loadServers() {
 async function loadTools() {
   const el = document.getElementById("tools-list");
   try {
-    const statuses = await api("/upstreams");
-    const items = [];
-
-    // Built-in tools (always enabled).
-    const builtins = ["http.fetch", "time.now", "math.eval", "text.regex"];
-    builtins.forEach(name => {
-      items.push({ origin: "builtin", name, enabled: true });
-    });
-
-    // Upstream tools from statuses.
-    statuses.forEach(st => {
-      if (st.tool_count > 0) {
-        for (let i = 0; i < st.tool_count; i++) {
-          items.push({ origin: "upstream", name: `${st.name}.tool_${i}`, enabled: st.reachable });
-        }
-      }
-    });
+    // Real names from the merged surface. This used to count `tool_count`
+    // from /upstreams and render `<server>.tool_0`, which matched the count
+    // and nothing else.
+    const items = await api("/tools");
 
     if (!items.length) {
       el.innerHTML = '<p class="empty">No tools found.</p>';
       return;
     }
     el.innerHTML = `<table>
-      <thead><tr><th>Origin</th><th>Name</th></tr></thead>
+      <thead><tr><th>Enabled</th><th>Origin</th><th>Name</th><th>Description</th></tr></thead>
       <tbody>${items.map(t => `
         <tr style="${t.enabled ? "" : "opacity:0.5"}">
+          <td><input type="checkbox" class="toggle tool-toggle" data-name="${esc(t.name)}"
+                     data-origin="${esc(t.origin)}" ${t.enabled ? "checked" : ""}
+                     aria-label="Enable ${esc(t.name)}"></td>
           <td><span class="origin-badge ${t.origin}">${esc(t.origin)}</span></td>
           <td style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px">${esc(t.name)}</td>
+          <td class="note">${esc(t.description || "")}</td>
         </tr>`).join("")}
       </tbody>
     </table>`;
+
+    el.querySelectorAll(".tool-toggle").forEach(box => {
+      box.addEventListener("change", () => setToolEnabled(box));
+    });
   } catch (err) {
     el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load tools: ${esc(err.message)}</p>`;
+  }
+}
+
+// Persist one tool's enable flag (User Story 3). On failure the checkbox is
+// put back the way it was, so what is on screen never disagrees with what is
+// stored.
+async function setToolEnabled(box) {
+  const enabled = box.checked;
+  box.disabled = true;
+  try {
+    await api("/items/flags", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        origin: box.dataset.origin,
+        item_kind: "tool",
+        item_name: box.dataset.name,
+        enabled,
+      }),
+    });
+    box.closest("tr").style.opacity = enabled ? "" : "0.5";
+  } catch (err) {
+    box.checked = !enabled;
+    alert(`Failed to update ${box.dataset.name}: ${err.message}`);
+  } finally {
+    box.disabled = false;
   }
 }
 
