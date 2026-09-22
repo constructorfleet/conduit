@@ -11,7 +11,9 @@
 //! linear interpolation aliases audibly, and the cost of doing it properly is
 //! paid once per sentence on a server rather than on the device.
 
-use rubato::{FftFixedIn, Resampler as _};
+use rubato::audioadapter::Adapter as _;
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, FixedSync, Resampler as _};
 
 use crate::audio::{AudioFormat, Encoding};
 use crate::{Error, Result};
@@ -30,7 +32,7 @@ const BLOCK_FRAMES: usize = 441;
 /// output blocks are ready, which may be empty while input is still being
 /// accumulated. [`Resampler::flush`] drains the tail at the end of a stream.
 pub struct Resampler {
-    inner: FftFixedIn<f32>,
+    inner: Fft<f32>,
     /// Input samples not yet consumed by a whole block.
     pending: Vec<f32>,
     /// Odd trailing byte from a chunk that split a sample in half.
@@ -70,12 +72,12 @@ impl Resampler {
             }
         }
 
-        let inner = FftFixedIn::<f32>::new(
+        let inner = Fft::<f32>::new(
             source.sample_rate as usize,
             target.sample_rate as usize,
             BLOCK_FRAMES,
             1,
-            1,
+            FixedSync::Input,
         )
         .map_err(|error| {
             Error::Config(format!(
@@ -176,13 +178,21 @@ impl Resampler {
     /// Runs every whole block currently buffered.
     fn drain_blocks(&mut self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
+        // One channel, so "interleaved" is just the block itself; rubato reads
+        // and writes through `audioadapter` buffers rather than slices of
+        // per-channel vectors.
+        let mut frames = vec![0.0_f32; self.inner.output_frames_max()];
         while self.pending.len() >= BLOCK_FRAMES {
             let block: Vec<f32> = self.pending.drain(..BLOCK_FRAMES).collect();
+            let input = InterleavedSlice::new(&block, 1, BLOCK_FRAMES)
+                .map_err(|error| Error::Config(format!("resampling failed: {error}")))?;
             let resampled = self
                 .inner
-                .process(&[block], None)
+                .process(&input, None)
                 .map_err(|error| Error::Config(format!("resampling failed: {error}")))?;
-            for sample in &resampled[0] {
+            let ready = resampled.frames();
+            resampled.copy_from_channel_to_slice(0, 0, &mut frames[..ready]);
+            for sample in &frames[..ready] {
                 let scaled = (sample * f32::from(i16::MAX))
                     .clamp(f32::from(i16::MIN), f32::from(i16::MAX));
                 out.extend_from_slice(&(scaled as i16).to_le_bytes());
