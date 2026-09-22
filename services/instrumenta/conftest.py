@@ -7,6 +7,7 @@ without real network calls.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -20,13 +21,44 @@ from instrumenta.app import Config, create_app
 # ── Shared fixtures ─────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def clean_postgres_database() -> None:
+    """Keep the shared CI PostgreSQL database isolated per test."""
+    url = os.getenv("INSTRUMENTA_TEST_POSTGRES_URL")
+    if not url:
+        return
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "TRUNCATE TABLE upstream_servers, item_flags, local_prompts, "
+                    "local_resources, audit_log RESTART IDENTITY CASCADE"
+                )
+            except psycopg.errors.UndefinedTable:
+                pass
+
+
 @pytest.fixture
 def secret_key() -> str:
     return Fernet.generate_key().decode()
 
 
-@pytest.fixture
-def config(tmp_path: Path, secret_key: str) -> Config:
+@pytest.fixture(params=["sqlite", "postgres"])
+def config(request: pytest.FixtureRequest, tmp_path: Path, secret_key: str) -> Config:
+    if request.param == "postgres":
+        database_url = os.getenv("INSTRUMENTA_TEST_POSTGRES_URL")
+        if not database_url:
+            pytest.skip("set INSTRUMENTA_TEST_POSTGRES_URL to run PostgreSQL tests")
+        return Config(
+            data_dir=tmp_path,
+            backend_type="postgres",
+            database_url=database_url,
+            api_key=None,
+            base_url="http://localhost:8085",
+            secret_key=secret_key,
+        )
     return Config(
         data_dir=tmp_path,
         backend_type="sqlite",

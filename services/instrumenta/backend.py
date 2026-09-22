@@ -1,13 +1,9 @@
-"""SQLite and PostgreSQL backends for Instrumenta configuration.
+"""SQLite and PostgreSQL implementations of Instrumenta's configuration store.
 
-Stores upstream server configs (with encrypted secrets), per-item enable
-flags, local prompts and resources, and audit-log rows. Uses `sqlite3` from
-the stdlib run inside `asyncio.to_thread` so the FastAPI event loop stays
-unblocked without pulling in an async-sqlite dependency for a workload
-measured in a few hundred rows.
-
-The interface is deliberately narrow (`Backend` protocol) so a postgres
-backend can slot in without touching `app.py`.
+Both backends implement the same narrow :class:`Backend` protocol for upstream
+servers, item flags, local prompts/resources, and audit entries. SQLite uses a
+stdlib connection and PostgreSQL uses psycopg; the application keeps their
+storage-specific SQL and row factories behind that shared interface.
 """
 
 from __future__ import annotations
@@ -16,7 +12,7 @@ import asyncio
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -213,7 +209,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 
-def _row_to_server(row: sqlite3.Row) -> UpstreamServer:
+def _row_to_server(row: Mapping[str, object]) -> UpstreamServer:
     return UpstreamServer(
         id=row["id"],
         name=row["name"],
@@ -226,7 +222,7 @@ def _row_to_server(row: sqlite3.Row) -> UpstreamServer:
     )
 
 
-def _row_to_flag(row: sqlite3.Row) -> ItemFlag:
+def _row_to_flag(row: Mapping[str, object]) -> ItemFlag:
     return ItemFlag(
         origin=row["origin"],
         item_kind=row["item_kind"],
@@ -235,7 +231,7 @@ def _row_to_flag(row: sqlite3.Row) -> ItemFlag:
     )
 
 
-def _row_to_prompt(row: sqlite3.Row) -> LocalPrompt:
+def _row_to_prompt(row: Mapping[str, object]) -> LocalPrompt:
     return LocalPrompt(
         id=row["id"],
         name=row["name"],
@@ -244,7 +240,7 @@ def _row_to_prompt(row: sqlite3.Row) -> LocalPrompt:
     )
 
 
-def _row_to_resource(row: sqlite3.Row) -> LocalResource:
+def _row_to_resource(row: Mapping[str, object]) -> LocalResource:
     return LocalResource(
         id=row["id"],
         uri=row["uri"],
@@ -254,7 +250,7 @@ def _row_to_resource(row: sqlite3.Row) -> LocalResource:
     )
 
 
-def _row_to_audit(row: sqlite3.Row) -> AuditEntry:
+def _row_to_audit(row: Mapping[str, object]) -> AuditEntry:
     return AuditEntry(
         id=row["id"],
         called_at=row["called_at"],

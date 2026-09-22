@@ -12,6 +12,7 @@ is the aggregation logic on top of it.
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
@@ -25,7 +26,7 @@ import asyncio
 import inspect
 
 from instrumenta.aggregator import Aggregator, build_forwarder
-from instrumenta.backend import SqliteBackend, UpstreamServer
+from instrumenta.backend import Backend, PostgresBackend, SqliteBackend, UpstreamServer
 from instrumenta.mcp_app import build_mcp_server
 from instrumenta.supervisor import http_connect
 from instrumenta.secret_box import SecretBox
@@ -57,8 +58,15 @@ def secret_box() -> SecretBox:
 
 
 @pytest.fixture
-def backend(tmp_path: Path) -> SqliteBackend:
-    return SqliteBackend(tmp_path / "instrumenta.db")
+def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Backend:
+    url = os.getenv("INSTRUMENTA_TEST_POSTGRES_URL")
+    if url:
+        instance = PostgresBackend(url)
+    else:
+        instance = SqliteBackend(tmp_path / "instrumenta.db")
+    yield instance
+    if url:
+        instance._conn.close()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

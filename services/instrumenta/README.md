@@ -15,7 +15,7 @@ under wayfinder map [#199](https://github.com/constructorfleet/conduit/issues/19
 | --- | --- | --- |
 | `INSTRUMENTA_DATA_DIR` | `/data` | Where SQLite + link records live |
 | `INSTRUMENTA_BACKEND` | `sqlite` | Backend selector (`sqlite` or `postgres`) |
-| `INSTRUMENTA_DATABASE_URL` | (unset) | PostgreSQL connection URL when using the `postgres` backend |
+| `INSTRUMENTA_DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/postgres` when `INSTRUMENTA_BACKEND=postgres`; otherwise unset | PostgreSQL connection URL |
 | `INSTRUMENTA_BASE_URL` | `http://localhost:8085` | Advertised in link handshake |
 | `INSTRUMENTA_SECRET_KEY` | (unset) | Fernet key for at-rest secret encryption |
 | `INSTRUMENTA_API_KEY` | (unset) | Bearer token protecting mutating routes (added by later PRs) |
