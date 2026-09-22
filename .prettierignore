@@ -1,0 +1,8 @@
+# Markdown outside the frontend (README, CHANGELOG, docs/, crate READMEs) is
+# hand-written prose that has never been Prettier-formatted, so it is excluded
+# on purpose rather than left to drift against a check nobody runs. The
+# frontend keeps its own .prettierignore and `npm run format` gate; this file
+# only applies when Prettier is run from the repository root.
+# Verified by scripts/tests/prettier_ignore_test.sh.
+*.md
+!frontend/**/*.md

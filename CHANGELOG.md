@@ -8,6 +8,11 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- Markdown outside `frontend/` (README, CHANGELOG, `docs/`, crate READMEs) is
+  now explicitly excluded from Prettier by a root `.prettierignore`. It is
+  hand-written prose that was never Prettier-formatted, so `prettier --check`
+  on it reported drift that no CI job enforced. A new script test, run in the
+  frontend CI job, proves the exclusion is in place and no wider than markdown.
 - The Operator Console's `npm audit` is clean again: `nanoid` (a transitive
   dependency of Vite through PostCSS) is bumped past GHSA-2v37-7h3g-55p8 in the
   lockfile. `npm audit --audit-level=high` now runs in the CI `audit` job and
