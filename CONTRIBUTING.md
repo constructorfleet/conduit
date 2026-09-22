@@ -59,6 +59,11 @@ cargo llvm-cov --workspace --all-features --cobertura --output-path cobertura.xm
 docker buildx build --load -t conduit-check .
 ```
 
+The Operator Console pins its Node version in `frontend/.nvmrc`, currently the
+Active LTS. Both CI `setup-node` steps read that file, so `nvm use` in
+`frontend/` gives you the same major CI runs; it is the only place the version
+is written.
+
 Markdown outside `frontend/` (README, CHANGELOG, `docs/`, crate READMEs) is
 hand-written prose and is deliberately excluded from Prettier by the root
 `.prettierignore`; do not run `prettier --write` over it. The frontend's

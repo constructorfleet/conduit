@@ -8,6 +8,12 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The Operator Console's CI now runs on Node 24, the current Active LTS, rather
+  than Node 22, which has moved to maintenance. The version is pinned once in
+  `frontend/.nvmrc` and both `setup-node` steps (the `frontend` job and the
+  `npm audit` step in `audit`) read it through `node-version-file`, so a local
+  `nvm use` and the two CI jobs can no longer drift apart and the next LTS bump
+  is a one-line change.
 - The root `Dockerfile` builds again. Its builder and runtime stages move from
   Debian bookworm to trixie, because the prebuilt static onnxruntime that
   `ort-sys` downloads for `conduit-vad` is compiled with GCC 14 and linking it
