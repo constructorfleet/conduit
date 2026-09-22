@@ -43,6 +43,23 @@ class ItemFlag:
     enabled: bool = True
 
 
+TRANSPORTS: tuple[str, ...] = ("http", "sse")
+"""Downstream MCP transports Instrumenta can expose, in display order."""
+
+
+@dataclass(frozen=True)
+class TransportFlag:
+    """Row for `transport_flags` — enable/disable a downstream MCP transport.
+
+    Absence of a row means enabled: both transports are on by default
+    (spec #198, User Story 16) and a row is only written when an operator
+    flips a toggle.
+    """
+
+    transport: str
+    enabled: bool = True
+
+
 @dataclass(frozen=True)
 class LocalPrompt:
     """Row for `local_prompts` — a locally-authored prompt template."""
@@ -110,6 +127,17 @@ class Backend(Protocol):
         raise NotImplementedError
 
     def delete_item_flag(self, origin: str, item_kind: str, item_name: str) -> bool:
+        raise NotImplementedError
+
+    # ── transport_flags ─────────────────────────────────────────────────
+
+    def list_transport_flags(self) -> list[TransportFlag]:
+        raise NotImplementedError
+
+    def is_transport_enabled(self, transport: str) -> bool:
+        raise NotImplementedError
+
+    def set_transport_enabled(self, transport: str, enabled: bool) -> None:
         raise NotImplementedError
 
     # ── local_prompts ───────────────────────────────────────────────────
@@ -180,6 +208,11 @@ CREATE TABLE IF NOT EXISTS item_flags (
     item_name TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (origin, item_kind, item_name)
+);
+
+CREATE TABLE IF NOT EXISTS transport_flags (
+    transport TEXT PRIMARY KEY CHECK (transport IN ('http', 'sse')),
+    enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS local_prompts (
@@ -380,6 +413,30 @@ class SqliteBackend:
             (origin, item_kind, item_name),
         )
         return cur.rowcount > 0
+
+    # ── transport_flags ─────────────────────────────────────────────────
+
+    def list_transport_flags(self) -> list[TransportFlag]:
+        cur = self._conn.execute("SELECT transport, enabled FROM transport_flags")
+        stored = {row["transport"]: bool(row["enabled"]) for row in cur.fetchall()}
+        return [
+            TransportFlag(transport=name, enabled=stored.get(name, True))
+            for name in TRANSPORTS
+        ]
+
+    def is_transport_enabled(self, transport: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT enabled FROM transport_flags WHERE transport = ?", (transport,)
+        )
+        row = cur.fetchone()
+        return True if row is None else bool(row["enabled"])
+
+    def set_transport_enabled(self, transport: str, enabled: bool) -> None:
+        self._conn.execute(
+            "INSERT INTO transport_flags (transport, enabled) VALUES (?, ?) "
+            "ON CONFLICT (transport) DO UPDATE SET enabled = excluded.enabled",
+            (transport, 1 if enabled else 0),
+        )
 
     # ── local_prompts ───────────────────────────────────────────────────
 
