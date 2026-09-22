@@ -85,6 +85,12 @@ jobs:
         run: npm run build
       - working-directory: frontend
         run: npm run format
+      # Runs here rather than in `scripts` because it needs the Prettier that
+      # `npm ci` just installed. Root and docs markdown is deliberately excluded
+      # from Prettier by the root .prettierignore; this proves the exclusion is
+      # in place and no wider than intended.
+      - name: Test the root .prettierignore
+        run: scripts/tests/prettier_ignore_test.sh
 
   # The repository ruleset enforces a minimum coverage percentage and a maximum
   # drop against the default branch, and that rule blocks a merge when analysis
