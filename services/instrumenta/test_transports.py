@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from instrumenta.backend import SqliteBackend
 
 
@@ -35,3 +37,36 @@ class TestBackendTransportFlags:
         backend.set_transport_enabled("http", False)
         backend.set_transport_enabled("http", True)
         assert backend.is_transport_enabled("http") is True
+
+
+_MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2025-06-18",
+}
+
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    },
+}
+
+
+class TestStreamableHttpMount:
+    def test_mcp_http_serves_initialize_handshake(self, client: TestClient) -> None:
+        response = client.post("/mcp/http/", json=_INITIALIZE, headers=_MCP_HEADERS)
+        assert response.status_code == 200, response.text
+        assert "mcp-session-id" in response.headers
+
+    def test_legacy_mcp_root_still_serves_streamable_http(
+        self, client: TestClient
+    ) -> None:
+        # `/mcp/` predates the per-transport split; clients configured against
+        # it keep working.
+        response = client.post("/mcp/", json=_INITIALIZE, headers=_MCP_HEADERS)
+        assert response.status_code == 200, response.text
+        assert "mcp-session-id" in response.headers
