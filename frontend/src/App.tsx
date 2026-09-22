@@ -56,6 +56,7 @@ import type {
   ProviderSecret,
   ScriptEngine,
   SpeakerEngine,
+  ToolCallStatus,
   TurnSnapshot,
   TransformRule,
   LinkedServiceView,
@@ -4984,6 +4985,12 @@ interface ReconstructedStep {
   error: boolean;
 }
 
+// A call the operator should see as unfinished: policy denial, a speaker's
+// refusal, and an ordinary failure all mean the tool never ran.
+function didNotRun(status: ToolCallStatus): boolean {
+  return status === "failed" || status === "denied" || status === "refused";
+}
+
 function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
   const steps = snapshot.items.flatMap((item): ReconstructedStep[] => {
     if (item.kind === "utterance_segment") {
@@ -5017,9 +5024,7 @@ function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
         type: "Tool Batch",
         component: "tools",
         detail: `${item.calls.length} ${item.calls.length === 1 ? "call" : "calls"} from model round ${item.model_round}`,
-        error: item.calls.some((call) =>
-          ["failed", "denied"].includes(call.status),
-        ),
+        error: item.calls.some((call) => didNotRun(call.status)),
       },
       ...item.calls.map((call) => ({
         id: `${item.id}-${call.id}`,
@@ -5027,7 +5032,7 @@ function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
         type: "Tool Call",
         component: "tools",
         detail: `${call.name ?? call.id} / ${call.status}`,
-        error: ["failed", "denied"].includes(call.status),
+        error: didNotRun(call.status),
       })),
     ];
   });
@@ -5208,6 +5213,7 @@ function eventComponent(event: Event): string {
     case "ToolConfirmationRequested":
     case "ToolCompleted":
     case "ToolFailed":
+    case "ToolConfirmationDenied":
       return "tools";
     case "TtsStarted":
     case "UtteranceSegmentStarted":
@@ -5220,6 +5226,7 @@ function eventComponent(event: Event): string {
     case "LinkedServiceUnlinked":
       return "diagnostics";
   }
+  return unknownEvent(event);
 }
 
 function eventDetail(event: Event): string | null {
@@ -5256,6 +5263,7 @@ function eventDetail(event: Event): string | null {
       return `${event.calls.length} calls from model round ${event.model_round}`;
     case "ToolStarted":
     case "ToolCompleted":
+    case "ToolConfirmationDenied":
       return event.call;
     case "ToolConfirmationRequested":
       return event.prompt;
@@ -5273,6 +5281,14 @@ function eventDetail(event: Event): string | null {
     case "LinkedServiceUnlinked":
       return event.peer_id;
   }
+  return unknownEvent(event);
+}
+
+// `event` is `never` once every variant above is handled, so a regenerated
+// contract that adds a variant fails `tsc` here instead of throwing at
+// render time in front of an operator.
+function unknownEvent(event: never): never {
+  throw new Error(`Received an unknown event: ${JSON.stringify(event)}`);
 }
 
 function displayEventType(type: string): string {

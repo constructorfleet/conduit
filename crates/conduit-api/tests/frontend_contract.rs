@@ -952,14 +952,19 @@ export interface ProviderRenameResult {{
 }}
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole =
+  | "assistant_preamble"
+  | "tool_output"
+  | "assistant_response"
+  | "confirmation_prompt";
 export type ToolCallStatus =
   | "requested"
   | "running"
   | "completed"
   | "failed"
   | "denied"
-  | "awaiting_confirmation";
+  | "awaiting_confirmation"
+  | "refused";
 
 export interface TurnList {{
   turns: TurnSummary[];
@@ -1676,7 +1681,8 @@ export type FinishReason = "stop" | "length" | "tool_use" | "cancelled";
 export type UtteranceSegmentRole =
   | "assistant_preamble"
   | "tool_output"
-  | "assistant_response";
+  | "assistant_response"
+  | "confirmation_prompt";
 export type Modality = "audio" | "text" | "utterance";
 
 export interface AudioFormat {{
@@ -1722,6 +1728,7 @@ export type Event =
   | {{ type: "ToolConfirmationRequested"; call: ToolCallId; prompt: string }}
   | {{ type: "ToolCompleted"; call: ToolCallId; duration_ms: number }}
   | {{ type: "ToolFailed"; call: ToolCallId; error: string }}
+  | {{ type: "ToolConfirmationDenied"; call: ToolCallId }}
   | {{ type: "TtsStarted"; voice: string }}
   | {{
       type: "UtteranceSegmentStarted";

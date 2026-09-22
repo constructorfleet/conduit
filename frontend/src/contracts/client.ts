@@ -593,14 +593,19 @@ export interface ProviderRenameResult {
 }
 
 export type TurnStatus = "running" | "completed" | "cancelled" | "failed" | "degraded";
-export type UtteranceSegmentRole = "assistant_preamble" | "tool_output" | "assistant_response";
+export type UtteranceSegmentRole =
+  | "assistant_preamble"
+  | "tool_output"
+  | "assistant_response"
+  | "confirmation_prompt";
 export type ToolCallStatus =
   | "requested"
   | "running"
   | "completed"
   | "failed"
   | "denied"
-  | "awaiting_confirmation";
+  | "awaiting_confirmation"
+  | "refused";
 
 export interface TurnList {
   turns: TurnSummary[];
