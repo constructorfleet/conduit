@@ -6,6 +6,7 @@ runs stay dependency-free; CI starts the compose database and sets the URL.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -33,9 +34,8 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Backend:
             pytest.skip("set INSTRUMENTA_TEST_POSTGRES_URL to run PostgreSQL tests")
         instance = PostgresBackend(url)
     yield instance
-    if request.param == "postgres":
-        # The backend has an async close API; tests are synchronous by design.
-        instance._conn.close()  # type: ignore[attr-defined]
+    # Exercise the public lifecycle seam for every backend.
+    asyncio.run(instance.close())
 
 
 def test_backend_contract(backend: Backend) -> None:

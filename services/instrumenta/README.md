@@ -13,7 +13,7 @@ under wayfinder map [#199](https://github.com/constructorfleet/conduit/issues/19
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `INSTRUMENTA_DATA_DIR` | `/data` | Where SQLite + link records live |
+| `INSTRUMENTA_DATA_DIR` | `/data` | Where the SQLite database and link records live when using SQLite; PostgreSQL data is stored at `INSTRUMENTA_DATABASE_URL` |
 | `INSTRUMENTA_BACKEND` | `sqlite` | Backend selector (`sqlite` or `postgres`) |
 | `INSTRUMENTA_DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/postgres` when `INSTRUMENTA_BACKEND=postgres`; otherwise unset | PostgreSQL connection URL |
 | `INSTRUMENTA_BASE_URL` | `http://localhost:8085` | Advertised in link handshake |
