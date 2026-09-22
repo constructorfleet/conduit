@@ -254,6 +254,8 @@ jobs:
         run: scripts/tests/model_fetch_test.sh
       - name: Test scripts/prune-target.sh
         run: scripts/tests/prune_target_test.sh
+      - name: Check the service base images agree
+        run: scripts/tests/base_image_parity_test.sh
 
   # Conduit Vox — the reference speaker identification service — ships in this
   # repository and is published as an image, so its tests and its build are
