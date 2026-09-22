@@ -22,6 +22,23 @@ under wayfinder map [#199](https://github.com/constructorfleet/conduit/issues/19
 Instrumenta refuses to start if any encrypted secret exists in the backend
 and `INSTRUMENTA_SECRET_KEY` is not set — misconfiguration surfaces at boot.
 
+## Upstream transports
+
+Instrumenta aggregates two kinds of upstream MCP server, both re-exposed under
+a `<server_name>.<tool_name>` prefix so nothing collides with the built-ins:
+
+- **HTTP** upstreams are connected once at boot via the SDK's streamable-HTTP
+  client.
+- **stdio** upstreams are spawned and supervised via the SDK's stdio client
+  transport. Each child is driven by one supervise task with capped
+  exponential-backoff autorestart. Its forwarding tools are registered the
+  first time a connection *succeeds* — including a retry after a lost boot
+  race — so a transient child failure never permanently hides its tools.
+  Per-upstream reachability is reported on `/upstreams`, never on `/health`.
+
+Forwarded tools mirror the upstream tool's own parameter schema, so a model
+calling them sees and validates the real arguments rather than an opaque bag.
+
 ## Running
 
 ```
@@ -39,6 +56,7 @@ cd services && PYTHONPATH=. pytest instrumenta/test_app.py
 - `scripts/dev.sh` integration on `:8085` (`--instrumenta-port`, `INSTRUMENTA_BASE_URL`).
 - Aggregator (HTTP upstream MCP clients).
 - Built-in tools: `http.fetch`, `time.now`, `math.eval`, `text.regex`.
-- Stdio upstream supervisor + layered `instrumenta-node` / `instrumenta-python` images.
+- Layered `instrumenta-node` / `instrumenta-python` images so stdio upstreams
+  can run node/python servers without bloating the base image.
 - HTMX configuration UI.
 - Audit log table + `/audit` viewer.

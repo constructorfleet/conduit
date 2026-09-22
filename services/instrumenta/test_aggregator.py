@@ -21,7 +21,10 @@ from mcp.client import Client
 from mcp.client._memory import InMemoryTransport
 from mcp.server.mcpserver import MCPServer
 
-from instrumenta.aggregator import Aggregator
+import asyncio
+import inspect
+
+from instrumenta.aggregator import Aggregator, build_forwarder
 from instrumenta.backend import SqliteBackend, UpstreamServer
 from instrumenta.mcp_app import build_mcp_server
 from instrumenta.secret_box import SecretBox
@@ -164,3 +167,84 @@ async def test_unreachable_upstream_records_last_error(
         assert "simulated unreachable" in (status.last_error or "")
     finally:
         await aggregator.close()
+
+
+@pytest.mark.asyncio
+async def test_forwarded_tool_call_passes_arguments_through(
+    backend: SqliteBackend, secret_box: SecretBox
+) -> None:
+    """A forwarded call with real arguments reaches the upstream.
+
+    Guards the schema-driven forwarder: a `forward(**kwargs)` whose signature
+    was left generic advertises a single opaque `kwargs` field and rejects any
+    real call at validation time. The forwarder must instead mirror the
+    upstream tool's parameters.
+    """
+    backend.insert_upstream_server(
+        UpstreamServer(
+            id=str(uuid.uuid4()),
+            name="fake",
+            transport="http",
+            url="http://placeholder.invalid",
+            command=None,
+            secret_ciphertext=None,
+            enabled=True,
+            timeout_seconds=None,
+        )
+    )
+    upstream = _make_upstream_server()
+    aggregator = Aggregator(
+        backend, secret_box, client_factory=_in_memory_client_factory(upstream)
+    )
+    mcp_server = build_mcp_server()
+    await aggregator.start(mcp_server)
+    try:
+        # The forwarded tool advertises the upstream's real parameter, not a
+        # `kwargs` bag.
+        [tool] = [t for t in await mcp_server.list_tools() if t.name == "fake.echo"]
+        assert "message" in (tool.input_schema.get("properties") or {})
+
+        client = Client(InMemoryTransport(mcp_server), raise_exceptions=True)
+        async with client:
+            result = await client.call_tool("fake.echo", {"message": "hi"})
+        assert "hi" in result.content[0].text
+    finally:
+        await aggregator.close()
+
+
+def test_forwarder_maps_non_identifier_names_collision_safely() -> None:
+    """Finding 5: a generated alias for a non-identifier property must never
+    collide with a different property (real or aliased) and silently drop it.
+    """
+    calls: dict[str, object] = {}
+
+    class _FakeClient:
+        async def call_tool(self, name, args):
+            calls["name"] = name
+            calls["args"] = args
+
+            class _R:
+                content: list = []
+
+            return _R()
+
+    # `weird_name` is a valid identifier and is kept; `weird-name` is not and
+    # would derive the same alias — the collision path must bump it.
+    schema = {
+        "type": "object",
+        "properties": {
+            "weird_name": {"type": "string"},
+            "weird-name": {"type": "string"},
+        },
+        "required": ["weird_name"],
+    }
+    forward = build_forwarder(lambda: _FakeClient(), "t", "srv", schema)
+    param_names = list(inspect.signature(forward).parameters)
+
+    # Two distinct parameters survive; neither was dropped by a collision.
+    assert len(param_names) == 2
+    assert "weird_name" in param_names
+
+    # Every parameter maps back to its real upstream name on forward.
+    asyncio.run(forward(**{p: "v" for p in param_names}))
+    assert set(calls["args"].keys()) == {"weird_name", "weird-name"}
