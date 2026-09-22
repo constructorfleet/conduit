@@ -487,7 +487,11 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
+      # Full history: the onnxruntime link check below decides whether to run
+      # by diffing against the pull request's base.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # Two pins for one toolchain only stay honest if something compares them.
       - name: Check Dockerfile matches rust-toolchain.toml
         run: |
@@ -521,6 +525,41 @@ jobs:
             exit 1
           fi
           echo "both stages are Debian ${builder}"
+      # `conduit-vad` links the prebuilt static onnxruntime that `ort-sys`
+      # downloads, and those objects are compiled with some GCC whose version
+      # the crate records nowhere (#279). The requirement it places on the
+      # image's libstdc++ can therefore rise on any `ort` bump, silently: the
+      # `check` job builds on the runner's toolchain and never sees it, and
+      # the image build that would see it does not run on pull requests.
+      #
+      # Linking the vad test binary inside the builder image is the cheap
+      # version of that build — one crate, no release profile — and it is the
+      # exact failure #258 hit. It runs on merges, and on a pull request only
+      # when something that can move the requirement changed, so an `ort` bump
+      # fails in review rather than after it.
+      - name: Decide whether the onnxruntime link needs rechecking
+        id: ort_link
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "needed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          base="origin/${{ github.base_ref }}"
+          changed=$(git diff --name-only "${base}...HEAD")
+          if echo "${changed}" | grep -qE '^(Dockerfile|rust-toolchain.toml|Cargo.lock|Cargo.toml|crates/conduit-vad/)'; then
+            echo "an ort, toolchain or image change is in this diff; rechecking the link"
+            echo "needed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "nothing here can move the onnxruntime requirement; skipping"
+            echo "needed=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Check conduit-vad links against the builder image's libstdc++
+        if: steps.ort_link.outputs.needed == 'true'
+        run: |
+          builder=$(sed -ne 's/^FROM \(rust:[^ ]*\) AS builder$/\1/p' Dockerfile)
+          echo "linking conduit-vad inside ${builder}"
+          docker run --rm --volume "${PWD}:/src" --workdir /src "${builder}" \
+            cargo test -p conduit-vad --no-run --locked
       - uses: docker/setup-buildx-action@v4
         if: github.event_name != 'pull_request'
       # Deliberately uncached. A `type=gha,mode=max` cache of a Rust release

@@ -70,6 +70,22 @@ hand-written prose and is deliberately excluded from Prettier by the root
 `.prettierignore`; do not run `prettier --write` over it. The frontend's
 `npm run format` covers only `frontend/`.
 
+Bumping `ort` is not an ordinary dependency bump. `conduit-vad` links the
+prebuilt static onnxruntime that `ort-sys` downloads, and the GCC those
+objects were built with — which sets the libstdc++ the image must ship — is
+recorded nowhere in the crate. The `docker` CI job relinks `conduit-vad`
+inside the builder image whenever a diff touches `ort`, `rust-toolchain.toml`
+or the `Dockerfile`; to check locally before pushing:
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src rust:1.98.0-trixie \
+  cargo test -p conduit-vad --no-run --locked
+```
+
+Thousands of undefined references to `std::` symbols mean the base image is
+older than onnxruntime now requires, and the Debian release in both
+`Dockerfile` stages has to move together.
+
 PostgreSQL store tests run only when `CONDUIT_TEST_POSTGRES_URL` is set. CI
 provides a PostgreSQL service, so a local run without that variable is not the
 same coverage as CI.
