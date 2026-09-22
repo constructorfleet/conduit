@@ -53,10 +53,16 @@ Additional CI jobs run:
 ```sh
 firmware/test.sh
 scripts/tests/dev_test.sh
+scripts/tests/prettier_ignore_test.sh
 cargo audit
 cargo llvm-cov --workspace --all-features --cobertura --output-path cobertura.xml
 docker buildx build --load -t conduit-check .
 ```
+
+Markdown outside `frontend/` (README, CHANGELOG, `docs/`, crate READMEs) is
+hand-written prose and is deliberately excluded from Prettier by the root
+`.prettierignore`; do not run `prettier --write` over it. The frontend's
+`npm run format` covers only `frontend/`.
 
 PostgreSQL store tests run only when `CONDUIT_TEST_POSTGRES_URL` is set. CI
 provides a PostgreSQL service, so a local run without that variable is not the
