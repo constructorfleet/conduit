@@ -19,8 +19,15 @@ pick up new upstreams. This keeps the aggregator simple and matches Conduit's
 own snapshot-once posture (see wayfinder decision #204). A follow-up PR can
 add hot-reload once demand exists.
 
-Filter-on-unreachable is deferred (decision #204): items from an unreachable
-upstream stay advertised; the call fails loud with the upstream's error.
+Filter-on-unreachable now holds for stdio upstreams (#274): a child that dies
+has its forwarding tools removed and gets them back on reconnect, because a
+tool that cannot be called should not be advertised.
+
+It does not yet hold for HTTP upstreams. Those are attached once at `start()`
+and never re-probed, so an HTTP upstream that goes away after boot keeps its
+items advertised and the call fails loud with the upstream's error -- the
+posture decision #204 describes. Closing that gap means giving HTTP upstreams
+the liveness polling stdio already has.
 """
 
 from __future__ import annotations
@@ -193,8 +200,13 @@ class Aggregator:
         self._clients: dict[str, Client] = {}
         self._upstream_prompts: dict[str, UpstreamPrompts] = {}
         self._upstream_resources: dict[str, UpstreamResources] = {}
-        self._stdio = StdioSupervisor(self._register_stdio_tools)
+        self._stdio = StdioSupervisor(
+            self._register_stdio_tools, unregister_tools=self._unregister_stdio_tools
+        )
         self._stdio_mcp_server: MCPServer | None = None
+        #: Prefixed tool names currently registered for each stdio upstream,
+        #: so a removal only ever touches names this aggregator added.
+        self._stdio_tool_names: dict[str, list[str]] = {}
 
     #: Seconds to wait for an upstream that has no `timeout_seconds` of its own
     #: before giving up on the attach. Not a read timeout -- it only bounds the
@@ -360,7 +372,8 @@ class Aggregator:
         tool: types.Tool,
         get_client: Callable[[], Client | None],
         mcp_server: MCPServer,
-    ) -> None:
+    ) -> str:
+        """Register one forwarding tool; returns the prefixed name it took."""
         prefixed_name = f"{server.name}.{tool.name}"
         forward = build_forwarder(
             get_client, tool.name, server.name, getattr(tool, "input_schema", None)
@@ -370,6 +383,7 @@ class Aggregator:
             name=prefixed_name,
             description=tool.description or f"Forwarded from {server.name}",
         )
+        return prefixed_name
 
     def _register_stdio_tools(
         self,
@@ -379,16 +393,37 @@ class Aggregator:
     ) -> None:
         """Supervisor callback: register a stdio upstream's forwarding tools.
 
-        Called on the first successful connection (which may be a retry after
-        a failed boot-race attempt), so tools appear without an Instrumenta
-        restart. Forwarders read the live client from `holder`, which the
-        supervisor swaps in place across reconnects.
+        Called on each connection that succeeds while the upstream has no
+        tools registered -- the first one, a retry after a failed boot race,
+        or a reconnect after the child died -- so tools appear without an
+        Instrumenta restart. Forwarders read the live client from `holder`,
+        which the supervisor swaps in place across reconnects.
         """
         assert self._stdio_mcp_server is not None
+        registered = []
         for tool in tools:
-            self._register_forwarding_tool(
-                server, tool, lambda h=holder: h.client, self._stdio_mcp_server
+            registered.append(
+                self._register_forwarding_tool(
+                    server, tool, lambda h=holder: h.client, self._stdio_mcp_server
+                )
             )
+        self._stdio_tool_names[server.id] = registered
+
+    def _unregister_stdio_tools(
+        self, server: UpstreamServer, _tools: list[types.Tool]
+    ) -> None:
+        """Supervisor callback: take a dead upstream's tools off the surface.
+
+        Removes the names recorded at registration rather than re-deriving
+        them from the tool list, because the list came from the child and the
+        child is the thing that has gone away.
+        """
+        assert self._stdio_mcp_server is not None
+        for name in self._stdio_tool_names.pop(server.id, []):
+            try:
+                self._stdio_mcp_server.remove_tool(name)
+            except Exception as exc:  # noqa: BLE001 — removal is best-effort
+                LOG.debug("tool %s was already gone: %s", name, exc)
 
     def client_for(self, server_id: str) -> Client | None:
         """Return the MCP client for a given upstream, or None."""

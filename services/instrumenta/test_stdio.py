@@ -86,6 +86,21 @@ def _register_on(mcp_server: MCPServer):
     return register
 
 
+def _unregister_on(mcp_server: MCPServer):
+    """The matching removal callback.
+
+    Derives the prefixed name from the same rule the registration helper
+    uses rather than reading anything the supervisor tracks, so the test does
+    not simply agree with the production bookkeeping about what was added.
+    """
+
+    def unregister(server: UpstreamServer, tools) -> None:
+        for tool in tools:
+            mcp_server.remove_tool(f"{server.name}.{tool.name}")
+
+    return unregister
+
+
 async def _call_tool(mcp_server: MCPServer, name: str, args: dict) -> str:
     client = Client(InMemoryTransport(mcp_server), raise_exceptions=True)
     async with client:
@@ -170,3 +185,63 @@ class TestStdioSupervisor:
             assert status["last_error"] is not None
         finally:
             await supervisor.close()
+
+    @pytest.mark.asyncio
+    async def test_tools_disappear_while_the_child_is_down(self, tmp_path: Path) -> None:
+        """User Story 24 for stdio (#274): a dead child's tools leave the surface.
+
+        The supervisor registered once and never unregistered, so a model
+        picking from `tools/list` could choose a tool whose upstream was gone
+        and get "upstream is not currently connected" at call time. A tool that
+        cannot be called should not be advertised.
+        """
+        gate = tmp_path / "gate"
+        gate.write_text("open")  # present → the child comes up
+        mcp_server = MCPServer(name="host")
+        command = f"{sys.executable} {FIXTURE} {gate}"
+        supervisor = StdioSupervisor(
+            _register_on(mcp_server),
+            unregister_tools=_unregister_on(mcp_server),
+            initial_backoff=0.05,
+            liveness_poll=0.2,
+        )
+        supervisor.add(_stdio_server("box", command))
+        await supervisor.start()
+        try:
+            assert "box.echo" in {t.name for t in await mcp_server.list_tools()}
+
+            # Kill the connected child: the fixture exits when the gate goes.
+            gate.unlink()
+            await _wait_until(lambda: supervisor.statuses()[0]["reachable"] is False)
+
+            assert "box.echo" not in {t.name for t in await mcp_server.list_tools()}
+
+            # And they come back on reconnect, still callable.
+            gate.write_text("open")
+            await _wait_until(lambda: supervisor.statuses()[0]["reachable"] is True)
+
+            assert "box.echo" in {t.name for t in await mcp_server.list_tools()}
+            assert await _call_tool(mcp_server, "box.echo", {"message": "back"}) == "echo: back"
+        finally:
+            await supervisor.close()
+
+    @pytest.mark.asyncio
+    async def test_close_leaves_no_tools_behind(self, tmp_path: Path) -> None:
+        """Shutdown removes them too, so a restarted aggregator starts clean."""
+        gate = tmp_path / "gate"
+        gate.write_text("open")
+        mcp_server = MCPServer(name="host")
+        command = f"{sys.executable} {FIXTURE} {gate}"
+        supervisor = StdioSupervisor(
+            _register_on(mcp_server),
+            unregister_tools=_unregister_on(mcp_server),
+            initial_backoff=0.05,
+            liveness_poll=0.2,
+        )
+        supervisor.add(_stdio_server("box", command))
+        await supervisor.start()
+        assert "box.echo" in {t.name for t in await mcp_server.list_tools()}
+
+        await supervisor.close()
+
+        assert "box.echo" not in {t.name for t in await mcp_server.list_tools()}

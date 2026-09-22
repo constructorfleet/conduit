@@ -336,3 +336,76 @@ async def test_hanging_upstream_is_detached_rather_than_stalling_boot(
         assert "timed out" in (status.last_error or "")
     finally:
         await aggregator.close()
+
+
+# ── stdio upstreams leaving and rejoining the surface (#274) ────────────
+
+
+@pytest.mark.asyncio
+async def test_stdio_tools_follow_the_child_through_the_aggregator(
+    backend: SqliteBackend, secret_box: SecretBox, tmp_path: Path
+) -> None:
+    """The production wiring, not the supervisor in isolation.
+
+    `test_stdio.py` drives the supervisor with its own callbacks; this proves
+    the Aggregator's own register/unregister pair keeps `tools/list` honest,
+    including the prefixed-name bookkeeping that decides what gets removed.
+    """
+    import sys
+
+    from instrumenta import _stdio_fixtures
+
+    gate = tmp_path / "gate"
+    gate.write_text("open")
+    backend.insert_upstream_server(
+        UpstreamServer(
+            id=str(uuid.uuid4()),
+            name="box",
+            transport="stdio",
+            url=None,
+            command=f"{sys.executable} {_stdio_fixtures.__file__} {gate}",
+            secret_ciphertext=None,
+            enabled=True,
+            timeout_seconds=None,
+        )
+    )
+
+    aggregator = Aggregator(backend, secret_box)
+    # Production timings would make this test spend ten seconds waiting for a
+    # liveness poll and a backoff. The behaviour under test is what happens on
+    # those edges, not how long they take.
+    aggregator._stdio._liveness_poll = 0.2
+    aggregator._stdio._initial_backoff = 0.05
+
+    mcp_server = build_mcp_server()
+    await aggregator.start(mcp_server)
+    try:
+
+        async def names() -> set[str]:
+            return {tool.name for tool in await mcp_server.list_tools()}
+
+        assert "box.echo" in await names()
+
+        gate.unlink()  # the child exits
+        await _until(lambda: not any(s.reachable for s in aggregator.statuses()))
+        assert "box.echo" not in await names()
+
+        gate.write_text("open")  # and comes back
+        await _until(lambda: any(s.reachable for s in aggregator.statuses()))
+        assert "box.echo" in await names()
+
+        # Registered once, not once per reconnect: a duplicate would mean the
+        # bookkeeping had lost track of what it already had.
+        assert sorted(await names()).count("box.echo") == 1
+    finally:
+        await aggregator.close()
+
+
+async def _until(predicate, timeout: float = 10.0) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not met within timeout")

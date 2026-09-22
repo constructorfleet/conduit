@@ -46,6 +46,12 @@ a `<server_name>.<tool_name>` prefix so nothing collides with the built-ins:
   race — so a transient child failure never permanently hides its tools.
   Per-upstream reachability is reported on `/upstreams`, never on `/health`.
 
+  A child that dies has its tools removed from `tools/list` until it
+  reconnects, so a model never picks a tool whose upstream is gone. This does
+  **not** yet apply to HTTP upstreams: they are attached once at boot and
+  never re-probed, so one that goes away later stays advertised and fails at
+  call time.
+
 Forwarded tools mirror the upstream tool's own parameter schema, so a model
 calling them sees and validates the real arguments rather than an opaque bag.
 
