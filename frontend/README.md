@@ -14,6 +14,22 @@ npm run build
 npm run format
 ```
 
+## Dependencies
+
+`npm audit --audit-level=high` runs in CI alongside `cargo audit`, and
+Dependabot opens weekly pull requests for this lockfile, so a transitive
+advisory is a failing job rather than a count to notice in `npm ci` output.
+
+`allowScripts` in `package.json` is npm 12's install-script policy. Dependency
+install scripts are blocked by default there, and every package with one is
+listed after install until it is approved or denied. `fsevents` (macOS file
+watching for Vite and Playwright) is denied on purpose: its published tarball
+already contains the compiled `fsevents.node`, so the `install` script is a
+`node-gyp` fallback it never needs. Run `npm install-scripts ls` after a
+dependency bump to see whether anything new needs a decision, and record it
+with `npm install-scripts approve <pkg>` or `npm install-scripts deny <pkg>`
+rather than by hand.
+
 The access foundation uses management bearer tokens or explicit anonymous mode.
 Bearer tokens stay in `sessionStorage` unless the operator chooses
 `Remember on this browser`, which writes to `localStorage`.
