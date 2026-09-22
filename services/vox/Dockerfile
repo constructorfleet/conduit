@@ -21,7 +21,7 @@
 # agreement, so an image containing them could not legally be pulled by someone
 # who had not accepted it; every engine downloads its model on first use into
 # the /models volume instead. See README.md.
-ARG BASE_IMAGE=python:3.12-slim-bookworm
+ARG BASE_IMAGE=python:3.12-slim-trixie
 FROM ${BASE_IMAGE}
 
 # Repeated after FROM: an ARG declared before it is out of scope afterwards.

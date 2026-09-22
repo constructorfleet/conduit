@@ -118,7 +118,7 @@ jobs:
       matrix:
         include:
           - suffix: speechbrain
-            base: python:3.12-slim-bookworm
+            base: python:3.12-slim-trixie
             torch_index: https://download.pytorch.org/whl/cpu
             device: cpu
           - suffix: speechbrain-gpu

@@ -8,7 +8,7 @@
 #          --build-arg BASE_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 \
 #          --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
 #          --build-arg DEVICE=cuda services/wyoming-asr
-ARG BASE_IMAGE=python:3.12-slim-bookworm
+ARG BASE_IMAGE=python:3.12-slim-trixie
 FROM ${BASE_IMAGE}
 
 # Repeated after FROM: an ARG declared before it is out of scope afterwards.
