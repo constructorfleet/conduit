@@ -14,6 +14,15 @@
 # from GCC 14 on. Trixie ships GCC 14. CI checks that the runtime stage below
 # names the same release, because the linked binary needs that libstdc++ at
 # run time too.
+#
+# Which GCC built those objects is recorded nowhere in the crate, so the next
+# `ort` bump can raise the requirement again without saying so (#279). The
+# `docker` CI job links `conduit-vad`'s tests inside this image whenever a
+# diff touches `ort`, the toolchain, or this file, so that lands as a failed
+# review rather than a broken image. Run it by hand the same way:
+#
+#   docker run --rm -v "$PWD:/src" -w /src rust:1.98.0-trixie \
+#     cargo test -p conduit-vad --no-run --locked
 FROM rust:1.98.0-trixie AS builder
 
 WORKDIR /src
