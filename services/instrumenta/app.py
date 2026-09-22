@@ -43,7 +43,7 @@ from .aggregator import Aggregator, UpstreamStatus
 from .audit import make_audit_router
 from .backend import Backend, SqliteBackend
 from .items_router import make_items_router
-from .mcp_app import build_mcp_server
+from .mcp_app import BUILTIN_TOOL_NAMES, build_mcp_server
 from .path_probe import probe_runtimes
 from .secret_box import SecretBox, SecretKeyMissingError
 from .servers_router import make_servers_router
@@ -51,6 +51,14 @@ from .servers_router import make_servers_router
 LOG = logging.getLogger("instrumenta")
 
 DEFAULT_PORT = 8085
+
+#: Path of the streamable-HTTP MCP endpoint, relative to the service base URL.
+#:
+#: One constant for two callers -- the mount below and the `mcp_url` the link
+#: handshake advertises -- so moving the transport moves what Conduit is told
+#: to connect to. The trailing slash is part of it: the sub-app is mounted at
+#: `/mcp` and serves its transport at `/`, so `/mcp` alone redirects.
+MCP_PATH = "/mcp/"
 
 
 class _NoExtension:
@@ -76,6 +84,10 @@ def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, ob
         "peer_name": context.request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": base_url,
+        # User Story 30 (#198): one canonical endpoint, so Conduit connects as
+        # a stock MCP client instead of reconstructing the path from transport
+        # knowledge it should not need.
+        "mcp_url": f"{base_url}{MCP_PATH}",
         "panel": {
             "id": "instrumenta",
             "label": "Instrumenta",
@@ -91,6 +103,16 @@ def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtensi
 
 def _public(_extension: _NoExtension) -> dict[str, object]:
     return {}
+
+
+class ToolSummary(BaseModel):
+    """One row of the merged tool surface, as the UI's Tools tab shows it."""
+
+    name: str
+    origin: str
+    server: str | None
+    description: str | None
+    enabled: bool
 
 
 class HealthResponse(BaseModel):
@@ -238,6 +260,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         return aggregator.statuses()
 
+    @app.get("/tools")
+    async def list_tools() -> list[ToolSummary]:
+        """The merged tool surface: built-ins plus every aggregated upstream.
+
+        Names come from the MCP server itself, so what the UI lists is exactly
+        what a client gets from `tools/list` -- the tab used to count
+        `tool_count` from `/upstreams` and invent `<server>.tool_0`, names no
+        upstream has.
+
+        `enabled` reads the per-item flags (User Story 3). Absent a flag a tool
+        is enabled, so the surface is on by default and the operator turns
+        things off.
+        """
+        disabled = {
+            flag.item_name
+            for flag in backend.list_item_flags(item_kind="tool")
+            if not flag.enabled
+        }
+        rows = []
+        for tool in await mcp_server.list_tools():
+            is_builtin = tool.name in BUILTIN_TOOL_NAMES
+            rows.append(
+                ToolSummary(
+                    name=tool.name,
+                    origin="builtin" if is_builtin else "upstream",
+                    # Aggregated tools are registered as `<server>.<tool>`; a
+                    # built-in's dot is part of its own name, not a prefix.
+                    server=None if is_builtin else tool.name.split(".", 1)[0],
+                    description=tool.description,
+                    enabled=tool.name not in disabled,
+                )
+            )
+        return rows
+
     @app.get("/runtimes")
     async def list_runtimes() -> dict[str, bool]:
         """Boot-time PATH probe for stdio runtimes.
@@ -269,7 +325,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         allowed_origins=allowed_origins,
     )
     app.mount(
-        "/mcp",
+        MCP_PATH.rstrip("/"),
         mcp_server.streamable_http_app(
             streamable_http_path="/",
             transport_security=transport_security,

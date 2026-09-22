@@ -15,12 +15,22 @@ under wayfinder map [#199](https://github.com/constructorfleet/conduit/issues/19
 | --- | --- | --- |
 | `INSTRUMENTA_DATA_DIR` | `/data` | Where SQLite + link records live |
 | `INSTRUMENTA_BACKEND` | `sqlite` | Backend selector (`postgres` planned) |
-| `INSTRUMENTA_BASE_URL` | `http://localhost:8085` | Advertised in link handshake |
+| `INSTRUMENTA_BASE_URL` | `http://localhost:8085` | Advertised in link handshake, and the base of `mcp_url` |
 | `INSTRUMENTA_SECRET_KEY` | (unset) | Fernet key for at-rest secret encryption |
 | `INSTRUMENTA_API_KEY` | (unset) | Bearer token protecting mutating routes (added by later PRs) |
 
 Instrumenta refuses to start if any encrypted secret exists in the backend
 and `INSTRUMENTA_SECRET_KEY` is not set — misconfiguration surfaces at boot.
+
+## Linking to Conduit
+
+The handshake advertises one canonical `mcp_url` — `{INSTRUMENTA_BASE_URL}/mcp/`,
+the streamable-HTTP endpoint — alongside `peer_base_url` and the panel, so
+Conduit connects as a stock MCP client without knowing how the transport is
+mounted (User Story 30 of
+[#198](https://github.com/constructorfleet/conduit/issues/198)). The path is
+defined once as `MCP_PATH` in `app.py` and used both to mount the transport
+and to build the advertised URL, so the two cannot drift.
 
 ## Upstream transports
 

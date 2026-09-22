@@ -317,6 +317,69 @@ jobs:
       # checked by the compose job resolving its build context, and the image is
       # built when it is published.
 
+  # Conduit Instrumenta — the MCP aggregator — ships in this repository and is
+  # published as an image, so its tests and its build are gates like any other.
+  instrumenta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # 3.13 because the Dockerfile is on python:3.13-slim. Testing on a
+      # different minor than the image runs would let a green job ship an
+      # image that fails on a version difference.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/instrumenta/requirements-dev.txt
+      # conduit-link is a workspace-local package app.py imports at runtime,
+      # so an install of only PyPI dependencies would ImportError on boot.
+      # Editable install here matches how the image installs it.
+      - name: Install test dependencies
+        working-directory: services/instrumenta
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install -e ../../packages/conduit-link
+      # PYTHONPATH is the services directory because the tests import the
+      # service as the package `instrumenta`, the same name the image runs it
+      # under.
+      - name: Run tests
+        working-directory: services/instrumenta
+        env:
+          PYTHONPATH: ..
+        run: python -m pytest -q
+      - uses: docker/setup-buildx-action@v4
+      # Context is the repo root, not services/instrumenta: the Dockerfile
+      # installs packages/conduit-link, which lives outside the service
+      # directory.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: services/instrumenta/Dockerfile
+          load: true
+          tags: instrumenta:ci
+      # A build that succeeds is not an image that runs. The module list in
+      # the Dockerfile had gone stale and the published image could not import
+      # its own app, which a build alone never notices — so start the
+      # container and read /health, the same proof the conduit image gets.
+      - name: Check the built image starts
+        run: |
+          key=$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
+          docker run --detach --name instrumenta-ci --publish 8085:8085 \
+            --env INSTRUMENTA_SECRET_KEY="${key}" instrumenta:ci
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8085/health; then
+              echo
+              docker rm --force instrumenta-ci >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "instrumenta did not answer /health within 30s" >&2
+          docker logs instrumenta-ci >&2
+          docker rm --force instrumenta-ci >/dev/null
+          exit 1
+
   # Conduit Excita — the wake-word service (detection + ops per spec 0011) —
   # ships in this repository and is published as an image, so its tests and
   # its build are gates like any other.

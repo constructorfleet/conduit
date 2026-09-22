@@ -57,6 +57,16 @@ class TestHealth:
         assert data["backend"] == "sqlite"
         assert data["linked"] is False
 
+def _parse_sse(text: str) -> dict:
+    """Pull the JSON payload out of a streamable-HTTP SSE response."""
+    import json
+
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])
+    raise AssertionError(f"no data frame in response: {text!r}")
+
+
 class TestMcpEndpoint:
     """End-to-end MCP wire tests over `/mcp`.
 
@@ -242,3 +252,105 @@ class TestBackend:
         conn.commit()
         conn.close()
         assert backend.has_encrypted_secret() is True
+
+
+class TestLinkHandshakeAdvertisesMcpUrl:
+    """User Story 30 (#198): the handshake carries one canonical `mcp_url`.
+
+    Conduit should be able to connect as a stock MCP client from the link
+    body alone, without knowing how Instrumenta happens to mount its
+    transport.
+    """
+
+    def test_create_body_carries_the_streamable_http_endpoint(self) -> None:
+        from instrumenta.app import MCP_PATH, _build_create_body
+
+        class _Request:
+            peer_name = "Instrumenta"
+
+        class _Context:
+            existing_peer_id = None
+            request = _Request()
+
+        body = _build_create_body(_Context())
+
+        assert body["mcp_url"] == f"{body['peer_base_url']}{MCP_PATH}"
+        assert body["mcp_url"].endswith("/mcp/")
+
+    def test_advertised_endpoint_is_the_one_the_app_actually_serves(
+        self, client: TestClient
+    ) -> None:
+        """The advertised path must be routable, not just well-formed.
+
+        A hand-written string here would drift the first time the mount moves,
+        and the handshake would send Conduit somewhere that 404s.
+        """
+        from instrumenta.app import MCP_PATH
+
+        response = client.post(
+            MCP_PATH,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code != 404
+
+
+class TestToolsSurface:
+    """`/tools` exposes the merged surface with real names (#278).
+
+    The UI previously counted `tool_count` from `/upstreams` and invented
+    `<server>.tool_0`, `<server>.tool_1`, ... — names no upstream has and no
+    caller can act on. It also hardcoded the built-ins as permanently enabled,
+    so the per-tool flags from User Story 3 were unreachable.
+    """
+
+    def test_builtins_are_listed_by_their_real_names(self, client: TestClient) -> None:
+        tools = client.get("/tools").json()
+
+        builtins = {t["name"] for t in tools if t["origin"] == "builtin"}
+        assert builtins == {"http.fetch", "time.now", "math.eval", "text.regex"}
+
+    def test_no_tool_name_is_fabricated(self, client: TestClient) -> None:
+        """Every advertised name must be one the MCP surface actually serves.
+
+        This is the regression the issue is about: names built by counting
+        `tool_count` matched the count and nothing else.
+        """
+        tools = client.get("/tools").json()
+
+        mcp = TestMcpEndpoint()
+        session_id = mcp._initialize(client)
+        response = client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            headers={**mcp._MCP_HEADERS, "mcp-session-id": session_id},
+        )
+        served = {
+            tool["name"]
+            for tool in _parse_sse(response.text)["result"]["tools"]
+        }
+
+        assert {t["name"] for t in tools} == served
+
+    def test_tools_are_enabled_by_default(self, client: TestClient) -> None:
+        tools = client.get("/tools").json()
+
+        assert all(t["enabled"] for t in tools)
+
+    def test_a_disabling_flag_is_reflected(self, client: TestClient) -> None:
+        """The tab's toggle writes `/items/flags`; `/tools` must read it back."""
+        client.put(
+            "/items/flags",
+            json={
+                "origin": "builtin",
+                "item_kind": "tool",
+                "item_name": "time.now",
+                "enabled": False,
+            },
+        ).raise_for_status()
+
+        tools = {t["name"]: t for t in client.get("/tools").json()}
+
+        assert tools["time.now"]["enabled"] is False
+        assert tools["math.eval"]["enabled"] is True
