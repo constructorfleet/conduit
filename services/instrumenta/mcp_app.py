@@ -1,8 +1,8 @@
 """MCP server construction for Instrumenta.
 
 Builds an `MCPServer` from the `mcp` SDK with the four built-in tools
-registered. The resulting Starlette sub-app is mounted on the FastAPI app at
-`/mcp` by `app.py`.
+registered. `app.py` mounts it twice on the FastAPI app — streamable-HTTP at
+`/mcp/http` and SSE at `/mcp/sse` — behind per-transport toggles.
 
 Aggregator wiring (upstream MCP clients contributing tools/prompts/resources)
 lands in the next PR and registers additional tools on the same server

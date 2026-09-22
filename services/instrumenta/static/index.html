@@ -362,6 +362,11 @@
       </dl>
     </section>
     <section>
+      <h2>Transports</h2>
+      <p class="empty" style="margin-top:0">Downstream MCP endpoints. Switching one off answers 404 on its path from the next request.</p>
+      <div id="transports-body"><p class="empty">Loading...</p></div>
+    </section>
+    <section>
       <h2>Runtimes</h2>
       <dl class="kv" id="runtimes-body">
         <dt>Loading...</dt><dd></dd>
@@ -643,12 +648,48 @@ async function loadSettings() {
     const h = await api("/health");
     el.innerHTML = [
       ["Backend", h.backend],
-      ["MCP endpoint", "POST /mcp (streamable-HTTP)"],
+      ["MCP endpoints", "POST /mcp/http/ (streamable-HTTP), GET /mcp/sse/ (SSE)"],
       ["Status", h.status],
       ["Linked", h.linked ? "yes" : "no"],
     ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
   } catch {
     el.innerHTML = "<dt>Backend</dt><dd>sqlite</dd>";
+  }
+}
+
+async function loadTransports() {
+  const el = document.getElementById("transports-body");
+  try {
+    const transports = await api("/transports");
+    el.innerHTML = `<table>
+      <thead><tr><th>Transport</th><th>Path</th><th>Enabled</th></tr></thead>
+      <tbody>${transports.map(t => `
+        <tr>
+          <td>${esc(t.transport)}</td>
+          <td style="font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px">${esc(t.path)}</td>
+          <td><input type="checkbox" class="toggle" data-transport="${esc(t.transport)}" ${t.enabled ? "checked" : ""} aria-label="Enable ${esc(t.transport)} transport"></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+    el.querySelectorAll("input[data-transport]").forEach(input => {
+      input.addEventListener("change", async () => {
+        input.disabled = true;
+        try {
+          await api(`/transports/${input.dataset.transport}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: input.checked }),
+          });
+        } catch (err) {
+          input.checked = !input.checked;
+          alert(`Failed to update ${input.dataset.transport} transport: ${err.message}`);
+        } finally {
+          input.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load transports: ${esc(err.message)}</p>`;
   }
 }
 
@@ -719,6 +760,7 @@ document.getElementById("modal-save").addEventListener("click", async () => {
   loadResources();
   loadAudit();
   loadSettings();
+  loadTransports();
   loadRuntimes();
 })();
 </script>
