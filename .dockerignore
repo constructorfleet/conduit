@@ -17,3 +17,8 @@
 **/.DS_Store
 **/__pycache__
 **/*.pyc
+# Per-service developer virtualenvs. They are host-built (wrong platform for
+# the image), hundreds of megabytes each, and the service Dockerfiles that
+# copy a whole service directory would otherwise bake one in.
+**/.venv
+**/.pytest_cache

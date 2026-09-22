@@ -19,8 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY packages/conduit-link ./conduit-link
 RUN pip install --no-cache-dir ./conduit-link
 
-COPY services/instrumenta/app.py services/instrumenta/backend.py services/instrumenta/secret_box.py services/instrumenta/builtins.py services/instrumenta/mcp_app.py services/instrumenta/aggregator.py services/instrumenta/servers_router.py services/instrumenta/metrics.py services/instrumenta/__init__.py ./instrumenta/
-COPY services/instrumenta/static ./instrumenta/static
+# The whole package, not a list of modules: the list had gone stale and the
+# image shipped without `audit`, `items_router`, `path_probe` and
+# `stdio_supervisor`, so importing `instrumenta.app` failed at boot. A module
+# added later cannot be forgotten this way. Developer virtualenvs and caches
+# are excluded by .dockerignore.
+COPY services/instrumenta ./instrumenta
 
 RUN mkdir -p /data
 ENV INSTRUMENTA_DATA_DIR=/data
