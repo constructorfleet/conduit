@@ -242,3 +242,45 @@ class TestBackend:
         conn.commit()
         conn.close()
         assert backend.has_encrypted_secret() is True
+
+
+class TestLinkHandshakeAdvertisesMcpUrl:
+    """User Story 30 (#198): the handshake carries one canonical `mcp_url`.
+
+    Conduit should be able to connect as a stock MCP client from the link
+    body alone, without knowing how Instrumenta happens to mount its
+    transport.
+    """
+
+    def test_create_body_carries_the_streamable_http_endpoint(self) -> None:
+        from instrumenta.app import MCP_PATH, _build_create_body
+
+        class _Request:
+            peer_name = "Instrumenta"
+
+        class _Context:
+            existing_peer_id = None
+            request = _Request()
+
+        body = _build_create_body(_Context())
+
+        assert body["mcp_url"] == f"{body['peer_base_url']}{MCP_PATH}"
+        assert body["mcp_url"].endswith("/mcp/")
+
+    def test_advertised_endpoint_is_the_one_the_app_actually_serves(
+        self, client: TestClient
+    ) -> None:
+        """The advertised path must be routable, not just well-formed.
+
+        A hand-written string here would drift the first time the mount moves,
+        and the handshake would send Conduit somewhere that 404s.
+        """
+        from instrumenta.app import MCP_PATH
+
+        response = client.post(
+            MCP_PATH,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+        assert response.status_code != 404

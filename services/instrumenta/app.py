@@ -52,6 +52,14 @@ LOG = logging.getLogger("instrumenta")
 
 DEFAULT_PORT = 8085
 
+#: Path of the streamable-HTTP MCP endpoint, relative to the service base URL.
+#:
+#: One constant for two callers -- the mount below and the `mcp_url` the link
+#: handshake advertises -- so moving the transport moves what Conduit is told
+#: to connect to. The trailing slash is part of it: the sub-app is mounted at
+#: `/mcp` and serves its transport at `/`, so `/mcp` alone redirects.
+MCP_PATH = "/mcp/"
+
 
 class _NoExtension:
     __slots__: tuple[()] = ()
@@ -76,6 +84,10 @@ def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, ob
         "peer_name": context.request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": base_url,
+        # User Story 30 (#198): one canonical endpoint, so Conduit connects as
+        # a stock MCP client instead of reconstructing the path from transport
+        # knowledge it should not need.
+        "mcp_url": f"{base_url}{MCP_PATH}",
         "panel": {
             "id": "instrumenta",
             "label": "Instrumenta",
@@ -269,7 +281,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         allowed_origins=allowed_origins,
     )
     app.mount(
-        "/mcp",
+        MCP_PATH.rstrip("/"),
         mcp_server.streamable_http_app(
             streamable_http_path="/",
             transport_security=transport_security,
