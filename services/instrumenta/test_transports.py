@@ -151,3 +151,33 @@ class TestTransportsApi:
         with TestClient(create_app(config)) as second:
             listed = {row["transport"]: row["enabled"] for row in second.get("/transports").json()}
         assert listed == {"http": False, "sse": True}
+
+
+class TestTransportGate:
+    def test_disabled_sse_mount_returns_404(self, client: TestClient) -> None:
+        client.put("/transports/sse", json={"enabled": False})
+        response = client.get("/mcp/sse/", headers={"Accept": "text/event-stream"})
+        assert response.status_code == 404
+        assert response.json() == {"detail": "sse transport is disabled"}
+
+    def test_disabled_http_gates_canonical_and_legacy_paths(
+        self, client: TestClient
+    ) -> None:
+        client.put("/transports/http", json={"enabled": False})
+        for path in ("/mcp/http/", "/mcp/"):
+            response = client.post(path, json=_INITIALIZE, headers=_MCP_HEADERS)
+            assert response.status_code == 404, path
+            assert response.json() == {"detail": "http transport is disabled"}
+
+    def test_disabling_one_transport_leaves_the_other_serving(
+        self, client: TestClient
+    ) -> None:
+        client.put("/transports/sse", json={"enabled": False})
+        response = client.post("/mcp/http/", json=_INITIALIZE, headers=_MCP_HEADERS)
+        assert response.status_code == 200, response.text
+
+    def test_re_enabling_takes_effect_without_restart(self, client: TestClient) -> None:
+        client.put("/transports/http", json={"enabled": False})
+        client.put("/transports/http", json={"enabled": True})
+        response = client.post("/mcp/http/", json=_INITIALIZE, headers=_MCP_HEADERS)
+        assert response.status_code == 200, response.text

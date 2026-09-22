@@ -24,9 +24,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from conduit_link import (
     HttpConduitLinkClient,
@@ -104,6 +105,23 @@ def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtensi
 
 def _public(_extension: _NoExtension) -> dict[str, object]:
     return {}
+
+
+class TransportGate:
+    """Reject requests to a transport whose persisted toggle is disabled."""
+
+    def __init__(self, transport: str, backend: Backend, inner: ASGIApp):
+        self.transport, self.backend, self.inner = transport, backend, inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and not self.backend.is_transport_enabled(self.transport):
+            response = JSONResponse(
+                status_code=404,
+                content={"detail": f"{self.transport} transport is disabled"},
+            )
+            await response(scope, receive, send)
+            return
+        await self.inner(scope, receive, send)
 
 
 class ToolSummary(BaseModel):
@@ -336,9 +354,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     sse = mcp_server.sse_app(
         sse_path="/", message_path="/messages/", transport_security=transport_security
     )
-    app.mount(TRANSPORT_MOUNTS["http"], streamable_http)
-    app.mount(TRANSPORT_MOUNTS["sse"], sse)
-    app.mount(MCP_PATH.rstrip("/"), streamable_http)
+    gated_http = TransportGate("http", backend, streamable_http)
+    app.mount(TRANSPORT_MOUNTS["http"], gated_http)
+    app.mount(TRANSPORT_MOUNTS["sse"], TransportGate("sse", backend, sse))
+    app.mount(MCP_PATH.rstrip("/"), gated_http)
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
