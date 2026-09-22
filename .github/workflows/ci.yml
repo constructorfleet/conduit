@@ -73,8 +73,32 @@ jobs:
           node-version-file: frontend/.nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # No Node line bundles npm 12 yet (24.21.0 ships npm 11.19.0), and
+      # `allowScripts` is an npm 12 feature: on npm 11 the field is ignored
+      # and every install script runs, so the policy would be documented and
+      # unenforced exactly where enforcement matters. The version comes from
+      # `packageManager` in package.json so the pin lives in one place.
+      - name: Install the npm the install-script policy needs
+        working-directory: frontend
+        run: |
+          want=$(node -p "require('./package.json').packageManager.split('@')[1]")
+          npm install -g "npm@${want}"
+          npm --version
       - working-directory: frontend
         run: npm ci
+      # `npm install-scripts ls` exits 0 whether or not anything is unreviewed,
+      # so the gate is its output: a dependency bump that pulls in a new
+      # install script fails here until someone approves or denies it in
+      # `allowScripts`, rather than silently running on the next install.
+      - name: Check every install script has a recorded decision
+        working-directory: frontend
+        run: |
+          output=$(npm install-scripts ls)
+          echo "${output}"
+          if ! echo "${output}" | grep -q "No packages with unreviewed install scripts"; then
+            echo "::error::a dependency has an install script with no decision in allowScripts" >&2
+            exit 1
+          fi
       - working-directory: frontend
         run: npm run lint
       - working-directory: frontend

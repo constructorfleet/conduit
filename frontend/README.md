@@ -30,6 +30,22 @@ dependency bump to see whether anything new needs a decision, and record it
 with `npm install-scripts approve <pkg>` or `npm install-scripts deny <pkg>`
 rather than by hand.
 
+No Node release bundles npm 12 yet — 24.21.0, the version `.nvmrc` pins,
+ships npm 11.19.0, which ignores `allowScripts` entirely and runs install
+scripts as before. So the CI `frontend` job installs the npm named by
+`packageManager` in `package.json` before `npm ci`, and a following step
+fails the job if any install script has no recorded decision. `npm
+install-scripts ls` exits 0 either way, so the step checks its output rather
+than its status.
+
+Two limits worth knowing. Locally the policy applies only if you are on npm
+12 (`npm install -g npm@12`); on the bundled npm 11 it is inert. And
+`fsevents` is a darwin-only optional dependency, so it is never installed on
+the Linux CI runner — its denial is enforced on a contributor's Mac, not in
+CI. What the CI gate catches is a _new_ dependency arriving with an install
+script that runs on Linux, which is the case where an unreviewed script would
+actually execute on a build machine.
+
 The access foundation uses management bearer tokens or explicit anonymous mode.
 Bearer tokens stay in `sessionStorage` unless the operator chooses
 `Remember on this browser`, which writes to `localStorage`.
