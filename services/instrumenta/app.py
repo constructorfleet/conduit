@@ -47,6 +47,7 @@ from .mcp_app import BUILTIN_TOOL_NAMES, build_mcp_server
 from .path_probe import probe_runtimes
 from .secret_box import SecretBox, SecretKeyMissingError
 from .servers_router import make_servers_router
+from .transports_router import TRANSPORT_MOUNTS, make_transports_router
 
 LOG = logging.getLogger("instrumenta")
 
@@ -309,6 +310,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(make_servers_router())
     app.include_router(make_items_router())
     app.include_router(make_audit_router())
+    app.include_router(make_transports_router())
 
     # Mount the streamable-HTTP MCP transport at `/mcp`. The SDK's default
     # `streamable_http_path='/mcp'` combined with a mount would become
@@ -322,19 +324,21 @@ def create_app(config: Config | None = None) -> FastAPI:
     # can widen it, and tests get "testserver" by default.
     from mcp.server.transport_security import TransportSecuritySettings
 
-    allowed_hosts = _csv(os.getenv("INSTRUMENTA_ALLOWED_HOSTS", "testserver,localhost,127.0.0.1"))
+    allowed_hosts = _csv(os.getenv("INSTRUMENTA_ALLOWED_HOSTS", "testserver,localhost,localhost:*,127.0.0.1,127.0.0.1:*"))
     allowed_origins = _csv(os.getenv("INSTRUMENTA_ALLOWED_ORIGINS", ""))
     transport_security = TransportSecuritySettings(
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
-    app.mount(
-        MCP_PATH.rstrip("/"),
-        mcp_server.streamable_http_app(
-            streamable_http_path="/",
-            transport_security=transport_security,
-        ),
+    streamable_http = mcp_server.streamable_http_app(
+        streamable_http_path="/", transport_security=transport_security
     )
+    sse = mcp_server.sse_app(
+        sse_path="/", message_path="/messages/", transport_security=transport_security
+    )
+    app.mount(TRANSPORT_MOUNTS["http"], streamable_http)
+    app.mount(TRANSPORT_MOUNTS["sse"], sse)
+    app.mount(MCP_PATH.rstrip("/"), streamable_http)
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

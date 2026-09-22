@@ -119,3 +119,35 @@ class TestSseMount:
     def test_mcp_sse_serves_the_builtin_tools(self, live_server: str) -> None:
         tool_names = asyncio.run(_list_tools_over_sse(live_server))
         assert tool_names == {"http.fetch", "time.now", "math.eval", "text.regex"}
+
+
+class TestTransportsApi:
+    def test_lists_both_transports_enabled_by_default(self, client: TestClient) -> None:
+        response = client.get("/transports")
+        assert response.status_code == 200
+        assert response.json() == [
+            {"transport": "http", "path": "/mcp/http/", "enabled": True},
+            {"transport": "sse", "path": "/mcp/sse/", "enabled": True},
+        ]
+
+    def test_put_disables_a_transport(self, client: TestClient) -> None:
+        response = client.put("/transports/sse", json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json() == {
+            "transport": "sse",
+            "path": "/mcp/sse/",
+            "enabled": False,
+        }
+        listed = {row["transport"]: row["enabled"] for row in client.get("/transports").json()}
+        assert listed == {"http": True, "sse": False}
+
+    def test_put_unknown_transport_is_404(self, client: TestClient) -> None:
+        response = client.put("/transports/grpc", json={"enabled": False})
+        assert response.status_code == 404
+
+    def test_toggle_survives_restart(self, config: Config) -> None:
+        with TestClient(create_app(config)) as first:
+            first.put("/transports/http", json={"enabled": False})
+        with TestClient(create_app(config)) as second:
+            listed = {row["transport"]: row["enabled"] for row in second.get("/transports").json()}
+        assert listed == {"http": False, "sse": True}
