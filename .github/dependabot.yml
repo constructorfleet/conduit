@@ -37,6 +37,27 @@ updates:
           - minor
           - patch
 
+  - package-ecosystem: npm
+    # The Operator Console lockfile. Without this, a transitive advisory in a
+    # devDependency (#247) waits for someone to notice the count `npm ci`
+    # prints, since nothing else touches the lockfile between feature work.
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: scope
+    groups:
+      patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

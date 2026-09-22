@@ -430,3 +430,12 @@ jobs:
       # Uses .cargo/audit.toml, where every ignored advisory carries a reason.
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+      # The frontend lockfile is audited here for the same reason: a
+      # transitive advisory (nanoid via postcss via vite, in #247) sat unnoticed
+      # because `npm ci` only prints the count and nothing failed on it. `npm
+      # audit` reads the lockfile directly, so no install is needed.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - working-directory: frontend
+        run: npm audit --audit-level=high

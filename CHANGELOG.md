@@ -8,6 +8,14 @@ and version tags are described in [VERSIONING.md](VERSIONING.md).
 
 ## Unreleased
 
+- The Operator Console's `npm audit` is clean again: `nanoid` (a transitive
+  dependency of Vite through PostCSS) is bumped past GHSA-2v37-7h3g-55p8 in the
+  lockfile. `npm audit --audit-level=high` now runs in the CI `audit` job and
+  Dependabot watches `frontend/package-lock.json`, so the next advisory fails a
+  job instead of waiting to be noticed. `fsevents` is recorded as denied in the
+  new `allowScripts` policy, which is what npm 12 was asking for when it warned
+  about blocked install scripts; the package ships a prebuilt binary and does
+  not need its script.
 - A tool that asks for confirmation can now actually ask, instead of always
   refusing. A device that calls `Confirmations::listen` (wired in on every
   conversation socket) can hear the question spoken aloud and answer it with a
