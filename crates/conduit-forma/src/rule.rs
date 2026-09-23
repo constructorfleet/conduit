@@ -69,7 +69,7 @@ pub enum RuleCondition {
     /// Apply only if text ends with a substring
     EndsWith { suffix: String },
 
-    /// Apply only if custom condition evaluates to true
+    /// Reserved for custom conditions, which validation currently rejects.
     Custom { condition: String },
 }
 
@@ -171,6 +171,10 @@ impl FormaRule {
             return Err("Rule name cannot be empty".to_string());
         }
 
+        if matches!(self.condition, RuleCondition::Custom { .. }) {
+            return Err("Custom conditions are not supported".to_string());
+        }
+
         match &self.action {
             RuleAction::Replace { pattern, .. } => {
                 if pattern.is_empty() {
@@ -207,5 +211,19 @@ impl FormaRule {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CaseConversion, FormaRule, RuleAction, RuleCondition};
+
+    #[test]
+    fn rejects_custom_conditions_during_rule_validation() {
+        let rule = FormaRule::new("conditional", "Conditional rewrite")
+            .with_condition(RuleCondition::Custom { condition: "text == 'hello'".to_owned() })
+            .with_action(RuleAction::ConvertCase { case: CaseConversion::Upper });
+
+        assert_eq!(rule.validate(), Err("Custom conditions are not supported".to_owned()));
     }
 }

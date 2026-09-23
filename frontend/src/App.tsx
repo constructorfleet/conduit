@@ -30,6 +30,7 @@ import {
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -62,11 +63,7 @@ import type {
   LinkedServiceView,
   WakeRuntime,
 } from "./contracts/client";
-import {
-  eventEnvelopeFixtures,
-  type EventEnvelope,
-  type Event,
-} from "./contracts/events";
+import { type EventEnvelope } from "./contracts/events";
 import type {
   OperatorStatusSnapshot,
   PipelineStatus,
@@ -419,6 +416,11 @@ function OperatorWorkspace({
     readonly LinkedServiceView[]
   >([]);
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
+  const turnSnapshotRef = useRef<TurnSnapshot | null>(null);
+  function updateTurnSnapshot(next: TurnSnapshot | null) {
+    turnSnapshotRef.current = next;
+    setTurnSnapshot(next);
+  }
   const hasStoredPipeline =
     pipelineViews.length > 0 || (snapshot?.pipelines.length ?? 0) > 0;
   const firstRun =
@@ -652,9 +654,7 @@ function OperatorWorkspace({
             ? Promise.resolve([...initialProviderDefinitions])
             : snapshotClient.loadProviderDefinitions(),
           snapshotClient.loadLinkedServices(),
-          initialEvents
-            ? Promise.resolve({ turns: [] })
-            : snapshotClient.loadTurns().catch(() => ({ turns: [] })),
+          snapshotClient.loadTurns().catch(() => ({ turns: [] })),
         ]);
 
         if (cancelled) {
@@ -725,7 +725,7 @@ function OperatorWorkspace({
         setProviderDefinitions((current) =>
           mergeProviderDefinitions(loadedProviderDefinitions, current),
         );
-        setTurnSnapshot(loadedTurnSnapshot);
+        updateTurnSnapshot(loadedTurnSnapshot);
         setSnapshotState("live");
       } catch (caught) {
         if (cancelled) {
@@ -809,6 +809,32 @@ function OperatorWorkspace({
       }
     }
 
+    async function refreshLatestTurn() {
+      try {
+        const turns = await snapshotClient.loadTurns();
+        const latestTurn = turns.turns[0]?.turn_id;
+        const latestSnapshot = latestTurn
+          ? await snapshotClient.loadTurn(latestTurn)
+          : null;
+        if (!cancelled) {
+          updateTurnSnapshot(latestSnapshot);
+        }
+      } catch {
+        // Keep the last server reconstruction visible if a refresh fails.
+      }
+    }
+
+    async function refreshTurn(turnId: string) {
+      try {
+        const nextTurn = await snapshotClient.loadTurn(turnId);
+        if (!cancelled) {
+          updateTurnSnapshot(nextTurn);
+        }
+      } catch {
+        // Keep the previous server reconstruction visible if a refresh fails.
+      }
+    }
+
     async function connect() {
       const controller = new AbortController();
       activeController = controller;
@@ -824,6 +850,29 @@ function OperatorWorkspace({
             ) {
               void refreshLinkedServices();
             }
+            if (envelope.event.type === "TurnStarted") {
+              void refreshTurn(envelope.event.turn);
+            } else if (
+              envelope.conversation &&
+              envelope.conversation ===
+                turnSnapshotRef.current?.conversation_id &&
+              [
+                "ConversationCancelled",
+                "ConversationCompleted",
+                "LlmFinished",
+                "ToolRequested",
+                "ToolBatchStarted",
+                "ToolStarted",
+                "ToolConfirmationRequested",
+                "ToolCompleted",
+                "ToolFailed",
+                "ToolConfirmationDenied",
+                "UtteranceSegmentStarted",
+                "StageFailed",
+              ].includes(envelope.event.type)
+            ) {
+              void refreshTurn(turnSnapshotRef.current.turn_id);
+            }
           },
           async () => {
             if (connected) {
@@ -832,6 +881,7 @@ function OperatorWorkspace({
                 return;
               }
               setSnapshot(refreshedSnapshot);
+              await refreshLatestTurn();
             }
             connected = true;
             setSnapshotState("live");
@@ -980,7 +1030,7 @@ function OperatorWorkspace({
           linkedServices={linkedServices}
           onFirmwareRender={renderFirmware}
           onFirmwareFlash={flashFirmware}
-          events={initialEvents ?? eventEnvelopeFixtures}
+          events={initialEvents ?? []}
           turnSnapshot={turnSnapshot}
           componentCatalog={componentCatalog}
           providerDefinitions={providerDefinitions}
@@ -2606,11 +2656,8 @@ function EventsPanel({
   const [filter, setFilter] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const turn = useMemo(
-    () =>
-      turnSnapshot
-        ? reconstructServerTurn(turnSnapshot)
-        : reconstructTurn(events),
-    [events, turnSnapshot],
+    () => (turnSnapshot ? reconstructServerTurn(turnSnapshot) : null),
+    [turnSnapshot],
   );
   const rawEvents = useMemo(
     () => filterRawEvents(events, filter),
@@ -2655,95 +2702,110 @@ function EventsPanel({
       </div>
 
       {activeView === "story" ? (
-        <section className="event-reconstruction" aria-labelledby="turn-title">
-          <div className="section-heading">
-            <div>
-              <div className="turn-context">
-                <span aria-label="Turn pipeline">Pipeline {turn.pipeline}</span>
-                <span>{turn.conversation}</span>
-              </div>
-              <h2 id="turn-title">Turn Reconstruction</h2>
-            </div>
-            <StatusPill
-              label="Turn"
-              value={turn.status}
-              tone={turn.status === "failed" ? "caution" : "neutral"}
-            />
-          </div>
-
-          <section className="stage-timeline" aria-labelledby="stage-title">
-            <div className="section-heading compact">
+        turn ? (
+          <section
+            className="event-reconstruction"
+            aria-labelledby="turn-title"
+          >
+            <div className="section-heading">
               <div>
-                <p className="eyebrow">Visual grouping</p>
-                <h3 id="stage-title">Stage Timeline</h3>
+                <div className="turn-context">
+                  <span aria-label="Turn pipeline">
+                    Pipeline {turn.pipeline}
+                  </span>
+                  <span>{turn.conversation}</span>
+                </div>
+                <h2 id="turn-title">Turn Reconstruction</h2>
               </div>
               <StatusPill
-                label="Stages"
-                value={turn.groups.length.toString()}
-                tone="neutral"
+                label="Turn"
+                value={turn.status}
+                tone={turn.status === "failed" ? "caution" : "neutral"}
               />
             </div>
-            <div className="stage-track">
-              {turn.groups.map((group) => (
-                <article
-                  aria-label={`${group.component} stage`}
-                  className={`stage-group ${group.status}`}
-                  key={group.component}
-                  role="group"
-                >
-                  <div className="stage-group-header">
-                    <strong>{displayStageComponent(group.component)}</strong>
-                    <span>{group.durationLabel}</span>
-                  </div>
-                  <div className="stage-event-chips">
-                    {group.steps.map((step) => (
-                      <button
-                        key={step.id}
-                        type="button"
-                        className={storyEventClassName("stage-event-chip", {
-                          selected: selectedEventId === step.id,
-                          error: step.error,
-                        })}
-                        aria-describedby={
-                          step.error ? eventErrorId(step.id) : undefined
-                        }
-                        onClick={() => selectStoryEvent(step.id)}
-                      >
-                        {displayEventType(step.type)}
-                      </button>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
 
-          <ol className="event-story">
-            {turn.steps.map((step) => (
-              <li
-                id={eventStepId(step.id)}
-                className={storyEventClassName("event-step", {
-                  selected: selectedEventId === step.id,
-                  error: step.error,
-                })}
-                key={step.id}
-                tabIndex={-1}
-                aria-label={`${step.type} ${step.component}${step.error ? " error" : ""}`}
-              >
-                <div className="event-meta">
-                  <strong>{step.type}</strong>
-                  <span>{step.component}</span>
-                  <time dateTime={step.at}>{formatTime(step.at)}</time>
+            <section className="stage-timeline" aria-labelledby="stage-title">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Visual grouping</p>
+                  <h3 id="stage-title">Stage Timeline</h3>
                 </div>
-                {step.detail ? (
-                  <p id={step.error ? eventErrorId(step.id) : undefined}>
-                    {step.detail}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        </section>
+                <StatusPill
+                  label="Stages"
+                  value={turn.groups.length.toString()}
+                  tone="neutral"
+                />
+              </div>
+              <div className="stage-track">
+                {turn.groups.map((group) => (
+                  <article
+                    aria-label={`${group.component} stage`}
+                    className={`stage-group ${group.status}`}
+                    key={group.component}
+                    role="group"
+                  >
+                    <div className="stage-group-header">
+                      <strong>{displayStageComponent(group.component)}</strong>
+                      <span>{group.durationLabel}</span>
+                    </div>
+                    <div className="stage-event-chips">
+                      {group.steps.map((step) => (
+                        <button
+                          key={step.id}
+                          type="button"
+                          className={storyEventClassName("stage-event-chip", {
+                            selected: selectedEventId === step.id,
+                            error: step.error,
+                          })}
+                          aria-describedby={
+                            step.error ? eventErrorId(step.id) : undefined
+                          }
+                          onClick={() => selectStoryEvent(step.id)}
+                        >
+                          {displayEventType(step.type)}
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <ol className="event-story">
+              {turn.steps.map((step) => (
+                <li
+                  id={eventStepId(step.id)}
+                  className={storyEventClassName("event-step", {
+                    selected: selectedEventId === step.id,
+                    error: step.error,
+                  })}
+                  key={step.id}
+                  tabIndex={-1}
+                  aria-label={`${step.type} ${step.component}${step.error ? " error" : ""}`}
+                >
+                  <div className="event-meta">
+                    <strong>{step.type}</strong>
+                    <span>{step.component}</span>
+                    <time dateTime={step.at}>{formatTime(step.at)}</time>
+                  </div>
+                  {step.detail ? (
+                    <p id={step.error ? eventErrorId(step.id) : undefined}>
+                      {step.detail}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : (
+          <section
+            className="event-reconstruction"
+            aria-labelledby="turn-title"
+          >
+            <h2 id="turn-title">Turn Reconstruction</h2>
+            <p>Waiting for a server turn reconstruction</p>
+          </section>
+        )
       ) : (
         <section className="raw-events" aria-labelledby="raw-events-title">
           <div className="section-heading">
@@ -5100,34 +5162,6 @@ function reconstructServerTurn(snapshot: TurnSnapshot): ReconstructedTurn {
   };
 }
 
-function reconstructTurn(events: readonly EventEnvelope[]): ReconstructedTurn {
-  const ordered = [...events].sort((left, right) =>
-    left.at.localeCompare(right.at),
-  );
-  const steps = ordered
-    .filter((envelope) => !isReconstructionBoundaryEvent(envelope.event))
-    .map((envelope) => ({
-      id: envelope.id,
-      at: envelope.at,
-      type: envelope.event.type,
-      component: eventComponent(envelope.event),
-      detail: eventDetail(envelope.event),
-      error: isErrorEvent(envelope.event),
-    }));
-
-  return {
-    conversation:
-      ordered.find((envelope) => envelope.conversation)?.conversation ??
-      "unknown conversation",
-    pipeline:
-      ordered.find((envelope) => envelope.pipeline)?.pipeline ??
-      "unknown pipeline",
-    status: turnStatus(ordered),
-    groups: groupTurnSteps(steps),
-    steps,
-  };
-}
-
 function groupTurnSteps(
   steps: readonly ReconstructedStep[],
 ): ReconstructedGroup[] {
@@ -5187,42 +5221,6 @@ function durationLabel(steps: readonly ReconstructedStep[]): string {
   return seconds === 0 ? "instant" : `${seconds.toFixed(1)}s`;
 }
 
-function turnStatus(events: readonly EventEnvelope[]): TurnStatus {
-  if (events.some((envelope) => envelope.event.type === "StageFailed")) {
-    return "failed";
-  }
-  if (events.some((envelope) => envelope.event.type === "ToolFailed")) {
-    return "failed";
-  }
-  if (
-    events.some((envelope) => envelope.event.type === "ConversationCancelled")
-  ) {
-    return "cancelled";
-  }
-  if (
-    events.some((envelope) => envelope.event.type === "ConversationCompleted")
-  ) {
-    return "completed";
-  }
-  return "running";
-}
-
-function isErrorEvent(event: Event): boolean {
-  return event.type === "StageFailed" || event.type === "ToolFailed";
-}
-
-function isReconstructionBoundaryEvent(event: Event): boolean {
-  // LinkedService* events are lifecycle signals published by the
-  // /v1/linked-services handlers; they aren't part of any turn and would
-  // otherwise create a "diagnostics" stage group on the Turn timeline.
-  return (
-    event.type === "UtteranceSegmentStarted" ||
-    event.type === "ToolBatchStarted" ||
-    event.type === "LinkedServiceLinked" ||
-    event.type === "LinkedServiceUnlinked"
-  );
-}
-
 function eventStepId(id: string): string {
   return `event-step-${id}`;
 }
@@ -5238,111 +5236,6 @@ function storyEventClassName(
   return [base, state.error ? "error" : "", state.selected ? "selected" : ""]
     .filter(Boolean)
     .join(" ");
-}
-
-function eventComponent(event: Event): string {
-  switch (event.type) {
-    case "WakeWordDetected":
-    case "WakeWordRejected":
-    case "AudioStarted":
-    case "AudioChunkReceived":
-    case "AudioFinished":
-      return "capture";
-    case "SpeechPartial":
-    case "SpeechFinal":
-    case "SpeakerIdentified":
-      return "transcription";
-    case "ConversationStarted":
-    case "TurnStarted":
-    case "ConversationCancelled":
-    case "ConversationCompleted":
-      return "conversation";
-    case "LlmRequestStarted":
-    case "LlmToken":
-    case "LlmFinished":
-      return "reasoning";
-    case "ToolRequested":
-    case "ToolBatchStarted":
-    case "ToolStarted":
-    case "ToolConfirmationRequested":
-    case "ToolCompleted":
-    case "ToolFailed":
-    case "ToolConfirmationDenied":
-      return "tools";
-    case "TtsStarted":
-    case "UtteranceSegmentStarted":
-    case "AudioStreaming":
-    case "TtsFinished":
-      return "synthesis";
-    case "StageFailed":
-      return event.node;
-    case "LinkedServiceLinked":
-    case "LinkedServiceUnlinked":
-      return "diagnostics";
-  }
-  return unknownEvent(event);
-}
-
-function eventDetail(event: Event): string | null {
-  switch (event.type) {
-    case "WakeWordDetected":
-    case "WakeWordRejected":
-      return `${event.phrase} (${Math.round(event.confidence * 100)}%)`;
-    case "AudioStarted":
-      return `${event.format.encoding}, ${event.format.sample_rate} Hz, ${event.format.channels} channel`;
-    case "AudioChunkReceived":
-    case "AudioStreaming":
-      return `sequence ${event.sequence}, ${event.bytes} bytes`;
-    case "AudioFinished":
-    case "TtsFinished":
-      return `${event.duration_ms} ms`;
-    case "SpeechPartial":
-    case "SpeechFinal":
-      return event.text;
-    case "SpeakerIdentified":
-      return event.speaker ?? "unknown speaker";
-    case "TurnStarted":
-      return event.turn;
-    case "ConversationCancelled":
-      return event.reason;
-    case "LlmRequestStarted":
-      return event.model;
-    case "LlmToken":
-      return event.delta;
-    case "LlmFinished":
-      return event.reason;
-    case "ToolRequested":
-      return event.name;
-    case "ToolBatchStarted":
-      return `${event.calls.length} calls from model round ${event.model_round}`;
-    case "ToolStarted":
-    case "ToolCompleted":
-    case "ToolConfirmationDenied":
-      return event.call;
-    case "ToolConfirmationRequested":
-      return event.prompt;
-    case "ToolFailed":
-    case "StageFailed":
-      return event.error;
-    case "UtteranceSegmentStarted":
-      return event.text;
-    case "ConversationStarted":
-    case "ConversationCompleted":
-    case "TtsStarted":
-      return "boundary";
-    case "LinkedServiceLinked":
-      return `${event.service_kind}: ${event.peer_name}`;
-    case "LinkedServiceUnlinked":
-      return event.peer_id;
-  }
-  return unknownEvent(event);
-}
-
-// `event` is `never` once every variant above is handled, so a regenerated
-// contract that adds a variant fails `tsc` here instead of throwing at
-// render time in front of an operator.
-function unknownEvent(event: never): never {
-  throw new Error(`Received an unknown event: ${JSON.stringify(event)}`);
 }
 
 function displayEventType(type: string): string {
