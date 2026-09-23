@@ -91,6 +91,8 @@ impl Capability {
 /// caring which is which, and hand the caller the typed registry back through
 /// `Any`.
 pub trait RegistryHandle: Send + Sync {
+    /// Clones this type-erased registry, sharing its provider implementations.
+    fn clone_box(&self) -> Box<dyn RegistryHandle>;
     /// Registration keys, in order.
     fn names(&self) -> Vec<String>;
 
@@ -129,6 +131,12 @@ pub trait RegistryHandle: Send + Sync {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+impl Clone for Box<dyn RegistryHandle> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
 /// A name-to-implementation map for one provider capability.
 ///
 /// Entries are stored in name order so listings are stable in the UI and in
@@ -157,6 +165,15 @@ impl<T: ?Sized> Registry<T> {
             self.default = Some(name.clone());
         }
         self.providers.insert(name, provider)
+    }
+
+    /// Removes `name`, selecting a new default if necessary.
+    pub fn remove(&mut self, name: &str) -> Option<Arc<T>> {
+        let provider = self.providers.remove(name);
+        if self.default.as_deref() == Some(name) {
+            self.default = self.providers.keys().next().cloned();
+        }
+        provider
     }
 
     /// Looks up a provider by name.
@@ -268,6 +285,9 @@ impl<T: Provider + ?Sized> Registry<T> {
 }
 
 impl<T: Provider + ?Sized> RegistryHandle for Registry<T> {
+    fn clone_box(&self) -> Box<dyn RegistryHandle> {
+        Box::new(self.clone())
+    }
     fn names(&self) -> Vec<String> {
         Registry::names(self).map(str::to_owned).collect()
     }

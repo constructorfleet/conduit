@@ -8,7 +8,7 @@ each one into a Conduit `Tool`.
 | Type | Role |
 | --- | --- |
 | `McpClient` | Connection lifecycle and JSON-RPC exchange |
-| `McpSession` | One `initialize`-completed exchange |
+| `McpSession` | An initialized exchange that can remain open for notifications |
 | `McpTool` | One remote tool, as a Conduit `Tool` provider |
 
 ## Transports
@@ -28,8 +28,13 @@ session layer, so every transport reaches a server the same way.
 
 `McpClient` holds a transport factory, not a connection. Building one never
 touches the network, so a client can be constructed from a provider definition
-whether or not the server is running. Each request opens a fresh session,
-performs the handshake, exchanges one message, and closes.
+whether or not the server is running. Request helpers open a fresh session,
+perform the handshake, exchange one message, and close. The API also holds a
+notification session for servers that advertise
+`capabilities.tools.listChanged`. When that session receives
+`notifications/tools/list_changed`, Conduit re-lists the server's tools and
+atomically publishes a new provider snapshot. Failed refreshes keep the current
+snapshot, and old snapshots remain valid for requests already using them.
 
 Requests are id-matched: responses answering a different id are skipped rather
 than mistaken for the reply. A single exchange is abandoned after 30 seconds.

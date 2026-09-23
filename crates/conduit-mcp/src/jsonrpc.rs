@@ -36,6 +36,18 @@ pub struct Notification {
     params: Value,
 }
 
+/// A notification received from an MCP server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerNotification {
+    /// JSON-RPC version marker.
+    pub jsonrpc: String,
+    /// The server notification method.
+    pub method: String,
+    /// Optional notification parameters.
+    #[serde(default)]
+    pub params: Value,
+}
+
 impl Notification {
     /// A notification with `params`.
     #[must_use]

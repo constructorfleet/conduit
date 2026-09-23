@@ -8,6 +8,7 @@
 //! underlying channel.
 
 use reqwest::header::HeaderValue;
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 
 use conduit_core::{Error, Result};
@@ -17,7 +18,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-use crate::jsonrpc::{response_result, Notification, Request, Response};
+use crate::jsonrpc::{response_result, Notification, Request, Response, ServerNotification};
 use crate::sse::{Decoder, SseEvent};
 
 /// A transport: a JSON-RPC channel to an MCP server.
@@ -48,6 +49,9 @@ pub trait Transport: Send {
     ///
     /// Returns an error when the notification cannot be sent.
     async fn notify(&mut self, method: &str, params: Value) -> Result<()>;
+
+    /// Waits for a notification initiated by the server.
+    async fn next_notification(&mut self) -> Result<ServerNotification>;
 
     /// Closes the channel, releasing any process or stream.
     async fn close(&mut self);
@@ -124,6 +128,7 @@ struct StdioSession {
     stdout: BufReader<tokio::process::ChildStdout>,
     /// Task forwarding the child's stderr to the logs.
     stderr_task: tokio::task::JoinHandle<()>,
+    pending_notifications: VecDeque<ServerNotification>,
 }
 
 impl StdioTransport {
@@ -163,8 +168,13 @@ impl Transport for StdioTransport {
             .take()
             .ok_or_else(|| Error::Config("failed to capture MCP server stdout".to_owned()))?;
 
-        self.session =
-            Some(StdioSession { child, stdin, stdout: BufReader::new(stdout), stderr_task });
+        self.session = Some(StdioSession {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            stderr_task,
+            pending_notifications: VecDeque::new(),
+        });
         Ok(())
     }
 
@@ -194,6 +204,10 @@ impl Transport for StdioTransport {
                 // A stray non-JSON line from the server; keep reading.
                 Err(_) => continue,
             };
+            if let Some(notification) = server_notification(&value) {
+                session.pending_notifications.push_back(notification);
+                continue;
+            }
             let response: Response = match serde_json::from_value(value) {
                 Ok(response) => response,
                 // Not a JSON-RPC response (for example, a server notification).
@@ -214,6 +228,33 @@ impl Transport for StdioTransport {
             .ok_or_else(|| Error::Config("stdio transport is not connected".to_owned()))?;
         let notification = Notification::new(method, params);
         write_line(&mut session.stdin, &notification).await
+    }
+
+    async fn next_notification(&mut self) -> Result<ServerNotification> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| Error::Config("stdio transport is not connected".to_owned()))?;
+        if let Some(notification) = session.pending_notifications.pop_front() {
+            return Ok(notification);
+        }
+        loop {
+            let mut raw = String::new();
+            let read = session
+                .stdout
+                .read_line(&mut raw)
+                .await
+                .map_err(|error| Error::provider("mcp", error))?;
+            if read == 0 {
+                return Err(provider_msg(
+                    "MCP server closed stdout while awaiting notification",
+                ));
+            }
+            let Ok(value) = serde_json::from_str::<Value>(&raw) else { continue };
+            if let Some(notification) = server_notification(&value) {
+                return Ok(notification);
+            }
+        }
     }
 
     async fn close(&mut self) {
@@ -265,6 +306,7 @@ struct SseSession {
     rx: mpsc::Receiver<Result<SseEvent>>,
     /// Task draining the GET stream; aborted on close.
     reader_task: tokio::task::JoinHandle<()>,
+    pending_notifications: VecDeque<ServerNotification>,
 }
 
 impl SseTransport {
@@ -330,7 +372,12 @@ impl Transport for SseTransport {
             Error::Config("SSE stream ended before an endpoint event arrived".to_owned())
         })?;
 
-        self.session = Some(SseSession { post_url, rx, reader_task });
+        self.session = Some(SseSession {
+            post_url,
+            rx,
+            reader_task,
+            pending_notifications: VecDeque::new(),
+        });
         Ok(())
     }
 
@@ -357,6 +404,10 @@ impl Transport for SseTransport {
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            if let Some(notification) = server_notification(&value) {
+                session.pending_notifications.push_back(notification);
+                continue;
+            }
             let response: Response = match serde_json::from_value(value) {
                 Ok(response) => response,
                 Err(_) => continue,
@@ -375,6 +426,28 @@ impl Transport for SseTransport {
             .ok_or_else(|| Error::Config("SSE transport is not connected".to_owned()))?;
         let notification = Notification::new(method, params);
         sse_post(&session.post_url, &notification).await
+    }
+
+    async fn next_notification(&mut self) -> Result<ServerNotification> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| Error::Config("SSE transport is not connected".to_owned()))?;
+        if let Some(notification) = session.pending_notifications.pop_front() {
+            return Ok(notification);
+        }
+        loop {
+            let event = session.rx.recv().await.ok_or_else(|| {
+                provider_msg("MCP SSE stream closed while awaiting notification")
+            })??;
+            if event.name != "message" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(&event.data) else { continue };
+            if let Some(notification) = server_notification(&value) {
+                return Ok(notification);
+            }
+        }
     }
 
     async fn close(&mut self) {
@@ -411,13 +484,23 @@ pub struct StreamableHttpTransport {
     /// without a reply, which reads as a working connection that never
     /// answers.
     session: Option<HeaderValue>,
+    notification_rx: Option<mpsc::Receiver<Result<ServerNotification>>>,
+    notification_task: Option<tokio::task::JoinHandle<()>>,
+    pending_notifications: VecDeque<ServerNotification>,
 }
 
 impl StreamableHttpTransport {
     /// A transport that POSTs to `url`.
     #[must_use]
     pub fn new(url: String) -> Self {
-        Self { url, client: reqwest::Client::new(), session: None }
+        Self {
+            url,
+            client: reqwest::Client::new(),
+            session: None,
+            notification_rx: None,
+            notification_task: None,
+            pending_notifications: VecDeque::new(),
+        }
     }
 
     /// Adds the session header, once the server has given one.
@@ -441,7 +524,12 @@ impl StreamableHttpTransport {
 }
 
 /// Reads an SSE response stream, returning the response matching `id`.
-async fn stream_response(response: reqwest::Response, id: u64, method: &str) -> Result<Value> {
+async fn stream_response(
+    response: reqwest::Response,
+    id: u64,
+    method: &str,
+    pending_notifications: &mut VecDeque<ServerNotification>,
+) -> Result<Value> {
     let mut stream = response.bytes_stream();
     let mut decoder = Decoder::new();
     while let Some(chunk) = stream.next().await {
@@ -454,6 +542,10 @@ async fn stream_response(response: reqwest::Response, id: u64, method: &str) -> 
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            if let Some(notification) = server_notification(&value) {
+                pending_notifications.push_back(notification);
+                continue;
+            }
             let response: Response = match serde_json::from_value(value) {
                 Ok(response) => response,
                 Err(_) => continue,
@@ -513,7 +605,7 @@ impl Transport for StreamableHttpTransport {
             .unwrap_or_default();
 
         if content_type.contains("text/event-stream") {
-            stream_response(response, id, method).await
+            stream_response(response, id, method, &mut self.pending_notifications).await
         } else {
             let value: Value =
                 response.json().await.map_err(|error| Error::provider("mcp", error))?;
@@ -548,6 +640,72 @@ impl Transport for StreamableHttpTransport {
         Ok(())
     }
 
+    async fn next_notification(&mut self) -> Result<ServerNotification> {
+        if let Some(notification) = self.pending_notifications.pop_front() {
+            return Ok(notification);
+        }
+        if self.notification_rx.is_none() {
+            let response = self
+                .with_session(self.client.get(&self.url))
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .send()
+                .await
+                .map_err(|error| Error::provider("mcp", error))?;
+            if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+                return Err(provider_msg("MCP server does not support a notification stream"));
+            }
+            let status = response.status();
+            if !status.is_success() {
+                return Err(provider_msg(format!("MCP notification stream returned {status}")));
+            }
+            if !response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/event-stream"))
+            {
+                return Err(provider_msg(
+                    "MCP notification stream did not return event-stream",
+                ));
+            }
+            let mut stream = response.bytes_stream();
+            let (tx, rx) = mpsc::channel(32);
+            self.notification_task = Some(tokio::spawn(async move {
+                let mut decoder = Decoder::new();
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(chunk) => {
+                            for event in decoder.push(&chunk) {
+                                if event.name != "message" {
+                                    continue;
+                                }
+                                let parsed = serde_json::from_str::<Value>(&event.data)
+                                    .ok()
+                                    .and_then(|value| server_notification(&value));
+                                if let Some(notification) = parsed {
+                                    if tx.send(Ok(notification)).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Err(Error::provider("mcp", error))).await;
+                            return;
+                        }
+                    }
+                }
+            }));
+            self.notification_rx = Some(rx);
+        }
+        self.notification_rx
+            .as_mut()
+            .expect("notification receiver was initialized")
+            .recv()
+            .await
+            .ok_or_else(|| provider_msg("MCP notification stream closed"))?
+    }
+
     /// Releases the session, if the server gave one.
     ///
     /// A session is opened per request by `McpClient`, so a server that keeps
@@ -555,6 +713,10 @@ impl Transport for StreamableHttpTransport {
     /// Best-effort: the session is being abandoned either way, and a failure
     /// here is not something the caller can act on.
     async fn close(&mut self) {
+        if let Some(task) = self.notification_task.take() {
+            task.abort();
+        }
+        self.notification_rx = None;
         let Some(session) = self.session.take() else {
             return;
         };
@@ -564,6 +726,15 @@ impl Transport for StreamableHttpTransport {
             tracing::debug!(url = %self.url, %error, "could not release MCP session");
         }
     }
+}
+
+fn server_notification(value: &Value) -> Option<ServerNotification> {
+    if value.get("id").is_some() {
+        return None;
+    }
+    serde_json::from_value(value.clone())
+        .ok()
+        .filter(|notification: &ServerNotification| notification.jsonrpc == "2.0")
 }
 
 /// Resolves an endpoint URL against the URL of the stream it came from.
@@ -598,6 +769,7 @@ fn resolve_endpoint(base: &str, endpoint: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::response::IntoResponse;
     use serde_json::json;
 
     #[test]
@@ -627,6 +799,26 @@ mod tests {
     #[test]
     fn resolve_endpoint_handles_a_scheme_only_base() {
         assert_eq!(resolve_endpoint("http://h:8080", "messages"), "http://h:8080/messages");
+    }
+
+    #[test]
+    fn server_notification_parser_rejects_requests_responses_and_invalid_versions() {
+        assert!(server_notification(&json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed"
+        }))
+        .is_some());
+        assert!(server_notification(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/request"
+        }))
+        .is_none());
+        assert!(server_notification(&json!({
+            "jsonrpc": "1.0",
+            "method": "notifications/tools/list_changed"
+        }))
+        .is_none());
     }
 
     /// Spawns an axum server answering POST /mcp with `handler`, mirroring the
@@ -712,6 +904,40 @@ mod tests {
         )
     }
 
+    async fn mock_notification_stream(
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response {
+        let session = headers.get("mcp-session-id").and_then(|value| value.to_str().ok());
+        if session != Some("session-abc") {
+            return axum::http::StatusCode::BAD_REQUEST.into_response();
+        }
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {}
+        });
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            format!("event: message\ndata: {notification}\n\n"),
+        )
+            .into_response()
+    }
+
+    async fn mock_legacy_sse() -> axum::response::Response {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {}
+        });
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            format!(
+                "event: endpoint\ndata: /messages\n\nevent: message\ndata: {notification}\n\n"
+            ),
+        )
+            .into_response()
+    }
+
     /// A server that requires the Accept header the spec asks for.
     ///
     /// The Python MCP SDK answers 406 without it, which is what a real server
@@ -780,6 +1006,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streamable_http_reads_notifications_from_its_session_stream() {
+        let handler = axum::routing::post(mock_session_mcp).get(mock_notification_stream);
+        let (url, server) = spawn_mock(handler).await;
+        let mut transport = StreamableHttpTransport::new(url);
+        transport.connect().await.expect("connect");
+        transport.request(0, "initialize", json!({})).await.expect("initialize");
+        transport.request(1, "tools/list", json!({})).await.expect("list tools");
+
+        let notification = transport.next_notification().await.expect("notification");
+
+        assert_eq!(notification.method, "notifications/tools/list_changed");
+        transport.close().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_sse_delivers_server_notifications() {
+        let (url, server) = spawn_mock(axum::routing::get(mock_legacy_sse)).await;
+        let mut transport = SseTransport::new(url);
+        transport.connect().await.expect("connect");
+
+        let notification = transport.next_notification().await.expect("notification");
+
+        assert_eq!(notification.method, "notifications/tools/list_changed");
+        transport.close().await;
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn streamable_http_round_trips_a_json_response() {
         let (url, server) = spawn_mock(axum::routing::post(mock_json_mcp)).await;
         let mut transport = StreamableHttpTransport::new(url);
@@ -814,6 +1069,9 @@ for line in sys.stdin:
             sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"stale": True}}) + "\n")
         sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"echo": msg["method"]}}) + "\n")
         sys.stdout.flush()
+    elif msg.get("method") == "notifications/initialized":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}) + "\n")
+        sys.stdout.flush()
 "#;
 
     fn stdio_transport() -> StdioTransport {
@@ -843,6 +1101,20 @@ for line in sys.stdin:
         let mut transport = stdio_transport();
         transport.connect().await.expect("connect");
         transport.notify("notifications/initialized", json!({})).await.expect("notify");
+        transport.close().await;
+    }
+
+    #[tokio::test]
+    async fn stdio_preserves_notifications_received_while_waiting_for_a_response() {
+        let mut transport = stdio_transport();
+        transport.connect().await.expect("connect");
+        transport.request(0, "initialize", json!({})).await.expect("initialize");
+        transport.notify("notifications/initialized", json!({})).await.expect("notify");
+        transport.request(1, "tools/list", json!({})).await.expect("list tools");
+
+        let notification = transport.next_notification().await.expect("notification");
+
+        assert_eq!(notification.method, "notifications/tools/list_changed");
         transport.close().await;
     }
 }
