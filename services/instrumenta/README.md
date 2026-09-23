@@ -37,20 +37,25 @@ and to build the advertised URL, so the two cannot drift.
 Instrumenta aggregates two kinds of upstream MCP server, both re-exposed under
 a `<server_name>.<tool_name>` prefix so nothing collides with the built-ins:
 
-- **HTTP** upstreams are connected once at boot via the SDK's streamable-HTTP
-  client.
-- **stdio** upstreams are spawned and supervised via the SDK's stdio client
-  transport. Each child is driven by one supervise task with capped
-  exponential-backoff autorestart. Its forwarding tools are registered the
-  first time a connection *succeeds* — including a retry after a lost boot
-  race — so a transient child failure never permanently hides its tools.
-  Per-upstream reachability is reported on `/upstreams`, never on `/health`.
+- **HTTP** upstreams are connected via the SDK's streamable-HTTP client.
+- **stdio** upstreams are spawned via the SDK's stdio client transport.
 
-  A child that dies has its tools removed from `tools/list` until it
-  reconnects, so a model never picks a tool whose upstream is gone. This does
-  **not** yet apply to HTTP upstreams: they are attached once at boot and
-  never re-probed, so one that goes away later stays advertised and fails at
-  call time.
+Both are then driven by the same supervisor, one task per upstream, with
+capped exponential-backoff autorestart. Only the transport differs; the
+lifecycle does not. Forwarding tools are registered the first time a
+connection *succeeds* — including a retry after a lost boot race — so a
+transient failure never permanently hides them. Per-upstream reachability is
+reported on `/upstreams`, never on `/health`.
+
+An upstream that goes away has its tools removed from `tools/list` until it
+reconnects, so a model never picks a tool whose upstream is gone. The same
+poll keeps the set current: an upstream that adds, removes or renames a tool
+while staying reachable has its forwarders replaced, rather than advertising
+the set it had when it was first attached.
+
+The poll is every 5s for stdio and every 30s for HTTP — a stdio child is a
+local process this service owns, while an HTTP upstream is someone else's
+server and every poll is a request to it.
 
 Forwarded tools mirror the upstream tool's own parameter schema, so a model
 calling them sees and validates the real arguments rather than an opaque bag.

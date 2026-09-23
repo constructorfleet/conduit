@@ -28,7 +28,7 @@ from instrumenta import _stdio_fixtures
 from instrumenta.aggregator import build_forwarder
 from instrumenta.backend import UpstreamServer
 from instrumenta.path_probe import probe_runtimes
-from instrumenta.stdio_supervisor import ClientHolder, StdioSupervisor
+from instrumenta.supervisor import ClientHolder, UpstreamSupervisor
 
 FIXTURE = _stdio_fixtures.__file__
 
@@ -123,7 +123,7 @@ class TestStdioSupervisor:
         """A live stdio upstream's tools register and forward end to end."""
         mcp_server = MCPServer(name="host")
         command = f"{sys.executable} {FIXTURE}"
-        supervisor = StdioSupervisor(
+        supervisor = UpstreamSupervisor(
             _register_on(mcp_server), initial_backoff=0.05, liveness_poll=0.2
         )
         supervisor.add(_stdio_server("box", command))
@@ -149,7 +149,7 @@ class TestStdioSupervisor:
         gate = tmp_path / "gate"  # absent → the child exits non-zero
         mcp_server = MCPServer(name="host")
         command = f"{sys.executable} {FIXTURE} {gate}"
-        supervisor = StdioSupervisor(
+        supervisor = UpstreamSupervisor(
             _register_on(mcp_server), initial_backoff=0.05, liveness_poll=0.2
         )
         supervisor.add(_stdio_server("box", command))
@@ -174,7 +174,7 @@ class TestStdioSupervisor:
     async def test_bad_command_reports_unreachable_without_blocking(self) -> None:
         """An unspawnable command settles quickly as unreachable, never hangs boot."""
         mcp_server = MCPServer(name="host")
-        supervisor = StdioSupervisor(
+        supervisor = UpstreamSupervisor(
             _register_on(mcp_server), initial_backoff=0.05, liveness_poll=0.2
         )
         supervisor.add(_stdio_server("bad", "nonexistent_binary_xyz_12345"))
@@ -199,7 +199,7 @@ class TestStdioSupervisor:
         gate.write_text("open")  # present → the child comes up
         mcp_server = MCPServer(name="host")
         command = f"{sys.executable} {FIXTURE} {gate}"
-        supervisor = StdioSupervisor(
+        supervisor = UpstreamSupervisor(
             _register_on(mcp_server),
             unregister_tools=_unregister_on(mcp_server),
             initial_backoff=0.05,
@@ -232,7 +232,7 @@ class TestStdioSupervisor:
         gate.write_text("open")
         mcp_server = MCPServer(name="host")
         command = f"{sys.executable} {FIXTURE} {gate}"
-        supervisor = StdioSupervisor(
+        supervisor = UpstreamSupervisor(
             _register_on(mcp_server),
             unregister_tools=_unregister_on(mcp_server),
             initial_backoff=0.05,
