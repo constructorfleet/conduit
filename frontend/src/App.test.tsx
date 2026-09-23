@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -285,7 +285,73 @@ describe("Overview operations workspace", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(screen.queryByText("Snapshot")).not.toBeInTheDocument();
-    expect(screen.getAllByText("live").length).toBeGreaterThan(0);
+  });
+
+  it("applies authenticated live events and refreshes status after reconnect", async () => {
+    const user = userEvent.setup();
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const initial = snapshotFixture();
+    const refreshed = healthySnapshot();
+    refreshed.generated_at = "2026-08-01T01:05:00Z";
+    const fetchMock = mockOperatorApi({
+      snapshot: initial,
+      statusSnapshots: [initial, refreshed],
+      onEventStream: (controller) => streams.push(controller),
+    });
+    render(<App />);
+
+    await user.type(
+      screen.getByLabelText("Management bearer token"),
+      "test-management-token",
+    );
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const [eventRequest] = fetchMock.mock.calls.filter(([input]) => {
+      const url = input instanceof URL ? input : new URL(input.toString());
+      return url.pathname === "/v1/events";
+    });
+    expect(eventRequest?.[1]?.headers).toMatchObject({
+      authorization: "Bearer test-management-token",
+      accept: "text/event-stream",
+    });
+
+    const failure = eventEnvelopeFixtures.find(
+      (envelope) => envelope.event.type === "StageFailed",
+    );
+    if (!failure) {
+      throw new Error("expected a StageFailed event fixture");
+    }
+    const liveFailure = {
+      ...failure,
+      event: {
+        type: "StageFailed" as const,
+        node: "tts",
+        error: "live stream failure",
+        recovered: false,
+      },
+    };
+    act(() => {
+      streams[0]?.enqueue(
+        new TextEncoder().encode(
+          `event: StageFailed\ndata: ${JSON.stringify(liveFailure)}\n\n`,
+        ),
+      );
+    });
+    expect(await screen.findAllByText("live stream failure")).toHaveLength(2);
+
+    act(() => streams[0]?.error(new Error("connection lost")));
+    expect(await screen.findByLabelText("Stale state")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Reconnect refresh required"),
+    ).toBeInTheDocument();
+
+    await waitFor(() => expect(streams).toHaveLength(2), { timeout: 5000 });
+    await waitFor(
+      () => expect(screen.queryByLabelText("Stale state")).toBeNull(),
+      { timeout: 5000 },
+    );
+    expect(screen.getByText("No current exceptions")).toBeInTheDocument();
   });
 
   it("loads status and pipeline graph data from the API after access", async () => {
@@ -4107,6 +4173,7 @@ function mockOperatorApi({
   providerDefinitions = [],
   linkedServices = [],
   updateSnapshotOnPipelineSave = true,
+  onEventStream,
 }: {
   snapshot?: OperatorStatusSnapshot;
   statusSnapshots?: OperatorStatusSnapshot[];
@@ -4124,6 +4191,9 @@ function mockOperatorApi({
     last_seen?: string | null;
   }[];
   updateSnapshotOnPipelineSave?: boolean;
+  onEventStream?: (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ) => void;
 } = {}) {
   let currentSnapshot = snapshot;
   const pendingStatusSnapshots = [...(statusSnapshots ?? [])];
@@ -4143,6 +4213,17 @@ function mockOperatorApi({
       const url = input instanceof URL ? input : new URL(input.toString());
       const route = decodeURIComponent(url.pathname);
       const method = init?.method ?? "GET";
+
+      if (route === "/v1/events" && method === "GET") {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            onEventStream?.(controller);
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
 
       if (route === "/v1/status" && method === "GET") {
         currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;

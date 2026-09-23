@@ -1,4 +1,5 @@
 import { conduitApiRoutes, createConduitApiClient } from "./contracts/client";
+import type { EventEnvelope } from "./contracts/events";
 import type {
   EnrolledSpeaker,
   FirmwareFlashResult,
@@ -58,6 +59,11 @@ export interface SnapshotClient {
   readonly state: SnapshotState;
   readonly snapshot: OperatorStatusSnapshot | null;
   loadSnapshot: () => Promise<OperatorStatusSnapshot>;
+  streamEvents: (
+    onEvent: (envelope: EventEnvelope) => void,
+    onOpen: () => void | Promise<void>,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   loadPipelineViews: () => Promise<PipelineLoad>;
   deletePipeline: (name: string) => Promise<void>;
   loadComponentCatalog: () => Promise<ProviderComponentCatalog>;
@@ -109,9 +115,11 @@ export function createSnapshotClient(
     return createMockSnapshotClient(config);
   }
 
+  const request = fetch;
   const client = createConduitApiClient({
     baseUrl: config.baseUrl,
     headers: () => authorizationHeaders(config.access),
+    fetch: request,
   });
 
   return {
@@ -125,6 +133,15 @@ export function createSnapshotClient(
           : "loading",
     snapshot: config.access.mode === "none" ? null : (config.snapshot ?? null),
     loadSnapshot: () => client.status(),
+    streamEvents: (onEvent, onOpen, signal) =>
+      streamEventRequest(
+        request,
+        new URL(client.routes.events, config.baseUrl),
+        authorizationHeaders(config.access),
+        onEvent,
+        onOpen,
+        signal,
+      ),
     loadPipelineViews: async () => {
       const names = await client.listPipelines();
       // Settled rather than all: a pipeline the server cannot read must not
@@ -197,6 +214,9 @@ function createMockSnapshotClient(
           : "loading",
     snapshot: config.access.mode === "none" ? null : (config.snapshot ?? null),
     loadSnapshot: async () => config.snapshot ?? operatorStatusSnapshotFixture,
+    streamEvents: async () => {
+      throw new Error("event streaming is unavailable in mock data mode");
+    },
     loadPipelineViews: async () => ({
       views: [pipelineViewFixture],
       unreadable: [],
@@ -319,4 +339,87 @@ export function authorizationHeaders(access: OperatorAccess): HeadersInit {
     return {};
   }
   return { authorization: `Bearer ${access.token}` };
+}
+
+async function streamEventRequest(
+  request: typeof fetch,
+  url: URL,
+  authorization: HeadersInit,
+  onEvent: (envelope: EventEnvelope) => void,
+  onOpen: () => void | Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await request(url, {
+    headers: { accept: "text/event-stream", ...authorization },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await eventStreamFailure(response));
+  }
+  if (!response.body) {
+    throw new Error("Conduit event stream returned no response body");
+  }
+
+  await onOpen();
+  await consumeEventStream(response.body, onEvent, signal);
+}
+
+async function consumeEventStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (envelope: EventEnvelope) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const cancelReader = () => void reader.cancel();
+  signal?.addEventListener("abort", cancelReader, { once: true });
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffered += decoder.decode(value, { stream: !done });
+      const frames = buffered.split(/\r\n\r\n|\n\n|\r\r/);
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        dispatchEventFrame(frame, onEvent);
+      }
+      if (done) {
+        if (buffered.trim()) {
+          dispatchEventFrame(buffered, onEvent);
+        }
+        return;
+      }
+    }
+  } finally {
+    signal?.removeEventListener("abort", cancelReader);
+    reader.releaseLock();
+  }
+}
+
+function dispatchEventFrame(
+  frame: string,
+  onEvent: (envelope: EventEnvelope) => void,
+): void {
+  const data = frame
+    .split(/\r\n|\n|\r/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+    .join("\n");
+  if (data) {
+    onEvent(JSON.parse(data) as EventEnvelope);
+  }
+}
+
+async function eventStreamFailure(response: Response): Promise<string> {
+  const fallback =
+    `Conduit event stream failed: ${response.status} ${response.statusText}`.trimEnd();
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return typeof body.detail === "string" && body.detail.length > 0
+      ? body.detail
+      : fallback;
+  } catch {
+    return fallback;
+  }
 }
