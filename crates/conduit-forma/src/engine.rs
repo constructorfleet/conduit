@@ -66,10 +66,8 @@ impl Engine {
 
             RuleCondition::EndsWith { suffix } => Ok(text.ends_with(suffix)),
 
-            RuleCondition::Custom { condition: _ } => {
-                // TODO: Implement custom condition evaluation
-                // For now, we'll return true to avoid blocking users
-                Ok(true)
+            RuleCondition::Custom { .. } => {
+                Err(FormaError::Validation("Custom conditions are not supported".to_owned()))
             }
         }
     }
@@ -283,6 +281,19 @@ mod tests {
 
         let result2 = engine.apply_rule("normal hello world", &rule).unwrap();
         assert_eq!(result2, "normal hello world");
+    }
+
+    #[test]
+    fn does_not_treat_custom_conditions_as_unconditional() {
+        let engine = Engine::new();
+        let rule = create_replace_rule("hello", "hi")
+            .with_condition(RuleCondition::Custom { condition: "false".to_owned() });
+
+        let result = engine.apply_rule("hello world", &rule);
+
+        assert!(
+            matches!(result, Err(FormaError::Validation(message)) if message == "Custom conditions are not supported")
+        );
     }
 
     #[test]
