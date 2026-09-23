@@ -505,6 +505,11 @@ reached within five seconds saves the definition and registers no tools, and
 For `linked_memoria`, the peer's advertised endpoint and transport are resolved
 from its linked-service record before using that same discovery path.
 
+Linked Memoria peers may read `GET /v1/linked-services/{peer_id}/roster/speakers`
+and `/roster/conversations` with their per-link sync token. These narrow routes
+return the current speaker roster and conversations represented in retained
+turn history; they do not grant management access or expose engram data.
+
 A `memory` definition names where the assistant keeps what it should remember.
 The two variants are two *retrievals*, not two places to put the same records: a
 question phrased in words the stored record never used is found by `pgvector` and

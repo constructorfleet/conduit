@@ -1,6 +1,7 @@
 """Tests for Memoria service."""
 
 import json
+import asyncio
 import os
 import stat
 import threading
@@ -14,6 +15,8 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
 from app import app
+import app as memoria_app
+from conduit_link import LinkRecord, LinkState, LinkedServicePanel
 
 
 class _ConduitLinkHandler(BaseHTTPRequestHandler):
@@ -67,6 +70,102 @@ class _ConduitLinkHandler(BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
+
+
+def test_sync_reconciles_speaker_and_conversation_rosters_without_touching_engrams():
+    class Response:
+        def __init__(self, payload: list[dict[str, Any]]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self) -> list[dict[str, Any]]:
+            return self.payload
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def get(self, url: str, headers: dict[str, str]) -> Response:
+            self.calls.append((url, headers["authorization"]))
+            if url.endswith("/speakers"):
+                return Response([{"id": "speaker-1", "name": "Ada", "samples": 2}])
+            return Response([{"conversation_id": "conversation-1", "turn_count": 3}])
+
+    client = Client()
+    record = LinkRecord(
+        state=LinkState(
+            conduit_url="http://conduit:8080",
+            peer_id="memoria-home",
+            peer_name="Home",
+            sync_token="link-sync-secret",
+            panel=LinkedServicePanel(title="Memoria", path="/ui/"),
+            linked_at="2026-01-01T00:00:00Z",
+        ),
+        extension=None,
+    )
+    memoria_app.speaker_roster = [{"id": "speaker-old", "name": "Old"}]
+    memoria_app.conversation_roster = [{"conversation_id": "conversation-old"}]
+
+    asyncio.run(memoria_app.sync_rosters_once(record, client))
+
+    assert client.calls == [
+        ("http://conduit:8080/v1/linked-services/memoria-home/roster/speakers", "Bearer link-sync-secret"),
+        ("http://conduit:8080/v1/linked-services/memoria-home/roster/conversations", "Bearer link-sync-secret"),
+    ]
+    assert memoria_app.speaker_roster == [{"id": "speaker-1", "name": "Ada", "samples": 2}]
+    assert memoria_app.conversation_roster == [{"conversation_id": "conversation-1", "turn_count": 3}]
+
+
+def test_failed_roster_request_keeps_the_last_complete_snapshot():
+    class Response:
+        def __init__(self, payload: list[dict[str, Any]], fail: bool = False) -> None:
+            self.payload = payload
+            self.fail = fail
+
+        def raise_for_status(self) -> None:
+            if self.fail:
+                raise RuntimeError("Conduit unavailable")
+
+        def json(self) -> list[dict[str, Any]]:
+            return self.payload
+
+    class Client:
+        async def get(self, url: str, headers: dict[str, str]) -> Response:
+            return Response([], fail=url.endswith("/conversations"))
+
+    record = LinkRecord(
+        state=LinkState(
+            conduit_url="http://conduit:8080", peer_id="memoria-home", peer_name="Home",
+            sync_token="link-sync-secret",
+            panel=LinkedServicePanel(title="Memoria", path="/ui/"),
+            linked_at="2026-01-01T00:00:00Z",
+        ),
+        extension=None,
+    )
+    previous_speakers = [{"id": "speaker-1", "name": "Ada"}]
+    previous_conversations = [{"conversation_id": "conversation-1"}]
+    memoria_app.speaker_roster = previous_speakers.copy()
+    memoria_app.conversation_roster = previous_conversations.copy()
+
+    with pytest.raises(RuntimeError, match="Conduit unavailable"):
+        asyncio.run(memoria_app.sync_rosters_once(record, Client()))
+
+    assert memoria_app.speaker_roster == previous_speakers
+    assert memoria_app.conversation_roster == previous_conversations
+
+
+def test_synced_rosters_are_available_through_the_memoria_api(client):
+    memoria_app.speaker_roster = [{"id": "speaker-1", "name": "Ada"}]
+    memoria_app.conversation_roster = [{"conversation_id": "conversation-1", "turn_count": 2}]
+    memoria_app.roster_sync_state = {"last_synced_at": "2026-09-22T12:00:00+00:00", "error": None}
+
+    assert client.get("/roster/speakers").json() == [{"id": "speaker-1", "name": "Ada"}]
+    assert client.get("/roster/conversations").json() == [
+        {"conversation_id": "conversation-1", "turn_count": 2}
+    ]
+    assert client.get("/roster/sync").json()["error"] is None
 
 
 @pytest.fixture

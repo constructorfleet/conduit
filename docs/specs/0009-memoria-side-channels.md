@@ -59,6 +59,11 @@ Per this spec:
 
 That's it. `memoria.*` prefix stays reserved to `LinkedServiceKind::Memoria` by 0005; future Memoria capabilities land under it.
 
+The separate roster-sync path reads only metadata. Conduit exposes speakers and
+conversations represented in its retained turn history at link-scoped roster
+routes authenticated by the per-link sync token. Memoria reconciles these
+snapshots; engrams remain local to Memoria and are never sent to Conduit.
+
 ## 0005 amendment
 
 The `capability_endpoints` field is an ADDITIVE change to spec 0005 §Handshake. Conduit now:

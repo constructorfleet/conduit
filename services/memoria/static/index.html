@@ -77,6 +77,7 @@
                     </div>
                     <p id="link-status" class="text-3xl font-bold">-</p>
                     <p class="text-sm text-gray-400 mt-2">Integration status</p>
+                    <p id="roster-sync-status" class="text-xs text-gray-500 mt-2">Roster sync pending</p>
                 </div>
             </div>
 
@@ -166,7 +167,8 @@
 
             <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-6">
                 <div class="flex gap-4">
-                    <input type="text" id="speaker-input" placeholder="Enter speaker ID..." class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    <input type="text" id="speaker-input" list="speaker-roster" placeholder="Choose a speaker or enter ID..." class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-3">
+                    <datalist id="speaker-roster"></datalist>
                     <button onclick="loadSpeakerEngrams()" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg flex items-center gap-2">
                         <i data-lucide="user" class="w-4 h-4"></i>
                         Load Memories
@@ -325,6 +327,7 @@
             if (sectionName === 'dashboard') loadDashboard();
             if (sectionName === 'engrams') loadEngrams();
             if (sectionName === 'link') loadLinkStatus();
+            if (sectionName === 'speakers') loadSpeakerRoster();
         }
 
         // Dashboard
@@ -335,6 +338,18 @@
                 document.getElementById('backend-type').textContent = health.backend;
                 document.getElementById('health-status').textContent = 'OK';
                 document.getElementById('link-status').textContent = health.linked ? 'Linked' : 'Unlinked';
+                if (health.linked) {
+                    const [sync, speakers, conversations] = await Promise.all([
+                        apiCall('/roster/sync'),
+                        apiCall('/roster/speakers'),
+                        apiCall('/roster/conversations'),
+                    ]);
+                    document.getElementById('roster-sync-status').textContent = sync.error
+                        ? `Roster sync error: ${sync.error}`
+                        : `Synced ${speakers.length} speakers and ${conversations.length} conversations${sync.last_synced_at ? ` at ${sync.last_synced_at}` : ''}`;
+                } else {
+                    document.getElementById('roster-sync-status').textContent = 'Roster sync unavailable while unlinked';
+                }
                 document.getElementById('connection-status').innerHTML = `
                     <span class="w-2 h-2 bg-green-500 rounded-full"></span>
                     <span class="text-sm text-gray-400">Connected</span>
@@ -569,6 +584,21 @@
         }
 
         // Speaker engrams
+        async function loadSpeakerRoster() {
+            try {
+                const speakers = await apiCall('/roster/speakers');
+                const roster = document.getElementById('speaker-roster');
+                roster.replaceChildren(...speakers.map(speaker => {
+                    const option = document.createElement('option');
+                    option.value = speaker.id;
+                    option.label = speaker.name;
+                    return option;
+                }));
+            } catch (error) {
+                console.warn('Could not load linked speaker roster:', error);
+            }
+        }
+
         async function loadSpeakerEngrams() {
             const speakerId = document.getElementById('speaker-input').value.trim();
             if (!speakerId) {
