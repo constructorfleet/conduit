@@ -11,9 +11,10 @@
 //! a person's name, and a deployment can change embedding models without every
 //! enrolled voice becoming a stranger.
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::Json;
 use bytes::Bytes;
 use chrono::Utc;
@@ -22,6 +23,7 @@ use conduit_provider::storage::EnrolledSpeaker;
 use conduit_provider::stt::AudioChunk;
 use conduit_provider::ChunkStream;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -69,7 +71,8 @@ pub struct EnrollQuery {
 pub async fn list(
     _caller: ManagementCaller,
     State(state): State<AppState>,
-) -> Result<Json<Vec<EnrolledSpeaker>>, ApiError> {
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
     let ids = state.speaker_ids().await.map_err(store_failure)?;
     let mut speakers = Vec::with_capacity(ids.len());
     for id in ids {
@@ -84,7 +87,39 @@ pub async fn list(
             }
         }
     }
-    Ok(Json(speakers))
+    let body = serde_json::to_vec(&speakers).map_err(|error| {
+        ApiError::unavailable(format!("cannot encode speaker roster: {error}"))
+    })?;
+    let digest = Sha256::digest(&body);
+    let encoded_digest = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let etag = format!("\"{encoded_digest}\"");
+    let mut response = Response::new(Body::empty());
+    response.headers_mut().insert(
+        ETAG,
+        HeaderValue::from_str(&etag).map_err(|error| {
+            ApiError::unavailable(format!("cannot encode roster ETag: {error}"))
+        })?,
+    );
+    if matches_etag(&headers, &etag) {
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        return Ok(response);
+    }
+    response.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    *response.status_mut() = StatusCode::OK;
+    *response.body_mut() = Body::from(body);
+    Ok(response)
+}
+
+fn matches_etag(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get_all(IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| {
+            candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == etag
+        })
 }
 
 /// `GET /v1/speakers/{id}` — one roster entry.

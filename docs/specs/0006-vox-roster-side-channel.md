@@ -63,12 +63,14 @@ Explicitly NOT doing delta (`?since=<opaque_cursor>`) — a full list on 304-mis
 
 Per 0005 §Side channels: log-and-retry, MUST NOT flip base `reachability`. Vox's `Syncer` already does this — non-2xx and connection errors trigger exponential backoff up to 900 s, and the base link continues to serve. No change needed beyond ensuring the log line names both the peer id and `vox.roster` so multi-service logs stay legible.
 
-## Retrofit scope (implementation ticket)
+## Implementation
 
-- Ensure Vox declares `vox.roster` in its handshake `capabilities` array (lands with the Python extraction, #171, once handshake carries `capabilities`).
-- Add ETag support to Conduit's `/v1/speakers` handler; add `If-None-Match` handling to `HttpConduitSpeakerClient`.
-- Add "peer=<peer_id> capability=vox.roster" prefix to Vox roster sync logs.
-- Conformance-test the ETag round-trip against a real HTTP server per 0005 §Verification.
+- Vox declares `vox.roster` in its handshake `capabilities` array.
+- Conduit's `/v1/speakers` handler returns an ETag; Vox sends `If-None-Match`
+  and reuses its cached roster on `304 Not Modified`.
+- Vox roster sync logs include both `peer=<peer_id>` and
+  `capability=vox.roster`.
+- A real HTTP server test covers the ETag round-trip per 0005 §Verification.
 
 ## Non-goals
 
