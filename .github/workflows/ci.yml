@@ -518,7 +518,7 @@ jobs:
             exit 1
           fi
 
-  instrumenta:
+  instrumenta-postgres:
     runs-on: ubuntu-latest
     services:
       postgres:
