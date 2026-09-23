@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -27,7 +28,7 @@ class QdrantBackend:
 
         try:
             from qdrant_client import QdrantClient
-            from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+            from qdrant_client.models import Distance, VectorParams
 
             self.client = QdrantClient(url=self.qdrant_url, timeout=30.0)
 
@@ -323,6 +324,3 @@ class Embedder:
         loop = asyncio.get_event_loop()
         embedding = await loop.run_in_executor(None, self.model.encode, text)
         return embedding
-
-
-from datetime import datetime, timezone

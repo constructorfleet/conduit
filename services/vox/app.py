@@ -42,7 +42,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Mapping, Protocol
+from typing import Awaitable, Callable, Protocol
 
 import httpx
 import numpy as np

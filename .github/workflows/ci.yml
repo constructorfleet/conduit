@@ -281,6 +281,24 @@ jobs:
       - name: Check the service base images agree
         run: scripts/tests/base_image_parity_test.sh
 
+  # One linter for every Python directory, rather than a step in each service
+  # job: memoria has no test job at all, so a per-job step would have left it
+  # unlinted, and five copies of an install is five places for the pin to
+  # drift. Ruff is fast enough that a whole-repository pass costs less than the
+  # checkout.
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      # Pinned: Ruff's default rule set has widened across releases, and an
+      # unpinned linter fails builds that nobody changed. ruff.toml selects the
+      # rules explicitly for the same reason.
+      - run: pip install ruff==0.16.8
+      - run: ruff check services packages/conduit-link
+
   # Conduit Vox — the reference speaker identification service — ships in this
   # repository and is published as an image, so its tests and its build are
   # gates like any other.
