@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import excita.supervisor as supervisor_module
-from excita.supervisor import DetectorSupervisor
 
 
 class Detector:
@@ -18,7 +17,7 @@ class Detector:
 
 
 def test_scored_near_miss_is_reported_without_entering_local_fire_history() -> None:
-    supervisor = DetectorSupervisor(backend=None, clip_store=None)
+    supervisor = supervisor_module.DetectorSupervisor(backend=None, clip_store=None)
     supervisor.arm(
         phrase_id="hey-conduit",
         model_ref="model",
@@ -34,7 +33,7 @@ def test_scored_near_miss_is_reported_without_entering_local_fire_history() -> N
 
 
 def test_detected_signal_remains_in_local_fire_history() -> None:
-    supervisor = DetectorSupervisor(backend=None, clip_store=None)
+    supervisor = supervisor_module.DetectorSupervisor(backend=None, clip_store=None)
     supervisor.arm(
         phrase_id="hey-conduit",
         model_ref="model",
@@ -51,7 +50,7 @@ def test_detected_signal_remains_in_local_fire_history() -> None:
 def test_rejected_signals_are_coalesced_per_detector(monkeypatch) -> None:
     moments = iter([0.0, 0.0, 1.0])
     monkeypatch.setattr(supervisor_module.time, "monotonic", lambda: next(moments))
-    supervisor = DetectorSupervisor(backend=None, clip_store=None)
+    supervisor = supervisor_module.DetectorSupervisor(backend=None, clip_store=None)
     supervisor.arm(
         phrase_id="hey-conduit",
         model_ref="model",

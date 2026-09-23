@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
-from app import app
 import app as memoria_app
 from conduit_link import LinkRecord, LinkState, LinkedServicePanel
 
@@ -191,7 +190,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("MEMORIA_API_KEY", raising=False)
     monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
-    with TestClient(app) as test_client:
+    with TestClient(memoria_app.app) as test_client:
         yield test_client
 
 
@@ -223,7 +222,7 @@ def linked_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     link_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-    with TestClient(app) as test_client:
+    with TestClient(memoria_app.app) as test_client:
         yield test_client
 
 
