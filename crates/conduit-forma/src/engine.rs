@@ -131,10 +131,8 @@ impl Engine {
                 Ok(regex.replace_all(text, format!("$0{}", insert_text)).to_string())
             }
 
-            RuleAction::CustomScript { script: _ } => {
-                // TODO: Implement custom script execution
-                // For now, return text unchanged
-                Ok(text.to_string())
+            RuleAction::CustomScript { .. } => {
+                Err(FormaError::Validation("Custom scripts are not supported".to_owned()))
             }
         }
     }
@@ -293,6 +291,20 @@ mod tests {
 
         assert!(
             matches!(result, Err(FormaError::Validation(message)) if message == "Custom conditions are not supported")
+        );
+    }
+
+    #[test]
+    fn does_not_treat_custom_scripts_as_noop_transformations() {
+        let engine = Engine::new();
+        let rule = create_replace_rule("hello", "hi").with_action(RuleAction::CustomScript {
+            script: "return text.toUpperCase()".to_owned(),
+        });
+
+        let result = engine.apply_rule("hello world", &rule);
+
+        assert!(
+            matches!(result, Err(FormaError::Validation(message)) if message == "Custom scripts are not supported")
         );
     }
 
