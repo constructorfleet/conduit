@@ -568,7 +568,7 @@ class TestLinking:
         monkeypatch.setenv("MEMORIA_API_KEY", "configured-key")
         monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
-        with TestClient(app) as client:
+        with TestClient(memoria_app.app) as client:
             response = client.get("/link")
 
         assert response.status_code == 200
@@ -673,7 +673,7 @@ class TestAuthentication:
         monkeypatch.setenv("MEMORIA_API_KEY", "test-key")
         monkeypatch.setenv("MEMORIA_METRICS_BIND", "127.0.0.1:0")
 
-        with TestClient(app) as client:
+        with TestClient(memoria_app.app) as client:
             response = client.get("/engrams")
 
         assert response.status_code == 401
