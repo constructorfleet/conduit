@@ -365,6 +365,18 @@ jobs:
   # published as an image, so its tests and its build are gates like any other.
   instrumenta:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@v7
       # 3.13 because the Dockerfile is on python:3.13-slim. Testing on a
@@ -391,6 +403,7 @@ jobs:
         working-directory: services/instrumenta
         env:
           PYTHONPATH: ..
+          INSTRUMENTA_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: python -m pytest -q
       - uses: docker/setup-buildx-action@v4
       # Context is the repo root, not services/instrumenta: the Dockerfile
@@ -517,38 +530,6 @@ jobs:
             echo "default profile should start conduit alone, got '${services}'" >&2
             exit 1
           fi
-
-  instrumenta:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-    defaults:
-      run:
-        working-directory: services
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: services/instrumenta/requirements.txt
-      - name: Install test dependencies
-        run: pip install -r instrumenta/requirements.txt
-      - name: Run Instrumenta tests against SQLite and PostgreSQL
-        env:
-          PYTHONPATH: .
-          INSTRUMENTA_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-        run: python -m pytest -q instrumenta
 
   # The published image is built from this Dockerfile, so a change that breaks
   # it must fail before the image is published. Building without pushing needs
