@@ -16,6 +16,23 @@ use conduit_core::Result;
 
 use crate::Provider;
 
+/// Optional conversation context supplied to a transform provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TransformContext {
+    /// Identified speaker, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    /// Conversation identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Current turn identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Recent turn text, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_turns: Vec<String>,
+}
+
 /// Rewrites what a model said on its way to being rendered.
 ///
 /// # Contract
@@ -51,4 +68,13 @@ pub trait UtteranceTransform: Provider {
     /// delivering untransformed text is the outcome the transform was placed
     /// in the graph to rule out.
     async fn transform(&self, segment: &str) -> Result<String>;
+
+    /// Rewrites one segment with bounded conversation metadata when supported.
+    async fn transform_with_context(
+        &self,
+        segment: &str,
+        _context: &TransformContext,
+    ) -> Result<String> {
+        self.transform(segment).await
+    }
 }

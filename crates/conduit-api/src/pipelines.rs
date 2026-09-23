@@ -884,6 +884,16 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "transform.dicta",
+            label: "Linked Dicta",
+            kind: ProviderCapability::Transform,
+            definition_variant: "dicta",
+            schema: ComponentConfigSchema {
+                properties: properties([("peer_id", string_property(None, None))]),
+                required: vec!["peer_id"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "memory.builtin",
             label: "Built-in memory",
             kind: ProviderCapability::Memory,

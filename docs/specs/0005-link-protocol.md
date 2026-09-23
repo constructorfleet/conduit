@@ -103,9 +103,12 @@ Conduit responds `201`:
 The `201` acknowledges that the supplied `peer_token`, capabilities, and
 endpoint metadata were stored. Conduit stores the row with
 `sync_token_hash = sha256_hex(sync_token)` and, when supplied,
-`peer_token_hash = sha256_hex(peer_token)`; the raw `sync_token` is returned
-once and never persisted server-side, and the raw `peer_token` is discarded
-after the hash is written. The peer persists
+`peer_token_hash = sha256_hex(peer_token)` plus an authenticated encrypted
+copy of the peer token when `CONDUIT_LINK_TOKEN_ENCRYPTION_KEY` is configured.
+The raw `sync_token` is returned once and never persisted server-side. The raw
+`peer_token` is never stored in clear; the encryption key is a stable 32-byte
+URL-safe base64 value supplied by the operator and is required for peer tokens
+used by Conduit-to-peer calls. The peer persists
 `{conduit_url, peer_id, sync_token, peer_token, panel, granted_at}` locally in
 a `link.json` with file-owner-only permissions; a world-readable file is a
 hard error at load (see Vox's `LinkStoreSecurityError` pattern).
@@ -227,8 +230,9 @@ endpoint on that side.
   `Authorization: Bearer {sync_token}`. Conduit matches by hashing the
   presented bearer against `sync_token_hash`.
 - **Conduit→peer** capabilities MUST authenticate with
-  `Authorization: Bearer {peer_token}`. The peer matches by hashing the
-  presented bearer against `peer_token_hash`.
+  `Authorization: Bearer {peer_token}`. Conduit decrypts the locally stored
+  authenticated ciphertext to present the token; the peer matches by hashing
+  the presented bearer against `peer_token_hash`.
 - The rule in [Rules that must hold](#rules-that-must-hold) applies: a
   presented value that happens to equal the stored hash is rejected. Replaying
   the hash must not authenticate.

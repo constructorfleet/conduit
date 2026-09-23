@@ -2644,6 +2644,31 @@ describe("Providers workspace", () => {
     expect(screen.getByLabelText("Engine")).toHaveDisplayValue("rhai");
   });
 
+  it("stores a linked Dicta transform by peer id", async () => {
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Transform" }));
+    await user.click(screen.getByRole("menuitem", { name: "Linked Dicta" }));
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "dicta-rewrite");
+    await user.type(screen.getByLabelText("Peer ID"), "dicta-office");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+
+    expect(saved[0]?.variant).toMatchObject({
+      type: "transform",
+      variant: { type: "dicta", peer_id: "dicta-office" },
+    });
+  });
+
   it("keeps a satellite off the engines it is too small to run", async () => {
     // The engine used to be a field beside the place, so a definition could say
     // openWakeWord on a satellite and only find out at the server. Now each
@@ -3914,6 +3939,16 @@ function componentCatalog(): ProviderComponentCatalog {
           // anyway, so requiring it would make somebody pick a number to save
           // two lines.
           required: ["engine", "source"],
+        },
+      },
+      {
+        id: "transform.dicta",
+        label: "Linked Dicta",
+        kind: "transform",
+        definition_variant: "dicta",
+        schema: {
+          properties: { peer_id: { type: "string" } },
+          required: ["peer_id"],
         },
       },
       {

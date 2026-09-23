@@ -53,6 +53,10 @@ pub struct LinkedService {
     /// Absent on legacy peers that have not upgraded the handshake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_token_hash: Option<String>,
+    /// Authenticated ciphertext of the peer bearer, available only to outbound
+    /// capability clients; management views never include it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_token_ciphertext: Option<String>,
     /// Side-channel names this peer advertised during the handshake.
     #[serde(default)]
     pub capabilities: Vec<String>,
@@ -126,7 +130,7 @@ mod tests {
     use super::LinkedService;
 
     #[test]
-    fn legacy_link_records_deserialize_without_capability_metadata() {
+    fn legacy_link_records_deserialize_without_capability_or_token_metadata() {
         let record = serde_json::json!({
             "service_kind": "vox",
             "peer_id": "satellite",
@@ -146,6 +150,7 @@ mod tests {
         let link: LinkedService = serde_json::from_value(record).expect("legacy row decodes");
 
         assert_eq!(link.peer_token_hash, None);
+        assert_eq!(link.peer_token_ciphertext, None);
         assert!(link.capabilities.is_empty());
         assert!(link.capability_endpoints.is_empty());
     }

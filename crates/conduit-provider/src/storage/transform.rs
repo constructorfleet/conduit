@@ -33,6 +33,11 @@ pub enum TransformVariant {
         #[serde(default = "default_script_timeout_ms")]
         timeout_ms: u64,
     },
+    /// A transform endpoint advertised by a linked Dicta peer.
+    Dicta {
+        /// Stable peer identifier from the linked-service row.
+        peer_id: String,
+    },
 }
 
 impl TransformVariant {
@@ -200,6 +205,14 @@ mod tests {
             timeout_ms: 25,
         };
         assert_eq!(variant.redacted(), variant);
+    }
+
+    #[test]
+    fn a_dicta_transform_round_trips_by_linked_peer_id() {
+        let variant = TransformVariant::Dicta { peer_id: "dicta-office".to_owned() };
+        let encoded = serde_json::to_string(&variant).expect("serializes");
+        assert_eq!(encoded, r#"{"type":"dicta","peer_id":"dicta-office"}"#);
+        assert_eq!(serde_json::from_str::<TransformVariant>(&encoded).unwrap(), variant);
     }
 
     #[test]

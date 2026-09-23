@@ -27,6 +27,7 @@ async fn state() -> (AppState, conduit_core::bus::Subscription) {
             peer_base_url: "http://excita:8080".into(),
             sync_token_hash: hash("excita-sync-token"),
             peer_token_hash: None,
+            peer_token_ciphertext: None,
             capabilities: vec!["excita.wake-events".into()],
             capability_endpoints: Default::default(),
             provider_definition_id: String::new(),

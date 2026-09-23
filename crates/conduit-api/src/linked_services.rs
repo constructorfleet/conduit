@@ -187,6 +187,15 @@ pub async fn create(
             Ok(hash_token(token))
         })
         .transpose()?;
+    let peer_token_ciphertext = request
+        .peer_token
+        .as_deref()
+        .map(|token| {
+            state.encrypt_peer_token(&peer_id, token)
+                .map_err(|error| ApiError::unavailable(format!("peer token encryption is unavailable: {error}")))?
+                .ok_or_else(|| ApiError::unavailable("CONDUIT_LINK_TOKEN_ENCRYPTION_KEY is required when a peer token is supplied"))
+        })
+        .transpose()?;
 
     if state.linked_service(&peer_id).await.map_err(store_failure)?.is_some() {
         return Err(ApiError::conflict(format!(
@@ -224,6 +233,7 @@ pub async fn create(
         peer_base_url: peer_base_url.to_owned(),
         sync_token_hash: hash_token(&sync_token),
         peer_token_hash,
+        peer_token_ciphertext,
         capabilities: request.capabilities,
         capability_endpoints: request.capability_endpoints,
         provider_definition_id: provider_definition_id.clone(),

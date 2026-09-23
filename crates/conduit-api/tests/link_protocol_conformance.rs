@@ -238,6 +238,7 @@ async fn seed_link(state: &AppState, peer_id: &str, peer_base_url: &str) -> Stri
             peer_base_url: peer_base_url.to_owned(),
             sync_token_hash: hash_token(sync_token),
             peer_token_hash: None,
+            peer_token_ciphertext: None,
             capabilities: Vec::new(),
             capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
@@ -294,7 +295,9 @@ async fn post_creates_row_returns_sync_token_hashed_server_side() {
 #[tokio::test]
 async fn link_stores_capabilities_and_hashes_the_peer_token_without_exposing_it() {
     let peer = spawn_peer().await;
-    let state = AppState::new(EventBus::default());
+    let state = AppState::new(EventBus::default())
+        .with_peer_token_encryption_key(&[7; 32])
+        .expect("peer token encryption configured");
     let peer_token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let mut body = memoria_link_body(&peer.base_url);
     body["peer_token"] = serde_json::json!(peer_token);
@@ -313,6 +316,8 @@ async fn link_stores_capabilities_and_hashes_the_peer_token_without_exposing_it(
         state.linked_service("household-memory").await.expect("store").expect("stored row");
     let stored_json = serde_json::to_value(&stored).expect("serializes stored row");
     assert_eq!(stored_json["peer_token_hash"], hash_token(peer_token));
+    let encrypted = stored_json["peer_token_ciphertext"].as_str().expect("ciphertext");
+    assert_ne!(encrypted, peer_token);
     assert_eq!(stored_json["capabilities"], serde_json::json!(["memoria.mcp"]));
     assert_eq!(stored_json["capability_endpoints"]["memoria.mcp"]["url"], "/mcp");
     assert!(!stored_json.to_string().contains(peer_token));
@@ -323,6 +328,7 @@ async fn link_stores_capabilities_and_hashes_the_peer_token_without_exposing_it(
     assert_eq!(row["capabilities"], serde_json::json!(["memoria.mcp"]));
     assert_eq!(row["capability_endpoints"], stored_json["capability_endpoints"]);
     assert!(row.get("peer_token_hash").is_none());
+    assert!(row.get("peer_token_ciphertext").is_none());
 }
 
 #[tokio::test]
@@ -381,6 +387,7 @@ async fn typed_kind_fallback_synthesises_a_panel_for_pre_manifest_rows() {
             peer_base_url: "http://memoria.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
             peer_token_hash: None,
+            peer_token_ciphertext: None,
             capabilities: Vec::new(),
             capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
@@ -416,6 +423,7 @@ async fn generic_row_without_a_panel_is_filtered_from_the_list() {
             peer_base_url: "http://unknown.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
             peer_token_hash: None,
+            peer_token_ciphertext: None,
             capabilities: Vec::new(),
             capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
@@ -764,6 +772,7 @@ async fn startup_probe_flips_a_previously_unreachable_row_to_reachable() {
             peer_base_url: peer.base_url.clone(),
             sync_token_hash: hash_token("sync-token-real"),
             peer_token_hash: None,
+            peer_token_ciphertext: None,
             capabilities: Vec::new(),
             capability_endpoints: Default::default(),
             provider_definition_id: String::new(),

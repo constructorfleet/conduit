@@ -37,6 +37,7 @@ services:
       CONDUIT_TOKENS: ${CONDUIT_TOKENS:-}
       CONDUIT_ALLOW_ANONYMOUS: ${CONDUIT_ALLOW_ANONYMOUS:-}
       CONDUIT_LOG: ${CONDUIT_LOG:-info}
+      CONDUIT_LINK_TOKEN_ENCRYPTION_KEY: ${CONDUIT_LINK_TOKEN_ENCRYPTION_KEY:-}
       CONDUIT_DATA_DIR: /var/lib/conduit
     volumes:
       - conduit-data:/var/lib/conduit
