@@ -110,7 +110,7 @@ import {
   type FirmwareRenderer,
 } from "./firmware/FirmwarePanel";
 import { formFromGraph, graphFromForm } from "./pipelines/form";
-import { initialEventStreamPlan } from "./eventStream";
+import { applySnapshotEvent, transitionEventStream } from "./eventStream";
 import type { EventStreamPosture } from "./eventStream";
 import { fieldLabel, fieldLabels } from "./fieldLabel";
 import {
@@ -352,6 +352,9 @@ function OperatorWorkspace({
   const [snapshotState, setSnapshotState] = useState<SnapshotState>(
     snapshotClient.snapshot ? "live" : snapshotClient.state,
   );
+  const [eventPosture, setEventPosture] = useState<EventStreamPosture>(
+    initialEventPosture ?? "connecting",
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   /// Pipelines the server has a name for and cannot read. Kept beside the
   /// readable ones rather than folded in: there is no graph to show, and the
@@ -416,12 +419,6 @@ function OperatorWorkspace({
     readonly LinkedServiceView[]
   >([]);
   const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
-  const eventPlan = useMemo(() => {
-    const plan = initialEventStreamPlan();
-    return initialEventPosture
-      ? { ...plan, posture: initialEventPosture }
-      : plan;
-  }, [initialEventPosture]);
   const hasStoredPipeline =
     pipelineViews.length > 0 || (snapshot?.pipelines.length ?? 0) > 0;
   const firstRun =
@@ -764,19 +761,40 @@ function OperatorWorkspace({
     snapshotClient,
   ]);
 
-  // Live-refresh linked services when a peer links or unlinks. Without this,
-  // an operator who linked from the peer's own UI (e.g. Vox's /link page)
-  // would have to reload the Console to see the row appear. EventSource
-  // reconnects on drop automatically; the effect cleans up on unmount.
+  const hasSnapshot = snapshot !== null;
+
+  // Event streams use fetch because EventSource cannot attach the management
+  // bearer header used by the rest of the console.
   useEffect(() => {
-    if (typeof EventSource === "undefined") {
+    if (
+      access.mode === "none" ||
+      dataMode !== "live" ||
+      initialEvents ||
+      !hasSnapshot
+    ) {
       return;
     }
-    // Only subscribe to the diagnostics stage — the two new event variants
-    // both live there — so we don't stream every wake-word detection into
-    // the Console just to listen for link changes.
-    const source = new EventSource("/v1/events?stage=diagnostics");
     let cancelled = false;
+    let connected = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let activeController: AbortController | undefined;
+
+    function markStale() {
+      setEventPosture("stale");
+      setSnapshotState("stale");
+      setSnapshot((current) =>
+        current
+          ? transitionEventStream(
+              {
+                snapshot: current,
+                eventPosture: "live",
+                snapshotState: "live",
+              },
+              { type: "disconnected" },
+            ).snapshot
+          : null,
+      );
+    }
 
     async function refreshLinkedServices() {
       try {
@@ -791,18 +809,58 @@ function OperatorWorkspace({
       }
     }
 
-    source.addEventListener("LinkedServiceLinked", () => {
-      void refreshLinkedServices();
-    });
-    source.addEventListener("LinkedServiceUnlinked", () => {
-      void refreshLinkedServices();
-    });
+    async function connect() {
+      const controller = new AbortController();
+      activeController = controller;
+      try {
+        await snapshotClient.streamEvents(
+          (envelope) => {
+            setSnapshot((current) =>
+              current ? applySnapshotEvent(current, envelope) : current,
+            );
+            if (
+              envelope.event.type === "LinkedServiceLinked" ||
+              envelope.event.type === "LinkedServiceUnlinked"
+            ) {
+              void refreshLinkedServices();
+            }
+          },
+          async () => {
+            if (connected) {
+              const refreshedSnapshot = await snapshotClient.loadSnapshot();
+              if (cancelled) {
+                return;
+              }
+              setSnapshot(refreshedSnapshot);
+            }
+            connected = true;
+            setSnapshotState("live");
+            setEventPosture("live");
+          },
+          controller.signal,
+        );
+      } catch {
+        // A dropped or refused stream is visible as stale state. The next
+        // connection retries with the same management credential.
+      }
+
+      if (cancelled) {
+        return;
+      }
+      markStale();
+      retryTimer = setTimeout(() => void connect(), 1000);
+    }
+
+    void connect();
 
     return () => {
       cancelled = true;
-      source.close();
+      activeController?.abort();
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
-  }, [snapshotClient]);
+  }, [access.mode, dataMode, hasSnapshot, initialEvents, snapshotClient]);
 
   if (firstRun) {
     return (
@@ -913,11 +971,7 @@ function OperatorWorkspace({
                 tone="caution"
               />
             )}
-            <StatusPill
-              label="Events"
-              value={eventPlan.posture}
-              tone="neutral"
-            />
+            <StatusPill label="Events" value={eventPosture} tone="neutral" />
           </div>
         </header>
 
@@ -934,7 +988,7 @@ function OperatorWorkspace({
           unreadablePipelines={unreadablePipelines}
           onPipelineDiscarded={discardPipeline}
           snapshot={snapshot}
-          eventPosture={eventPlan.posture}
+          eventPosture={eventPosture}
           loadError={loadError}
           onSectionChange={onSectionChange}
           onPipelineValidate={
