@@ -61,6 +61,13 @@ impl MemoryStore {
     }
 }
 
+fn validate_rules(rules: &[FormaRule]) -> Result<(), FormaError> {
+    for rule in rules {
+        rule.validate().map_err(FormaError::Validation)?;
+    }
+    Ok(())
+}
+
 impl Default for MemoryStore {
     fn default() -> Self {
         Self::new()
@@ -70,6 +77,7 @@ impl Default for MemoryStore {
 #[async_trait::async_trait]
 impl FormaStore for MemoryStore {
     async fn create_rule_set(&self, rule_set: RuleSet) -> Result<(), FormaError> {
+        validate_rules(&rule_set.rules)?;
         let mut store = self
             .rule_sets
             .write()
@@ -105,6 +113,7 @@ impl FormaStore for MemoryStore {
     }
 
     async fn update_rule_set(&self, rule_set: RuleSet) -> Result<(), FormaError> {
+        validate_rules(&rule_set.rules)?;
         let mut store = self
             .rule_sets
             .write()
@@ -132,6 +141,7 @@ impl FormaStore for MemoryStore {
     }
 
     async fn add_rule(&self, rule_set_id: &str, rule: FormaRule) -> Result<(), FormaError> {
+        rule.validate().map_err(FormaError::Validation)?;
         let mut store = self
             .rule_sets
             .write()
@@ -147,6 +157,7 @@ impl FormaStore for MemoryStore {
     }
 
     async fn update_rule(&self, rule_set_id: &str, rule: FormaRule) -> Result<(), FormaError> {
+        rule.validate().map_err(FormaError::Validation)?;
         let mut store = self
             .rule_sets
             .write()
@@ -226,6 +237,25 @@ mod tests {
         let retrieved = store.get_rule_set("test-set").await.unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().name, "Test Set");
+    }
+
+    #[tokio::test]
+    async fn rejects_custom_conditions_before_storing_a_rule_set() {
+        let store = MemoryStore::new();
+        let rule_set = RuleSet {
+            id: "unsupported".to_owned(),
+            name: "Unsupported".to_owned(),
+            description: String::new(),
+            rules: vec![create_test_rule("custom", "Custom")
+                .with_condition(RuleCondition::Custom { condition: "false".to_owned() })],
+        };
+
+        let result = store.create_rule_set(rule_set).await;
+
+        assert!(
+            matches!(result, Err(FormaError::Validation(message)) if message == "Custom conditions are not supported")
+        );
+        assert!(store.get_rule_set("unsupported").await.unwrap().is_none());
     }
 
     #[tokio::test]

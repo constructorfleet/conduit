@@ -65,7 +65,7 @@ Rules can be applied conditionally:
 - **Starts With**: Apply only if text starts with a substring
 - **Ends With**: Apply only if text ends with a substring
 - **Matches Pattern**: Apply only if text matches a regex pattern
-- **Custom**: Apply only if a custom condition evaluates to true (future)
+- **Custom**: Reserved for future use. Rule validation rejects custom conditions until their semantics are implemented.
 
 ## Using Forma
 
