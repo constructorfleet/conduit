@@ -73,7 +73,9 @@ Serde defaults keep older stored link rows readable; peers without these fields 
 - `LinkedService` carries `capabilities: Vec<String>` and `capability_endpoints: Map<String, serde_json::Value>` with serde defaults.
 - The handshake handler accepts and persists both fields and hashes an optional 256-bit `peer_token`.
 - `LinkedServiceView` exposes capabilities and endpoint metadata while never exposing either token hash.
-- Resolving a linked peer into an `McpTransport` remains follow-up work tracked by #310.
+- `ToolVariant::LinkedMemoria` stores a peer id and resolves the peer's advertised
+  transport and endpoint into the existing MCP client at runtime. The operator
+  console offers linked Memoria peers when configuring this tool provider.
 
 ## Non-goals
 

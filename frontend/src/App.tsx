@@ -2006,6 +2006,7 @@ function ProvidersPanel({
                             selectedComponent={selectedDraftComponent}
                             validation={draftProviderValidation}
                             suggestions={draftProviderSuggestions}
+                            linkedServices={linkedServices}
                             onConfigChange={updateDraftConfig}
                             onDraftChange={updateDraftProvider}
                           />
@@ -2185,6 +2186,7 @@ function ProviderEditorFields({
   selectedComponent,
   validation,
   suggestions,
+  linkedServices = [],
   onConfigChange,
   onDraftChange,
 }: {
@@ -2193,6 +2195,7 @@ function ProviderEditorFields({
   selectedComponent: ProviderComponentDescriptor | null;
   validation: PipelineValidationResult;
   suggestions?: Record<string, readonly string[]>;
+  linkedServices?: readonly LinkedServiceView[];
   onConfigChange: (
     field: string,
     property: ComponentConfigProperty,
@@ -2202,6 +2205,24 @@ function ProviderEditorFields({
     updater: (current: ProviderDefinition) => ProviderDefinition,
   ) => void;
 }) {
+  const formComponent =
+    selectedComponent?.id === "mcp.linked_memoria"
+      ? {
+          ...selectedComponent,
+          schema: {
+            ...selectedComponent.schema,
+            properties: {
+              ...selectedComponent.schema.properties,
+              peer_id: {
+                ...selectedComponent.schema.properties.peer_id,
+                options: linkedServices
+                  .filter((service) => service.service_kind === "memoria")
+                  .map((service) => service.peer_id),
+              },
+            },
+          },
+        }
+      : selectedComponent;
   return (
     <div className="provider-definition-form">
       <label className="field">
@@ -2257,9 +2278,9 @@ function ProviderEditorFields({
             ))}
         </select>
       </label>
-      {selectedComponent ? (
+      {formComponent ? (
         <ComponentConfigFields
-          component={selectedComponent}
+          component={formComponent}
           config={draftProvider.config}
           readOnly={false}
           suggestions={suggestions}
@@ -4197,6 +4218,14 @@ function componentForApiProviderDefinition(
 ): ProviderComponentDescriptor | null {
   const kind = definition.kind;
   if (definition.variant.type === "tool") {
+    if (definition.variant.variant.type === "linked_memoria") {
+      return (
+        catalog.components.find(
+          (component) =>
+            component.id === "mcp.linked_memoria" && component.kind === kind,
+        ) ?? null
+      );
+    }
     const transport = definition.variant.variant.transport.type;
     const componentId =
       transport === "streamable_http"
@@ -4407,6 +4436,9 @@ function configFromProviderVariant(
       engine: variant.variant.engine,
       threshold_percent: variant.variant.threshold_percent,
     };
+  }
+  if (variant.variant.type === "linked_memoria") {
+    return { peer_id: variant.variant.peer_id };
   }
   if (variant.variant.transport.type === "stdio") {
     return {
@@ -4799,6 +4831,12 @@ function variantFromProviderDefinition(
           args: text("args").split(/\s+/).filter(Boolean),
         },
       },
+    };
+  }
+  if (definition.component === "mcp.linked_memoria") {
+    return {
+      type: "tool",
+      variant: { type: "linked_memoria", peer_id: text("peer_id") },
     };
   }
   return {

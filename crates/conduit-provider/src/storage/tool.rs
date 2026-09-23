@@ -35,6 +35,11 @@ pub enum ToolVariant {
         /// Tool transport configuration.
         transport: McpTransport,
     },
+    /// MCP server discovered through an authenticated Memoria link.
+    LinkedMemoria {
+        /// Identifier of the linked Memoria peer.
+        peer_id: String,
+    },
 }
 
 impl ToolVariant {

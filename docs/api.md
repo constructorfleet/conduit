@@ -389,6 +389,7 @@ a Runtime Provider under the definition id:
 | `transform` | `script` | One transform under the definition id | `engine` is `rhai`; the script is compiled and its deadline checked when the definition is saved |
 | `transform` | `dicta` | One transform under the definition id | `peer_id` must name a linked Dicta peer advertising `dicta.transform`; the peer bearer is decrypted only for outbound requests |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+| `tool` | `linked_memoria` | Tools from the MCP endpoint advertised by a linked Memoria peer | `peer_id` must name a linked peer advertising `memoria.mcp`; MCP authentication stays in MCP configuration |
 | `memory` | `builtin` | One memory store under the definition id | Nothing required; an absent `path` writes nowhere |
 | `memory` | `pgvector` | One memory store under the definition id | `url` must be `postgres://` or `postgresql://` and carry no password; needs `--features postgres` |
 
@@ -501,6 +502,8 @@ whole server, and offers the model every tool that definition registered.
 Discovery needs the server, but saving does not: a server that cannot be
 reached within five seconds saves the definition and registers no tools, and
 `POST /v1/providers/{id}/test` rediscovers them once it answers.
+For `linked_memoria`, the peer's advertised endpoint and transport are resolved
+from its linked-service record before using that same discovery path.
 
 A `memory` definition names where the assistant keeps what it should remember.
 The two variants are two *retrievals*, not two places to put the same records: a

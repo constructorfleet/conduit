@@ -2669,6 +2669,31 @@ describe("Providers workspace", () => {
     });
   });
 
+  it("stores a linked Memoria MCP tool by peer id", async () => {
+    const user = userEvent.setup();
+    const saved: ProviderDefinition[] = [];
+    render(
+      <App
+        initialComponentCatalog={componentCatalog()}
+        onProviderDefinitionSaved={(definition) => saved.push(definition)}
+      />,
+    );
+    await enterProvidersSection(user);
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    await user.click(screen.getByRole("menuitem", { name: "Tools" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Linked Memoria MCP" }),
+    );
+    await user.clear(screen.getByLabelText("Provider id"));
+    await user.type(screen.getByLabelText("Provider id"), "memoria-tools");
+    await user.type(screen.getByLabelText("Peer ID"), "memoria-home");
+    await user.click(screen.getByRole("button", { name: "Save provider" }));
+    expect(saved[0]?.variant).toEqual({
+      type: "tool",
+      variant: { type: "linked_memoria", peer_id: "memoria-home" },
+    });
+  });
+
   it("keeps a satellite off the engines it is too small to run", async () => {
     // The engine used to be a field beside the place, so a definition could say
     // openWakeWord on a satellite and only find out at the server. Now each
@@ -3946,6 +3971,16 @@ function componentCatalog(): ProviderComponentCatalog {
         label: "Linked Dicta",
         kind: "transform",
         definition_variant: "dicta",
+        schema: {
+          properties: { peer_id: { type: "string" } },
+          required: ["peer_id"],
+        },
+      },
+      {
+        id: "mcp.linked_memoria",
+        label: "Linked Memoria MCP",
+        kind: "tool",
+        definition_variant: "linked_memoria",
         schema: {
           properties: { peer_id: { type: "string" } },
           required: ["peer_id"],
