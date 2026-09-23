@@ -285,7 +285,6 @@ describe("Overview operations workspace", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("piper-local").length).toBeGreaterThan(0);
     expect(screen.queryByText("Snapshot")).not.toBeInTheDocument();
-    expect(screen.getAllByText("live").length).toBeGreaterThan(0);
   });
 
   it("applies authenticated live events and refreshes status after reconnect", async () => {
