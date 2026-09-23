@@ -616,7 +616,7 @@ class _PostgresConnection:
     def execute(self, query: str, params: tuple[object, ...] = ()) -> Any:
         cursor = self._connection.cursor()
         cursor.execute(
-            query.replace("?", "%s").replace("datetime('now')", "CURRENT_TIMESTAMP"),
+            query.replace("?", "%s").replace("datetime('now')", "CURRENT_TIMESTAMP::text"),
             params,
         )
         return cursor
@@ -638,7 +638,7 @@ class PostgresBackend(SqliteBackend):
         connection = psycopg.connect(database_url)
         connection.autocommit = False
         self._conn = _PostgresConnection(connection)
-        schema = _SCHEMA.replace("datetime('now')", "CURRENT_TIMESTAMP")
+        schema = _SCHEMA.replace("datetime('now')", "CURRENT_TIMESTAMP::text")
         for statement in schema.split(";"):
             if statement.strip():
                 self._conn.execute(statement)
