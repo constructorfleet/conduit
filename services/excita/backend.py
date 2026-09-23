@@ -14,7 +14,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -314,6 +314,7 @@ class SqliteBackend:
     async def close(self) -> None:
         self._conn.close()
 
+
     # --- phrases ---
 
     _PHRASE_COLS = "id, name, display_label, language, notes, deleted_at"
@@ -604,6 +605,47 @@ class SqliteBackend:
             (current_model_id, at, status, error, target_id),
         )
         self._conn.commit()
+
+
+class _PostgresConnection:
+    """Small DB-API compatibility shim for the backend's shared SQL."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> Any:
+        cursor = self._connection.cursor()
+        cursor.execute(
+            query.replace("?", "%s").replace("datetime('now')", "CURRENT_TIMESTAMP"),
+            params,
+        )
+        return cursor
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+
+class PostgresBackend(SqliteBackend):
+    """PostgreSQL implementation sharing Excita's backend behavior and schema."""
+
+    def __init__(self, database_url: str) -> None:
+        try:
+            import psycopg
+        except ImportError as exc:  # pragma: no cover - packaging error
+            raise RuntimeError(
+                "PostgresBackend requires psycopg; install Excita requirements"
+            ) from exc
+        connection = psycopg.connect(database_url)
+        connection.autocommit = False
+        self._conn = _PostgresConnection(connection)
+        schema = _SCHEMA.replace("datetime('now')", "CURRENT_TIMESTAMP")
+        for statement in schema.split(";"):
+            if statement.strip():
+                self._conn.execute(statement)
+        self._conn.commit()
+
+    async def close(self) -> None:
+        self._conn._connection.close()
 
 
 def new_id() -> str:

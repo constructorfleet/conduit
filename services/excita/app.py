@@ -53,6 +53,7 @@ from .backend import (
     DeployTarget,
     Label,
     Model,
+    PostgresBackend,
     Phrase,
     SqliteBackend,
     new_id,
@@ -120,6 +121,7 @@ def _public(_extension: _NoExtension) -> dict[str, object]:
 class Config(BaseModel):
     data_dir: Path
     backend_type: str
+    database_url: str | None = None
     base_url: str
     # Where the three shared openWakeWord ONNX files live. Defaults to
     # `<data_dir>/wake-models`, populated by `scripts/fetch-wake-models.sh`
@@ -142,6 +144,7 @@ class Config(BaseModel):
         return cls(
             data_dir=data_dir,
             backend_type=os.getenv("EXCITA_BACKEND", "sqlite"),
+            database_url=os.getenv("EXCITA_DATABASE_URL"),
             base_url=os.getenv("EXCITA_BASE_URL", f"http://localhost:{DEFAULT_PORT}"),
             wake_models_dir=wake_dir,
             pre_roll_ms=int(os.getenv("EXCITA_PREROLL_MS", "2000")),
@@ -328,7 +331,9 @@ def _make_backend(config: Config) -> Backend:
     if config.backend_type == "sqlite":
         return SqliteBackend(config.data_dir / "excita.db")
     if config.backend_type == "postgres":
-        raise NotImplementedError("postgres backend reserved; see spec 0011")
+        return PostgresBackend(config.database_url or os.getenv(
+            "EXCITA_DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/postgres"
+        ))
     raise ValueError(f"Unknown EXCITA_BACKEND: {config.backend_type}")
 
 
