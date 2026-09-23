@@ -15,4 +15,5 @@ pub mod tool;
 pub mod transport;
 
 pub use client::{McpClient, McpSession, McpToolInfo};
+pub use jsonrpc::ServerNotification;
 pub use tool::McpTool;

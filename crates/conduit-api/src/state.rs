@@ -1,13 +1,13 @@
 //! Shared application state.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use std::time::Duration;
 
 use conduit_core::bus::EventBus;
 use conduit_core::graph::PipelineGraph;
 use conduit_core::Result;
-use conduit_mcp::McpClient;
+use conduit_mcp::{McpClient, McpTool, McpToolInfo};
 use conduit_metrics::Metrics;
 use conduit_provider::storage::{
     EnrolledSpeaker, LinkedService, LinkedServiceStore, McpTransport, PipelineStore,
@@ -38,6 +38,8 @@ pub struct AppState {
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
+    /// Serializes snapshot rebuilds with asynchronous MCP tool-list refreshes.
+    provider_snapshot_update: Arc<tokio::sync::Mutex<()>>,
     /// Results from explicit provider reachability checks.
     provider_reachability: Arc<RwLock<BTreeMap<String, Health>>>,
     /// Metrics derived from the bus, rendered by the scrape endpoint.
@@ -52,8 +54,181 @@ pub struct AppState {
     turn_idle_timeout: Option<Duration>,
     /// What turns stored provider definitions into running providers.
     factories: Arc<Factories>,
+    /// Long-lived MCP sessions that report tool-list changes.
+    mcp_watchers: Arc<Mutex<BTreeMap<String, McpWatcher>>>,
     /// Where rendered firmware fragments are handed off, if anywhere.
     esphome: Option<Arc<EsphomeDashboard>>,
+}
+
+async fn watch_mcp_tools(
+    providers: Weak<RwLock<Option<Arc<Providers>>>>,
+    snapshot_update: Arc<tokio::sync::Mutex<()>>,
+    definitions: Arc<dyn ProviderDefinitionStore>,
+    id: String,
+    transport: McpTransport,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+) {
+    let client = Arc::new(McpClient::new(transport.clone()));
+    let mut retry_delay = Duration::from_secs(1);
+    loop {
+        let connection = tokio::select! {
+            _ = &mut cancel => return,
+            connection = tokio::time::timeout(Duration::from_secs(30), client.connect_session()) => connection,
+        };
+        let mut session = match connection {
+            Ok(Ok(session)) => session,
+            Ok(Err(error)) => {
+                tracing::warn!(provider = %id, %error, "MCP notification session failed to connect");
+                if wait_mcp_retry(&mut cancel, retry_delay).await {
+                    return;
+                }
+                retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!(provider = %id, "MCP notification session connection timed out");
+                if wait_mcp_retry(&mut cancel, retry_delay).await {
+                    return;
+                }
+                retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+                continue;
+            }
+        };
+
+        if !session.supports_tool_list_changed() {
+            session.close().await;
+            return;
+        }
+
+        match session.list_tools().await {
+            Ok(tools) => {
+                refresh_mcp_tools(
+                    &providers,
+                    &snapshot_update,
+                    &definitions,
+                    &id,
+                    &transport,
+                    &tools,
+                    &client,
+                )
+                .await;
+            }
+            Err(error) => {
+                tracing::warn!(provider = %id, %error, "MCP notification session discovery failed");
+                session.close().await;
+                if wait_mcp_retry(&mut cancel, retry_delay).await {
+                    return;
+                }
+                retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+                continue;
+            }
+        }
+
+        loop {
+            let notification = tokio::select! {
+                _ = &mut cancel => {
+                    session.close().await;
+                    return;
+                }
+                notification = session.next_notification() => notification,
+            };
+            match notification {
+                Ok(notification)
+                    if notification.method == "notifications/tools/list_changed" =>
+                {
+                    retry_delay = Duration::from_secs(1);
+                    match session.list_tools().await {
+                        Ok(tools) => {
+                            refresh_mcp_tools(
+                                &providers,
+                                &snapshot_update,
+                                &definitions,
+                                &id,
+                                &transport,
+                                &tools,
+                                &client,
+                            )
+                            .await
+                        }
+                        Err(error) => tracing::warn!(
+                            provider = %id,
+                            %error,
+                            "MCP tool-list refresh failed; retaining the current tools"
+                        ),
+                    }
+                }
+                Ok(notification) => tracing::debug!(
+                    provider = %id,
+                    method = %notification.method,
+                    "ignoring unsupported MCP server notification"
+                ),
+                Err(error) => {
+                    tracing::warn!(provider = %id, %error, "MCP notification stream ended");
+                    break;
+                }
+            }
+        }
+        session.close().await;
+        if wait_mcp_retry(&mut cancel, retry_delay).await {
+            return;
+        }
+        retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+    }
+}
+
+async fn wait_mcp_retry(
+    cancel: &mut tokio::sync::oneshot::Receiver<()>,
+    delay: Duration,
+) -> bool {
+    tokio::select! {
+        _ = cancel => true,
+        () = tokio::time::sleep(delay) => false,
+    }
+}
+
+async fn refresh_mcp_tools(
+    providers: &Weak<RwLock<Option<Arc<Providers>>>>,
+    snapshot_update: &Arc<tokio::sync::Mutex<()>>,
+    definitions: &Arc<dyn ProviderDefinitionStore>,
+    id: &str,
+    transport: &McpTransport,
+    tools: &[McpToolInfo],
+    client: &Arc<McpClient>,
+) {
+    let _update = snapshot_update.lock().await;
+    let definition = match definitions.get(id).await {
+        Ok(Some(definition)) => definition,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(provider = %id, %error, "could not verify MCP definition before refreshing tools");
+            return;
+        }
+    };
+    if !matches!(
+        definition.variant,
+        ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport: ref current } }
+            if current == transport
+    ) {
+        return;
+    }
+    let Some(providers) = providers.upgrade() else { return };
+    let mut current = providers.write().unwrap_or_else(PoisonError::into_inner);
+    let Some(snapshot) = current.as_ref() else { return };
+    let mut next = Arc::clone(snapshot).as_ref().clone();
+    next.remove_tool_prefix(&format!("{id}."));
+    for tool in tools {
+        next = next.with_tool(McpTool::new(
+            format!("{id}.{}", tool.name),
+            tool.clone(),
+            Arc::clone(client),
+        ));
+    }
+    *current = Some(Arc::new(next));
+}
+
+struct McpWatcher {
+    transport: McpTransport,
+    cancel: tokio::sync::oneshot::Sender<()>,
 }
 
 impl AppState {
@@ -85,6 +260,7 @@ impl AppState {
             speakers: Arc::new(MemoryStore::new()),
             linked_services: Arc::new(MemoryStore::new()),
             providers: Arc::new(RwLock::new(None)),
+            provider_snapshot_update: Arc::new(tokio::sync::Mutex::new(())),
             provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
             metrics: Arc::new(Metrics::new()),
             status: RuntimeStatus::new(),
@@ -92,6 +268,7 @@ impl AppState {
             access: Arc::new(Access::anonymous()),
             turn_idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
             factories: Arc::new(Factories::builtin()),
+            mcp_watchers: Arc::new(Mutex::new(BTreeMap::new())),
             esphome: None,
         }
     }
@@ -472,11 +649,18 @@ impl AppState {
     }
 
     async fn rebuild_provider_snapshot(&self) -> Result<()> {
+        let _update = self.provider_snapshot_update.lock().await;
         let mut snapshot = Providers::new();
+        let mut mcp_definitions = BTreeMap::new();
         for id in self.provider_definition_ids().await? {
             let Some(definition) = self.provider_definition(&id).await? else {
                 continue;
             };
+            if let ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } =
+                &definition.variant
+            {
+                mcp_definitions.insert(definition.id.clone(), transport.clone());
+            }
             snapshot = self.factories.register(snapshot, &definition).await?;
             // Checked here rather than at the store because the schema lives on
             // the provider that was just built: a definition's default settings
@@ -486,8 +670,39 @@ impl AppState {
             validate_definition_settings(&snapshot, &definition)?;
         }
         *self.provider_lock() = Some(Arc::new(snapshot));
+        self.sync_mcp_watchers(mcp_definitions);
         self.spawn_reachability_probe();
         Ok(())
+    }
+
+    fn sync_mcp_watchers(&self, definitions: BTreeMap<String, McpTransport>) {
+        let mut watchers = self.mcp_watchers.lock().unwrap_or_else(PoisonError::into_inner);
+        let stale: Vec<_> = watchers
+            .iter()
+            .filter(|(id, watcher)| definitions.get(*id) != Some(&watcher.transport))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale {
+            if let Some(watcher) = watchers.remove(&id) {
+                let _ = watcher.cancel.send(());
+            }
+        }
+
+        for (id, transport) in definitions {
+            if watchers.contains_key(&id) {
+                continue;
+            }
+            let (cancel, cancel_rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(watch_mcp_tools(
+                Arc::downgrade(&self.providers),
+                Arc::clone(&self.provider_snapshot_update),
+                Arc::clone(&self.provider_definitions),
+                id.clone(),
+                transport.clone(),
+                cancel_rx,
+            ));
+            watchers.insert(id, McpWatcher { transport, cancel });
+        }
     }
 
     /// Asks every registered provider how it is, in the background.
@@ -659,5 +874,68 @@ pub(crate) async fn probe_mcp(transport: &McpTransport) -> Health {
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState").field("providers", &self.providers).finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const CHANGING_MCP_SERVER: &str = r#"
+import json, sys
+lists = 0
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "notifications/initialized":
+        print(json.dumps({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}), flush=True)
+    elif "id" in message:
+        if method == "initialize":
+            result = {"protocolVersion":"2025-03-26","capabilities":{"tools":{"listChanged":True}}}
+        elif method == "tools/list":
+            lists += 1
+            name = "old_tool" if lists == 1 else "new_tool"
+            result = {"tools":[{"name":name,"inputSchema":{"type":"object"}}]}
+        else:
+            result = {}
+        print(json.dumps({"jsonrpc":"2.0","id":message["id"],"result":result}), flush=True)
+"#;
+
+    #[tokio::test]
+    async fn advertised_tool_list_changes_replace_only_that_servers_snapshot_tools() {
+        let state = AppState::new(EventBus::default());
+        state
+            .put_provider_definition(
+                "dynamic",
+                ProviderDefinition {
+                    id: "dynamic".to_owned(),
+                    label: "Dynamic MCP".to_owned(),
+                    variant: ProviderDefinitionVariant::Tool {
+                        variant: ToolVariant::Mcp {
+                            transport: McpTransport::Stdio {
+                                command: "python3".to_owned(),
+                                args: vec!["-c".to_owned(), CHANGING_MCP_SERVER.to_owned()],
+                            },
+                        },
+                    },
+                    settings: Default::default(),
+                },
+            )
+            .await
+            .expect("store MCP provider");
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let providers = state.providers().expect("provider snapshot");
+                if providers.tools().get("dynamic.new_tool").is_some() {
+                    assert!(providers.tools().get("dynamic.old_tool").is_none());
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("server notification refreshes the registered tools");
+
+        state.remove_provider_definition("dynamic").await.expect("remove provider");
     }
 }

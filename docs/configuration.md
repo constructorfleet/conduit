@@ -451,6 +451,11 @@ An MCP definition describes a _server_, which may advertise several tools. Each
 advertised tool is registered as `<definition id>.<tool name>`, so a core can
 bind one of them by name.
 
+When the server advertises `capabilities.tools.listChanged`, Conduit listens for
+`notifications/tools/list_changed`, re-runs `tools/list`, and atomically updates
+that server's registered tools. The provider definition does not need to be
+saved again. If the refresh fails, the current tool snapshot stays available.
+
 A core may instead bind the definition id itself, which names the whole server:
 every tool it registered is offered to the model. That is what to write when a
 pipeline should have whatever the server does — it keeps saying so when the

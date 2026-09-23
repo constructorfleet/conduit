@@ -84,6 +84,7 @@ const OUTPUT_BUFFER: usize = 16;
 /// [`Capability`] variant and one typed accessor pair — never an edit to this
 /// struct, [`Providers::new`], or [`Providers`]'s [`Debug`](std::fmt::Debug)
 /// output.
+#[derive(Clone)]
 pub struct Providers {
     registries: BTreeMap<Capability, Box<dyn RegistryHandle>>,
 }
@@ -191,6 +192,24 @@ impl Providers {
     pub fn with_tool<P: Tool>(self, provider: P) -> Self {
         let name = provider.name().to_owned();
         self.with::<dyn Tool>(Capability::Tool, name, Arc::new(provider))
+    }
+
+    /// Removes tools registered under a provider definition id prefix.
+    ///
+    /// MCP definitions register each advertised tool as `<id>.<tool name>`.
+    /// Copy-on-write refreshes use this to replace one server's tools while
+    /// leaving every other provider and in-flight snapshot intact.
+    pub fn remove_tool_prefix(&mut self, prefix: &str) {
+        let names: Vec<_> = self
+            .registry::<dyn Tool>(Capability::Tool)
+            .names()
+            .filter(|name| name.starts_with(prefix))
+            .map(str::to_owned)
+            .collect();
+        let tools = self.registry_mut::<dyn Tool>(Capability::Tool);
+        for name in names {
+            tools.remove(&name);
+        }
     }
 
     /// Registers a memory store under its own name.

@@ -3,8 +3,8 @@
 //! An [`McpClient`] wraps a transport factory. Opening the transport is
 //! deferred until the first request, so constructing a client never touches
 //! the network — registration stays cheap and tests can inject a fake
-//! transport. Each exchange opens a fresh session that performs the MCP
-//! `initialize` handshake before serving.
+//! transport. Ordinary requests use fresh sessions; callers that need server
+//! notifications can explicitly hold an initialized [`McpSession`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,7 @@ use conduit_provider::storage::McpTransport;
 use serde_json::{json, Value};
 use tokio::time::timeout;
 
+use crate::jsonrpc::ServerNotification;
 use crate::transport::{open_transport, Transport};
 
 /// How long a single JSON-RPC exchange may take before it is abandoned.
@@ -25,7 +26,8 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// A client for one MCP server.
 ///
 /// The client is cheap to build and safe to share: it only holds a transport
-/// factory, and a fresh session is opened for every request.
+/// factory. Request helpers open short-lived sessions; [`connect_session`]
+/// provides a long-lived session for notification-aware callers.
 pub struct McpClient {
     /// Opens a fresh transport on demand.
     open: Arc<dyn Fn() -> Box<dyn Transport> + Send + Sync>,
@@ -53,11 +55,16 @@ impl McpClient {
     /// Returns an error when the server cannot be reached, the handshake
     /// fails, or the response is malformed.
     pub async fn list_tools(&self) -> Result<Vec<McpToolInfo>> {
-        let mut session = McpSession::connect(&*self.open).await?;
-        let result = session.request("tools/list", json!({})).await?;
-        let tools = parse_tools(&result)?;
+        let mut session = self.connect_session().await?;
+        let tools = session.list_tools().await?;
         session.close().await;
         Ok(tools)
+    }
+
+    /// Opens an initialized session for callers that need to receive server
+    /// notifications between requests.
+    pub async fn connect_session(&self) -> Result<McpSession> {
+        McpSession::connect(&*self.open).await
     }
 
     /// Invokes `name` with `arguments`, returning the flattened result.
@@ -138,13 +145,14 @@ fn map_content(result: &Value) -> Value {
     }
 }
 
-/// One MCP exchange: an open transport plus the next request id.
+/// An open MCP session: a transport plus the next request id.
 ///
 /// A session is only produced after the `initialize` handshake succeeds, so
 /// callers can assume the server has accepted the client.
 pub struct McpSession {
     transport: Box<dyn Transport>,
     next_id: u64,
+    supports_tool_list_changed: bool,
 }
 
 impl McpSession {
@@ -157,7 +165,8 @@ impl McpSession {
     pub async fn connect(
         open: &(dyn Fn() -> Box<dyn Transport> + Send + Sync),
     ) -> Result<Self> {
-        let mut session = Self { transport: open(), next_id: 0 };
+        let mut session =
+            Self { transport: open(), next_id: 0, supports_tool_list_changed: false };
         session.transport.connect().await?;
         session.initialize().await?;
         Ok(session)
@@ -207,7 +216,28 @@ impl McpSession {
                 "MCP initialize response omitted protocolVersion".to_owned(),
             ));
         }
+        self.supports_tool_list_changed = result
+            .pointer("/capabilities/tools/listChanged")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         self.notify("notifications/initialized", json!({})).await
+    }
+
+    /// Whether the server advertised tool-list change notifications.
+    #[must_use]
+    pub const fn supports_tool_list_changed(&self) -> bool {
+        self.supports_tool_list_changed
+    }
+
+    /// Lists tools on this session without closing it.
+    pub async fn list_tools(&mut self) -> Result<Vec<McpToolInfo>> {
+        let result = self.request("tools/list", json!({})).await?;
+        parse_tools(&result)
+    }
+
+    /// Waits for the next server notification.
+    pub async fn next_notification(&mut self) -> Result<ServerNotification> {
+        self.transport.next_notification().await
     }
 
     /// Closes the underlying transport.
@@ -220,13 +250,14 @@ impl McpSession {
 pub(crate) mod test_support {
     //! Shared fake transport for the client and tool tests.
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
-    use conduit_core::Result;
+    use conduit_core::{Error, Result};
     use serde_json::Value;
 
     use super::McpClient;
+    use crate::jsonrpc::ServerNotification;
     use crate::transport::Transport;
 
     /// A transport that answers every request from canned per-method results
@@ -235,6 +266,7 @@ pub(crate) mod test_support {
     pub(crate) struct TestTransport {
         log: Arc<Mutex<Vec<(u64, String)>>>,
         results: Arc<Mutex<HashMap<String, Value>>>,
+        notifications: Arc<Mutex<VecDeque<ServerNotification>>>,
     }
 
     impl TestTransport {
@@ -249,6 +281,16 @@ pub(crate) mod test_support {
                     .insert((*method).to_owned(), result.clone());
             }
             transport
+        }
+
+        /// Queues one server notification for a connected test session.
+        pub(crate) fn with_notification(self, method: &str) -> Self {
+            self.notifications.lock().expect("notifications").push_back(ServerNotification {
+                jsonrpc: "2.0".to_owned(),
+                method: method.to_owned(),
+                params: Value::Null,
+            });
+            self
         }
 
         /// The (id, method) pairs sent to this transport, in order.
@@ -274,6 +316,14 @@ pub(crate) mod test_support {
             Ok(())
         }
 
+        async fn next_notification(&mut self) -> Result<ServerNotification> {
+            self.notifications
+                .lock()
+                .expect("notifications")
+                .pop_front()
+                .ok_or_else(|| Error::Config("no queued test notification".to_owned()))
+        }
+
         async fn close(&mut self) {}
     }
 
@@ -291,7 +341,13 @@ mod tests {
 
     fn initialized() -> TestTransport {
         TestTransport::answering(&[
-            ("initialize", json!({ "protocolVersion": "2025-03-26" })),
+            (
+                "initialize",
+                json!({
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": { "tools": { "listChanged": true } }
+                }),
+            ),
             ("tools/list", json!({ "tools": [] })),
         ])
     }
@@ -307,6 +363,20 @@ mod tests {
         assert_eq!(log[1].1, "notifications/initialized");
         assert_eq!(log[2].0, 1, "tools/list should use the second id");
         assert_eq!(log[2].1, "tools/list");
+    }
+
+    #[tokio::test]
+    async fn a_session_delivers_server_notifications_after_discovery() {
+        let transport = initialized().with_notification("notifications/tools/list_changed");
+        let client = fake_client(transport);
+        let mut session = client.connect_session().await.expect("connect");
+        assert!(session.supports_tool_list_changed());
+        session.list_tools().await.expect("initial discovery");
+
+        let notification = session.next_notification().await.expect("notification");
+
+        assert_eq!(notification.method, "notifications/tools/list_changed");
+        session.close().await;
     }
 
     #[tokio::test]
