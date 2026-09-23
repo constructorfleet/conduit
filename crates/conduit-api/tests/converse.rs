@@ -571,7 +571,7 @@ async fn a_device_is_told_when_a_turn_is_given_up_on() {
     // cannot tell those apart has no idea whether to prompt the person again.
     let state = AppState::new(EventBus::default())
         .with_providers(silent_providers())
-        .with_turn_idle_timeout(Some(Duration::from_millis(100)));
+        .with_turn_idle_timeout(Some(Duration::from_secs(1)));
     state.put_pipeline("echo", echo_graph()).await.expect("stores");
     let server = Server::start(state).await;
 
