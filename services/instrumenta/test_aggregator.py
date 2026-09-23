@@ -27,6 +27,7 @@ import inspect
 from instrumenta.aggregator import Aggregator, build_forwarder
 from instrumenta.backend import SqliteBackend, UpstreamServer
 from instrumenta.mcp_app import build_mcp_server
+from instrumenta.supervisor import http_connect
 from instrumenta.secret_box import SecretBox
 
 
@@ -253,7 +254,7 @@ def test_forwarder_maps_non_identifier_names_collision_safely() -> None:
 # ── Upstream timeouts (#276) ────────────────────────────────────────────
 
 
-def test_default_client_factory_passes_the_configured_timeout() -> None:
+def test_http_connect_passes_the_configured_timeout() -> None:
     """A configured `timeout_seconds` must reach the MCP client.
 
     The row carried the value and the factory dropped it, so a hanging (as
@@ -270,12 +271,12 @@ def test_default_client_factory_passes_the_configured_timeout() -> None:
         timeout_seconds=7,
     )
 
-    client = Aggregator._default_client_factory(server)
+    client = http_connect(server)
 
     assert client.read_timeout_seconds == 7.0
 
 
-def test_default_client_factory_without_a_timeout_sets_none() -> None:
+def test_http_connect_without_a_timeout_sets_none() -> None:
     """No configured timeout stays no timeout; the default is not invented."""
     server = UpstreamServer(
         id=str(uuid.uuid4()),
@@ -288,7 +289,7 @@ def test_default_client_factory_without_a_timeout_sets_none() -> None:
         timeout_seconds=None,
     )
 
-    client = Aggregator._default_client_factory(server)
+    client = http_connect(server)
 
     assert client.read_timeout_seconds is None
 
@@ -406,6 +407,172 @@ async def _until(predicate, timeout: float = 10.0) -> None:
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         if predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not met within timeout")
+
+
+# ── HTTP upstreams follow their server too (#252, #282) ────────────────
+
+
+class _ControllableUpstream:
+    """A fake HTTP upstream whose tool set and reachability a test can change.
+
+    Wraps a real in-memory MCP session, so the aggregator exercises the same
+    client API it uses in production; only the failure and the tool set are
+    under the test's hand.
+    """
+
+    def __init__(self) -> None:
+        self.server = MCPServer(name="fake-upstream", version="0.0.0")
+        self.add_tool("echo")
+        self.reachable = True
+
+    def add_tool(self, name: str) -> None:
+        def handler(message: str = "") -> dict[str, str]:
+            return {"echoed": message}
+
+        self.server.add_tool(handler, name=name, description=f"{name} tool")
+
+    def remove_tool(self, name: str) -> None:
+        self.server.remove_tool(name)
+
+    def connect(self, _server: UpstreamServer):
+        upstream = self
+
+        class _Client:
+            def __init__(self) -> None:
+                self._inner = Client(InMemoryTransport(upstream.server), raise_exceptions=True)
+
+            async def __aenter__(self):
+                upstream._check()
+                await self._inner.__aenter__()
+                return self
+
+            async def __aexit__(self, *exc):
+                return await self._inner.__aexit__(*exc)
+
+            async def list_tools(self):
+                upstream._check()
+                return await self._inner.list_tools()
+
+            async def list_prompts(self):
+                return await self._inner.list_prompts()
+
+            async def list_resources(self):
+                return await self._inner.list_resources()
+
+            async def call_tool(self, name, args):
+                upstream._check()
+                return await self._inner.call_tool(name, args)
+
+        return _Client()
+
+    def _check(self) -> None:
+        if not self.reachable:
+            raise RuntimeError("upstream is gone")
+
+
+def _http_row(name: str) -> UpstreamServer:
+    return UpstreamServer(
+        id=str(uuid.uuid4()),
+        name=name,
+        transport="http",
+        url="http://placeholder.invalid",
+        command=None,
+        secret_ciphertext=None,
+        enabled=True,
+        timeout_seconds=None,
+    )
+
+
+async def _http_aggregator(backend, secret_box, upstream: _ControllableUpstream):
+    aggregator = Aggregator(backend, secret_box, client_factory=upstream.connect)
+    # Production polls a third party every 30s; the behaviour under test is
+    # what happens on the poll, not how long it waits for one.
+    aggregator._http._liveness_poll = 0.05
+    aggregator._http._initial_backoff = 0.05
+    return aggregator
+
+
+@pytest.mark.asyncio
+async def test_unreachable_http_upstream_loses_its_tools(
+    backend: SqliteBackend, secret_box: SecretBox
+) -> None:
+    """#252: an HTTP upstream that goes away stops being advertised.
+
+    It used to be attached once and never contacted again, so its tools stayed
+    in `tools/list` and a call failed at call time instead.
+    """
+    backend.insert_upstream_server(_http_row("fake"))
+    upstream = _ControllableUpstream()
+    aggregator = await _http_aggregator(backend, secret_box, upstream)
+    mcp_server = build_mcp_server()
+    await aggregator.start(mcp_server)
+    try:
+
+        async def names() -> set[str]:
+            return {tool.name for tool in await mcp_server.list_tools()}
+
+        assert "fake.echo" in await names()
+
+        upstream.reachable = False
+        await _until(lambda: not any(s.reachable for s in aggregator.statuses()))
+        assert "fake.echo" not in await names()
+
+        upstream.reachable = True
+        await _until(lambda: any(s.reachable for s in aggregator.statuses()))
+        assert "fake.echo" in await names()
+    finally:
+        await aggregator.close()
+
+
+@pytest.mark.asyncio
+async def test_reachable_http_upstream_that_changes_tools_is_followed(
+    backend: SqliteBackend, secret_box: SecretBox
+) -> None:
+    """#282: the liveness poll's listing is used, not discarded.
+
+    An upstream that stays up while adding, removing or renaming a tool used
+    to keep advertising the set it had at attach time until it detached or
+    Instrumenta restarted.
+    """
+    backend.insert_upstream_server(_http_row("fake"))
+    upstream = _ControllableUpstream()
+    aggregator = await _http_aggregator(backend, secret_box, upstream)
+    mcp_server = build_mcp_server()
+    await aggregator.start(mcp_server)
+    try:
+
+        async def names() -> set[str]:
+            return {tool.name for tool in await mcp_server.list_tools()}
+
+        assert await names() >= {"fake.echo"}
+        assert "fake.shout" not in await names()
+
+        # Added while reachable — no disconnect, no restart.
+        upstream.add_tool("shout")
+        await _until_async(lambda n: "fake.shout" in n, names)
+        assert "fake.echo" in await names()
+
+        # And removed the same way.
+        upstream.remove_tool("echo")
+        await _until_async(lambda n: "fake.echo" not in n, names)
+        assert "fake.shout" in await names()
+
+        # The status count follows too, rather than reporting the old set.
+        [status] = [s for s in aggregator.statuses() if s.name == "fake"]
+        assert status.tool_count == 1
+        assert status.reachable is True
+    finally:
+        await aggregator.close()
+
+
+async def _until_async(predicate, produce, timeout: float = 10.0) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate(await produce()):
             return
         await asyncio.sleep(0.02)
     raise AssertionError("condition not met within timeout")
