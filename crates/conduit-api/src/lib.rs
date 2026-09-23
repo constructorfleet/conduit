@@ -29,6 +29,7 @@ pub mod state;
 pub mod status;
 pub mod turns;
 pub mod vox;
+pub mod wake_events;
 
 use std::time::Duration;
 
@@ -66,6 +67,7 @@ pub const CONVERSE_ROUTE: &str = "/v1/pipelines/{name}/converse";
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/events", get(events::stream))
+        .route("/v1/wake-events", post(wake_events::receive))
         .route("/v1/status", get(status::get))
         .route("/v1/turns", get(turns::list))
         .route("/v1/turns/live", get(turns::live))

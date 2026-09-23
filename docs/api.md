@@ -698,6 +698,15 @@ page unopenable. Responses include an `ETag`; clients can send it in
 `If-None-Match` to receive `304 Not Modified` with an empty body when the roster
 has not changed.
 
+### `POST /v1/wake-events`
+
+Receives one authenticated Excita wake event. Excita peers send their link
+`sync_token` as a bearer token and include `peer_id`, `event_type` (`detected`
+or `rejected`), `phrase`, `confidence`, and RFC3339 `detected_at`. Optional
+`source_device` may be a device id or label; optional `Idempotency-Key` deduplicates retries
+within the latest 1024 events per peer. Successful requests return `202` with
+an empty body.
+
 ### `POST /v1/speakers`
 
 Creates somebody from `{"name": "Ada"}`. Answers `201` with the new entry,

@@ -1,6 +1,6 @@
 //! Shared application state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use std::time::Duration;
 
@@ -35,6 +35,7 @@ pub struct AppState {
     speakers: Arc<dyn SpeakerRosterStore>,
     /// Conduit Vox peers this deployment is linked to.
     linked_services: Arc<dyn LinkedServiceStore>,
+    wake_event_keys: Arc<Mutex<BTreeMap<String, VecDeque<String>>>>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
     providers: Arc<RwLock<Option<Arc<Providers>>>>,
@@ -259,6 +260,7 @@ impl AppState {
             provider_definitions,
             speakers: Arc::new(MemoryStore::new()),
             linked_services: Arc::new(MemoryStore::new()),
+            wake_event_keys: Arc::new(Mutex::new(BTreeMap::new())),
             providers: Arc::new(RwLock::new(None)),
             provider_snapshot_update: Arc::new(tokio::sync::Mutex::new(())),
             provider_reachability: Arc::new(RwLock::new(BTreeMap::new())),
@@ -307,6 +309,21 @@ impl AppState {
     /// Returns an error if the store is unavailable or the entry cannot be read.
     pub async fn linked_service(&self, peer_id: &str) -> Result<Option<LinkedService>> {
         self.linked_services.get(peer_id).await
+    }
+
+    /// Records an idempotency key, retaining the latest 1024 per peer.
+    /// Returns `true` when the key was already present.
+    pub(crate) fn remember_wake_event(&self, peer_id: &str, key: &str) -> bool {
+        let mut keys = self.wake_event_keys.lock().unwrap_or_else(PoisonError::into_inner);
+        let peer_keys = keys.entry(peer_id.to_owned()).or_default();
+        if peer_keys.iter().any(|existing| existing == key) {
+            return true;
+        }
+        peer_keys.push_back(key.to_owned());
+        if peer_keys.len() > 1024 {
+            peer_keys.pop_front();
+        }
+        false
     }
 
     /// Stores a Vox link, returning `true` if it replaced one.

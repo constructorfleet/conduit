@@ -1704,8 +1704,8 @@ export interface EventEnvelope {{
 }}
 
 export type Event =
-  | {{ type: "WakeWordDetected"; phrase: string; confidence: number }}
-  | {{ type: "WakeWordRejected"; phrase: string; confidence: number }}
+  | {{ type: "WakeWordDetected"; phrase: string; confidence: number; source_device?: string; detected_at?: DateTimeString; audio_clip_ref?: string }}
+  | {{ type: "WakeWordRejected"; phrase: string; confidence: number; source_device?: string; detected_at?: DateTimeString; audio_clip_ref?: string }}
   | {{ type: "AudioStarted"; format: AudioFormat }}
   | {{ type: "AudioChunkReceived"; sequence: number; bytes: number }}
   | {{ type: "AudioFinished"; duration_ms: number }}
