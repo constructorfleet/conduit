@@ -51,9 +51,9 @@ bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-core = "0.3"
 futures-util = "0.3"
-opentelemetry = "0.32"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
-opentelemetry_sdk = { version = "0.32", features = ["trace"] }
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33", features = ["trace"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # `sync` makes `Engine`/`AST` `Send + Sync` so one engine can be shared across
 # turns; `no_closure` removes shared closure captures, whose locking is a hang
