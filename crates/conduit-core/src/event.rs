@@ -103,6 +103,15 @@ pub enum Event {
         phrase: String,
         /// Detector confidence in `0.0..=1.0`.
         confidence: f32,
+        /// Optional peer-originated device label for an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_device: Option<String>,
+        /// Optional timestamp reported by an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detected_at: Option<DateTime<Utc>>,
+        /// Optional opaque clip reference reported by an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_clip_ref: Option<String>,
     },
     /// A candidate activation was scored but fell below threshold.
     ///
@@ -113,6 +122,15 @@ pub enum Event {
         phrase: String,
         /// Detector confidence in `0.0..=1.0`.
         confidence: f32,
+        /// Optional peer-originated device label for an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_device: Option<String>,
+        /// Optional timestamp reported by an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detected_at: Option<DateTime<Utc>>,
+        /// Optional opaque clip reference reported by an external detector.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_clip_ref: Option<String>,
     },
 
     // ---- capture ---------------------------------------------------------
@@ -345,8 +363,20 @@ impl Event {
     #[must_use]
     pub fn contract_examples() -> Vec<Self> {
         vec![
-            Self::WakeWordDetected { phrase: "hey conduit".to_owned(), confidence: 0.91 },
-            Self::WakeWordRejected { phrase: "hey conduit".to_owned(), confidence: 0.12 },
+            Self::WakeWordDetected {
+                phrase: "hey conduit".to_owned(),
+                confidence: 0.91,
+                source_device: None,
+                detected_at: None,
+                audio_clip_ref: None,
+            },
+            Self::WakeWordRejected {
+                phrase: "hey conduit".to_owned(),
+                confidence: 0.12,
+                source_device: None,
+                detected_at: None,
+                audio_clip_ref: None,
+            },
             Self::AudioStarted { format: AudioFormat::DEFAULT },
             Self::AudioChunkReceived { sequence: 1, bytes: 3200 },
             Self::AudioFinished { duration_ms: 1200 },
@@ -607,11 +637,25 @@ mod tests {
         // nothing published; now that the runtime does, where their events
         // land is what makes `?stage=wake_word` show anything.
         assert_eq!(
-            Event::WakeWordDetected { phrase: String::new(), confidence: 0.0 }.stage(),
+            Event::WakeWordDetected {
+                phrase: String::new(),
+                confidence: 0.0,
+                source_device: None,
+                detected_at: None,
+                audio_clip_ref: None
+            }
+            .stage(),
             Stage::WakeWord
         );
         assert_eq!(
-            Event::WakeWordRejected { phrase: String::new(), confidence: 0.0 }.stage(),
+            Event::WakeWordRejected {
+                phrase: String::new(),
+                confidence: 0.0,
+                source_device: None,
+                detected_at: None,
+                audio_clip_ref: None
+            }
+            .stage(),
             Stage::WakeWord
         );
         assert_eq!(

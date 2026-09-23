@@ -31,7 +31,7 @@ from io import BytesIO
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -72,6 +72,7 @@ from .engines import (
     gap_reason,
 )
 from .supervisor import DetectorSupervisor, bindings_view
+from .link_delivery import deliver_wake_event
 
 LOG = logging.getLogger("excita")
 
@@ -101,6 +102,7 @@ def _build_create_body(context: LinkCreateContext[_NoExtension]) -> dict[str, ob
         "peer_name": context.request.peer_name,
         "peer_id": peer_id,
         "peer_base_url": base_url,
+        "capabilities": ["excita.wake-events"],
         "panel": {
             "id": "excita",
             "label": "Excita",
@@ -901,7 +903,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return Response(status_code=204)
 
     @app.post("/v1/audio/{source_device}/frames", status_code=202)
-    async def ingest_frame(source_device: str, request: Request) -> dict[str, object]:
+    async def ingest_frame(
+        source_device: str, request: Request, background_tasks: BackgroundTasks
+    ) -> dict[str, object]:
         body = await request.body()
         if not body:
             raise HTTPException(422, "empty frame")
@@ -910,8 +914,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             # the sender is speaking a different codec, and silently
             # trimming would delay the diagnostic to the score curve.
             raise HTTPException(422, "frame length not a multiple of 2 (int16 mono)")
-        fires = supervisor.feed(source_device, body)
-        return {"accepted": True, "fires": len(fires)}
+        signals = supervisor.feed(source_device, body)
+        link = link_store.load()
+        if link is not None:
+            for signal in signals:
+                background_tasks.add_task(deliver_wake_event, link, signal)
+        return {
+            "accepted": True,
+            "fires": sum(signal.event_type == "detected" for signal in signals),
+        }
 
     @app.get("/v1/wake-events/recent")
     async def recent_wake_events(limit: int = 64) -> list[WakeEventOut]:

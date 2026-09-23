@@ -387,7 +387,9 @@ a Runtime Provider under the definition id:
 | `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `transform` | `builtin` | One transform under the definition id | `rules` names the rewrites to apply, in order |
 | `transform` | `script` | One transform under the definition id | `engine` is `rhai`; the script is compiled and its deadline checked when the definition is saved |
+| `transform` | `dicta` | One transform under the definition id | `peer_id` must name a linked Dicta peer advertising `dicta.transform`; the peer bearer is decrypted only for outbound requests |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
+| `tool` | `linked_memoria` | Tools from the MCP endpoint advertised by a linked Memoria peer | `peer_id` must name a linked peer advertising `memoria.mcp`; MCP authentication stays in MCP configuration |
 | `memory` | `builtin` | One memory store under the definition id | Nothing required; an absent `path` writes nowhere |
 | `memory` | `pgvector` | One memory store under the definition id | `url` must be `postgres://` or `postgresql://` and carry no password; needs `--features postgres` |
 
@@ -500,6 +502,13 @@ whole server, and offers the model every tool that definition registered.
 Discovery needs the server, but saving does not: a server that cannot be
 reached within five seconds saves the definition and registers no tools, and
 `POST /v1/providers/{id}/test` rediscovers them once it answers.
+For `linked_memoria`, the peer's advertised endpoint and transport are resolved
+from its linked-service record before using that same discovery path.
+
+Linked Memoria peers may read `GET /v1/linked-services/{peer_id}/roster/speakers`
+and `/roster/conversations` with their per-link sync token. These narrow routes
+return the current speaker roster and conversations represented in retained
+turn history; they do not grant management access or expose engram data.
 
 A `memory` definition names where the assistant keeps what it should remember.
 The two variants are two *retrievals*, not two places to put the same records: a
@@ -697,6 +706,15 @@ out rather than failing the request, so one broken record does not make the
 page unopenable. Responses include an `ETag`; clients can send it in
 `If-None-Match` to receive `304 Not Modified` with an empty body when the roster
 has not changed.
+
+### `POST /v1/wake-events`
+
+Receives one authenticated Excita wake event. Excita peers send their link
+`sync_token` as a bearer token and include `peer_id`, `event_type` (`detected`
+or `rejected`), `phrase`, `confidence`, and RFC3339 `detected_at`. Optional
+`source_device` may be a device id or label; optional `Idempotency-Key` deduplicates retries
+within the latest 1024 events per peer. Successful requests return `202` with
+an empty body.
 
 ### `POST /v1/speakers`
 

@@ -757,6 +757,16 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
             },
         },
         ProviderComponentDescriptor {
+            id: "mcp.linked_memoria",
+            label: "Linked Memoria MCP",
+            kind: ProviderCapability::Tool,
+            definition_variant: "linked_memoria",
+            schema: ComponentConfigSchema {
+                properties: properties([("peer_id", string_property(None, None))]),
+                required: vec!["peer_id"],
+            },
+        },
+        ProviderComponentDescriptor {
             id: "openwakeword",
             label: "openWakeWord",
             kind: ProviderCapability::Wake,
@@ -881,6 +891,16 @@ pub fn component_catalog() -> Vec<ProviderComponentDescriptor> {
                     ("timeout_ms", integer_property()),
                 ]),
                 required: vec!["engine", "source"],
+            },
+        },
+        ProviderComponentDescriptor {
+            id: "transform.dicta",
+            label: "Linked Dicta",
+            kind: ProviderCapability::Transform,
+            definition_variant: "dicta",
+            schema: ComponentConfigSchema {
+                properties: properties([("peer_id", string_property(None, None))]),
+                required: vec!["peer_id"],
             },
         },
         ProviderComponentDescriptor {

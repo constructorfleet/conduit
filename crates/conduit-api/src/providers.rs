@@ -340,6 +340,20 @@ pub async fn test(
         state.record_provider_reachability(&id, health.clone());
         return Ok(Json(status_from_health(kind, id, None, health, affected_pipelines)));
     }
+    if let ProviderDefinitionVariant::Tool { variant: ToolVariant::LinkedMemoria { peer_id } } =
+        &definition.variant
+    {
+        let transport = state
+            .resolve_memoria_mcp_transport(peer_id)
+            .await
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        let health = crate::state::probe_mcp(&transport).await;
+        if health.is_usable() {
+            state.reload_provider_definitions().await.map_err(store_failure)?;
+        }
+        state.record_provider_reachability(&id, health.clone());
+        return Ok(Json(status_from_health(kind, id, None, health, affected_pipelines)));
+    }
 
     let Some(providers) = state.providers() else {
         return Ok(Json(unregistered_status(kind, id, affected_pipelines)));
@@ -537,6 +551,11 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
         ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
             validate_mcp_transport(transport)?;
         }
+        ProviderDefinitionVariant::Tool { variant: ToolVariant::LinkedMemoria { peer_id } } => {
+            if peer_id.trim().is_empty() {
+                return Err(ApiError::unprocessable("peer_id must not be empty"));
+            }
+        }
         // Built-in rules name nothing outside the process: no endpoint to
         // reach, no credential to check. An empty rule list is a definition an
         // operator is still filling in, and refusing to save one would be the
@@ -557,6 +576,13 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                     .map_err(|error| ApiError::unprocessable(error.to_string()))?;
             }
         },
+        ProviderDefinitionVariant::Transform {
+            variant: TransformVariant::Dicta { peer_id },
+        } => {
+            if peer_id.trim().is_empty() {
+                return Err(ApiError::unprocessable("peer_id must not be empty"));
+            }
+        }
         // A capacity of zero is a store that accepts every write and remembers
         // nothing. The store's own builder refuses it, so an operator who saves
         // one would get a definition that stores cleanly and fails to build on

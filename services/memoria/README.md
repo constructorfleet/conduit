@@ -66,6 +66,9 @@ The UI is served without authentication so an operator with the key in their hea
 | `GET /engrams/speakers/{speaker_id}` | — | Engrams for speaker |
 | `GET /engrams/conversations/{conversation_id}` | — | Engrams for conversation |
 | `GET /health` | — | Service health |
+| `GET /roster/speakers` | — | Last successfully synchronized Conduit speaker roster |
+| `GET /roster/conversations` | — | Conversations represented in retained Conduit turn history |
+| `GET /roster/sync` | — | Last sync timestamp or current retry error |
 | `GET /link` | — | `{"status":"unlinked"}` or linked status with `conduit_url`, `peer_id`, `peer_name`, and `linked_at`; API-key-managed deployments add `config_managed: true` |
 | `POST /link` | `{"conduit_url", "operator_token", "peer_name", "force"?}` | Linked status |
 | `DELETE /link` | — | `204` after unlink |
@@ -112,6 +115,12 @@ The UI is served without authentication so an operator with the key in their hea
 | `MEMORIA_SEARCH_LIMIT` | `10` | Default search result limit |
 | `MEMORIA_SEARCH_TIMEOUT_MS` | `3000` | Search timeout in milliseconds |
 | `MEMORIA_SIMILARITY_THRESHOLD` | `0.7` | Similarity threshold for semantic search |
+
+When linked, Memoria periodically fetches the speaker roster and conversation
+summaries from Conduit's link-scoped roster routes using its per-link sync
+token. Both rosters are replaced together only after both requests succeed;
+temporary failures leave the last good roster and every engram untouched.
+Conversation summaries are limited to Conduit's retained turn history.
 
 ## Storage
 

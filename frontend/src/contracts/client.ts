@@ -267,7 +267,9 @@ export type ProviderDefinitionVariantType =
   | "microwakeword"
   | "http"
   | "diarization_server"
-  | "pgvector";
+  | "pgvector"
+  | "dicta"
+  | "linked_memoria";
 
 /// The three wake word detectors Conduit speaks to. Each is its own wake
 /// variant, because the three do not run in the same places.
@@ -390,6 +392,9 @@ export type TtsVariant =
 export type ToolVariant = {
   type: "mcp";
   transport: McpTransport;
+} | {
+  type: "linked_memoria";
+  peer_id: string;
 };
 
 /// One rewriting rule that ships with Conduit. Named rather than configurable
@@ -420,6 +425,10 @@ export type TransformVariant =
       /// the turn loop, so a script that never returns would end every turn on
       /// the pipeline rather than one segment.
       timeout_ms?: number;
+    }
+  | {
+      type: "dicta";
+      peer_id: string;
     };
 
 /// The interpreter a scripted transform runs on. One today, and still named in
