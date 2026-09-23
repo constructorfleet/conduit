@@ -54,6 +54,13 @@ class TestBackendTransportFlags:
         backend.set_transport_enabled("http", True)
         assert backend.is_transport_enabled("http") is True
 
+    def test_reopen_removes_flags_for_removed_transports(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "instrumenta.db"
+        SqliteBackend(db_path).set_transport_enabled("retired", False)
+        reopened = SqliteBackend(db_path)
+        assert {flag.transport for flag in reopened.list_transport_flags()} == set(TRANSPORTS)
+        assert reopened.is_transport_enabled("retired") is True
+
 
 _MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
