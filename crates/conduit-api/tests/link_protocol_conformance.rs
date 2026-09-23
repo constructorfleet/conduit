@@ -237,6 +237,9 @@ async fn seed_link(state: &AppState, peer_id: &str, peer_base_url: &str) -> Stri
             peer_name: "Household Memory".to_owned(),
             peer_base_url: peer_base_url.to_owned(),
             sync_token_hash: hash_token(sync_token),
+            peer_token_hash: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: Some(LinkedServicePanel {
                 id: "memoria".to_owned(),
@@ -289,6 +292,65 @@ async fn post_creates_row_returns_sync_token_hashed_server_side() {
 }
 
 #[tokio::test]
+async fn link_stores_capabilities_and_hashes_the_peer_token_without_exposing_it() {
+    let peer = spawn_peer().await;
+    let state = AppState::new(EventBus::default());
+    let peer_token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let mut body = memoria_link_body(&peer.base_url);
+    body["peer_token"] = serde_json::json!(peer_token);
+    body["capabilities"] = serde_json::json!(["memoria.mcp"]);
+    body["capability_endpoints"] = serde_json::json!({
+        "memoria.mcp": { "transport": "streamable_http", "url": "/mcp" }
+    });
+
+    let (status, response) =
+        json_response(call(&state, operator_post_json("/v1/linked-services", body)).await)
+            .await;
+    assert_eq!(status, StatusCode::CREATED, "{response}");
+    assert!(response.get("peer_token").is_none());
+
+    let stored =
+        state.linked_service("household-memory").await.expect("store").expect("stored row");
+    let stored_json = serde_json::to_value(&stored).expect("serializes stored row");
+    assert_eq!(stored_json["peer_token_hash"], hash_token(peer_token));
+    assert_eq!(stored_json["capabilities"], serde_json::json!(["memoria.mcp"]));
+    assert_eq!(stored_json["capability_endpoints"]["memoria.mcp"]["url"], "/mcp");
+    assert!(!stored_json.to_string().contains(peer_token));
+
+    let (_, list) =
+        json_response(call(&state, operator_get("/v1/linked-services")).await).await;
+    let row = &list[0];
+    assert_eq!(row["capabilities"], serde_json::json!(["memoria.mcp"]));
+    assert_eq!(row["capability_endpoints"], stored_json["capability_endpoints"]);
+    assert!(row.get("peer_token_hash").is_none());
+}
+
+#[tokio::test]
+async fn malformed_peer_tokens_and_unadvertised_endpoint_metadata_are_rejected() {
+    let peer = spawn_peer().await;
+    let state = AppState::new(EventBus::default());
+    let mut invalid_token = memoria_link_body(&peer.base_url);
+    invalid_token["peer_token"] = serde_json::json!("not-a-256-bit-token");
+    let (status, body) = json_response(
+        call(&state, operator_post_json("/v1/linked-services", invalid_token)).await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(state.linked_service("household-memory").await.unwrap().is_none());
+
+    let mut orphan_endpoint = memoria_link_body(&peer.base_url);
+    orphan_endpoint["capability_endpoints"] = serde_json::json!({
+        "memoria.mcp": { "transport": "streamable_http", "url": "/mcp" }
+    });
+    let (status, body) = json_response(
+        call(&state, operator_post_json("/v1/linked-services", orphan_endpoint)).await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(state.linked_service("household-memory").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn get_lists_with_explicit_manifest_panel_winning() {
     let peer = spawn_peer().await;
     let state = AppState::new(EventBus::default());
@@ -318,6 +380,9 @@ async fn typed_kind_fallback_synthesises_a_panel_for_pre_manifest_rows() {
             peer_name: "Legacy Memoria".to_owned(),
             peer_base_url: "http://memoria.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: None,
             granted_by: "operator".to_owned(),
@@ -350,6 +415,9 @@ async fn generic_row_without_a_panel_is_filtered_from_the_list() {
             peer_name: "Unlabelled".to_owned(),
             peer_base_url: "http://unknown.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: None,
             granted_by: "operator".to_owned(),
@@ -695,6 +763,9 @@ async fn startup_probe_flips_a_previously_unreachable_row_to_reachable() {
             peer_name: "Household Memory".to_owned(),
             peer_base_url: peer.base_url.clone(),
             sync_token_hash: hash_token("sync-token-real"),
+            peer_token_hash: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: Some(LinkedServicePanel {
                 id: "memoria".to_owned(),

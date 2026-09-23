@@ -77,14 +77,22 @@ POST /v1/linked-services
   "peer_base_url": "https://memoria.example",
   "panel":         { "id": "memoria", "label": "Memory", "icon": "brain", "path": "/ui/" },
   "peer_token":    "<opaque 256-bit base64url no-pad>",
-  "capabilities":  ["memoria.mcp"]
+  "capabilities":  ["memoria.mcp"],
+  "capability_endpoints": {
+    "memoria.mcp": { "transport": "streamable_http", "url": "/mcp" }
+  }
 }
 ```
 
-`peer_token` is REQUIRED (256-bit base64url-no-pad, minted by the peer).
-`capabilities` is REQUIRED but MAY be an empty array; each entry is a
-side-channel capability name (see [Side channels](#side-channels)). Unknown
-capability names are stored verbatim — Conduit does not enforce a registry.
+New peers SHOULD send `peer_token` (256-bit base64url-no-pad, minted by the
+peer). During migration, Conduit accepts handshakes without it; those legacy
+links cannot authenticate Conduit-to-peer calls. `capabilities` is OPTIONAL
+during migration and defaults to an empty array. Each entry is a side-channel
+capability name (see [Side channels](#side-channels)). Unknown capability
+names are stored verbatim — Conduit does not enforce a registry.
+`capability_endpoints` is OPTIONAL and maps advertised capability names to
+opaque JSON objects whose shape is defined by that capability's spec. Endpoint
+metadata for a capability not listed in `capabilities` is rejected.
 
 Conduit responds `201`:
 
@@ -92,8 +100,9 @@ Conduit responds `201`:
 { "sync_token": "<opaque 256-bit base64url no-pad>" }
 ```
 
-The `201` acknowledges that BOTH `peer_token` and `capabilities` were stored.
-Conduit stores the row with `sync_token_hash = sha256_hex(sync_token)` and
+The `201` acknowledges that the supplied `peer_token`, capabilities, and
+endpoint metadata were stored. Conduit stores the row with
+`sync_token_hash = sha256_hex(sync_token)` and, when supplied,
 `peer_token_hash = sha256_hex(peer_token)`; the raw `sync_token` is returned
 once and never persisted server-side, and the raw `peer_token` is discarded
 after the hash is written. The peer persists

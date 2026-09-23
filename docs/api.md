@@ -694,7 +694,9 @@ sample has been accepted.
 
 Lists the whole roster, in id order. An entry that cannot be decoded is left
 out rather than failing the request, so one broken record does not make the
-page unopenable.
+page unopenable. Responses include an `ETag`; clients can send it in
+`If-None-Match` to receive `304 Not Modified` with an empty body when the roster
+has not changed.
 
 ### `POST /v1/speakers`
 

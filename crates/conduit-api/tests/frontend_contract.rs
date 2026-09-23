@@ -1081,6 +1081,8 @@ export interface LinkedServiceView {{
   peer_id: string;
   peer_name: string;
   peer_base_url: string;
+  capabilities: string[];
+  capability_endpoints: Record<string, unknown>;
   panel: LinkedServicePanel;
   granted_by: string;
   granted_at: DateTimeString;
