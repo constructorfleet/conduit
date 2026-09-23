@@ -355,11 +355,30 @@
 
   <!-- ===== SETTINGS ===== -->
   <div class="tab-panel" id="panel-settings">
+    <section id="link-panel">
+      <h2>Conduit Link</h2>
+      <dl class="kv" id="link-body"><dt>Loading...</dt><dd></dd></dl>
+      <div style="margin-top:12px; display:grid; gap:8px">
+        <input type="url" id="link-conduit-url" placeholder="Conduit URL" autocomplete="off">
+        <input type="password" id="link-token" placeholder="Operator token (leave blank if anonymous)" autocomplete="off">
+        <input type="text" id="link-peer-name" value="Conduit Instrumenta" placeholder="Peer name">
+        <div class="row">
+          <button id="link-connect" class="primary">Link</button>
+          <button id="link-unlink" class="danger">Unlink</button>
+        </div>
+      </div>
+      <div id="link-notice"></div>
+    </section>
     <section>
       <h2>Configuration</h2>
       <dl class="kv" id="settings-body">
         <dt>Loading...</dt><dd></dd>
       </dl>
+    </section>
+    <section>
+      <h2>Transports</h2>
+      <p class="empty" style="margin-top:0">Downstream MCP endpoints. Switching one off answers 404 on its path from the next request.</p>
+      <div id="transports-body"><p class="empty">Loading...</p></div>
     </section>
     <section>
       <h2>Runtimes</h2>
@@ -643,12 +662,90 @@ async function loadSettings() {
     const h = await api("/health");
     el.innerHTML = [
       ["Backend", h.backend],
-      ["MCP endpoint", "POST /mcp (streamable-HTTP)"],
+      ["MCP endpoints", "POST /mcp/http/ (streamable-HTTP), GET /mcp/sse/ (SSE)"],
       ["Status", h.status],
       ["Linked", h.linked ? "yes" : "no"],
     ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(String(v))}</dd>`).join("");
   } catch {
     el.innerHTML = "<dt>Backend</dt><dd>sqlite</dd>";
+  }
+}
+
+async function loadLink() {
+  const dl = document.getElementById("link-body");
+  try {
+    const body = await api("/link");
+    const rows = [["Status", body.status]];
+    if (body.status === "linked") {
+      rows.push(["Conduit", body.conduit_url], ["Peer", body.peer_name], ["Linked at", body.linked_at]);
+      document.getElementById("link-conduit-url").value = body.conduit_url || "";
+      document.getElementById("link-peer-name").value = body.peer_name || "Conduit Instrumenta";
+    }
+    dl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v ?? ""))}</dd>`).join("");
+    document.getElementById("link-unlink").disabled = body.status !== "linked";
+  } catch (err) {
+    dl.innerHTML = "<dt>Status</dt><dd>error</dd>";
+    paint("link-notice", "err", `Could not load link status: ${err.message}`);
+  }
+}
+
+async function connectLink() {
+  const conduitUrl = document.getElementById("link-conduit-url").value.trim();
+  const operatorToken = document.getElementById("link-token").value.trim();
+  const peerName = document.getElementById("link-peer-name").value.trim() || "Conduit Instrumenta";
+  try {
+    const linked = await api("/link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conduit_url: conduitUrl, operator_token: operatorToken, peer_name: peerName }),
+    });
+    if (linked.local_api_key) document.getElementById("link-token").value = "";
+    paint("link-notice", "ok", "Linked.");
+    await loadLink();
+  } catch (err) { paint("link-notice", "err", `Link failed: ${err.message}`); }
+}
+
+async function disconnectLink() {
+  if (!confirm("Unlink this Instrumenta peer from Conduit?")) return;
+  try {
+    await api("/link", { method: "DELETE" });
+    paint("link-notice", "ok", "Unlinked.");
+    await loadLink();
+  } catch (err) { paint("link-notice", "err", `Unlink failed: ${err.message}`); }
+}
+
+async function loadTransports() {
+  const el = document.getElementById("transports-body");
+  try {
+    const transports = await api("/transports");
+    el.innerHTML = `<table>
+      <thead><tr><th>Transport</th><th>Path</th><th>Enabled</th></tr></thead>
+      <tbody>${transports.map(t => `
+        <tr>
+          <td>${esc(t.transport)}</td>
+          <td class="mono">${esc(t.path)}</td>
+          <td><input type="checkbox" class="toggle" data-transport="${esc(t.transport)}" ${t.enabled ? "checked" : ""} aria-label="Enable ${esc(t.transport)} transport"></td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+    el.querySelectorAll("input[data-transport]").forEach(input => {
+      input.addEventListener("change", async () => {
+        input.disabled = true;
+        try {
+          await api(`/transports/${input.dataset.transport}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: input.checked }),
+          });
+        } catch (err) {
+          input.checked = !input.checked;
+          alert(`Failed to update ${input.dataset.transport} transport: ${err.message}`);
+        } finally {
+          input.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    el.innerHTML = `<p class="empty" style="color:var(--danger)">Failed to load transports: ${esc(err.message)}</p>`;
   }
 }
 
@@ -702,6 +799,8 @@ document.getElementById("modal-save").addEventListener("click", async () => {
     paint("modal-notice", "err", err.message);
   }
 });
+document.getElementById("link-connect").addEventListener("click", connectLink);
+document.getElementById("link-unlink").addEventListener("click", disconnectLink);
 
 // ── Init ────────────────────────────────────────────────────────────────
 
@@ -719,6 +818,8 @@ document.getElementById("modal-save").addEventListener("click", async () => {
   loadResources();
   loadAudit();
   loadSettings();
+  loadLink();
+  loadTransports();
   loadRuntimes();
 })();
 </script>

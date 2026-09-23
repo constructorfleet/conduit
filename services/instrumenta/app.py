@@ -6,14 +6,11 @@ tools, and re-exposes the merged surface over streamable-HTTP. It hosts a
 configuration UI for enabling/disabling tools, authoring local prompts and
 resources, and inspecting per-upstream reachability and an audit log.
 
-This module wires link endpoints, a pluggable SQLite/PostgreSQL configuration backend,
-Fernet-encrypted secrets, and the streamable-HTTP MCP endpoint with the four
-built-in tools registered (see `mcp_app.py`). The aggregator PR extends the
-MCP server with upstream-forwarded tools/prompts/resources.
-
-Streamable-HTTP only (SSE deferred): the MCP SDK's streamable-HTTP transport
-handles legacy clients via the `MCP-Protocol-Version` header, so a second SSE
-mount is not required for v1.
+This module wires link endpoints, pluggable SQLite/PostgreSQL configuration
+backends, Fernet-encrypted secrets, and the streamable-HTTP and SSE MCP
+endpoints with the four built-in tools registered (see `mcp_app.py`). The
+aggregator extends the MCP server with upstream-forwarded tools, prompts, and
+resources.
 """
 
 from __future__ import annotations
@@ -24,9 +21,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from conduit_link import (
     HttpConduitLinkClient,
@@ -47,6 +45,7 @@ from .mcp_app import BUILTIN_TOOL_NAMES, build_mcp_server
 from .path_probe import probe_runtimes
 from .secret_box import SecretBox, SecretKeyMissingError
 from .servers_router import make_servers_router
+from .transports_router import TRANSPORT_MOUNTS, make_transports_router
 
 LOG = logging.getLogger("instrumenta")
 
@@ -103,6 +102,23 @@ def _build_extension(_context: LinkExtensionContext[_NoExtension]) -> _NoExtensi
 
 def _public(_extension: _NoExtension) -> dict[str, object]:
     return {}
+
+
+class TransportGate:
+    """Reject requests to a transport whose persisted toggle is disabled."""
+
+    def __init__(self, transport: str, backend: Backend, inner: ASGIApp):
+        self.transport, self.backend, self.inner = transport, backend, inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and not self.backend.is_transport_enabled(self.transport):
+            response = JSONResponse(
+                status_code=404,
+                content={"detail": f"{self.transport} transport is disabled"},
+            )
+            await response(scope, receive, send)
+            return
+        await self.inner(scope, receive, send)
 
 
 class ToolSummary(BaseModel):
@@ -309,6 +325,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(make_servers_router())
     app.include_router(make_items_router())
     app.include_router(make_audit_router())
+    app.include_router(make_transports_router())
 
     # Mount the streamable-HTTP MCP transport at `/mcp`. The SDK's default
     # `streamable_http_path='/mcp'` combined with a mount would become
@@ -322,19 +339,22 @@ def create_app(config: Config | None = None) -> FastAPI:
     # can widen it, and tests get "testserver" by default.
     from mcp.server.transport_security import TransportSecuritySettings
 
-    allowed_hosts = _csv(os.getenv("INSTRUMENTA_ALLOWED_HOSTS", "testserver,localhost,127.0.0.1"))
+    allowed_hosts = _csv(os.getenv("INSTRUMENTA_ALLOWED_HOSTS", "testserver,localhost,localhost:*,127.0.0.1,127.0.0.1:*"))
     allowed_origins = _csv(os.getenv("INSTRUMENTA_ALLOWED_ORIGINS", ""))
     transport_security = TransportSecuritySettings(
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
-    app.mount(
-        MCP_PATH.rstrip("/"),
-        mcp_server.streamable_http_app(
-            streamable_http_path="/",
-            transport_security=transport_security,
-        ),
+    streamable_http = mcp_server.streamable_http_app(
+        streamable_http_path="/", transport_security=transport_security
     )
+    sse = mcp_server.sse_app(
+        sse_path="/", message_path="/messages/", transport_security=transport_security
+    )
+    gated_http = TransportGate("http", backend, streamable_http)
+    app.mount(TRANSPORT_MOUNTS["http"], gated_http)
+    app.mount(TRANSPORT_MOUNTS["sse"], TransportGate("sse", backend, sse))
+    app.mount(MCP_PATH.rstrip("/"), gated_http)
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

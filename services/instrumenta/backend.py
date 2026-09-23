@@ -43,6 +43,23 @@ class ItemFlag:
     enabled: bool = True
 
 
+TRANSPORTS: tuple[str, ...] = ("http", "sse")
+"""Downstream MCP transports Instrumenta can expose, in display order."""
+
+
+@dataclass(frozen=True)
+class TransportFlag:
+    """Row for `transport_flags` — enable/disable a downstream MCP transport.
+
+    Absence of a row means enabled: both transports are on by default
+    (spec #198, User Story 16) and a row is only written when an operator
+    flips a toggle.
+    """
+
+    transport: str
+    enabled: bool = True
+
+
 @dataclass(frozen=True)
 class LocalPrompt:
     """Row for `local_prompts` — a locally-authored prompt template."""
@@ -110,6 +127,17 @@ class Backend(Protocol):
         raise NotImplementedError
 
     def delete_item_flag(self, origin: str, item_kind: str, item_name: str) -> bool:
+        raise NotImplementedError
+
+    # ── transport_flags ─────────────────────────────────────────────────
+
+    def list_transport_flags(self) -> list[TransportFlag]:
+        raise NotImplementedError
+
+    def is_transport_enabled(self, transport: str) -> bool:
+        raise NotImplementedError
+
+    def set_transport_enabled(self, transport: str, enabled: bool) -> None:
         raise NotImplementedError
 
     # ── local_prompts ───────────────────────────────────────────────────
@@ -180,6 +208,12 @@ CREATE TABLE IF NOT EXISTS item_flags (
     item_name TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (origin, item_kind, item_name)
+);
+-- No CHECK on `transport`: the name set is `TRANSPORTS` (validated by the only
+-- writer, transports_router), and a CHECK would freeze it in existing databases.
+CREATE TABLE IF NOT EXISTS transport_flags (
+    transport TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS local_prompts (
@@ -279,6 +313,10 @@ class SqliteBackend:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._conn.execute(
+            f"DELETE FROM transport_flags WHERE transport NOT IN ({','.join('?' for _ in TRANSPORTS)})",
+            TRANSPORTS,
+        )
 
     def has_encrypted_secret(self) -> bool:
         """Any row in `upstream_servers` with a non-null `secret_ciphertext`.
@@ -380,6 +418,30 @@ class SqliteBackend:
             (origin, item_kind, item_name),
         )
         return cur.rowcount > 0
+
+    # ── transport_flags ─────────────────────────────────────────────────
+
+    def list_transport_flags(self) -> list[TransportFlag]:
+        cur = self._conn.execute("SELECT transport, enabled FROM transport_flags")
+        stored = {row["transport"]: bool(row["enabled"]) for row in cur.fetchall()}
+        return [
+            TransportFlag(transport=name, enabled=stored.get(name, True))
+            for name in TRANSPORTS
+        ]
+
+    def is_transport_enabled(self, transport: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT enabled FROM transport_flags WHERE transport = ?", (transport,)
+        )
+        row = cur.fetchone()
+        return True if row is None else bool(row["enabled"])
+
+    def set_transport_enabled(self, transport: str, enabled: bool) -> None:
+        self._conn.execute(
+            "INSERT INTO transport_flags (transport, enabled) VALUES (?, ?) "
+            "ON CONFLICT (transport) DO UPDATE SET enabled = excluded.enabled",
+            (transport, 1 if enabled else 0),
+        )
 
     # ── local_prompts ───────────────────────────────────────────────────
 
@@ -513,6 +575,10 @@ CREATE TABLE IF NOT EXISTS item_flags (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (origin, item_kind, item_name)
 );
+CREATE TABLE IF NOT EXISTS transport_flags (
+    transport TEXT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE
+);
 CREATE TABLE IF NOT EXISTS local_prompts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -555,6 +621,10 @@ class PostgresBackend:
             for statement in _POSTGRES_SCHEMA.split(";"):
                 if statement.strip():
                     cur.execute(statement)
+            cur.execute(
+                f"DELETE FROM transport_flags WHERE transport NOT IN ({','.join('%s' for _ in TRANSPORTS)})",
+                TRANSPORTS,
+            )
 
     def has_encrypted_secret(self) -> bool:
         with self._conn.cursor() as cur:
@@ -598,6 +668,22 @@ class PostgresBackend:
 
     def delete_item_flag(self, origin: str, item_kind: str, item_name: str) -> bool:
         return self._execute("DELETE FROM item_flags WHERE origin = %s AND item_kind = %s AND item_name = %s", (origin, item_kind, item_name)) > 0
+
+    def list_transport_flags(self) -> list[TransportFlag]:
+        rows = self._query("SELECT transport, enabled FROM transport_flags")
+        stored = {row["transport"]: bool(row["enabled"]) for row in rows}
+        return [TransportFlag(transport=name, enabled=stored.get(name, True)) for name in TRANSPORTS]
+
+    def is_transport_enabled(self, transport: str) -> bool:
+        rows = self._query("SELECT enabled FROM transport_flags WHERE transport = %s", (transport,))
+        return True if not rows else bool(rows[0]["enabled"])
+
+    def set_transport_enabled(self, transport: str, enabled: bool) -> None:
+        self._execute(
+            "INSERT INTO transport_flags (transport, enabled) VALUES (%s, %s) "
+            "ON CONFLICT (transport) DO UPDATE SET enabled = EXCLUDED.enabled",
+            (transport, enabled),
+        )
 
     def list_local_prompts(self) -> list[LocalPrompt]:
         return [_row_to_prompt(row) for row in self._query("SELECT * FROM local_prompts ORDER BY name")]

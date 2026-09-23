@@ -1,7 +1,8 @@
 """Contract tests shared by the SQLite and PostgreSQL backends.
 
-Set ``INSTRUMENTA_TEST_POSTGRES_URL`` to include PostgreSQL in the run.  Local
-runs stay dependency-free; CI starts the compose database and sets the URL.
+Set ``INSTRUMENTA_TEST_POSTGRES_URL`` to include PostgreSQL in the run. Local
+runs skip the database-backed cases when no server is configured; CI starts
+the compose database and sets the URL.
 """
 
 from __future__ import annotations
