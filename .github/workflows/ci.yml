@@ -469,6 +469,32 @@ jobs:
           file: services/excita/Dockerfile
           push: false
 
+  # Memoria's builtin backend is lightweight enough for pull-request CI. Its
+  # Dockerfile and tests are otherwise easy to let rot while only the Rust
+  # workspace stays green.
+  memoria:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/memoria
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/memoria/requirements-dev.txt
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: services/memoria/Dockerfile
+          push: false
+
   # `docker compose up` is the documented way to run Conduit, so a compose file
   # that does not parse is a broken front door. `config` resolves variables,
   # profiles, and the build contexts without starting anything.
