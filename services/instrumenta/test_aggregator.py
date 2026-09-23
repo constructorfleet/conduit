@@ -12,10 +12,12 @@ is the aggregation logic on top of it.
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from cryptography.fernet import Fernet
 from mcp.client import Client
 from mcp.client._memory import InMemoryTransport
@@ -25,7 +27,7 @@ import asyncio
 import inspect
 
 from instrumenta.aggregator import Aggregator, build_forwarder
-from instrumenta.backend import SqliteBackend, UpstreamServer
+from instrumenta.backend import Backend, PostgresBackend, SqliteBackend, UpstreamServer
 from instrumenta.mcp_app import build_mcp_server
 from instrumenta.supervisor import http_connect
 from instrumenta.secret_box import SecretBox
@@ -56,14 +58,22 @@ def secret_box() -> SecretBox:
     return SecretBox(Fernet.generate_key().decode())
 
 
-@pytest.fixture
-def backend(tmp_path: Path) -> SqliteBackend:
-    return SqliteBackend(tmp_path / "instrumenta.db")
+@pytest_asyncio.fixture(params=["sqlite", "postgres"])
+async def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Backend:
+    if request.param == "postgres":
+        url = os.getenv("INSTRUMENTA_TEST_POSTGRES_URL")
+        if not url:
+            pytest.skip("set INSTRUMENTA_TEST_POSTGRES_URL to run PostgreSQL tests")
+        instance = PostgresBackend(url)
+    else:
+        instance = SqliteBackend(tmp_path / "instrumenta.db")
+    yield instance
+    await instance.close()
 
 
 @pytest.mark.asyncio
 async def test_start_with_no_servers_populates_no_statuses(
-    backend: SqliteBackend, secret_box: SecretBox
+    backend: Backend, secret_box: SecretBox
 ) -> None:
     aggregator = Aggregator(backend, secret_box)
     mcp_server = build_mcp_server()
@@ -76,7 +86,7 @@ async def test_start_with_no_servers_populates_no_statuses(
 
 @pytest.mark.asyncio
 async def test_start_registers_enabled_upstream_tool_under_prefix(
-    backend: SqliteBackend, secret_box: SecretBox
+    backend: Backend, secret_box: SecretBox
 ) -> None:
     backend.insert_upstream_server(
         UpstreamServer(
@@ -111,7 +121,7 @@ async def test_start_registers_enabled_upstream_tool_under_prefix(
 
 @pytest.mark.asyncio
 async def test_disabled_upstream_is_not_probed_but_appears_in_statuses(
-    backend: SqliteBackend, secret_box: SecretBox
+    backend: Backend, secret_box: SecretBox
 ) -> None:
     backend.insert_upstream_server(
         UpstreamServer(
@@ -141,7 +151,7 @@ async def test_disabled_upstream_is_not_probed_but_appears_in_statuses(
 
 @pytest.mark.asyncio
 async def test_unreachable_upstream_records_last_error(
-    backend: SqliteBackend, secret_box: SecretBox
+    backend: Backend, secret_box: SecretBox
 ) -> None:
     backend.insert_upstream_server(
         UpstreamServer(
@@ -172,7 +182,7 @@ async def test_unreachable_upstream_records_last_error(
 
 @pytest.mark.asyncio
 async def test_forwarded_tool_call_passes_arguments_through(
-    backend: SqliteBackend, secret_box: SecretBox
+    backend: Backend, secret_box: SecretBox
 ) -> None:
     """A forwarded call with real arguments reaches the upstream.
 

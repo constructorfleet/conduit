@@ -8,6 +8,8 @@ route's response body so operators can see the current picture.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,6 +17,14 @@ from pydantic import BaseModel, Field
 
 from .backend import Backend, UpstreamServer
 from .secret_box import SecretBox
+
+try:
+    from psycopg.errors import UniqueViolation
+except ImportError:  # pragma: no cover - psycopg is an optional test dependency
+    UniqueViolation = type("UniqueViolation", (Exception,), {})
+
+
+LOG = logging.getLogger(__name__)
 
 
 class ServerCreate(BaseModel):
@@ -96,8 +106,11 @@ def make_servers_router() -> APIRouter:
         )
         try:
             backend.insert_upstream_server(server)
-        except Exception as exc:  # sqlite unique-constraint
-            raise HTTPException(status_code=409, detail=str(exc))
+        except (sqlite3.IntegrityError, UniqueViolation):
+            raise HTTPException(status_code=409, detail="server name already exists")
+        except Exception:
+            LOG.exception("Failed to create upstream server", extra={"server_name": server.name})
+            raise HTTPException(status_code=500, detail="failed to create server")
         return ServerRead.from_row(server)
 
     @router.get("/{server_id}", response_model=ServerRead)

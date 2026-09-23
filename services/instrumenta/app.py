@@ -6,7 +6,7 @@ tools, and re-exposes the merged surface over streamable-HTTP. It hosts a
 configuration UI for enabling/disabling tools, authoring local prompts and
 resources, and inspecting per-upstream reachability and an audit log.
 
-This module wires link endpoints, a SQLite configuration backend,
+This module wires link endpoints, a pluggable SQLite/PostgreSQL configuration backend,
 Fernet-encrypted secrets, and the streamable-HTTP MCP endpoint with the four
 built-in tools registered (see `mcp_app.py`). The aggregator PR extends the
 MCP server with upstream-forwarded tools/prompts/resources.
@@ -41,7 +41,7 @@ from conduit_link import (
 
 from .aggregator import Aggregator, UpstreamStatus
 from .audit import make_audit_router
-from .backend import Backend, SqliteBackend
+from .backend import Backend, PostgresBackend, SqliteBackend
 from .items_router import make_items_router
 from .mcp_app import BUILTIN_TOOL_NAMES, build_mcp_server
 from .path_probe import probe_runtimes
@@ -135,12 +135,14 @@ class Config(BaseModel):
     api_key: str | None
     base_url: str
     secret_key: str | None
+    database_url: str | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
             data_dir=Path(os.getenv("INSTRUMENTA_DATA_DIR", "/data")),
             backend_type=os.getenv("INSTRUMENTA_BACKEND", "sqlite"),
+            database_url=os.getenv("INSTRUMENTA_DATABASE_URL"),
             api_key=os.getenv("INSTRUMENTA_API_KEY"),
             base_url=os.getenv("INSTRUMENTA_BASE_URL", f"http://localhost:{DEFAULT_PORT}"),
             secret_key=os.getenv("INSTRUMENTA_SECRET_KEY"),
@@ -155,9 +157,11 @@ def _make_backend(config: Config) -> Backend:
     if config.backend_type == "sqlite":
         return SqliteBackend(config.data_dir / "instrumenta.db")
     if config.backend_type == "postgres":
-        raise NotImplementedError(
-            "postgres backend is planned; see wayfinder map issue #199"
+        database_url = config.database_url or os.getenv(
+            "INSTRUMENTA_DATABASE_URL",
+            "postgresql://postgres:postgres@postgres:5432/postgres",
         )
+        return PostgresBackend(database_url)
     raise ValueError(f"Unknown INSTRUMENTA_BACKEND: {config.backend_type}")
 
 

@@ -91,7 +91,8 @@ ones (`hey_jarvis_v0.1.tflite`, `hey_jarvis_v0.1.nww.onnx`).
 | Variable | Default | Meaning |
 |---|---|---|
 | `EXCITA_DATA_DIR` | `/data` | SQLite, clips, uploaded model artifacts |
-| `EXCITA_BACKEND` | `sqlite` | Backend type |
+| `EXCITA_BACKEND` | `sqlite` | Backend type (`sqlite` or `postgres`) |
+| `EXCITA_DATABASE_URL` | PostgreSQL service default | PostgreSQL connection URL when using the `postgres` backend |
 | `EXCITA_BASE_URL` | `http://localhost:8084` | Advertised link URL |
 | `EXCITA_WAKE_MODELS_DIR` | `<data>/wake-models` | Shared openWakeWord ONNX files |
 | `EXCITA_MODEL_IMPORT_DIR` | unset | Filesystem model-import mount (scanner) |

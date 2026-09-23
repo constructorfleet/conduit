@@ -8,13 +8,14 @@ between tests.
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from instrumenta.app import Config, create_app
+from instrumenta.app import Config, _make_backend, create_app
 from instrumenta.backend import SqliteBackend
 from instrumenta.secret_box import SecretBox, SecretKeyMissingError
 
@@ -38,6 +39,45 @@ def config(data_dir: Path, secret_key: str) -> Config:
         base_url="http://localhost:8085",
         secret_key=secret_key,
     )
+
+
+def test_postgres_backend_is_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config(
+        data_dir=Path("/tmp/instrumenta-test"),
+        backend_type="postgres",
+        database_url="postgresql://example.invalid/instrumenta",
+        api_key=None,
+        base_url="http://localhost:8085",
+        secret_key=None,
+    )
+    selected: list[str] = []
+
+    class FakePostgresBackend:
+        def __init__(self, database_url: str) -> None:
+            selected.append(database_url)
+
+    monkeypatch.setattr("instrumenta.app.PostgresBackend", FakePostgresBackend)
+    backend = _make_backend(config)
+    assert isinstance(backend, FakePostgresBackend)
+    assert selected == ["postgresql://example.invalid/instrumenta"]
+
+
+def test_postgres_app_uses_real_backend() -> None:
+    database_url = os.getenv("INSTRUMENTA_TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("set INSTRUMENTA_TEST_POSTGRES_URL to run PostgreSQL tests")
+    config = Config(
+        data_dir=Path("/tmp/instrumenta-postgres-test"),
+        backend_type="postgres",
+        database_url=database_url,
+        api_key=None,
+        base_url="http://localhost:8085",
+        secret_key=None,
+    )
+    with TestClient(create_app(config)) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["backend"] == "postgres"
 
 
 @pytest.fixture

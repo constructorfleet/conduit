@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from excita.app import Config, create_app
+from excita.app import Config, _make_backend, create_app
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -98,6 +98,24 @@ def test_health_reports_unlinked(client: TestClient) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["linked"] is False
+
+
+def test_postgres_backend_is_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected: list[str] = []
+
+    class FakeBackend:
+        def __init__(self, url: str) -> None:
+            selected.append(url)
+
+    monkeypatch.setattr("excita.app.PostgresBackend", FakeBackend)
+    config = Config(
+        data_dir=Path("/tmp/excita"),
+        backend_type="postgres",
+        database_url="postgresql://example.invalid/excita",
+        base_url="http://localhost:8084",
+    )
+    _make_backend(config)
+    assert selected == [config.database_url]
 
 
 def test_create_phrase_then_list(client: TestClient) -> None:

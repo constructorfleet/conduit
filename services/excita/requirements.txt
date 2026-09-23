@@ -2,6 +2,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.24
 httpx==0.28.1
 pydantic==2.13.4
+psycopg[binary]>=3.2.0
 python-multipart>=0.0.9
 # Wake-word runtime. openwakeword ships as a small pure-Python package that
 # expects a tflite / onnxruntime backend at import time; we pin the ONNX

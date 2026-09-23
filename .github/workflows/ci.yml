@@ -469,6 +469,32 @@ jobs:
           file: services/excita/Dockerfile
           push: false
 
+  # Memoria's builtin backend is lightweight enough for pull-request CI. Its
+  # Dockerfile and tests are otherwise easy to let rot while only the Rust
+  # workspace stays green.
+  memoria:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/memoria
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/memoria/requirements-dev.txt
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: services/memoria/Dockerfile
+          push: false
+
   # `docker compose up` is the documented way to run Conduit, so a compose file
   # that does not parse is a broken front door. `config` resolves variables,
   # profiles, and the build contexts without starting anything.
@@ -482,6 +508,7 @@ jobs:
           docker compose --profile vox config --quiet
           # The legacy profile name is kept for one release cycle; verify it too.
           docker compose --profile speaker-id config --quiet
+          docker compose --profile instrumenta-postgres config --quiet
           docker compose --profile wyoming-asr config --quiet
           # The default `up` must not need the optional profile, or the
           # smallest thing that runs is not the default.
@@ -490,6 +517,38 @@ jobs:
             echo "default profile should start conduit alone, got '${services}'" >&2
             exit 1
           fi
+
+  instrumenta:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    defaults:
+      run:
+        working-directory: services
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/instrumenta/requirements.txt
+      - name: Install test dependencies
+        run: pip install -r instrumenta/requirements.txt
+      - name: Run Instrumenta tests against SQLite and PostgreSQL
+        env:
+          PYTHONPATH: .
+          INSTRUMENTA_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: python -m pytest -q instrumenta
 
   # The published image is built from this Dockerfile, so a change that breaks
   # it must fail before the image is published. Building without pushing needs
