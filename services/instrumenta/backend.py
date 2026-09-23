@@ -552,7 +552,9 @@ class PostgresBackend:
         self._conn = psycopg.connect(database_url, row_factory=dict_row)
         self._conn.autocommit = True
         with self._conn.cursor() as cur:
-            cur.execute(_POSTGRES_SCHEMA)
+            for statement in _POSTGRES_SCHEMA.split(";"):
+                if statement.strip():
+                    cur.execute(statement)
 
     def has_encrypted_secret(self) -> bool:
         with self._conn.cursor() as cur:

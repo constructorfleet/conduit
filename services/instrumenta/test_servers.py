@@ -41,6 +41,20 @@ def client(config: Config):
 
 
 class TestServersCRUD:
+    def test_backend_failure_is_not_reported_as_duplicate(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(_server: object) -> None:
+            raise RuntimeError("database password leaked")
+
+        monkeypatch.setattr(SqliteBackend, "insert_upstream_server", fail)
+        response = client.post(
+            "/servers", json={"name": "broken", "url": "https://example.invalid/mcp"}
+        )
+        assert response.status_code == 500
+        assert response.json()["detail"] == "failed to create server"
+        assert "database password" not in response.text
+
     def test_list_empty_by_default(self, client: TestClient) -> None:
         assert client.get("/servers").json() == []
 
