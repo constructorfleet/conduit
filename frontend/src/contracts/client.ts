@@ -268,7 +268,8 @@ export type ProviderDefinitionVariantType =
   | "http"
   | "diarization_server"
   | "pgvector"
-  | "dicta";
+  | "dicta"
+  | "linked_memoria";
 
 /// The three wake word detectors Conduit speaks to. Each is its own wake
 /// variant, because the three do not run in the same places.
@@ -391,6 +392,9 @@ export type TtsVariant =
 export type ToolVariant = {
   type: "mcp";
   transport: McpTransport;
+} | {
+  type: "linked_memoria";
+  peer_id: string;
 };
 
 /// One rewriting rule that ships with Conduit. Named rather than configurable

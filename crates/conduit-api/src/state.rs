@@ -707,13 +707,23 @@ impl AppState {
         let mut snapshot = Providers::new();
         let mut mcp_definitions = BTreeMap::new();
         for id in self.provider_definition_ids().await? {
-            let Some(definition) = self.provider_definition(&id).await? else {
+            let Some(mut definition) = self.provider_definition(&id).await? else {
                 continue;
             };
-            if let ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } =
-                &definition.variant
-            {
-                mcp_definitions.insert(definition.id.clone(), transport.clone());
+            match &definition.variant {
+                ProviderDefinitionVariant::Tool { variant: ToolVariant::Mcp { transport } } => {
+                    mcp_definitions.insert(definition.id.clone(), transport.clone());
+                }
+                ProviderDefinitionVariant::Tool {
+                    variant: ToolVariant::LinkedMemoria { peer_id },
+                } => {
+                    let transport = self.resolve_memoria_mcp_transport(peer_id).await?;
+                    mcp_definitions.insert(definition.id.clone(), transport.clone());
+                    definition.variant = ProviderDefinitionVariant::Tool {
+                        variant: ToolVariant::Mcp { transport },
+                    };
+                }
+                _ => {}
             }
             if let ProviderDefinitionVariant::Transform {
                 variant: TransformVariant::Dicta { peer_id },
@@ -735,6 +745,110 @@ impl AppState {
         self.sync_mcp_watchers(mcp_definitions);
         self.spawn_reachability_probe();
         Ok(())
+    }
+
+    pub(crate) async fn resolve_memoria_mcp_transport(
+        &self,
+        peer_id: &str,
+    ) -> Result<McpTransport> {
+        let link = self.linked_service(peer_id).await?.ok_or_else(|| {
+            conduit_core::Error::Config(format!(
+                "linked Memoria peer `{peer_id}` does not exist"
+            ))
+        })?;
+        if link.service_kind != conduit_link::LinkedServiceKind::Memoria
+            || !link.capabilities.iter().any(|capability| capability == "memoria.mcp")
+        {
+            return Err(conduit_core::Error::Config(format!(
+                "linked peer `{peer_id}` does not advertise memoria.mcp"
+            )));
+        }
+        let endpoint = link.capability_endpoints.get("memoria.mcp").ok_or_else(|| {
+            conduit_core::Error::Config(format!(
+                "linked Memoria peer `{peer_id}` has no memoria.mcp endpoint metadata"
+            ))
+        })?;
+        let transport =
+            endpoint.get("transport").and_then(serde_json::Value::as_str).ok_or_else(|| {
+                conduit_core::Error::Config("memoria.mcp endpoint needs a transport".into())
+            })?;
+        match transport {
+            "sse" | "streamable_http" => {
+                let value = endpoint
+                    .get("url")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        conduit_core::Error::Config(
+                            "HTTP memoria.mcp endpoint needs a URL".into(),
+                        )
+                    })?;
+                let base = reqwest::Url::parse(&link.peer_base_url).map_err(|error| {
+                    conduit_core::Error::Config(format!(
+                        "linked Memoria peer `{peer_id}` has invalid base URL: {error}"
+                    ))
+                })?;
+                let url = base
+                    .join(value)
+                    .map_err(|error| {
+                        conduit_core::Error::Config(format!(
+                            "linked Memoria peer `{peer_id}` has invalid MCP URL: {error}"
+                        ))
+                    })?
+                    .to_string();
+                let resolved = if transport == "sse" {
+                    McpTransport::Sse { url }
+                } else {
+                    McpTransport::StreamableHttp { url }
+                };
+                let (McpTransport::Sse { url } | McpTransport::StreamableHttp { url }) =
+                    &resolved
+                else {
+                    unreachable!("an HTTP transport has a URL")
+                };
+                let parsed = reqwest::Url::parse(url).map_err(|error| {
+                    conduit_core::Error::Config(format!(
+                        "linked Memoria peer `{peer_id}` has invalid MCP URL: {error}"
+                    ))
+                })?;
+                if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                    return Err(conduit_core::Error::Config(format!(
+                        "linked Memoria peer `{peer_id}` MCP URL must use HTTP or HTTPS"
+                    )));
+                }
+                Ok(resolved)
+            }
+            "stdio" => {
+                let command = endpoint
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|command| !command.trim().is_empty())
+                    .ok_or_else(|| {
+                        conduit_core::Error::Config(
+                            "stdio memoria.mcp endpoint needs a command".into(),
+                        )
+                    })?;
+                let args = endpoint
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|args| {
+                        args.iter()
+                            .map(|arg| {
+                                arg.as_str().map(str::to_owned).ok_or_else(|| {
+                                    conduit_core::Error::Config(
+                                        "stdio memoria.mcp args must be strings".into(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(McpTransport::Stdio { command: command.to_owned(), args })
+            }
+            other => Err(conduit_core::Error::Config(format!(
+                "linked Memoria peer `{peer_id}` advertises unsupported MCP transport `{other}`"
+            ))),
+        }
     }
 
     async fn register_dicta_transform(
@@ -1061,6 +1175,52 @@ for line in sys.stdin:
             .await
             .expect("provider resolves from the advertised peer");
         assert!(state.providers().unwrap().transform().get("dicta-transform").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_memoria_tool_resolves_its_advertised_mcp_endpoint() {
+        let state = AppState::new(EventBus::default());
+        state.put_linked_service(LinkedService {
+            service_kind: conduit_link::LinkedServiceKind::Memoria,
+            peer_id: "memoria-home".into(),
+            peer_name: "Home Memoria".into(),
+            peer_base_url: "http://127.0.0.1:1".into(),
+            sync_token_hash: "unused".into(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: vec!["memoria.mcp".into()],
+            capability_endpoints: [(
+                "memoria.mcp".into(),
+                serde_json::json!({"transport":"stdio","command":"python3","args":["-m","memoria.mcp"]}),
+            )].into(),
+            provider_definition_id: String::new(), panel: None,
+            granted_by: "operator".into(), granted_at: chrono::Utc::now(),
+            last_seen: None, proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown, last_probed_at: None,
+        }).await.expect("linked peer stored");
+        assert_eq!(
+            state.resolve_memoria_mcp_transport("memoria-home").await.unwrap(),
+            McpTransport::Stdio {
+                command: "python3".into(),
+                args: vec!["-m".into(), "memoria.mcp".into()],
+            }
+        );
+
+        state
+            .put_provider_definition(
+                "memoria-tools",
+                ProviderDefinition {
+                    id: "memoria-tools".into(),
+                    label: "Memoria".into(),
+                    variant: ProviderDefinitionVariant::Tool {
+                        variant: ToolVariant::LinkedMemoria { peer_id: "memoria-home".into() },
+                    },
+                    settings: Default::default(),
+                },
+            )
+            .await
+            .expect("linked MCP endpoint resolves");
+        assert!(state.providers().unwrap().tools().get("memoria-tools").is_none());
     }
 
     #[tokio::test]
