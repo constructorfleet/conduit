@@ -355,6 +355,20 @@
 
   <!-- ===== SETTINGS ===== -->
   <div class="tab-panel" id="panel-settings">
+    <section id="link-panel">
+      <h2>Conduit Link</h2>
+      <dl class="kv" id="link-body"><dt>Loading...</dt><dd></dd></dl>
+      <div style="margin-top:12px; display:grid; gap:8px">
+        <input type="url" id="link-conduit-url" placeholder="Conduit URL" autocomplete="off">
+        <input type="password" id="link-token" placeholder="Operator token (leave blank if anonymous)" autocomplete="off">
+        <input type="text" id="link-peer-name" value="Conduit Instrumenta" placeholder="Peer name">
+        <div class="row">
+          <button id="link-connect" class="primary">Link</button>
+          <button id="link-unlink" class="danger">Unlink</button>
+        </div>
+      </div>
+      <div id="link-notice"></div>
+    </section>
     <section>
       <h2>Configuration</h2>
       <dl class="kv" id="settings-body">
@@ -657,6 +671,48 @@ async function loadSettings() {
   }
 }
 
+async function loadLink() {
+  const dl = document.getElementById("link-body");
+  try {
+    const body = await api("/link");
+    const rows = [["Status", body.status]];
+    if (body.status === "linked") {
+      rows.push(["Conduit", body.conduit_url], ["Peer", body.peer_name], ["Linked at", body.linked_at]);
+      document.getElementById("link-conduit-url").value = body.conduit_url || "";
+      document.getElementById("link-peer-name").value = body.peer_name || "Conduit Instrumenta";
+    }
+    dl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v ?? ""))}</dd>`).join("");
+    document.getElementById("link-unlink").disabled = body.status !== "linked";
+  } catch (err) {
+    dl.innerHTML = "<dt>Status</dt><dd>error</dd>";
+    paint("link-notice", "err", `Could not load link status: ${err.message}`);
+  }
+}
+
+async function connectLink() {
+  const conduitUrl = document.getElementById("link-conduit-url").value.trim();
+  const operatorToken = document.getElementById("link-token").value.trim();
+  const peerName = document.getElementById("link-peer-name").value.trim() || "Conduit Instrumenta";
+  try {
+    const linked = await api("/link", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conduit_url: conduitUrl, operator_token: operatorToken, peer_name: peerName }),
+    });
+    if (linked.local_api_key) document.getElementById("link-token").value = "";
+    paint("link-notice", "ok", "Linked.");
+    await loadLink();
+  } catch (err) { paint("link-notice", "err", `Link failed: ${err.message}`); }
+}
+
+async function disconnectLink() {
+  if (!confirm("Unlink this Instrumenta peer from Conduit?")) return;
+  try {
+    await api("/link", { method: "DELETE" });
+    paint("link-notice", "ok", "Unlinked.");
+    await loadLink();
+  } catch (err) { paint("link-notice", "err", `Unlink failed: ${err.message}`); }
+}
+
 async function loadTransports() {
   const el = document.getElementById("transports-body");
   try {
@@ -743,6 +799,8 @@ document.getElementById("modal-save").addEventListener("click", async () => {
     paint("modal-notice", "err", err.message);
   }
 });
+document.getElementById("link-connect").addEventListener("click", connectLink);
+document.getElementById("link-unlink").addEventListener("click", disconnectLink);
 
 // ── Init ────────────────────────────────────────────────────────────────
 
@@ -760,6 +818,7 @@ document.getElementById("modal-save").addEventListener("click", async () => {
   loadResources();
   loadAudit();
   loadSettings();
+  loadLink();
   loadTransports();
   loadRuntimes();
 })();

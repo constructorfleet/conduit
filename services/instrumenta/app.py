@@ -6,14 +6,11 @@ tools, and re-exposes the merged surface over streamable-HTTP. It hosts a
 configuration UI for enabling/disabling tools, authoring local prompts and
 resources, and inspecting per-upstream reachability and an audit log.
 
-This module wires link endpoints, a pluggable SQLite/PostgreSQL configuration backend,
-Fernet-encrypted secrets, and the streamable-HTTP MCP endpoint with the four
-built-in tools registered (see `mcp_app.py`). The aggregator PR extends the
-MCP server with upstream-forwarded tools/prompts/resources.
-
-Streamable-HTTP only (SSE deferred): the MCP SDK's streamable-HTTP transport
-handles legacy clients via the `MCP-Protocol-Version` header, so a second SSE
-mount is not required for v1.
+This module wires link endpoints, pluggable SQLite/PostgreSQL configuration
+backends, Fernet-encrypted secrets, and the streamable-HTTP and SSE MCP
+endpoints with the four built-in tools registered (see `mcp_app.py`). The
+aggregator extends the MCP server with upstream-forwarded tools, prompts, and
+resources.
 """
 
 from __future__ import annotations

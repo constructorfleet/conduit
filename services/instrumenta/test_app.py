@@ -97,6 +97,14 @@ class TestHealth:
         assert data["backend"] == "sqlite"
         assert data["linked"] is False
 
+
+def test_the_embedded_ui_exposes_the_link_flow(client: TestClient) -> None:
+    response = client.get("/ui/")
+    assert response.status_code == 200
+    assert 'id="link-panel"' in response.text
+    assert 'api("/link"' in response.text
+    assert 'api("/link", { method: "DELETE" })' in response.text
+
 def _parse_sse(text: str) -> dict:
     """Pull the JSON payload out of a streamable-HTTP SSE response."""
     import json
