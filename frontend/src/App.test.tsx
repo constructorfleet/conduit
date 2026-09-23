@@ -9,7 +9,9 @@ import type {
   PipelineView,
   ProviderDefinition,
   ProviderDefinitionView,
+  TurnSnapshot,
 } from "./contracts/client";
+import { turnSnapshotFixture } from "./contracts/client";
 import { eventEnvelopeFixtures, type EventEnvelope } from "./contracts/events";
 import {
   operatorStatusSnapshotFixture,
@@ -400,7 +402,7 @@ describe("Overview operations workspace", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("links current failures to reconstructed turn events when possible", async () => {
+  it("opens the latest server turn reconstruction from the overview", async () => {
     const user = userEvent.setup();
     render(<App initialEvents={eventFixture()} />);
 
@@ -414,7 +416,7 @@ describe("Overview operations workspace", () => {
     expect(
       screen.getByRole("heading", { name: "Turn Reconstruction" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("StageFailed")).toBeInTheDocument();
+    expect(screen.getByText("The lights are on.")).toBeInTheDocument();
   });
 });
 
@@ -737,124 +739,36 @@ describe("First-Run Guided Setup", () => {
 });
 
 describe("Events turn reconstruction", () => {
-  it("groups reconstructed events into visual component stages", async () => {
+  it("renders the server snapshot as the ordered turn story", async () => {
     const user = userEvent.setup();
     render(<App initialEvents={successfulTurnEvents()} />);
 
     await enterEventsSection(user);
 
-    expect(screen.getByText("Stage Timeline")).toBeInTheDocument();
-    expect(screen.getAllByRole("group", { name: /stage$/ })).toHaveLength(5);
-    expect(
-      screen.queryByRole("group", { name: "conversation stage" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("group", { name: "transcription stage" }),
-    ).toHaveTextContent("Speech Final");
-    expect(
-      screen.getByRole("group", { name: "reasoning stage" }),
-    ).toHaveTextContent("Llm Token");
-    expect(
-      screen.getByRole("group", { name: "tools stage" }),
-    ).toHaveTextContent("Tool Requested");
-    expect(
-      screen.getByRole("group", { name: "synthesis stage" }),
-    ).toHaveTextContent("Tts Finished");
-  });
-
-  it("attributes node failures to the matching visual component stage", async () => {
-    const user = userEvent.setup();
-    render(<App initialEvents={eventFixture()} />);
-
-    await enterEventsSection(user);
-
-    expect(
-      screen.queryByRole("group", { name: "node: tts stage" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("group", { name: "synthesis stage" }),
-    ).toHaveTextContent("Stage Failed");
-  });
-
-  it("renders a successful turn as an ordered component story", async () => {
-    const user = userEvent.setup();
-    render(<App initialEvents={successfulTurnEvents()} />);
-
-    await enterEventsSection(user);
-
-    const speech = screen.getByText("turn on the kitchen lights");
-    const reasoning = screen.getByText("The lights are on.");
-    const synthesis = screen.getByText("TtsFinished");
-
-    expect(
-      screen.getByRole("heading", { name: "Turn Reconstruction" }),
-    ).toBeInTheDocument();
     expect(screen.getByText("completed")).toBeInTheDocument();
-    expect(
-      speech.compareDocumentPosition(reasoning) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      reasoning.compareDocumentPosition(synthesis) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByLabelText("Turn pipeline")).toHaveTextContent(
-      "Pipeline kitchen",
-    );
+    expect(screen.getByText("I will check the lights.")).toBeInTheDocument();
+    expect(screen.getByText("The lights are on.")).toBeInTheDocument();
+    expect(screen.getByText("1 call from model round 1")).toBeInTheDocument();
+    expect(screen.getByText("lights.turn_on / completed")).toBeInTheDocument();
+    expect(screen.queryByText("SpeechFinal")).not.toBeInTheDocument();
   });
 
-  it("preserves tool activity and confirmation boundaries", async () => {
+  it("waits for a server reconstruction instead of inferring one from raw events", async () => {
     const user = userEvent.setup();
+    mockOperatorApi({ turnSnapshot: null });
     render(<App initialEvents={successfulTurnEvents()} />);
 
     await enterEventsSection(user);
 
-    expect(screen.getByText("lights.turn_on")).toBeInTheDocument();
-    expect(screen.getByText("Turn on the kitchen lights?")).toBeInTheDocument();
-    expect(screen.getByText("ToolCompleted")).toBeInTheDocument();
-  });
-
-  it("surfaces synthesis failures as component-attributed turn failures", async () => {
-    const user = userEvent.setup();
-    render(<App initialEvents={eventFixture()} />);
-
-    await enterEventsSection(user);
-
-    expect(screen.getByText("failed")).toBeInTheDocument();
-    expect(screen.getByText("StageFailed")).toBeInTheDocument();
-    expect(screen.getByText("connection refused")).toBeInTheDocument();
-    expect(screen.getByText("tts")).toBeInTheDocument();
     expect(
-      screen.getByRole("listitem", { name: "StageFailed tts error" }),
-    ).toHaveClass("error");
+      screen.getByText("Waiting for a server turn reconstruction"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("completed")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Raw stream" }));
+    expect(screen.getByText("SpeechFinal")).toBeInTheDocument();
   });
 
-  it("uses stage event pills as ordered shortcuts into reconstruction rows", async () => {
-    const user = userEvent.setup();
-    render(<App initialEvents={eventFixture()} />);
-
-    await enterEventsSection(user);
-
-    const synthesis = screen.getByRole("group", { name: "synthesis stage" });
-    const pills = within(synthesis).getAllByRole("button");
-
-    expect(pills.map((pill) => pill.textContent)).toEqual([
-      "Tts Started",
-      "Audio Streaming",
-      "Tts Finished",
-      "Stage Failed",
-    ]);
-    expect(pills[3]).toHaveClass("error");
-    expect(pills[3]).toHaveAccessibleDescription("connection refused");
-
-    await user.click(pills[3]);
-
-    expect(
-      screen.getByRole("listitem", { name: "StageFailed tts error" }),
-    ).toHaveClass("selected");
-  });
-
-  it("marks reconstructed turns stale when the event stream is stale", async () => {
+  it("marks the server reconstruction stale when the event stream is stale", async () => {
     const user = userEvent.setup();
     render(
       <App
@@ -871,20 +785,7 @@ describe("Events turn reconstruction", () => {
     expect(screen.getByText("completed")).toBeInTheDocument();
   });
 
-  it("does not mark events stale before a stream has gone stale", async () => {
-    const user = userEvent.setup();
-    render(<App initialEvents={successfulTurnEvents()} />);
-
-    await enterEventsSection(user);
-
-    expect(screen.queryByLabelText("Stale state")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("Reconnect refresh required"),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText("completed")).toBeInTheDocument();
-  });
-
-  it("keeps raw event filtering secondary to reconstruction", async () => {
+  it("filters the raw event stream independently from server reconstruction", async () => {
     const user = userEvent.setup();
     render(<App initialEvents={successfulTurnEvents()} />);
 
@@ -4167,6 +4068,7 @@ function liveApiSnapshot(): OperatorStatusSnapshot {
 
 function mockOperatorApi({
   snapshot = snapshotFixture(),
+  turnSnapshot = turnSnapshotFixture,
   statusSnapshots,
   pipelineViews = [pipelineView()],
   componentCatalog: catalog = componentCatalog(),
@@ -4176,6 +4078,7 @@ function mockOperatorApi({
   onEventStream,
 }: {
   snapshot?: OperatorStatusSnapshot;
+  turnSnapshot?: TurnSnapshot | null;
   statusSnapshots?: OperatorStatusSnapshot[];
   pipelineViews?: PipelineView[];
   componentCatalog?: ProviderComponentCatalog;
@@ -4228,6 +4131,16 @@ function mockOperatorApi({
       if (route === "/v1/status" && method === "GET") {
         currentSnapshot = pendingStatusSnapshots.shift() ?? currentSnapshot;
         return jsonResponse(currentSnapshot);
+      }
+
+      if (route === "/v1/turns" && method === "GET") {
+        return jsonResponse({ turns: turnSnapshot ? [turnSnapshot] : [] });
+      }
+
+      if (route.startsWith("/v1/turns/") && method === "GET") {
+        return turnSnapshot && route === `/v1/turns/${turnSnapshot.turn_id}`
+          ? jsonResponse(turnSnapshot)
+          : jsonResponse({ error: "not_found" }, { status: 404 });
       }
 
       if (route === "/v1/linked-services" && method === "GET") {
