@@ -30,6 +30,7 @@ questions, and only the first one has a stage in a Conduit pipeline.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -816,6 +817,7 @@ class HttpConduitClient:
                 "icon": "users",
                 "path": "/ui/",
             },
+            "capabilities": ["vox.roster"],
             "extension": {"local_api_key": body["vox_api_key"]},
         }
         try:
@@ -857,24 +859,36 @@ class HttpConduitSpeakerClient:
     ) -> None:
         self._timeout = timeout
         self._transport = transport
+        self._cache_key: tuple[str, str] | None = None
+        self._etag: str | None = None
+        self._speakers: list[ConduitSpeaker] | None = None
 
     async def list_speakers(
         self, conduit_url: str, sync_token: str
     ) -> list[ConduitSpeaker]:
         url = f"{conduit_url.rstrip('/')}/v1/speakers"
+        cache_key = (conduit_url.rstrip("/"), hashlib.sha256(sync_token.encode()).hexdigest())
+        headers = {"authorization": f"Bearer {sync_token}"}
+        if cache_key == self._cache_key and self._etag:
+            headers["if-none-match"] = self._etag
         async with httpx.AsyncClient(
             timeout=self._timeout, transport=self._transport
         ) as client:
-            response = await client.get(
-                url,
-                headers={"authorization": f"Bearer {sync_token}"},
-            )
+            response = await client.get(url, headers=headers)
+        if response.status_code == 304:
+            if cache_key != self._cache_key or self._speakers is None:
+                raise RuntimeError("Conduit returned 304 without a cached speaker roster")
+            return list(self._speakers)
         response.raise_for_status()
         payload = response.json()
-        return [
+        speakers = [
             ConduitSpeaker(id=str(item["id"]), name=str(item["name"]))
             for item in payload
         ]
+        self._cache_key = cache_key
+        self._etag = response.headers.get("etag")
+        self._speakers = speakers
+        return list(speakers)
 
 
 class Syncer:
@@ -913,7 +927,7 @@ class Syncer:
                 speaker = uuid.UUID(remote.id)
             except ValueError:
                 LOG.warning(
-                    "skipping Conduit speaker with invalid UUID: peer=%s speaker=%r",
+                    "skipping Conduit speaker with invalid UUID: peer=%s capability=vox.roster speaker=%r",
                     record.state.peer_id,
                     remote.id,
                 )
@@ -925,7 +939,7 @@ class Syncer:
             )
             synced += 1
         LOG.info(
-            "synced Vox roster from Conduit: peer=%s speakers=%d",
+            "synced Vox roster from Conduit: peer=%s capability=vox.roster speakers=%d",
             record.state.peer_id,
             synced,
         )
@@ -952,7 +966,7 @@ class Syncer:
                     record = None
                 retry_in = failure_delay
                 LOG.warning(
-                    "Vox roster sync failed: peer=%s conduit=%s retry_in=%.0fs error=%s",
+                    "Vox roster sync failed: peer=%s capability=vox.roster conduit=%s retry_in=%.0fs error=%s",
                     record.state.peer_id if record is not None else "unlinked",
                     record.state.conduit_url if record is not None else "unknown",
                     retry_in,

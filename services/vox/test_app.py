@@ -1088,6 +1088,7 @@ def test_http_conduit_client_sends_the_expected_link_request() -> None:
         # extension.local_api_key.
         assert json_body["service_kind"] == "vox"
         assert json_body["peer_base_url"] == "http://vox.internal:8081"
+        assert json_body["capabilities"] == ["vox.roster"]
         assert json_body["extension"] == {"local_api_key": "local-key"}
         return httpx.Response(
             201,
@@ -1117,3 +1118,25 @@ def test_http_conduit_client_sends_the_expected_link_request() -> None:
     assert seen["method"] == "POST"
     assert seen["url"] == "http://conduit.internal:8080/v1/linked-services"
     assert seen["authorization"] == "Bearer operator-secret"
+
+
+def test_http_conduit_speaker_client_uses_etag_and_cached_roster_after_304() -> None:
+    from app import HttpConduitSpeakerClient
+
+    headers_seen: list[str | None] = []
+    payload = [{"id": "speaker-1", "name": "Ada"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers_seen.append(request.headers.get("if-none-match"))
+        if len(headers_seen) == 1:
+            return httpx.Response(200, json=payload, headers={"etag": '"roster-v1"'})
+        return httpx.Response(304)
+
+    client = HttpConduitSpeakerClient(transport=httpx.MockTransport(handler))
+
+    first = asyncio.run(client.list_speakers("http://conduit.internal:8080", "sync"))
+    second = asyncio.run(client.list_speakers("http://conduit.internal:8080", "sync"))
+
+    assert headers_seen == [None, '"roster-v1"']
+    assert [speaker.id for speaker in first] == ["speaker-1"]
+    assert second == first
