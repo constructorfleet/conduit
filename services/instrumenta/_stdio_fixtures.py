@@ -5,11 +5,13 @@ script (`<python> _stdio_fixtures.py [gate_file]`), so the child needs only
 `mcp` and the stdlib on its interpreter — no `instrumenta` package on its
 path.
 
-A `gate_file` argument makes the first spawn fail and a later one succeed:
-while the gate file is absent the child exits non-zero (a child that cannot
-come up yet — a lost boot race); once a test creates it, the child runs a
-real stdio MCP server exposing a single `echo` tool. That is what exercises
-register-on-recovery without timing races.
+A `gate_file` argument ties the child's whole life to that file: while it is
+absent the child exits non-zero (a child that cannot come up yet — a lost
+boot race), and once a test creates it the child runs a real stdio MCP server
+exposing a single `echo` tool. Deleting the file again makes the running
+child exit, which is how a test kills a *connected* upstream without sending
+signals. Between them those two edges exercise register-on-recovery and
+unregister-on-disconnect without timing races.
 """
 
 from __future__ import annotations
@@ -18,11 +20,34 @@ import os
 import sys
 
 
+def _watch_gate(gate: str) -> None:
+    """Exit the process once `gate` is removed.
+
+    A plain thread rather than an async task: it must be able to kill the
+    process while the MCP server owns the event loop, and `os._exit` skips
+    the orderly shutdown on purpose — the point is to look like a child that
+    died, not one that said goodbye.
+    """
+    import threading
+    import time
+
+    def watch() -> None:
+        while os.path.exists(gate):
+            time.sleep(0.02)
+        sys.stderr.write("stdio fixture: gate removed, exiting\n")
+        sys.stderr.flush()
+        os._exit(1)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def _main() -> None:
     gate = sys.argv[1] if len(sys.argv) > 1 else None
     if gate is not None and not os.path.exists(gate):
         sys.stderr.write("stdio fixture: gate absent, exiting\n")
         raise SystemExit(1)
+    if gate is not None:
+        _watch_gate(gate)
 
     import anyio
     from mcp.server.mcpserver import MCPServer

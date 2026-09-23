@@ -13,8 +13,15 @@ exponential backoff (1s → 2s → … → 30s, reset on success). Forwarding to
 are registered the first time a connection *succeeds*, not the first time one
 is *attempted*: a stdio upstream whose very first connect loses a boot race
 still has its tools registered once a later retry connects, without an
-Instrumenta restart. Reconnections after that swap the live client in place
-through a shared holder, so already-registered forwarders keep working.
+Instrumenta restart.
+
+They are removed again when the child dies, and re-registered when it comes
+back (User Story 24, #274). A tool that cannot be called should not be
+advertised: leaving a dead child's tools in `tools/list` invites a model to
+pick one and get "upstream is not currently connected" at call time, which
+is a failure it cannot do anything useful with. The live client is still
+swapped in place through a shared holder, so a forwarder registered from one
+connection keeps working across the reconnect it survives.
 """
 
 from __future__ import annotations
@@ -57,9 +64,14 @@ class ClientHolder:
 
 
 # Callback that registers forwarding tools for a freshly connected upstream.
-# Invoked once, on the first successful connection, with the holder the
-# forwarders should read their live client from.
+# Invoked on each connection that succeeds while the upstream is unregistered,
+# with the holder the forwarders should read their live client from.
 RegisterTools = Callable[[UpstreamServer, list[types.Tool], ClientHolder], None]
+
+# Callback that removes those tools again when the child goes away. Receives
+# the tools as listed at registration time, so an implementation can derive
+# the same prefixed names it added.
+UnregisterTools = Callable[[UpstreamServer, list[types.Tool]], None]
 
 
 @dataclass
@@ -70,6 +82,9 @@ class _Child:
     holder: ClientHolder = field(default_factory=ClientHolder)
     reachable: bool = False
     registered: bool = False
+    #: Tools as listed when they were registered, kept so they can be removed
+    #: again without asking a child that is no longer answering.
+    tools: list[types.Tool] = field(default_factory=list)
     tool_count: int = 0
     last_error: str | None = None
     backoff: float = _INITIAL_BACKOFF
@@ -91,11 +106,13 @@ class StdioSupervisor:
         self,
         register_tools: RegisterTools | None = None,
         *,
+        unregister_tools: UnregisterTools | None = None,
         initial_backoff: float = _INITIAL_BACKOFF,
         max_backoff: float = _MAX_BACKOFF,
         liveness_poll: float = _LIVENESS_POLL,
     ) -> None:
         self._register_tools = register_tools
+        self._unregister_tools = unregister_tools
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
         self._liveness_poll = liveness_poll
@@ -149,6 +166,7 @@ class StdioSupervisor:
                     if not child.registered:
                         if self._register_tools is not None:
                             self._register_tools(child.server, listed.tools, child.holder)
+                        child.tools = list(listed.tools)
                         child.registered = True
                         LOG.info(
                             "stdio upstream %s connected; %d tool(s) registered",
@@ -165,6 +183,11 @@ class StdioSupervisor:
             finally:
                 child.reachable = False
                 child.holder.client = None
+                # The child is gone, so its tools cannot be called: take them
+                # off the surface until a reconnect puts them back. Doing this
+                # here rather than only on a clean stop covers the crash case,
+                # which is the one that matters.
+                self._drop_tools(child)
                 # A failed first attempt must still release boot; recovery is
                 # what re-registers the tools, not the initial attempt.
                 child.ready.set()
@@ -172,6 +195,28 @@ class StdioSupervisor:
             if child.stop_event.is_set():
                 break
             await self._sleep_backoff(child)
+
+    def _drop_tools(self, child: _Child) -> None:
+        """Remove a child's forwarding tools; a no-op if none are registered.
+
+        Tool count is left alone: `/upstreams` reports what the upstream had
+        when it was last reachable, which is more useful to an operator
+        reading a down row than a zero.
+        """
+        if not child.registered:
+            return
+        child.registered = False
+        tools, child.tools = child.tools, []
+        if self._unregister_tools is None:
+            return
+        try:
+            self._unregister_tools(child.server, tools)
+        except Exception as exc:  # noqa: BLE001 — a failed removal must not stop supervision
+            LOG.warning(
+                "could not unregister tools for stdio upstream %s: %s",
+                child.server.name,
+                exc,
+            )
 
     async def _hold_until_stop_or_crash(self, child: _Child, client: Client) -> None:
         """Keep the connection open until stop is requested or the child dies.
