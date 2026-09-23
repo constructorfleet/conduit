@@ -12,11 +12,12 @@ use conduit_metrics::Metrics;
 use conduit_provider::storage::{
     EnrolledSpeaker, LinkedService, LinkedServiceStore, McpTransport, PipelineStore,
     ProviderCapability, ProviderDefinition, ProviderDefinitionStore, ProviderDefinitionVariant,
-    SpeakerRosterStore, ToolVariant,
+    SpeakerRosterStore, ToolVariant, TransformVariant,
 };
 use conduit_provider::Health;
 use conduit_runtime::{Providers, DEFAULT_IDLE_TIMEOUT};
 use conduit_store::MemoryStore;
+use conduit_transform::dicta::DictaTransform;
 
 use crate::auth::Access;
 use crate::esphome::EsphomeDashboard;
@@ -35,6 +36,7 @@ pub struct AppState {
     speakers: Arc<dyn SpeakerRosterStore>,
     /// Conduit Vox peers this deployment is linked to.
     linked_services: Arc<dyn LinkedServiceStore>,
+    link_token_cipher: Option<Arc<crate::link_token::LinkTokenCipher>>,
     wake_event_keys: Arc<Mutex<BTreeMap<String, VecDeque<String>>>>,
     /// Providers available to pipelines, if any have been configured. A
     /// server without them still serves everything except conversations.
@@ -260,6 +262,7 @@ impl AppState {
             provider_definitions,
             speakers: Arc::new(MemoryStore::new()),
             linked_services: Arc::new(MemoryStore::new()),
+            link_token_cipher: None,
             wake_event_keys: Arc::new(Mutex::new(BTreeMap::new())),
             providers: Arc::new(RwLock::new(None)),
             provider_snapshot_update: Arc::new(tokio::sync::Mutex::new(())),
@@ -291,6 +294,40 @@ impl AppState {
     pub fn with_linked_service_store(mut self, store: Arc<dyn LinkedServiceStore>) -> Self {
         self.linked_services = store;
         self
+    }
+
+    /// Configures authenticated encryption for peer bearers used by outbound
+    /// side channels.
+    pub fn with_peer_token_encryption_key(mut self, key: &[u8]) -> Result<Self> {
+        self.link_token_cipher = Some(Arc::new(
+            crate::link_token::LinkTokenCipher::new(key)
+                .map_err(conduit_core::Error::Config)?,
+        ));
+        Ok(self)
+    }
+
+    pub(crate) fn encrypt_peer_token(
+        &self,
+        peer_id: &str,
+        token: &str,
+    ) -> Result<Option<String>> {
+        self.link_token_cipher
+            .as_ref()
+            .map(|cipher| cipher.encrypt(peer_id, token).map_err(conduit_core::Error::Config))
+            .transpose()
+    }
+
+    pub(crate) fn decrypt_peer_token(&self, peer_id: &str, ciphertext: &str) -> Result<String> {
+        self.link_token_cipher
+            .as_ref()
+            .ok_or_else(|| {
+                conduit_core::Error::Config(
+                    "CONDUIT_LINK_TOKEN_ENCRYPTION_KEY is required to use a linked peer token"
+                        .to_owned(),
+                )
+            })?
+            .decrypt(peer_id, ciphertext)
+            .map_err(conduit_core::Error::Config)
     }
 
     /// Peer ids of every linked Vox instance, in order.
@@ -678,7 +715,15 @@ impl AppState {
             {
                 mcp_definitions.insert(definition.id.clone(), transport.clone());
             }
-            snapshot = self.factories.register(snapshot, &definition).await?;
+            if let ProviderDefinitionVariant::Transform {
+                variant: TransformVariant::Dicta { peer_id },
+            } = &definition.variant
+            {
+                snapshot =
+                    self.register_dicta_transform(snapshot, &definition, peer_id).await?;
+            } else {
+                snapshot = self.factories.register(snapshot, &definition).await?;
+            }
             // Checked here rather than at the store because the schema lives on
             // the provider that was just built: a definition's default settings
             // must be ones the provider it configures said it accepts, or the
@@ -690,6 +735,61 @@ impl AppState {
         self.sync_mcp_watchers(mcp_definitions);
         self.spawn_reachability_probe();
         Ok(())
+    }
+
+    async fn register_dicta_transform(
+        &self,
+        providers: Providers,
+        definition: &ProviderDefinition,
+        peer_id: &str,
+    ) -> Result<Providers> {
+        let link = self.linked_service(peer_id).await?.ok_or_else(|| {
+            conduit_core::Error::Config(format!("linked Dicta peer `{peer_id}` does not exist"))
+        })?;
+        if link.service_kind != conduit_link::LinkedServiceKind::Dicta
+            || !link.capabilities.iter().any(|capability| capability == "dicta.transform")
+        {
+            return Err(conduit_core::Error::Config(format!(
+                "linked peer `{peer_id}` does not advertise dicta.transform"
+            )));
+        }
+        let ciphertext = link.peer_token_ciphertext.as_deref()
+            .ok_or_else(|| conduit_core::Error::Config(format!(
+                "linked Dicta peer `{peer_id}` has no encrypted peer token; re-link it with token encryption configured"
+            )))?;
+        let token = self.decrypt_peer_token(peer_id, ciphertext)?;
+        let base = reqwest::Url::parse(&link.peer_base_url).map_err(|error| {
+            conduit_core::Error::Config(format!(
+                "linked Dicta peer `{peer_id}` has invalid base URL: {error}"
+            ))
+        })?;
+        let endpoint = link
+            .capability_endpoints
+            .get("dicta.transform")
+            .and_then(|metadata| metadata.get("url"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("/transform");
+        let url = base.join(endpoint).map_err(|error| {
+            conduit_core::Error::Config(format!(
+                "linked Dicta peer `{peer_id}` has invalid transform endpoint: {error}"
+            ))
+        })?;
+        if url.scheme() != base.scheme()
+            || url.host_str() != base.host_str()
+            || url.port() != base.port()
+        {
+            return Err(conduit_core::Error::Config(format!(
+                "linked Dicta peer `{peer_id}` transform endpoint must stay on its advertised origin"
+            )));
+        }
+        let transform = DictaTransform::new(
+            &definition.id,
+            &definition.label,
+            peer_id,
+            url.to_string(),
+            token,
+        )?;
+        Ok(providers.with_transform(transform))
     }
 
     fn sync_mcp_watchers(&self, definitions: BTreeMap<String, McpTransport>) {
@@ -916,6 +1016,52 @@ for line in sys.stdin:
             result = {}
         print(json.dumps({"jsonrpc":"2.0","id":message["id"],"result":result}), flush=True)
 "#;
+
+    #[tokio::test]
+    async fn a_dicta_provider_resolves_only_from_a_linked_capable_peer() {
+        let state = AppState::new(EventBus::default())
+            .with_peer_token_encryption_key(&[7; 32])
+            .expect("key is valid");
+        let ciphertext =
+            state.encrypt_peer_token("dicta-office", "dicta-peer-token").unwrap().unwrap();
+        state
+            .put_linked_service(LinkedService {
+                service_kind: conduit_link::LinkedServiceKind::Dicta,
+                peer_id: "dicta-office".into(),
+                peer_name: "Office Dicta".into(),
+                peer_base_url: "http://dicta:8080".into(),
+                sync_token_hash: "unused".into(),
+                peer_token_hash: Some("peer-token-hash".into()),
+                peer_token_ciphertext: Some(ciphertext),
+                capabilities: vec!["dicta.transform".into()],
+                capability_endpoints: Default::default(),
+                provider_definition_id: String::new(),
+                panel: None,
+                granted_by: "operator".into(),
+                granted_at: chrono::Utc::now(),
+                last_seen: None,
+                proxy_auth_bearer: None,
+                reachability: conduit_link::Reachability::Unknown,
+                last_probed_at: None,
+            })
+            .await
+            .expect("linked peer stored");
+        state
+            .put_provider_definition(
+                "dicta-transform",
+                ProviderDefinition {
+                    id: "dicta-transform".into(),
+                    label: "Dicta transform".into(),
+                    variant: ProviderDefinitionVariant::Transform {
+                        variant: TransformVariant::Dicta { peer_id: "dicta-office".into() },
+                    },
+                    settings: Default::default(),
+                },
+            )
+            .await
+            .expect("provider resolves from the advertised peer");
+        assert!(state.providers().unwrap().transform().get("dicta-transform").is_some());
+    }
 
     #[tokio::test]
     async fn advertised_tool_list_changes_replace_only_that_servers_snapshot_tools() {

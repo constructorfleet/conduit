@@ -369,6 +369,7 @@ pub fn linked_service(peer_id: &str, peer_name: &str) -> LinkedService {
         peer_base_url: format!("http://{peer_id}.vox.internal:8081"),
         sync_token_hash: format!("{peer_id}-sync-token-hash"),
         peer_token_hash: None,
+        peer_token_ciphertext: None,
         capabilities: Vec::new(),
         capability_endpoints: Default::default(),
         provider_definition_id: format!("vox-{peer_id}"),
@@ -394,6 +395,7 @@ fn replacement_vox_link(peer_id: &str) -> LinkedService {
         peer_name: "Kitchen Vox Replacement".to_owned(),
         sync_token_hash: "replacement-token-hash".to_owned(),
         peer_token_hash: None,
+        peer_token_ciphertext: None,
         capabilities: Vec::new(),
         capability_endpoints: Default::default(),
         last_seen: Some(

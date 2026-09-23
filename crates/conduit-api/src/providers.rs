@@ -557,6 +557,13 @@ fn validate_provider_definition(definition: &ProviderDefinition) -> Result<(), A
                     .map_err(|error| ApiError::unprocessable(error.to_string()))?;
             }
         },
+        ProviderDefinitionVariant::Transform {
+            variant: TransformVariant::Dicta { peer_id },
+        } => {
+            if peer_id.trim().is_empty() {
+                return Err(ApiError::unprocessable("peer_id must not be empty"));
+            }
+        }
         // A capacity of zero is a store that accepts every write and remembers
         // nothing. The store's own builder refuses it, so an operator who saves
         // one would get a definition that stores cleanly and fails to build on

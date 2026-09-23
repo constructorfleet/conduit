@@ -21,6 +21,7 @@ pub mod esphome;
 pub mod events;
 pub mod factory;
 pub mod firmware;
+mod link_token;
 pub mod linked_services;
 pub mod pipelines;
 pub mod providers;
