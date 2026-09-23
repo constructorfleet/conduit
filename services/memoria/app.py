@@ -34,10 +34,8 @@ import uuid
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Protocol
 
-import httpx
-import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -435,7 +433,9 @@ async def health_check() -> HealthResponse:
     """Health check endpoint."""
     backend = get_storage()
     health = await backend.health()
-    engrams = await backend.list(limit=1)
+    # Not the value but the call: /health proves the read path answers,
+    # not merely that the backend says it is well.
+    await backend.list(limit=1)
 
     return HealthResponse(
         status="ok",

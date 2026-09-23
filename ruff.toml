@@ -1,0 +1,20 @@
+# Ruff configuration for the Python side of the repository: services/ and
+# packages/conduit-link.
+#
+# The rule set is written out rather than left to Ruff's defaults, which have
+# widened across releases -- a linter whose scope changes when its version does
+# is a linter that fails builds nobody changed. These are pyflakes (F) plus the
+# pycodestyle errors that are genuine mistakes rather than formatting opinions:
+# undefined and unused names, redefinitions, broken syntax, comparisons that do
+# not do what they look like.
+#
+# Deliberately not enabled yet: import sorting (I), which would rewrite imports
+# in every file at once, and flake8-bugbear (B), whose B008 fires on every
+# FastAPI `Depends()` default in this repository and would be noise rather than
+# signal. Both are a decision to take on purpose, not by upgrading.
+target-version = "py311"
+
+extend-exclude = [".venv", "**/.venv", "**/node_modules"]
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

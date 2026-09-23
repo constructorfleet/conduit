@@ -176,7 +176,9 @@ class TestSecretBoxFailLoud:
         # Seed an encrypted secret row via the same backend the app uses, then
         # try to construct the app with `secret_key=None`. Should raise.
         db_path = data_dir / "instrumenta.db"
-        backend = SqliteBackend(db_path)
+        # Constructed for the side effect: it creates the schema the raw
+        # INSERT below writes into. The handle itself is not needed.
+        SqliteBackend(db_path)
         conn = sqlite3.connect(db_path)
         conn.execute(
             "INSERT INTO upstream_servers (id, name, transport, url, secret_ciphertext) "

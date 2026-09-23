@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
-from wyoming.event import Event, async_read_event, async_write_event
+from wyoming.event import Event, async_read_event
 from wyoming.info import Describe, Info
 
 from app import (

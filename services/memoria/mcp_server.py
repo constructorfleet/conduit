@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 import httpx
@@ -496,6 +497,3 @@ class MCPServer:
         response = self._error_response(None, code, message)
         print(json.dumps(response))
         sys.stdout.flush()
-
-
-import os

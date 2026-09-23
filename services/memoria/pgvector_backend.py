@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 
-import httpx
 import numpy as np
 
 LOG = logging.getLogger("memoria.pgvector")
@@ -154,7 +154,7 @@ class PgVectorBackend:
             params.append(embedding.tolist())
             param_count += 1
 
-        set_clauses.append(f"updated_at = NOW()")
+        set_clauses.append("updated_at = NOW()")
         params.append(engram_id)
 
         async with self.pool.acquire() as conn:
@@ -362,5 +362,3 @@ class Embedder:
         loop = asyncio.get_event_loop()
         embedding = await loop.run_in_executor(None, self.model.encode, text)
         return embedding
-
-import os

@@ -54,6 +54,7 @@ Additional CI jobs run:
 firmware/test.sh
 scripts/tests/dev_test.sh
 scripts/tests/prettier_ignore_test.sh
+ruff check services packages/conduit-link
 cargo audit
 cargo llvm-cov --workspace --all-features --cobertura --output-path cobertura.xml
 docker buildx build --load -t conduit-check .
