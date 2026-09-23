@@ -12,6 +12,22 @@ import { afterEach } from "vitest";
 // nothing can observe scrolling in a jsdom document.
 Element.prototype.scrollIntoView = function scrollIntoView() {};
 
+// Node 26 ships a built-in Web Storage `localStorage`, and under vitest 4 it
+// shadowed jsdom's: `localStorage` came out `undefined` inside tests and 109 of
+// them failed on `localStorage.clear()` with nothing naming the cause (#285).
+// vitest 5 resolves it, so this is a tripwire rather than a fix — if a Node or
+// runner change puts the wrong storage back, the suite says which one sentence
+// instead of failing a hundred tests on a missing method.
+if (
+  typeof localStorage === "undefined" ||
+  localStorage !== window.localStorage
+) {
+  throw new Error(
+    "the test environment's localStorage is not jsdom's — a built-in Web Storage " +
+      "global is shadowing it (see #285); check the Node and vitest versions",
+  );
+}
+
 afterEach(() => {
   cleanup();
 });
