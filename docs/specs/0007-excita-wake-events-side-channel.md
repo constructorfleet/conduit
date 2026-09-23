@@ -76,12 +76,16 @@ Excita times out its POST at 3 s. Conduit MUST respond in well under that — th
 
 Per 0005 §Side channels: log-and-retry, MUST NOT flip base `reachability`. Excita's `Bearer sync_token` failing (401) is a link-level problem for a human to fix; log with `peer=<peer_id> capability=excita.wake-events` prefix and stop retrying that specific request (it won't recover on its own). All other errors retry.
 
-## Implementation scope (future ticket)
+## Implementation
 
-- Add `POST /v1/wake-events` handler on Conduit; resolve `sync_token` → peer, cross-check `peer_id`, dispatch a `WakeWordDetected` / `WakeWordRejected` event on the bus keyed by `source_device`'s pipeline.
-- Idempotency-key ring buffer (per peer, 1024 keys).
-- Client SDK stub in `packages/conduit-link` (or a companion `conduit-link-excita`) so a future Excita implementation isn't hand-rolling this — shape TBD when Excita is scaffolded.
-- Conformance test over real HTTP: POST/retry/dedup all covered.
+- Excita advertises `excita.wake-events` and sends scored detections and
+  rejections asynchronously to Conduit's `POST /v1/wake-events` with bounded
+  exponential backoff and a stable idempotency key.
+- Conduit resolves `sync_token` to the linked Excita peer, checks the body
+  `peer_id`, and publishes a `WakeWordDetected` or `WakeWordRejected` event.
+- Conduit keeps the latest 1024 idempotency keys per peer in memory.
+- Contract tests cover publishing, authentication, duplicate delivery, and a
+  real HTTP retry round-trip.
 
 ## Non-goals
 

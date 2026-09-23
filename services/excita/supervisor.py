@@ -10,15 +10,14 @@ Owns:
 - An in-memory ring buffer of recent fires (spec 0011 §Standalone posture)
   so an unlinked Excita's operator still has a diagnostic view.
 
-Does not know about Conduit — a fire that also needs to POST to Conduit's
-`/v1/wake-events` is a caller concern (spec 0007). The supervisor stops at
-"clip persisted + event recorded locally"; that boundary is what lets the
-supervisor be exercised in-process from tests without a Conduit peer.
+Does not know about Conduit. It returns scored detections and rejections to
+the request handler, which owns delivery and retry policy (spec 0007).
 """
 
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -59,7 +58,7 @@ class Binding:
 
 @dataclass
 class WakeEvent:
-    """Local ring-buffer entry (spec 0011 §Standalone posture)."""
+    """Wake signal emitted locally or delivered to the linked Conduit peer."""
 
     detector_id: str
     phrase_id: str
@@ -67,6 +66,8 @@ class WakeEvent:
     confidence: float
     detected_at: str
     audio_clip_id: str | None = None
+    event_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    event_type: str = "detected"
 
 
 @dataclass
@@ -115,6 +116,7 @@ class DetectorSupervisor:
         self._bindings: dict[str, Binding] = {}
         self._pre_rolls: dict[str, _PreRoll] = {}
         self._events: deque[WakeEvent] = deque(maxlen=wake_event_history)
+        self._last_rejected_at: dict[str, float] = {}
         self._lock = threading.Lock()
         self._clock = clock
 
@@ -141,6 +143,7 @@ class DetectorSupervisor:
 
     def disarm(self, binding_id: str) -> bool:
         with self._lock:
+            self._last_rejected_at.pop(binding_id, None)
             return self._bindings.pop(binding_id, None) is not None
 
     def list_bindings(self) -> list[Binding]:
@@ -170,7 +173,7 @@ class DetectorSupervisor:
         if not pcm_frame:
             return []
         stamp = self._clock()
-        fires: list[WakeEvent] = []
+        signals: list[WakeEvent] = []
 
         with self._lock:
             targets = [
@@ -189,11 +192,15 @@ class DetectorSupervisor:
                     continue
                 confidence, fired = result
                 if not fired:
-                    continue
-                clip_id = self._persist_fire_clip(
-                    binding=binding,
-                    pcm=pre_roll.drain_pcm(),
-                    stamp=stamp,
+                    now = time.monotonic()
+                    previous = self._last_rejected_at.get(binding.id)
+                    if previous is not None and now - previous < 1.0:
+                        continue
+                    self._last_rejected_at[binding.id] = now
+                clip_id = (
+                    self._persist_fire_clip(binding=binding, pcm=pre_roll.drain_pcm(), stamp=stamp)
+                    if fired
+                    else None
                 )
                 event = WakeEvent(
                     detector_id=binding.id,
@@ -202,14 +209,18 @@ class DetectorSupervisor:
                     confidence=confidence,
                     detected_at=stamp,
                     audio_clip_id=clip_id,
+                    event_type="detected" if fired else "rejected",
                 )
-                self._events.append(event)
-                fires.append(event)
+                if fired:
+                    self._events.append(event)
+                signals.append(event)
                 # Reset so a single wake produces one event, not a fire on
                 # every subsequent overlapping frame from the same phrase.
-                binding.detector.reset()
+                if fired:
+                    binding.detector.reset()
+                    self._last_rejected_at.pop(binding.id, None)
 
-        return fires
+        return signals
 
     # --- diagnostics ---
 
