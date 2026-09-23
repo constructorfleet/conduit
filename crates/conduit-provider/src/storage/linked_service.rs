@@ -17,6 +17,7 @@ use conduit_core::Result;
 pub use conduit_link::LinkedServicePanel;
 use conduit_link::{LinkedServiceKind, Reachability};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 fn default_service_kind() -> LinkedServiceKind {
     LinkedServiceKind::Vox
@@ -47,6 +48,18 @@ pub struct LinkedService {
     /// Hex-encoded SHA-256 of the minted sync token. The raw token is
     /// returned to the caller of `POST /v1/linked-services` and never stored.
     pub sync_token_hash: String,
+    /// SHA-256 hex of the peer-minted bearer for Conduit-to-peer calls.
+    ///
+    /// Absent on legacy peers that have not upgraded the handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_token_hash: Option<String>,
+    /// Side-channel names this peer advertised during the handshake.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Capability-specific endpoint metadata, retained as data and interpreted
+    /// only by code that understands the corresponding capability.
+    #[serde(default)]
+    pub capability_endpoints: std::collections::BTreeMap<String, Value>,
     /// Provider definition id auto-provisioned for this peer.
     ///
     /// Recorded so an operator screen can point at the auto-provisioned
@@ -106,4 +119,34 @@ pub trait LinkedServiceStore: Send + Sync + 'static {
 
     /// Removes a link, returning whether it existed.
     async fn remove(&self, peer_id: &str) -> Result<bool>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LinkedService;
+
+    #[test]
+    fn legacy_link_records_deserialize_without_capability_metadata() {
+        let record = serde_json::json!({
+            "service_kind": "vox",
+            "peer_id": "satellite",
+            "peer_name": "Kitchen",
+            "peer_base_url": "http://vox:8081",
+            "sync_token_hash": "hash",
+            "provider_definition_id": "",
+            "panel": null,
+            "granted_by": "operator",
+            "granted_at": "2026-09-22T00:00:00Z",
+            "last_seen": null,
+            "proxy_auth_bearer": null,
+            "reachability": "unknown",
+            "last_probed_at": null
+        });
+
+        let link: LinkedService = serde_json::from_value(record).expect("legacy row decodes");
+
+        assert_eq!(link.peer_token_hash, None);
+        assert!(link.capabilities.is_empty());
+        assert!(link.capability_endpoints.is_empty());
+    }
 }
