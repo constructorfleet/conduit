@@ -33,8 +33,8 @@ def clean_postgres_database() -> None:
         with connection.cursor() as cursor:
             try:
                 cursor.execute(
-                    "TRUNCATE TABLE upstream_servers, item_flags, local_prompts, "
-                    "local_resources, audit_log RESTART IDENTITY CASCADE"
+                    "TRUNCATE TABLE upstream_servers, item_flags, transport_flags, "
+                    "local_prompts, local_resources, audit_log RESTART IDENTITY CASCADE"
                 )
             except psycopg.errors.UndefinedTable:
                 # Some test runs hit this before migrations/schema setup; skipping
