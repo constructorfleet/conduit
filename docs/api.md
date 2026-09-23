@@ -387,6 +387,7 @@ a Runtime Provider under the definition id:
 | `speaker_id` | `diarization_server` | One speaker identifier under the definition id | For an existing [Diarization_Server](https://github.com/CptCamembert/Diarization_Server); `base_url` must be `http` or `https` |
 | `transform` | `builtin` | One transform under the definition id | `rules` names the rewrites to apply, in order |
 | `transform` | `script` | One transform under the definition id | `engine` is `rhai`; the script is compiled and its deadline checked when the definition is saved |
+| `transform` | `dicta` | One transform under the definition id | `peer_id` must name a linked Dicta peer advertising `dicta.transform`; the peer bearer is decrypted only for outbound requests |
 | `tool` | `mcp` | One tool provider per tool the server advertises | Requires tool discovery, see below |
 | `memory` | `builtin` | One memory store under the definition id | Nothing required; an absent `path` writes nowhere |
 | `memory` | `pgvector` | One memory store under the definition id | `url` must be `postgres://` or `postgresql://` and carry no password; needs `--features postgres` |

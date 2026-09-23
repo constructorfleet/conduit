@@ -11,6 +11,7 @@
 //! markdown before stripping emoji means an emoji inside a link's text is seen
 //! as text, and the other way around means it is seen as part of an address.
 
+pub mod dicta;
 pub mod emoji;
 pub mod markdown;
 pub mod whitespace;

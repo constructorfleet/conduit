@@ -58,6 +58,7 @@ base64.workspace = true
 # For hashing minted Vox sync tokens: the raw token is returned once, the row
 # only carries its SHA-256, so a leaked link file cannot be replayed.
 sha2.workspace = true
+ring.workspace = true
 
 [features]
 default = ["postgres", "polly"]

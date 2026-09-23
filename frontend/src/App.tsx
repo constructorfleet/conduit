@@ -4359,9 +4359,12 @@ function configFromProviderVariant(
           : { timeout_ms: variant.variant.timeout_ms }),
       };
     }
-    // Held as the text an operator is typing, and split when the definition is
-    // built, like every other list field in this form.
-    return { rules: variant.variant.rules.join(", ") };
+    if (variant.variant.type === "builtin") {
+      // Held as the text an operator is typing, and split when the definition
+      // is built, like every other list field in this form.
+      return { rules: variant.variant.rules.join(", ") };
+    }
+    return { peer_id: variant.variant.peer_id };
   }
   if (variant.type === "memory") {
     if (variant.variant.type === "builtin") {
@@ -4691,6 +4694,15 @@ function variantFromProviderDefinition(
         ...(typeof config.timeout_ms === "number"
           ? { timeout_ms: config.timeout_ms }
           : {}),
+      },
+    };
+  }
+  if (definition.component === "transform.dicta") {
+    return {
+      type: "transform",
+      variant: {
+        type: "dicta",
+        peer_id: text("peer_id"),
       },
     };
   }

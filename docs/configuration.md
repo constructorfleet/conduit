@@ -89,6 +89,7 @@ C++, so a `.bin` carries a working device token.
 | `CONDUIT_PROVIDER_DIR` | `$CONDUIT_DATA_DIR/providers`                            | Directory for JSON Provider Definition files. Set to `:memory:` only for disposable development storage.                                                                        |
 | `CONDUIT_SPEAKER_DIR`  | `$CONDUIT_DATA_DIR/speakers`                             | Directory for the speaker roster. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage.       |
 | `CONDUIT_VOX_LINK_DIR` | `$CONDUIT_DATA_DIR/vox-links`                            | Directory for Conduit Vox link records. Overridden by `CONDUIT_DATABASE_URL` when the `postgres` feature is enabled. Set to `:memory:` only for disposable development storage. |
+| `CONDUIT_LINK_TOKEN_ENCRYPTION_KEY` | unset | URL-safe base64 without padding encoding a stable 32-byte key. Required when a peer supplies a Conduit-to-peer bearer; encrypts that bearer at rest for authenticated outbound side-channel requests. |
 
 If neither database nor pipeline directory is set, pipelines are stored as JSON
 files in the default local data directory and survive API restarts. The server

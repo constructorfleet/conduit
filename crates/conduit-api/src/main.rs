@@ -43,6 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_access(access)
         .with_turn_idle_timeout(registered.turn_idle_timeout)
         .with_turn_history_retention(turn_history_retention);
+    if let Some(key) = conduit_api::config::peer_token_encryption_key_from_env()? {
+        state = state.with_peer_token_encryption_key(&key)?;
+    }
     if let Some(dashboard) = esphome {
         tracing::info!(dashboard = %dashboard.base_url(), "ESPHome hand-off configured");
         state = state.with_esphome(dashboard);
