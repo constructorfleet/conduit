@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -257,6 +258,9 @@ link_store: LinkStore[_NoExtension] | None = None
 api_key: str | None = None
 sync_task: asyncio.Task[None] | None = None
 sync_lock = asyncio.Lock()
+speaker_roster: list[dict[str, Any]] = []
+conversation_roster: list[dict[str, Any]] = []
+roster_sync_state: dict[str, Any] = {"last_synced_at": None, "error": None}
 
 
 security = HTTPBearer(auto_error=False)
@@ -279,9 +283,13 @@ def get_storage() -> StorageBackend:
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global storage, link_store, api_key, sync_task
+    global speaker_roster, conversation_roster, roster_sync_state
 
     # Initialize configuration
     api_key = os.getenv("MEMORIA_API_KEY")
+    speaker_roster = []
+    conversation_roster = []
+    roster_sync_state = {"last_synced_at": None, "error": None}
     backend_type = os.getenv("MEMORIA_BACKEND", "builtin")
     data_dir = Path(os.getenv("MEMORIA_DATA_DIR", "/data"))
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -322,9 +330,12 @@ async def lifespan(app: FastAPI):
     existing = link_store.load()
     if existing is not None:
         LOG.info("linked to Conduit peer=%s since %s", existing.state.peer_id, existing.state.linked_at)
-        sync_task = asyncio.create_task(background_sync())
     else:
         LOG.info("unlinked")
+    # Start even when unlinked so a link created later takes effect without a
+    # process restart. The task sleeps between checks while the service is not
+    # linked.
+    sync_task = asyncio.create_task(background_sync())
 
     # Initialize MCP server if enabled
     if os.getenv("MEMORIA_MCP_ENABLED", "false").lower() == "true":
@@ -387,25 +398,73 @@ async def background_sync() -> None:
     """Background task to sync with Conduit."""
     interval = int(os.getenv("MEMORIA_SYNC_INTERVAL_SECONDS", DEFAULT_SYNC_INTERVAL_SECONDS))
     max_backoff = int(os.getenv("MEMORIA_SYNC_MAX_BACKOFF_SECONDS", DEFAULT_SYNC_MAX_BACKOFF_SECONDS))
-    backoff = interval
+    backoff = 0
 
     while True:
+        peer_id = None
         try:
             await asyncio.sleep(backoff)
             async with sync_lock:
                 if link_store is None or link_store.load() is None:
+                    backoff = interval
                     continue
 
-                # Sync engrams with Conduit
-                LOG.debug("Syncing engrams with Conduit")
-                # TODO: Implement sync logic
+                record = link_store.load()
+                if record is None:
+                    continue
+                peer_id = record.state.peer_id
+                await sync_rosters_once(record)
                 backoff = interval
 
         except asyncio.CancelledError:
             break
         except Exception as e:
-            LOG.error(f"Sync failed: {e}")
-            backoff = min(backoff * 2, max_backoff)
+            if isinstance(e, httpx.HTTPStatusError):
+                error_summary = f"Conduit returned HTTP {e.response.status_code}"
+            elif isinstance(e, httpx.RequestError):
+                error_summary = f"Conduit request failed ({type(e).__name__})"
+            else:
+                error_summary = type(e).__name__
+            roster_sync_state["error"] = error_summary
+            LOG.warning("Roster sync failed peer=%s error=%s", peer_id or "unlinked", error_summary)
+            backoff = min(interval if backoff == 0 else backoff * 2, max_backoff)
+
+
+async def sync_rosters_once(record: LinkRecord[_NoExtension], client: Any | None = None) -> None:
+    """Fetch both linked rosters and replace the local read model atomically."""
+    global speaker_roster, conversation_roster
+    base_url = record.state.conduit_url.rstrip("/")
+    prefix = f"{base_url}/v1/linked-services/{record.state.peer_id}/roster"
+    headers = {"authorization": f"Bearer {record.state.sync_token}"}
+    owned_client = client is None
+    if owned_client:
+        client = httpx.AsyncClient(timeout=10.0)
+    try:
+        speakers_response, conversations_response = await asyncio.gather(
+            client.get(f"{prefix}/speakers", headers=headers),
+            client.get(f"{prefix}/conversations", headers=headers),
+        )
+        speakers_response.raise_for_status()
+        conversations_response.raise_for_status()
+        speakers = speakers_response.json()
+        conversations = conversations_response.json()
+        if not isinstance(speakers, list) or not isinstance(conversations, list):
+            raise ValueError("Conduit roster responses must be JSON arrays")
+        # Only publish after both reads and shape checks succeed. A partial
+        # fetch must not make valid existing metadata disappear.
+        speaker_roster = speakers
+        conversation_roster = conversations
+        roster_sync_state["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+        roster_sync_state["error"] = None
+        LOG.info(
+            "Synchronized Conduit rosters peer=%s speakers=%d conversations=%d",
+            record.state.peer_id,
+            len(speakers),
+            len(conversations),
+        )
+    finally:
+        if owned_client:
+            await client.aclose()
 
 
 def start_mcp_server() -> None:
@@ -443,6 +502,24 @@ async def health_check() -> HealthResponse:
         engram_count=health.get("engram_count", 0),
         linked=link_store is not None and link_store.load() is not None,
     )
+
+
+@app.get("/roster/speakers", dependencies=[Depends(verify_token)])
+async def get_synced_speakers() -> list[dict[str, Any]]:
+    """Return the last successfully synchronized Conduit speaker roster."""
+    return speaker_roster
+
+
+@app.get("/roster/conversations", dependencies=[Depends(verify_token)])
+async def get_synced_conversations() -> list[dict[str, Any]]:
+    """Return conversations represented in Conduit's retained turn history."""
+    return conversation_roster
+
+
+@app.get("/roster/sync", dependencies=[Depends(verify_token)])
+async def get_roster_sync_status() -> dict[str, Any]:
+    """Expose the last roster-sync result without exposing link credentials."""
+    return dict(roster_sync_state)
 
 
 @app.post("/engrams", dependencies=[Depends(verify_token)])

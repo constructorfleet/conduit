@@ -4,6 +4,8 @@
 //! here covers process concerns such as storage, authentication, and runtime
 //! bounds.
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use std::collections::HashMap;
 
 use std::path::PathBuf;
@@ -65,6 +67,29 @@ const PROVIDER_DIR: &str = "CONDUIT_PROVIDER_DIR";
 const SPEAKER_DIR: &str = "CONDUIT_SPEAKER_DIR";
 /// Directory to keep Conduit Vox link records in. Unset means the default data directory.
 const VOX_LINK_DIR: &str = "CONDUIT_VOX_LINK_DIR";
+/// Stable URL-safe base64 encryption key for linked peer credentials.
+const LINK_TOKEN_ENCRYPTION_KEY: &str = "CONDUIT_LINK_TOKEN_ENCRYPTION_KEY";
+
+/// Reads the optional 256-bit key used to encrypt peer bearers at rest.
+pub fn peer_token_encryption_key_from_env() -> Result<Option<Vec<u8>>> {
+    let Ok(encoded) = std::env::var(LINK_TOKEN_ENCRYPTION_KEY) else {
+        return Ok(None);
+    };
+    if encoded.trim().is_empty() {
+        return Ok(None);
+    }
+    let key = URL_SAFE_NO_PAD.decode(encoded).map_err(|error| {
+        Error::Config(format!(
+            "{LINK_TOKEN_ENCRYPTION_KEY} must be URL-safe base64 without padding: {error}"
+        ))
+    })?;
+    if key.len() != 32 {
+        return Err(Error::Config(format!(
+            "{LINK_TOKEN_ENCRYPTION_KEY} must decode to exactly 32 bytes"
+        )));
+    }
+    Ok(Some(key))
+}
 /// Named only in the error a missing data directory raises: a wake definition
 /// carries its own `models_dir`, so there is no variable to set instead.
 const WAKE_MODELS_DIR: &str = "the definition's `models_dir`";

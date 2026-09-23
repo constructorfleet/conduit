@@ -70,6 +70,10 @@ async fn proxy_forwards_the_request_with_the_stored_vox_api_key() {
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: "vox-kitchen".to_owned(),
             panel: Some(LinkedServicePanel {
                 id: "vox".to_owned(),
@@ -118,6 +122,10 @@ async fn proxy_rewrites_redirect_locations_back_under_conduit() {
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: "vox-kitchen".to_owned(),
             panel: Some(LinkedServicePanel {
                 id: "vox".to_owned(),
@@ -237,6 +245,10 @@ async fn linked_services_proxy_injects_the_row_proxy_auth_bearer() {
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: Some(LinkedServicePanel {
                 id: "vox".to_owned(),
@@ -285,6 +297,10 @@ async fn linked_services_proxy_forwards_no_authorization_when_none_stored() {
             peer_name: "Memoria".to_owned(),
             peer_base_url: upstream.base_url.clone(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: Some(LinkedServicePanel {
                 id: "memoria".to_owned(),

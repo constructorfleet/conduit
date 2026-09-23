@@ -5,7 +5,7 @@ Forma is a service for defining transformation rules for utterances prior to out
 ## Features
 
 - **Custom Transformation Rules**: Define your own text transformation patterns using regex
-- **Multiple Rule Types**: Replace, remove, transform (case conversion), insert, and custom scripts
+- **Multiple Rule Types**: Replace, remove, transform (case conversion), and insert
 - **Conditional Application**: Apply rules based on conditions (always, contains, starts with, ends with, patterns)
 - **Priority-based Execution**: Control the order in which rules are applied
 - **Test Environment**: Preview transformations before applying them
@@ -54,7 +54,7 @@ Example: Add emphasis before important words
 - Position: Before
 
 ### Script
-Custom script-based transformations (future feature).
+Custom script-based transformations are reserved for future use. Rule validation rejects them until execution and sandbox limits are defined.
 
 ## Rule Conditions
 

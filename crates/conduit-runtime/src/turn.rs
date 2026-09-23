@@ -20,6 +20,7 @@ use conduit_core::{Error, Result};
 use conduit_provider::llm::{Completion, CompletionRequest, Message};
 use conduit_provider::memory::{Query, Record};
 use conduit_provider::stt::{AudioChunk, TranscribeOptions};
+use conduit_provider::transform::TransformContext;
 use conduit_provider::tts::{SpeechChunk, SynthesisRequest};
 use conduit_provider::ChunkStream;
 use futures_util::StreamExt;
@@ -641,8 +642,14 @@ impl Turn {
     /// stops redacting is worse than a turn that stops.
     async fn rewrite(&mut self, chain: &[Rewriter], segment: &str) -> Option<String> {
         let mut text = segment.to_owned();
+        let context = TransformContext {
+            speaker_id: self.speaker.map(|speaker| speaker.to_string()),
+            session_id: Some(self.emitter.conversation().to_string()),
+            turn_id: Some(self.turn.to_string()),
+            prior_turns: Vec::new(),
+        };
         for rewriter in chain {
-            match rewriter.provider.transform(&text).await {
+            match rewriter.provider.transform_with_context(&text, &context).await {
                 Ok(rewritten) => text = rewritten,
                 Err(error) => return self.fail(&rewriter.node.clone(), error).await,
             }

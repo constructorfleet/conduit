@@ -840,7 +840,9 @@ async fn a_wake_word_opens_the_pipeline_and_is_published() {
 
     let seen = drain(&mut events).await;
     let detected = seen.iter().find_map(|event| match event {
-        Event::WakeWordDetected { phrase, confidence } => Some((phrase.clone(), *confidence)),
+        Event::WakeWordDetected { phrase, confidence, .. } => {
+            Some((phrase.clone(), *confidence))
+        }
         _ => None,
     });
     let (phrase, confidence) = detected.expect("the activation is published");

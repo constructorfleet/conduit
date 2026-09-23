@@ -59,22 +59,28 @@ Per this spec:
 
 That's it. `memoria.*` prefix stays reserved to `LinkedServiceKind::Memoria` by 0005; future Memoria capabilities land under it.
 
-## 0005 amendment (docs-only follow-up)
+The separate roster-sync path reads only metadata. Conduit exposes speakers and
+conversations represented in its retained turn history at link-scoped roster
+routes authenticated by the per-link sync token. Memoria reconciles these
+snapshots; engrams remain local to Memoria and are never sent to Conduit.
 
-The `capability_endpoints` field is an ADDITIVE change to spec 0005 §Handshake. A separate ticket adds:
+## 0005 amendment
 
-- Optional `capability_endpoints: Map<capability_name, object>` to the handshake request.
-- One sentence in §Side channels: *"A capability MAY require peer-supplied endpoint metadata; the peer includes it under the capability's key in `capability_endpoints`. The endpoint object shape is defined by that capability's spec."*
-- Note on `GET /v1/linked-services`: `capability_endpoints` surfaces alongside `capabilities`.
+The `capability_endpoints` field is an ADDITIVE change to spec 0005 §Handshake. Conduit now:
 
-This amendment is small and non-breaking (serde defaults on both sides). Track as a follow-up ticket rather than blocking this design.
+- Accepts optional `capability_endpoints: Map<capability_name, object>` in the handshake request.
+- Stores endpoint objects only for advertised capabilities and exposes them on `GET /v1/linked-services` alongside `capabilities`.
 
-## Implementation scope (future ticket)
+Serde defaults keep older stored link rows readable; peers without these fields remain linkable during migration.
 
-- Extend `LinkedService` storage row to carry `capabilities: Vec<String>` and `capability_endpoints: Map<String, serde_json::Value>` (both `#[serde(default)]`).
-- Extend the handshake handler (`crates/conduit-api/src/linked_services.rs::create`) to accept and persist both fields.
-- Surface both fields on `LinkedServiceView` returned by `GET /v1/linked-services`.
-- Add a helper on `LinkedService` to synthesize an `McpTransport` when the row carries `memoria.mcp`, so a `ToolVariant::Mcp` provider definition can reference the peer by id and pick up the endpoint automatically.
+## Implementation scope
+
+- `LinkedService` carries `capabilities: Vec<String>` and `capability_endpoints: Map<String, serde_json::Value>` with serde defaults.
+- The handshake handler accepts and persists both fields and hashes an optional 256-bit `peer_token`.
+- `LinkedServiceView` exposes capabilities and endpoint metadata while never exposing either token hash.
+- `ToolVariant::LinkedMemoria` stores a peer id and resolves the peer's advertised
+  transport and endpoint into the existing MCP client at runtime. The operator
+  console offers linked Memoria peers when configuring this tool provider.
 
 ## Non-goals
 

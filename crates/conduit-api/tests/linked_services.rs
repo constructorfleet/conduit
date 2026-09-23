@@ -14,8 +14,10 @@ use axum::http::{Request, StatusCode};
 use conduit_api::{router, AppState};
 use conduit_core::bus::EventBus;
 use conduit_link::LinkedServiceKind;
+use conduit_provider::storage::EnrolledSpeaker;
 use conduit_provider::storage::LinkedService;
 use http_body_util::BodyExt;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 async fn call(state: &AppState, request: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -55,6 +57,94 @@ fn delete(uri: &str) -> Request<Body> {
         .header("authorization", "Bearer test-management-token-abcdefghijklmnopqrstuvwxyz")
         .body(Body::empty())
         .expect("request")
+}
+
+fn peer_get(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("request")
+}
+
+#[tokio::test]
+async fn a_link_sync_token_reads_only_the_linked_speakers_and_conversations() {
+    let state = AppState::new(EventBus::default());
+    let token = "memoria-link-sync-token";
+    let token_hash = Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Memoria,
+            peer_id: "memoria-home".into(),
+            peer_name: "Home".into(),
+            peer_base_url: "http://memoria:8080".into(),
+            sync_token_hash: token_hash,
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
+            provider_definition_id: String::new(),
+            panel: None,
+            granted_by: "operator".into(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+            proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
+        })
+        .await
+        .expect("link stored");
+    state.put_speaker(EnrolledSpeaker::named("Ada")).await.expect("speaker stored");
+
+    let (status, speakers) =
+        call(&state, peer_get("/v1/linked-services/memoria-home/roster/speakers", token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(speakers.as_array().unwrap().len(), 1);
+    let (status, _) =
+        call(&state, peer_get("/v1/linked-services/memoria-home/roster/conversations", token))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &state,
+        peer_get("/v1/linked-services/memoria-home/roster/speakers", "wrong-token"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let vox_token = "vox-link-sync-token";
+    let vox_hash = Sha256::digest(vox_token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    state
+        .put_linked_service(LinkedService {
+            service_kind: LinkedServiceKind::Vox,
+            peer_id: "vox-kitchen".into(),
+            peer_name: "Kitchen".into(),
+            peer_base_url: "http://vox:8080".into(),
+            sync_token_hash: vox_hash,
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
+            provider_definition_id: String::new(),
+            panel: None,
+            granted_by: "operator".into(),
+            granted_at: chrono::Utc::now(),
+            last_seen: None,
+            proxy_auth_bearer: None,
+            reachability: conduit_link::Reachability::Unknown,
+            last_probed_at: None,
+        })
+        .await
+        .expect("vox link stored");
+    let (status, _) =
+        call(&state, peer_get("/v1/linked-services/vox-kitchen/roster/speakers", vox_token))
+            .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -97,6 +187,10 @@ async fn listing_legacy_vox_links_synthesizes_their_panel_manifest() {
             peer_name: "Kitchen Vox".to_owned(),
             peer_base_url: "http://vox.internal:8081".to_owned(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: "vox-kitchen-vox-01".to_owned(),
             panel: None,
             granted_by: "Operator Console".to_owned(),
@@ -127,6 +221,10 @@ async fn listing_legacy_instrumenta_links_synthesizes_their_panel_manifest() {
             peer_name: "Instrumenta".to_owned(),
             peer_base_url: "http://instrumenta.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: None,
             granted_by: "Operator Console".to_owned(),
@@ -157,6 +255,10 @@ async fn listing_legacy_excita_links_synthesizes_their_panel_manifest() {
             peer_name: "Excita".to_owned(),
             peer_base_url: "http://excita.internal:8080".to_owned(),
             sync_token_hash: "hash".to_owned(),
+            peer_token_hash: None,
+            peer_token_ciphertext: None,
+            capabilities: Vec::new(),
+            capability_endpoints: Default::default(),
             provider_definition_id: String::new(),
             panel: None,
             granted_by: "Operator Console".to_owned(),

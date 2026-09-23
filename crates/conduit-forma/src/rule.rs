@@ -46,7 +46,7 @@ pub enum RuleType {
     /// Insert text before/after matches
     Insert,
 
-    /// Custom script-based transformation
+    /// Reserved for custom scripts, which validation currently rejects.
     Script,
 }
 
@@ -202,10 +202,8 @@ impl FormaRule {
                     return Err("InsertAfter action requires text to insert".to_string());
                 }
             }
-            RuleAction::CustomScript { script } => {
-                if script.is_empty() {
-                    return Err("CustomScript action requires a script".to_string());
-                }
+            RuleAction::CustomScript { .. } => {
+                return Err("Custom scripts are not supported".to_string());
             }
             RuleAction::ConvertCase { .. } => {}
         }
@@ -225,5 +223,14 @@ mod tests {
             .with_action(RuleAction::ConvertCase { case: CaseConversion::Upper });
 
         assert_eq!(rule.validate(), Err("Custom conditions are not supported".to_owned()));
+    }
+
+    #[test]
+    fn rejects_custom_scripts_during_rule_validation() {
+        let rule = FormaRule::new("script", "Script transformation").with_action(
+            RuleAction::CustomScript { script: "return text.toUpperCase()".to_owned() },
+        );
+
+        assert_eq!(rule.validate(), Err("Custom scripts are not supported".to_owned()));
     }
 }

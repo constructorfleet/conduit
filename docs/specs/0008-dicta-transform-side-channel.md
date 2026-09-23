@@ -14,7 +14,7 @@ This channel is on **Conduit's pipeline hot path**: it runs between reasoning an
 
 **Conduit → peer request/response.** Confirmed by the transform's role — Conduit has an utterance in hand and needs a rewritten one to feed TTS. A peer→Conduit variant makes no sense here.
 
-Since this is a Conduit→peer direction, per 0005 §Side channels the request MUST be authenticated with `Authorization: Bearer {peer_token}` — the token minted by Dicta at handshake and stored (as hash) on the Conduit row.
+Since this is a Conduit→peer direction, per 0005 §Side channels the request MUST be authenticated with `Authorization: Bearer {peer_token}` — the token minted by Dicta at handshake and retained by Conduit as authenticated ciphertext plus a one-way hash for verification and link management.
 
 ## Transport
 
@@ -91,13 +91,17 @@ Per 0005 §Side channels: side-channel failure MUST NOT flip base `reachability`
 
 Log with `peer=<peer_id> capability=dicta.transform` prefix. Every timeout is a log line.
 
-## Implementation scope (future ticket)
+## Implementation
 
-- New provider variant `TransformVariant::Dicta { peer_id }` in `crates/conduit-provider/src/storage/transform.rs`, resolved at build time against the `LinkedService` row for its `peer_base_url` and `peer_token`.
-- A `DictaTransform` impl of `UtteranceTransform` in a new `crates/conduit-dicta` (or added to `conduit-transform` — TBD when Dicta ships).
-- 500 ms deadline + one retry policy + fallback-to-passthrough.
-- `dicta.transform` capability advertised in the row; if a peer's row doesn't declare it, `TransformVariant::Dicta { peer_id }` cannot resolve at pipeline build.
-- Conformance test over real HTTP: happy path, timeout falls back, 5xx retries once then falls back.
+- `TransformVariant::Dicta { peer_id }` resolves at build time against the linked
+  peer row and requires the `dicta.transform` capability plus an encrypted
+  peer bearer.
+- The `DictaTransform` adapter sends the utterance and bounded context to the
+  peer with a 500 ms whole-call deadline, one retry, and pass-through fallback.
+- Context carries speaker, conversation, and turn IDs when available, plus at
+  most four prior strings truncated to 200 characters each.
+- Real HTTP tests cover the rewrite, peer authentication, context bounds,
+  timeout fallback, and one retry after a server error.
 
 ## Non-goals
 

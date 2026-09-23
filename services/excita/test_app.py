@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import io
 import wave
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from excita.app import Config, _make_backend, create_app
+from excita.app import Config, _build_create_body, _make_backend, create_app
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -90,6 +91,16 @@ def _upload(client: TestClient, phrase_id: str, audio: bytes) -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def test_link_handshake_advertises_wake_event_capability() -> None:
+    payload = _build_create_body(
+        SimpleNamespace(
+            request=SimpleNamespace(peer_name="Excita Kitchen"),
+            existing_peer_id=None,
+        )
+    )
+    assert payload["capabilities"] == ["excita.wake-events"]
 
 
 def test_health_reports_unlinked(client: TestClient) -> None:

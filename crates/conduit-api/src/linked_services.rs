@@ -15,13 +15,14 @@ use conduit_core::event::{Envelope, Event};
 use conduit_core::id::TraceId;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel, Reachability};
 use conduit_provider::storage::{
-    LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
-    SpeakerEngine, SpeakerIdVariant,
+    EnrolledSpeaker, LinkedService, ProviderDefinition, ProviderDefinitionVariant,
+    ProviderSecret, SpeakerEngine, SpeakerIdVariant,
 };
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::auth::ManagementCaller;
@@ -41,6 +42,16 @@ pub struct CreateLinkedServiceRequest {
     pub peer_base_url: String,
     /// Panel manifest the peer wants Conduit to surface.
     pub panel: LinkedServicePanel,
+    /// Peer-minted bearer for authenticated Conduit-to-peer capability calls.
+    /// Missing on legacy peers during the migration period.
+    #[serde(default)]
+    pub peer_token: Option<String>,
+    /// Capabilities supported by the peer.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Opaque endpoint metadata keyed by capability name.
+    #[serde(default)]
+    pub capability_endpoints: BTreeMap<String, JsonValue>,
     /// Service-specific extras. Shape depends on `service_kind`; Vox uses
     /// `{"local_api_key": "..."}` so Conduit can auto-provision the peer's
     /// `http_speaker_id` provider definition.
@@ -105,6 +116,10 @@ pub struct LinkedServiceView {
     pub peer_name: String,
     /// Base URL Conduit reaches the peer at.
     pub peer_base_url: String,
+    /// Capabilities the peer advertised during linking.
+    pub capabilities: Vec<String>,
+    /// Peer-supplied endpoint metadata keyed by capability.
+    pub capability_endpoints: BTreeMap<String, JsonValue>,
     /// Resolved panel manifest (inline or typed-kind fallback).
     pub panel: LinkedServicePanel,
     /// Operator credential name that authorised the link.
@@ -136,6 +151,8 @@ impl TryFrom<LinkedService> for LinkedServiceView {
             peer_id: link.peer_id,
             peer_name: link.peer_name,
             peer_base_url: link.peer_base_url,
+            capabilities: link.capabilities,
+            capability_endpoints: link.capability_endpoints,
             panel,
             granted_by: link.granted_by,
             granted_at: link.granted_at,
@@ -161,6 +178,24 @@ pub async fn create(
     let peer_name = trimmed_field("peer_name", &request.peer_name)?;
     let peer_base_url = trimmed_field("peer_base_url", &request.peer_base_url)?;
     let panel = normalise_panel(&request.panel)?;
+    validate_capabilities(&request.capabilities, &request.capability_endpoints)?;
+    let peer_token_hash = request
+        .peer_token
+        .as_deref()
+        .map(|token| {
+            validate_peer_token(token)?;
+            Ok(hash_token(token))
+        })
+        .transpose()?;
+    let peer_token_ciphertext = request
+        .peer_token
+        .as_deref()
+        .map(|token| {
+            state.encrypt_peer_token(&peer_id, token)
+                .map_err(|error| ApiError::unavailable(format!("peer token encryption is unavailable: {error}")))?
+                .ok_or_else(|| ApiError::unavailable("CONDUIT_LINK_TOKEN_ENCRYPTION_KEY is required when a peer token is supplied"))
+        })
+        .transpose()?;
 
     if state.linked_service(&peer_id).await.map_err(store_failure)?.is_some() {
         return Err(ApiError::conflict(format!(
@@ -197,6 +232,10 @@ pub async fn create(
         peer_name: peer_name.to_owned(),
         peer_base_url: peer_base_url.to_owned(),
         sync_token_hash: hash_token(&sync_token),
+        peer_token_hash,
+        peer_token_ciphertext,
+        capabilities: request.capabilities,
+        capability_endpoints: request.capability_endpoints,
         provider_definition_id: provider_definition_id.clone(),
         panel: Some(panel),
         granted_by: caller.name.clone(),
@@ -419,6 +458,80 @@ pub async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Conversation ids represented in Conduit's retained turn history.
+#[derive(Debug, Serialize)]
+pub struct SyncedConversation {
+    /// Stable conversation identifier.
+    pub conversation_id: String,
+    /// Number of retained turns in the conversation.
+    pub turn_count: usize,
+    /// Most recent retained turn start time.
+    pub last_activity: String,
+}
+
+/// `GET /v1/linked-services/{peer_id}/roster/speakers` — link-scoped roster read.
+pub async fn sync_speakers(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<EnrolledSpeaker>>, ApiError> {
+    authorize_roster_sync(&state, &peer_id, &headers).await?;
+    let mut speakers = Vec::new();
+    for id in state.speaker_ids().await.map_err(store_failure)? {
+        if let Some(speaker) = state.speaker(&id).await.map_err(store_failure)? {
+            speakers.push(speaker);
+        }
+    }
+    Ok(Json(speakers))
+}
+
+/// `GET /v1/linked-services/{peer_id}/roster/conversations` — retained conversations.
+pub async fn sync_conversations(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<SyncedConversation>>, ApiError> {
+    authorize_roster_sync(&state, &peer_id, &headers).await?;
+    let mut conversations = BTreeMap::<String, SyncedConversation>::new();
+    for turn in state.turns().list().await {
+        let id = turn.conversation_id.to_string();
+        let conversation =
+            conversations.entry(id.clone()).or_insert_with(|| SyncedConversation {
+                conversation_id: id,
+                turn_count: 0,
+                last_activity: turn.started_at.to_rfc3339(),
+            });
+        conversation.turn_count += 1;
+        let started = turn.started_at.to_rfc3339();
+        if started > conversation.last_activity {
+            conversation.last_activity = started;
+        }
+    }
+    Ok(Json(conversations.into_values().collect()))
+}
+
+async fn authorize_roster_sync(
+    state: &AppState,
+    peer_id: &str,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    let peer_id = normalise_peer_id(peer_id)?;
+    let link =
+        state.linked_service(&peer_id).await.map_err(store_failure)?.ok_or_else(|| {
+            ApiError::not_found(format!("no linked service for peer `{peer_id}`"))
+        })?;
+    if link.service_kind != LinkedServiceKind::Memoria {
+        return Err(ApiError::forbidden(
+            "roster synchronization is available only to linked Memoria peers",
+        ));
+    }
+    let token = bearer(headers).ok_or_else(ApiError::unauthorized)?;
+    if hash_token(token) != link.sync_token_hash {
+        return Err(ApiError::unauthorized());
+    }
+    Ok(())
+}
+
 /// `ANY /linked-services/{peer_id}/{*rest}` — reverse proxy to the peer.
 pub async fn proxy(
     _caller: ManagementCaller,
@@ -638,6 +751,55 @@ fn normalise_panel(panel: &LinkedServicePanel) -> Result<LinkedServicePanel, Api
         return Err(ApiError::unprocessable("panel.path must start with `/`"));
     }
     Ok(LinkedServicePanel { id, label, icon, path: path.to_owned() })
+}
+
+fn validate_peer_token(token: &str) -> Result<(), ApiError> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| ApiError::unprocessable("peer_token must be a 256-bit base64url token"))?;
+    if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(decoded) != token {
+        return Err(ApiError::unprocessable("peer_token must be a 256-bit base64url token"));
+    }
+    Ok(())
+}
+
+fn validate_capabilities(
+    capabilities: &[String],
+    endpoints: &BTreeMap<String, JsonValue>,
+) -> Result<(), ApiError> {
+    let mut names = std::collections::BTreeSet::new();
+    for capability in capabilities {
+        let valid = capability.contains('.')
+            && capability.split('.').all(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            });
+        if !valid {
+            return Err(ApiError::unprocessable(format!(
+                "invalid capability name `{capability}`; names must be dotted lowercase identifiers"
+            )));
+        }
+        if !names.insert(capability) {
+            return Err(ApiError::unprocessable(format!(
+                "capability `{capability}` was advertised more than once"
+            )));
+        }
+    }
+    for (capability, endpoint) in endpoints {
+        if !names.contains(capability) {
+            return Err(ApiError::unprocessable(format!(
+                "endpoint metadata was provided for unadvertised capability `{capability}`"
+            )));
+        }
+        if !endpoint.is_object() {
+            return Err(ApiError::unprocessable(format!(
+                "endpoint metadata for `{capability}` must be an object"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn panel_for(link: &LinkedService) -> Option<LinkedServicePanel> {

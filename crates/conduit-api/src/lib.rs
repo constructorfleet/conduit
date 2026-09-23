@@ -21,6 +21,7 @@ pub mod esphome;
 pub mod events;
 pub mod factory;
 pub mod firmware;
+mod link_token;
 pub mod linked_services;
 pub mod pipelines;
 pub mod providers;
@@ -29,6 +30,7 @@ pub mod state;
 pub mod status;
 pub mod turns;
 pub mod vox;
+pub mod wake_events;
 
 use std::time::Duration;
 
@@ -66,6 +68,7 @@ pub const CONVERSE_ROUTE: &str = "/v1/pipelines/{name}/converse";
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/events", get(events::stream))
+        .route("/v1/wake-events", post(wake_events::receive))
         .route("/v1/status", get(status::get))
         .route("/v1/turns", get(turns::list))
         .route("/v1/turns/live", get(turns::live))
@@ -84,6 +87,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/linked-services", get(linked_services::list).post(linked_services::create))
         .route("/v1/linked-services/{peer_id}", axum::routing::delete(linked_services::delete))
         .route("/v1/linked-services/{peer_id}/revoke", post(linked_services::revoke))
+        .route(
+            "/v1/linked-services/{peer_id}/roster/speakers",
+            get(linked_services::sync_speakers),
+        )
+        .route(
+            "/v1/linked-services/{peer_id}/roster/conversations",
+            get(linked_services::sync_conversations),
+        )
         .route("/v1/speakers", get(speakers::list).post(speakers::create))
         .route(
             "/v1/speakers/{id}",

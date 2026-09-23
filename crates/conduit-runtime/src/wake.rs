@@ -106,6 +106,9 @@ pub fn gate(
                     detection_emitter.emit(Event::WakeWordDetected {
                         phrase: detection.phrase.clone(),
                         confidence: detection.confidence,
+                        source_device: None,
+                        detected_at: None,
+                        audio_clip_ref: None,
                     });
                     // Sending fails once the turn has stopped listening, which
                     // is not a detector problem — the audio simply has nowhere
@@ -120,6 +123,9 @@ pub fn gate(
                     detection_emitter.emit(Event::WakeWordRejected {
                         phrase: detection.phrase,
                         confidence: detection.confidence,
+                        source_device: None,
+                        detected_at: None,
+                        audio_clip_ref: None,
                     });
                 }
                 Err(error) => {
@@ -407,7 +413,7 @@ mod tests {
 
         let mut detected = None;
         while let Some(envelope) = events.recv().await {
-            if let Event::WakeWordDetected { phrase, confidence } = &envelope.event {
+            if let Event::WakeWordDetected { phrase, confidence, .. } = &envelope.event {
                 detected = Some((phrase.clone(), *confidence));
                 break;
             }

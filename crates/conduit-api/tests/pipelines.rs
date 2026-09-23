@@ -985,6 +985,7 @@ async fn the_speech_cleanup_component_offers_only_rules_this_build_implements() 
     assert_eq!(status, StatusCode::OK);
     let components = body["components"].as_array().expect("component list");
     assert_component(components, "transform.builtin", "transform", &["rules"], &["rules"]);
+    assert_component(components, "transform.dicta", "transform", &["peer_id"], &["peer_id"]);
 
     let component = components
         .iter()

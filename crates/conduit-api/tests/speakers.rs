@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header::ETAG, Request, StatusCode};
 use conduit_api::{router, AppState};
 use conduit_core::audio::AudioFormat;
 use conduit_core::bus::EventBus;
@@ -182,6 +182,42 @@ async fn an_empty_roster_lists_nobody() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn speaker_roster_etag_returns_not_modified_until_the_roster_changes() {
+    let state = state_with(RecordingIdentifier::new("voices"));
+    let first_id = create_speaker(&state, "Ada").await;
+    let first = router(state.clone()).oneshot(get("/v1/speakers")).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers().get(ETAG).expect("ETag").clone();
+    let previous_etag = first_etag.clone();
+    let first_body = first.into_body().collect().await.unwrap().to_bytes();
+    let roster: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(roster[0]["id"], first_id);
+    assert_eq!(roster[0]["name"], "Ada");
+
+    let unchanged = Request::builder()
+        .uri("/v1/speakers")
+        .header("if-none-match", first_etag.clone())
+        .body(Body::empty())
+        .unwrap();
+    let unchanged = router(state.clone()).oneshot(unchanged).await.unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+    assert!(unchanged.into_body().collect().await.unwrap().to_bytes().is_empty());
+
+    create_speaker(&state, "Grace").await;
+    let changed = Request::builder()
+        .uri("/v1/speakers")
+        .header("if-none-match", first_etag)
+        .body(Body::empty())
+        .unwrap();
+    let changed = router(state).oneshot(changed).await.unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    assert_ne!(changed.headers().get(ETAG).unwrap(), &previous_etag);
+    let body = changed.into_body().collect().await.unwrap().to_bytes();
+    let roster: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(roster.as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]
