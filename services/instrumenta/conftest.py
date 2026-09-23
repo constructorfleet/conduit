@@ -37,6 +37,8 @@ def clean_postgres_database() -> None:
                     "local_resources, audit_log RESTART IDENTITY CASCADE"
                 )
             except psycopg.errors.UndefinedTable:
+                # Some test runs hit this before migrations/schema setup; skipping
+                # cleanup is intentional when target tables do not yet exist.
                 pass
 
 

@@ -638,6 +638,7 @@ class PostgresBackend(SqliteBackend):
         connection = psycopg.connect(database_url)
         connection.autocommit = False
         self._conn = _PostgresConnection(connection)
+        super().__init__(self._conn)
         schema = _SCHEMA.replace("datetime('now')", "CURRENT_TIMESTAMP::text")
         for statement in schema.split(";"):
             if statement.strip():
