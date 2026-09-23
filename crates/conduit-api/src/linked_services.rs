@@ -15,8 +15,8 @@ use conduit_core::event::{Envelope, Event};
 use conduit_core::id::TraceId;
 use conduit_link::{LinkedServiceKind, LinkedServicePanel, Reachability};
 use conduit_provider::storage::{
-    LinkedService, ProviderDefinition, ProviderDefinitionVariant, ProviderSecret,
-    SpeakerEngine, SpeakerIdVariant,
+    EnrolledSpeaker, LinkedService, ProviderDefinition, ProviderDefinitionVariant,
+    ProviderSecret, SpeakerEngine, SpeakerIdVariant,
 };
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -456,6 +456,80 @@ pub async fn revoke(
         Event::LinkedServiceUnlinked { peer_id: peer_id.clone() },
     ));
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Conversation ids represented in Conduit's retained turn history.
+#[derive(Debug, Serialize)]
+pub struct SyncedConversation {
+    /// Stable conversation identifier.
+    pub conversation_id: String,
+    /// Number of retained turns in the conversation.
+    pub turn_count: usize,
+    /// Most recent retained turn start time.
+    pub last_activity: String,
+}
+
+/// `GET /v1/linked-services/{peer_id}/roster/speakers` — link-scoped roster read.
+pub async fn sync_speakers(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<EnrolledSpeaker>>, ApiError> {
+    authorize_roster_sync(&state, &peer_id, &headers).await?;
+    let mut speakers = Vec::new();
+    for id in state.speaker_ids().await.map_err(store_failure)? {
+        if let Some(speaker) = state.speaker(&id).await.map_err(store_failure)? {
+            speakers.push(speaker);
+        }
+    }
+    Ok(Json(speakers))
+}
+
+/// `GET /v1/linked-services/{peer_id}/roster/conversations` — retained conversations.
+pub async fn sync_conversations(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<SyncedConversation>>, ApiError> {
+    authorize_roster_sync(&state, &peer_id, &headers).await?;
+    let mut conversations = BTreeMap::<String, SyncedConversation>::new();
+    for turn in state.turns().list().await {
+        let id = turn.conversation_id.to_string();
+        let conversation =
+            conversations.entry(id.clone()).or_insert_with(|| SyncedConversation {
+                conversation_id: id,
+                turn_count: 0,
+                last_activity: turn.started_at.to_rfc3339(),
+            });
+        conversation.turn_count += 1;
+        let started = turn.started_at.to_rfc3339();
+        if started > conversation.last_activity {
+            conversation.last_activity = started;
+        }
+    }
+    Ok(Json(conversations.into_values().collect()))
+}
+
+async fn authorize_roster_sync(
+    state: &AppState,
+    peer_id: &str,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    let peer_id = normalise_peer_id(peer_id)?;
+    let link =
+        state.linked_service(&peer_id).await.map_err(store_failure)?.ok_or_else(|| {
+            ApiError::not_found(format!("no linked service for peer `{peer_id}`"))
+        })?;
+    if link.service_kind != LinkedServiceKind::Memoria {
+        return Err(ApiError::forbidden(
+            "roster synchronization is available only to linked Memoria peers",
+        ));
+    }
+    let token = bearer(headers).ok_or_else(ApiError::unauthorized)?;
+    if hash_token(token) != link.sync_token_hash {
+        return Err(ApiError::unauthorized());
+    }
+    Ok(())
 }
 
 /// `ANY /linked-services/{peer_id}/{*rest}` — reverse proxy to the peer.
