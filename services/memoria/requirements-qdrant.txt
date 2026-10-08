@@ -1,2 +1,2 @@
-sentence-transformers==2.2.2
+sentence-transformers==5.6.0
 qdrant-client==1.9.0
