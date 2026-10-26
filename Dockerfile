@@ -23,7 +23,7 @@
 #
 #   docker run --rm -v "$PWD:/src" -w /src rust:1.98.0-trixie \
 #     cargo test -p conduit-vad --no-run --locked
-FROM rust:1.98.0-trixie AS builder
+FROM rust:1.99.1-trixie AS builder
 
 WORKDIR /src
 COPY . .
